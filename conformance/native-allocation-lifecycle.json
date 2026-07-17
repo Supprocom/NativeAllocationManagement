@@ -1,0 +1,52 @@
+[
+  {
+    "name": "pool-default-no-reservation-dispose",
+    "owner": "pool",
+    "initialReservation": 0,
+    "returnPolicy": "ToGarbageCollector",
+    "returnKind": "none",
+    "reLease": false,
+    "states": ["Active", "Disposed"],
+    "result": "Disposed"
+  },
+  {
+    "name": "pool-native-return-release-no-reservation",
+    "owner": "pool",
+    "initialReservation": 0,
+    "returnPolicy": "ToNativeMemory",
+    "returnKind": "native",
+    "reLease": true,
+    "states": ["Active", "Returned", "Active", "Disposed"],
+    "result": "Disposed"
+  },
+  {
+    "name": "pool-gc-return-release-with-reservation",
+    "owner": "pool",
+    "initialReservation": 4,
+    "returnPolicy": "ToGarbageCollector",
+    "returnKind": "garbageCollector",
+    "reLease": true,
+    "states": ["Active", "Returned", "Active", "Disposed"],
+    "result": "Disposed"
+  },
+  {
+    "name": "region-native-return-no-reservation",
+    "owner": "region",
+    "initialReservation": 0,
+    "returnPolicy": "ToNativeMemory",
+    "returnKind": "native",
+    "reLease": false,
+    "states": ["Active", "Returned", "Disposed"],
+    "result": "Disposed"
+  },
+  {
+    "name": "region-gc-return-with-reservation",
+    "owner": "region",
+    "initialReservation": 64,
+    "returnPolicy": "ToGarbageCollector",
+    "returnKind": "garbageCollector",
+    "reLease": false,
+    "states": ["Active", "Returned", "Disposed"],
+    "result": "Disposed"
+  }
+]

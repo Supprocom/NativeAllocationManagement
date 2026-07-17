@@ -555,6 +555,17 @@ internal sealed class NativeOwnerKernel
     private NativeGeneration? _current;
     private NativeOwnerLifecycle _lifecycle;
 
+    internal NativeOwnerLifecycle Lifecycle
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _lifecycle;
+            }
+        }
+    }
+
     private NativeOwnerKernel(
         NativeOwnerKind kind,
         string ownerKind,

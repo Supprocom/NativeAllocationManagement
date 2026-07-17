@@ -49,6 +49,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         private readonly HashSet<string> _lifecycleSummaryVisiting = new(StringComparer.Ordinal);
         private readonly List<RegionScope> _regions = [];
         private readonly HashSet<OwnerState> _borrowedOwners = [];
+        private readonly Dictionary<ISymbol, ControlFlowRegion> _localLifetimeRegions = new(SymbolEqualityComparer.Default);
         private readonly HashSet<ISymbol> _usingResourceSymbols = new(SymbolEqualityComparer.Default);
         private readonly List<FlowSnapshot> _exitSnapshots = [];
         private readonly HashSet<string> _reported = new(StringComparer.Ordinal);
@@ -102,11 +103,6 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 _context.CancellationToken.ThrowIfCancellationRequested();
                 foreach (HandleState handle in exit.Handles.Values)
                 {
-                    if (!IsVisibleAtMethodExit(handle.Symbol))
-                    {
-                        continue;
-                    }
-
                     if (handle.Returned && !handle.Ambiguous && handle.GenerationRelation != GenerationRelationKind.Unknown || handle.IsUsing || handle.Owner.IsRegion)
                     {
                         continue;
@@ -137,44 +133,10 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             }
         }
 
-        private bool IsVisibleAtMethodExit(ISymbol? symbol)
-        {
-            if (symbol is not ILocalSymbol local || local.DeclaringSyntaxReferences.Length == 0)
-            {
-                return true;
-            }
-
-            SyntaxNode declaration = local.DeclaringSyntaxReferences[0].GetSyntax(_context.CancellationToken);
-            if (declaration.AncestorsAndSelf().OfType<SwitchSectionSyntax>().Any())
-            {
-                return false;
-            }
-
-            BlockSyntax? containingBlock = declaration.AncestorsAndSelf().OfType<BlockSyntax>().FirstOrDefault();
-            BlockSyntax? methodBlock = declaration.AncestorsAndSelf()
-                .Select(GetCallableBody)
-                .FirstOrDefault(body => body is not null);
-            return containingBlock is null || ReferenceEquals(containingBlock, methodBlock);
-        }
-
-        private static BlockSyntax? GetCallableBody(SyntaxNode syntax)
-        {
-            return syntax switch
-            {
-                MethodDeclarationSyntax method => method.Body,
-                ConstructorDeclarationSyntax constructor => constructor.Body,
-                DestructorDeclarationSyntax destructor => destructor.Body,
-                OperatorDeclarationSyntax operatorDeclaration => operatorDeclaration.Body,
-                ConversionOperatorDeclarationSyntax conversion => conversion.Body,
-                AccessorDeclarationSyntax accessor => accessor.Body,
-                LocalFunctionStatementSyntax localFunction => localFunction.Body,
-                _ => null
-            };
-        }
-
         private void AnalyzeControlFlowGraph(ControlFlowGraph graph)
         {
             _context.CancellationToken.ThrowIfCancellationRequested();
+            BuildLocalLifetimeRegions(graph);
             BasicBlock entry = graph.Blocks.First(block => block.Kind == BasicBlockKind.Entry);
             Dictionary<BasicBlock, FlowSnapshot> entryStates = new();
             Dictionary<BasicBlock, FlowSnapshot> exitStates = new();
@@ -195,7 +157,12 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 {
                     FlowSnapshot[] predecessorStates = block.Predecessors
                         .Where(branch => branch.Source is not null && exitStates.ContainsKey(branch.Source))
-                        .Select(branch => ApplyFinallyOnEdge(graph, branch.Source!, block, exitStates[branch.Source!]))
+                        .Select(branch => ApplyLexicalScopeExit(
+                            graph,
+                            branch.Source!,
+                            block,
+                            ApplyFinallyOnEdge(graph, branch.Source!, block, exitStates[branch.Source!]),
+                            emitDiagnostics: false))
                         .ToArray();
                     if (predecessorStates.Length == 0)
                     {
@@ -228,6 +195,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             }
 
             _suppressDiagnostics = false;
+            ReportFinalLexicalScopeExits(graph, exitStates);
             _exitSnapshots.AddRange(exitStates
                 .Where(pair => pair.Key.Kind == BasicBlockKind.Exit)
                 .Select(pair => pair.Value));
@@ -245,6 +213,133 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             }
 
             _cfgMode = false;
+        }
+
+        private void BuildLocalLifetimeRegions(ControlFlowGraph graph)
+        {
+            _localLifetimeRegions.Clear();
+            foreach (ControlFlowRegion region in FlattenRegions(graph.Root))
+            {
+                if (region.Kind != ControlFlowRegionKind.LocalLifetime)
+                {
+                    continue;
+                }
+
+                foreach (ILocalSymbol local in region.Locals)
+                {
+                    if (IsOwnerType(local.Type) || IsHandleType(local.Type))
+                    {
+                        _localLifetimeRegions[local] = region;
+                    }
+                }
+            }
+        }
+
+        private void ReportFinalLexicalScopeExits(
+            ControlFlowGraph graph,
+            IReadOnlyDictionary<BasicBlock, FlowSnapshot> exitStates)
+        {
+            foreach (KeyValuePair<BasicBlock, FlowSnapshot> pair in exitStates)
+            {
+                foreach (BasicBlock destination in GraphSuccessors(graph, pair.Key))
+                {
+                    bool previousSuppression = _suppressDiagnostics;
+                    _suppressDiagnostics = true;
+                    FlowSnapshot state = ApplyFinallyOnEdge(graph, pair.Key, destination, pair.Value);
+                    _suppressDiagnostics = previousSuppression;
+                    ApplyLexicalScopeExit(graph, pair.Key, destination, state, emitDiagnostics: true);
+                }
+            }
+        }
+
+        private FlowSnapshot ApplyLexicalScopeExit(
+            ControlFlowGraph graph,
+            BasicBlock source,
+            BasicBlock destination,
+            FlowSnapshot state,
+            bool emitDiagnostics)
+        {
+            FlowSnapshot result = CloneSnapshot(state);
+            HashSet<ISymbol> exitingSymbols = new(SymbolEqualityComparer.Default);
+            exitingSymbols.UnionWith(_localLifetimeRegions
+                .Where(pair => ContainsBlock(pair.Value, source.Ordinal)
+                    && !ContainsBlock(pair.Value, destination.Ordinal))
+                .Select(pair => pair.Key));
+            if (exitingSymbols.Count == 0)
+            {
+                return result;
+            }
+
+            foreach (HandleState handle in result.Handles.Values
+                .Where(handle => handle.Symbol is not null && exitingSymbols.Contains(handle.Symbol))
+                .ToArray())
+            {
+                if (!IsHandleEndedAtScopeExit(handle, source, destination) && emitDiagnostics)
+                {
+                    Report(
+                        NativeAllocationDiagnosticDescriptors.LifetimeEscape,
+                        handle.Syntax,
+                        handle.DisplayName);
+                }
+            }
+
+            foreach (OwnerState owner in result.Owners.Values
+                .Where(owner => owner.Symbol is not null && exitingSymbols.Contains(owner.Symbol))
+                .ToArray())
+            {
+                if (owner.RequiresDeterministicReturn
+                    && !owner.IsUsing
+                    && !owner.IsRegion
+                    && !IsOwnerEnded(owner)
+                    && emitDiagnostics)
+                {
+                    Report(
+                        NativeAllocationDiagnosticDescriptors.LifetimeEscape,
+                        owner.Syntax,
+                        owner.DisplayName);
+                }
+            }
+
+            foreach (ISymbol symbol in exitingSymbols)
+            {
+                result.Handles.Remove(symbol);
+                result.Owners.Remove(symbol);
+            }
+
+            return result;
+        }
+
+        private bool IsHandleEndedAtScopeExit(HandleState handle, BasicBlock source, BasicBlock destination)
+        {
+            if (handle.IsUsing || IsHandleEnded(handle))
+            {
+                return true;
+            }
+
+            return handle.Owner.IsRegion
+                && handle.Owner.Symbol is not null
+                && IsLifetimeLeaving(handle.Owner.Symbol, source, destination);
+        }
+
+        private static bool IsHandleEnded(HandleState handle)
+        {
+            return handle.Returned
+                && !handle.Ambiguous
+                && handle.GenerationRelation != GenerationRelationKind.Unknown;
+        }
+
+        private static bool IsOwnerEnded(OwnerState owner)
+        {
+            return (owner.Returned || owner.Disposed)
+                && !owner.Ambiguous
+                && owner.GenerationRelation != GenerationRelationKind.Unknown;
+        }
+
+        private bool IsLifetimeLeaving(ISymbol symbol, BasicBlock source, BasicBlock destination)
+        {
+            return _localLifetimeRegions.TryGetValue(symbol, out ControlFlowRegion? region)
+                && ContainsBlock(region, source.Ordinal)
+                && !ContainsBlock(region, destination.Ordinal);
         }
 
         private void VisitBlock(BasicBlock block)

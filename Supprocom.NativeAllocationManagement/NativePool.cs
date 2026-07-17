@@ -11,6 +11,8 @@ public sealed class NativePool<T> : IDisposable
 {
     private readonly NativeOwnerKernel _kernel;
 
+    internal NativeOwnerLifecycle CurrentLifecycle => _kernel.Lifecycle;
+
     /// <summary>
     /// Creates an active pool generation.
     /// </summary>
@@ -71,4 +73,3 @@ public sealed class NativePool<T> : IDisposable
         _kernel.Dispose();
     }
 }
-

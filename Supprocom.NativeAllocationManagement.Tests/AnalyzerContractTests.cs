@@ -868,6 +868,219 @@ public sealed class AnalyzerContractTests
     }
 
     [Fact]
+    public async Task NestedDefaultGcRootAbandonedReportsLifetimeEscape()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    NativePool<int> pool = new();
+                    {
+                        Pooled<int> value = pool.Rent(1);
+                    }
+
+                    pool.Dispose();
+                }
+            }
+            """);
+
+        Assert.Contains("NAM1003", NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task NestedRootFollowedOnlyByOwnerDisposeReportsTheRoot()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    NativePool<int> pool = new();
+                    {
+                        Pooled<int> value = pool.Rent(1);
+                    }
+
+                    pool.Dispose();
+                }
+            }
+            """);
+
+        Diagnostic[] lifetimeDiagnostics = diagnostics.Where(diagnostic => diagnostic.Id == "NAM1003").ToArray();
+        Assert.Single(lifetimeDiagnostics);
+        Assert.Contains("value", lifetimeDiagnostics[0].Properties["NAM.Provenance"]!);
+    }
+
+    [Fact]
+    public async Task NestedRootExplicitlyDisposedIsAccepted()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    NativePool<int> pool = new();
+                    {
+                        Pooled<int> value = pool.Rent(1);
+                        value.Dispose();
+                    }
+
+                    pool.Dispose();
+                }
+            }
+            """);
+
+        Assert.Empty(NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task NestedRootEndedByWholeGenerationReturnIsAccepted()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    NativePool<int> pool = new();
+                    {
+                        Pooled<int> value = pool.Rent(1);
+                        pool.ReturnToNativeMemory();
+                    }
+
+                    pool.LeaseFromMemory();
+                    pool.Dispose();
+                }
+            }
+            """);
+
+        Assert.Empty(NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task LoopLocalDisposedRootIsAcceptedForZeroOneAndManyIterations()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run(int iterations)
+                {
+                    NativePool<int> pool = new();
+                    for (int index = 0; index < iterations; index++)
+                    {
+                        Pooled<int> value = pool.Rent(1);
+                        value.Dispose();
+                    }
+
+                    pool.Dispose();
+                }
+            }
+            """);
+
+        Assert.Empty(NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task ActiveRootsLeavingSwitchBreakAndContinueEdgesAreRejected()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run(int value, bool continueLoop)
+                {
+                    NativePool<int> pool = new();
+                    while (continueLoop)
+                    {
+                        switch (value)
+                        {
+                            case 1:
+                                Pooled<int> switched = pool.Rent(1);
+                                break;
+                            default:
+                                Pooled<int> continued = pool.Rent(1);
+                                continue;
+                        }
+
+                        break;
+                    }
+
+                    pool.Dispose();
+                }
+            }
+            """);
+
+        Assert.True(NativeDiagnostics(diagnostics).Count(id => id == "NAM1003") >= 2);
+    }
+
+    [Fact]
+    public async Task ActiveRootsLeavingGotoFallthroughReturnAndExceptionEdgesAreRejected()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using System;
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void GotoPath()
+                {
+                    NativePool<int> pool = new();
+                    {
+                        Pooled<int> value = pool.Rent(1);
+                        goto Done;
+                    }
+
+                Done:
+                    pool.Dispose();
+                }
+
+                public static int ReturnPath()
+                {
+                    NativePool<int> pool = new();
+                    {
+                        Pooled<int> value = pool.Rent(1);
+                        return 42;
+                    }
+                }
+
+                public static void ExceptionPath()
+                {
+                    NativePool<int> pool = new();
+                    try
+                    {
+                        Pooled<int> value = pool.Rent(1);
+                        throw new InvalidOperationException();
+                    }
+                    catch (InvalidOperationException)
+                    {
+                    }
+
+                    pool.Dispose();
+                }
+            }
+            """);
+
+        Assert.True(NativeDiagnostics(diagnostics).Count(id => id == "NAM1003") >= 3);
+    }
+
+    [Fact]
     public async Task SwitchWithoutDefaultAndExceptionalExitRemainConservative()
     {
         ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(

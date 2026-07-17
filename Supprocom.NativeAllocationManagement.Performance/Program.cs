@@ -46,7 +46,7 @@ internal static class Program
         Console.WriteLine($"| changed-project incremental | {analyzer.IncrementalElapsedMs:F2} | {analyzer.IncrementalAllocatedBytes} | {analyzer.IncrementalDiagnostics} | {analyzer.IncrementalProjectsAnalyzed} of {analyzer.TotalProjects} | {analyzer.IncrementalOperationBlocks} of {analyzer.FullOperationBlocks} | no |");
         Console.WriteLine($"| cancellation | {analyzer.CancellationElapsedMs:F2} | n/a | n/a | n/a | n/a | {analyzer.CancellationObserved} |");
         Console.WriteLine();
-        Console.WriteLine($"Representative graph: {analyzer.TotalProjects} retained project models in a reference chain, {analyzer.FullOperationBlocks} cold method blocks, and project {analyzer.ChangedProjectId} edited at the leaf. The incremental scheduler reused {analyzer.RetainedProjects} unchanged project analyses and scheduled exactly {analyzer.IncrementalProjectsAnalyzed} project.");
+        Console.WriteLine($"Representative graph: {analyzer.TotalProjects} versioned project models in a reference chain, {analyzer.FullOperationBlocks} cold method blocks with 2 NAM-heavy and 10 ordinary methods per project, and heavy method 0 in project {analyzer.ChangedProjectId} edited. The retained cache hit projects [{analyzer.CacheHitProjectIds}], invalidated and reanalyzed projects [{analyzer.ReanalyzedProjectIds}], and the aggregate consumed {analyzer.AggregateOperationBlocks} total blocks ({analyzer.AggregateOperationBlocks - analyzer.IncrementalOperationBlocks} cached, {analyzer.IncrementalOperationBlocks} reanalyzed).");
         Console.WriteLine();
 
         Console.WriteLine("## Isolated workload measurements");
@@ -66,38 +66,61 @@ internal static class Program
     private static async Task<AnalyzerEvidence> MeasureAnalyzerAsync()
     {
         RepresentativeSolution solution = CreateRepresentativeSolution();
-        int fullOperationBlocks = CorpusProjects * MethodsPerProject;
 
         GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
         long coldAllocatedBefore = GC.GetTotalAllocatedBytes(precise: true);
         Stopwatch coldClock = Stopwatch.StartNew();
-        OperationBlockCounterAnalyzer coldCounter = new();
         ProjectAnalysis[] coldResults = await Task.WhenAll(
-            solution.Projects.Select(project => AnalyzeProjectAsync(project, CancellationToken.None, coldCounter)));
+            solution.Projects.Select(project => AnalyzeProjectAsync(project, CancellationToken.None)));
         coldClock.Stop();
         long coldAllocated = GC.GetTotalAllocatedBytes(precise: true) - coldAllocatedBefore;
+        int fullOperationBlocks = coldResults.Sum(result => result.OperationBlocks);
 
-        ProjectModel changedProject = solution.Projects[^1];
-        SyntaxTree editedTree = CSharpSyntaxTree.ParseText(
-            CreateCorpusSource(changedProject.Id).Replace("value[0] = 0;", "value[0] = 1;", StringComparison.Ordinal),
-            new CSharpParseOptions(LanguageVersion.Preview),
-            $"Project{changedProject.Id}.cs");
-        ProjectModel editedModel = changedProject with
-        {
-            Tree = editedTree,
-            Compilation = changedProject.Compilation.ReplaceSyntaxTree(changedProject.Tree, editedTree)
-        };
-
-        Dictionary<int, ProjectAnalysis> retainedAnalyses = coldResults.ToDictionary(result => result.ProjectId);
-        retainedAnalyses.Remove(changedProject.Id);
+        int changedProjectId = CorpusProjects / 2;
+        ProjectModel changedProject = solution.Projects[changedProjectId];
+        RepresentativeSolution editedSolution = CreateEditedSolution(solution, changedProjectId);
+        AnalysisCache cache = new(coldResults);
         GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
         long incrementalAllocatedBefore = GC.GetTotalAllocatedBytes(precise: true);
         Stopwatch incrementalClock = Stopwatch.StartNew();
-        OperationBlockCounterAnalyzer incrementalCounter = new();
-        ProjectAnalysis incrementalResult = await AnalyzeProjectAsync(editedModel, CancellationToken.None, incrementalCounter);
+        List<ProjectAnalysis> aggregateResults = [];
+        List<int> cacheHitProjects = [];
+        List<int> reanalyzedProjects = [];
+        foreach (ProjectModel project in editedSolution.Projects)
+        {
+            if (cache.TryGet(project, out ProjectAnalysis? cached) && cached is not null)
+            {
+                aggregateResults.Add(cached);
+                cacheHitProjects.Add(project.Id);
+                continue;
+            }
+
+            ProjectAnalysis analyzed = await AnalyzeProjectAsync(project, CancellationToken.None);
+            cache.Store(analyzed);
+            aggregateResults.Add(analyzed);
+            reanalyzedProjects.Add(project.Id);
+        }
+
+        int aggregateDiagnostics = aggregateResults.Sum(result => result.Diagnostics.Length);
+        int aggregateOperationBlocks = aggregateResults.Sum(result => result.OperationBlocks);
         incrementalClock.Stop();
         long incrementalAllocated = GC.GetTotalAllocatedBytes(precise: true) - incrementalAllocatedBefore;
-        _ = retainedAnalyses;
+
+        int expectedCacheHits = editedSolution.Projects.Count(project =>
+            ReferenceEquals(project.Compilation, solution.Projects[project.Id].Compilation));
+        int expectedReanalyzed = editedSolution.Projects.Count - expectedCacheHits;
+        if (cacheHitProjects.Count != expectedCacheHits
+            || reanalyzedProjects.Count != expectedReanalyzed
+            || aggregateOperationBlocks != fullOperationBlocks
+            || !cacheHitProjects.SequenceEqual(editedSolution.Projects
+                .Where(project => ReferenceEquals(project.Compilation, solution.Projects[project.Id].Compilation))
+                .Select(project => project.Id))
+            || !reanalyzedProjects.SequenceEqual(editedSolution.Projects
+                .Where(project => !ReferenceEquals(project.Compilation, solution.Projects[project.Id].Compilation))
+                .Select(project => project.Id)))
+        {
+            throw new InvalidOperationException("The retained incremental cache did not produce the expected identity and aggregate counts.");
+        }
 
         CancellationTokenSource cancellation = new();
         cancellation.Cancel();
@@ -120,24 +143,28 @@ internal static class Program
             coldResults.Sum(result => result.Diagnostics.Length),
             incrementalClock.Elapsed.TotalMilliseconds,
             incrementalAllocated,
-            incrementalResult.Diagnostics.Length,
+            aggregateDiagnostics,
             cancellationClock.Elapsed.TotalMilliseconds,
             cancellationObserved,
             solution.Projects.Count,
-            solution.Projects.Count - 1,
-            changedProject.Id,
+            changedProjectId,
             fullOperationBlocks,
-            coldCounter.Count,
-            incrementalCounter.Count);
+            coldResults.Sum(result => result.OperationBlocks),
+            reanalyzedProjects.Sum(projectId => aggregateResults.First(result => result.ProjectId == projectId).OperationBlocks),
+            cacheHitProjects.Count,
+            reanalyzedProjects.Count,
+            string.Join(",", cacheHitProjects),
+            string.Join(",", reanalyzedProjects),
+            aggregateOperationBlocks);
     }
 
     private static async Task<ProjectAnalysis> AnalyzeProjectAsync(
         ProjectModel project,
-        CancellationToken cancellationToken,
-        OperationBlockCounterAnalyzer counter)
+        CancellationToken cancellationToken)
     {
+        OperationBlockCounterAnalyzer counter = new();
         ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(project.Compilation, cancellationToken, counter);
-        return new ProjectAnalysis(project.Id, diagnostics);
+        return new ProjectAnalysis(project.Id, project.Compilation, diagnostics, counter.Count);
     }
 
     private static async Task<ImmutableArray<Diagnostic>> AnalyzeAsync(
@@ -182,14 +209,62 @@ internal static class Program
         return new RepresentativeSolution(projects);
     }
 
-    private static string CreateCorpusSource(int project)
+    private static RepresentativeSolution CreateEditedSolution(
+        RepresentativeSolution original,
+        int changedProjectId)
+    {
+        List<ProjectModel> projects = [];
+        MetadataReference[] commonReferences =
+        [
+            .. GetTrustedPlatformReferences(),
+            MetadataReference.CreateFromFile(typeof(NativePool<int>).Assembly.Location)
+        ];
+
+        for (int project = 0; project < original.Projects.Count; project++)
+        {
+            if (project < changedProjectId)
+            {
+                projects.Add(original.Projects[project]);
+                continue;
+            }
+
+            SyntaxTree tree = CSharpSyntaxTree.ParseText(
+                CreateCorpusSource(project, editHeavyMethod: project == changedProjectId),
+                new CSharpParseOptions(LanguageVersion.Preview),
+                $"Project{project}.edited.cs");
+            List<MetadataReference> references = [.. commonReferences];
+            if (projects.Count > 0)
+            {
+                references.Add(projects[^1].Compilation.ToMetadataReference());
+            }
+
+            CSharpCompilation compilation = CSharpCompilation.Create(
+                $"NativeAllocationPerformanceProject{project}.Edited",
+                [tree],
+                references,
+                new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, allowUnsafe: true));
+            projects.Add(new ProjectModel(project, compilation, tree));
+        }
+
+        return new RepresentativeSolution(projects);
+    }
+
+    private static string CreateCorpusSource(int project, bool editHeavyMethod = false)
     {
         StringBuilder source = new();
         source.AppendLine("using Supprocom.NativeAllocationManagement;");
         source.AppendLine($"public static class CorpusProject{project} {{");
         for (int method = 0; method < MethodsPerProject; method++)
         {
-            source.AppendLine($"public static void Method{method}() {{ NativePool<int> pool = new(); Pooled<int> value = pool.Rent(1); value[0] = 0; value.Dispose(); pool.Dispose(); }}");
+            if (method < 2)
+            {
+                int value = editHeavyMethod && method == 0 ? 1 : 0;
+                source.AppendLine($"public static void Method{method}() {{ NativePool<int> pool = new(); Pooled<int> value = pool.Rent(1); value[0] = {value}; value.Dispose(); pool.Dispose(); }}");
+            }
+            else
+            {
+                source.AppendLine($"public static int Method{method}() => {project} + {method};");
+            }
         }
 
         source.AppendLine("}");
@@ -501,9 +576,44 @@ internal static class Program
         internal IReadOnlyList<ProjectModel> Projects { get; }
     }
 
+    private sealed class AnalysisCache
+    {
+        private readonly Dictionary<int, ProjectAnalysis> _entries = [];
+
+        internal AnalysisCache(IEnumerable<ProjectAnalysis> analyses)
+        {
+            foreach (ProjectAnalysis analysis in analyses)
+            {
+                Store(analysis);
+            }
+        }
+
+        internal void Store(ProjectAnalysis analysis)
+        {
+            _entries[analysis.ProjectId] = analysis;
+        }
+
+        internal bool TryGet(ProjectModel project, out ProjectAnalysis? analysis)
+        {
+            if (_entries.TryGetValue(project.Id, out ProjectAnalysis? cached)
+                && ReferenceEquals(cached.Compilation, project.Compilation))
+            {
+                analysis = cached;
+                return true;
+            }
+
+            analysis = null;
+            return false;
+        }
+    }
+
     private sealed record ProjectModel(int Id, CSharpCompilation Compilation, SyntaxTree Tree);
 
-    private sealed record ProjectAnalysis(int ProjectId, ImmutableArray<Diagnostic> Diagnostics);
+    private sealed record ProjectAnalysis(
+        int ProjectId,
+        CSharpCompilation Compilation,
+        ImmutableArray<Diagnostic> Diagnostics,
+        int OperationBlocks);
 
     private sealed record AnalyzerEvidence(
         double ColdElapsedMs,
@@ -515,14 +625,18 @@ internal static class Program
         double CancellationElapsedMs,
         bool CancellationObserved,
         int TotalProjects,
-        int RetainedProjects,
         int ChangedProjectId,
         int FullOperationBlocks,
         int ColdOperationBlocks,
-        int IncrementalOperationBlocks)
+        int IncrementalOperationBlocks,
+        int CacheHitProjects,
+        int ReanalyzedProjects,
+        string CacheHitProjectIds,
+        string ReanalyzedProjectIds,
+        int AggregateOperationBlocks)
     {
         internal int ColdProjectsAnalyzed => TotalProjects;
-        internal int IncrementalProjectsAnalyzed => 1;
+        internal int IncrementalProjectsAnalyzed => ReanalyzedProjects;
     }
 
     private sealed record WorkloadEvidence(

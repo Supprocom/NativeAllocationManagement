@@ -9,6 +9,8 @@ public readonly ref struct NativeRegion
 {
     private readonly NativeOwnerKernel? _kernel;
 
+    internal NativeOwnerLifecycle CurrentLifecycle => _kernel?.Lifecycle ?? NativeOwnerLifecycle.Uninitialized;
+
     /// <summary>
     /// Creates a lazily allocated region using deferred cleanup by default.
     /// </summary>
@@ -97,4 +99,3 @@ public readonly ref struct NativeRegion
         return alignment;
     }
 }
-
