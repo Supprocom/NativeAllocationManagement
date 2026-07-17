@@ -59,6 +59,65 @@ public sealed class PackageSmokeTests
     }
 
     [Fact]
+    public async Task PackageAnalyzerRejectsNestedRootAbandonedBeforeOwnerDisposeInIsolatedConsumer()
+    {
+        PackageEvidence package = await GetPackageAsync();
+        WriteEvidence(package);
+        string consumerRoot = CreateConsumerRoot();
+        try
+        {
+            WriteConsumerProject(consumerRoot, package, excludeAnalyzer: false, suppressDiagnostics: false);
+            File.WriteAllText(
+                Path.Combine(consumerRoot, "Program.cs"),
+                """
+                using Supprocom.NativeAllocationManagement;
+
+                public static class Consumer
+                {
+                    public static void AbandonNestedLease()
+                    {
+                        NativePool<int> pool = new();
+                        {
+                            Pooled<int> value = pool.Rent(1);
+                        }
+
+                        pool.Dispose();
+                    }
+
+                    public static void AbandonNestedLeaseBeforeOwnerDispose()
+                    {
+                        NativePool<int> pool = new();
+                        {
+                            Pooled<int> value = pool.Rent(1);
+                        }
+
+                        pool.Dispose();
+                    }
+                }
+                """);
+
+            string project = Path.Combine(consumerRoot, "Consumer.csproj");
+            CommandResult restore = await RunDotnetAsync(
+                $"restore \"{project}\" --nologo --force --no-cache --packages \"{Path.Combine(consumerRoot, ".packages")}\" --source \"{package.SourceDirectory}\"",
+                consumerRoot);
+            Assert.True(restore.ExitCode == 0, restore.Output);
+
+            CommandResult build = await RunDotnetAsync($"build \"{project}\" --no-restore --nologo", consumerRoot);
+            Assert.True(build.ExitCode != 0, build.Output);
+            string[] diagnostics = build.Output
+                .Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries)
+                .Where(line => line.Contains("error NAM1003", StringComparison.Ordinal))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            Assert.Equal(2, diagnostics.Length);
+        }
+        finally
+        {
+            DeleteConsumerRoot(consumerRoot);
+        }
+    }
+
+    [Fact]
     public async Task PackageAnalyzerRejectsStaleHandleInAnIsolatedConsumer()
     {
         PackageEvidence package = await GetPackageAsync();
