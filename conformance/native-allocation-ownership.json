@@ -311,6 +311,24 @@
     "source": "using System;\nusing Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativePool<int> pool = new(); try { Pooled<int> value = pool.Rent(1); throw new InvalidOperationException(); } catch (InvalidOperationException) { } pool.Dispose(); } }"
   },
   {
+    "name": "delayed-pool-activation",
+    "compilerRejected": false,
+    "expectedDiagnostics": [],
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativePool<int> pool = new(doNotLeaseOnDeclaration: true); pool.LeaseFromMemory(); Pooled<int> value = pool.Rent(1); value.Dispose(); pool.Dispose(); } }"
+  },
+  {
+    "name": "delayed-region-explicit-using-statement",
+    "compilerRejected": false,
+    "expectedDiagnostics": [],
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { using (NativeRegion region = new(doNotLeaseOnDeclaration: true)) { region.LeaseFromMemory(); Local<int> value = region.Lease<int>(1); value[0] = 42; } } }"
+  },
+  {
+    "name": "region-field-compiler-boundary",
+    "compilerRejected": true,
+    "expectedDiagnostics": [],
+    "source": "using Supprocom.NativeAllocationManagement;\npublic sealed class Holder { private NativeRegion _region = new(); }"
+  },
+  {
     "name": "nested-fallthrough-leak",
     "compilerRejected": false,
     "expectedDiagnostics": [

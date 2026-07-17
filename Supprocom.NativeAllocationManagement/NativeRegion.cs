@@ -19,16 +19,32 @@ public readonly ref struct NativeRegion
         _kernel = NativeOwnerKernel.CreateRegion(
             preAllocateBytes: 0,
             "NativeRegion",
-            NativeReturn.ToGarbageCollector);
+            NativeReturn.ToGarbageCollector,
+            doNotLeaseOnDeclaration: false);
+    }
+
+    /// <summary>
+    /// Creates a region that remains unleased until <see cref="LeaseFromMemory"/> succeeds.
+    /// </summary>
+    /// <param name="doNotLeaseOnDeclaration">When true, defer the first generation until <see cref="LeaseFromMemory"/>.</param>
+    public NativeRegion(bool doNotLeaseOnDeclaration)
+    {
+        _kernel = NativeOwnerKernel.CreateRegion(
+            preAllocateBytes: 0,
+            "NativeRegion",
+            NativeReturn.ToGarbageCollector,
+            doNotLeaseOnDeclaration);
     }
 
     /// <summary>
     /// Creates a lazily allocated region with an explicit cleanup policy.
     /// </summary>
-    public NativeRegion(NativeReturn returnOnDispose)
+    public NativeRegion(
+        NativeReturn returnOnDispose,
+        bool doNotLeaseOnDeclaration = false)
     {
         NativeReturnValidation.Validate(returnOnDispose, nameof(returnOnDispose));
-        _kernel = NativeOwnerKernel.CreateRegion(0, "NativeRegion", returnOnDispose);
+        _kernel = NativeOwnerKernel.CreateRegion(0, "NativeRegion", returnOnDispose, doNotLeaseOnDeclaration);
     }
 
     /// <summary>
@@ -36,24 +52,33 @@ public readonly ref struct NativeRegion
     /// </summary>
     public NativeRegion(
         nuint preAllocateBytes,
-        NativeReturn returnOnDispose = NativeReturn.ToGarbageCollector)
+        NativeReturn returnOnDispose = NativeReturn.ToGarbageCollector,
+        bool doNotLeaseOnDeclaration = false)
     {
         NativeReturnValidation.Validate(returnOnDispose, nameof(returnOnDispose));
-        _kernel = NativeOwnerKernel.CreateRegion(preAllocateBytes, "NativeRegion", returnOnDispose);
+        _kernel = NativeOwnerKernel.CreateRegion(preAllocateBytes, "NativeRegion", returnOnDispose, doNotLeaseOnDeclaration);
     }
 
     /// <summary>
-    /// Allocates a typed local range from the region's current generation.
+    /// Leases a typed local range from the region's current generation.
     /// </summary>
-    public Local<T> Allocate<T>(int length)
+    public Local<T> Lease<T>(int length)
         where T : unmanaged
     {
-        NativeOwnerKernel kernel = GetKernel(nameof(Allocate));
-        NativeRegionAllocation allocation = kernel.AllocateRegion(
+        NativeOwnerKernel kernel = GetKernel(nameof(Lease));
+        NativeRegionAllocation allocation = kernel.LeaseRegion(
             length,
             Unsafe.SizeOf<T>(),
             GetAlignment<T>());
         return new Local<T>(kernel, allocation.Generation, allocation.AllocationId, allocation.Length, allocation.Capacity);
+    }
+
+    /// <summary>
+    /// Publishes the initial region generation when declaration leasing was deferred.
+    /// </summary>
+    public void LeaseFromMemory()
+    {
+        GetKernel(nameof(LeaseFromMemory)).LeaseFromMemory();
     }
 
     /// <summary>

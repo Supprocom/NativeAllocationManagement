@@ -21,7 +21,9 @@ public enum NativeOwnerLifecycle
     /// <summary>The owner is permanently closed.</summary>
     Disposed,
     /// <summary>The owner-shaped value was never constructed.</summary>
-    Uninitialized
+    Uninitialized,
+    /// <summary>The owner was declared without leasing its first generation.</summary>
+    Unleased
 }
 
 internal enum NativeAllocationLifecycle
@@ -572,7 +574,8 @@ internal sealed class NativeOwnerKernel
         NativeReturn returnOnDispose,
         int elementSize,
         int initialCapacity,
-        nuint initialRegionBytes)
+        nuint initialRegionBytes,
+        bool doNotLeaseOnDeclaration)
     {
         _kind = kind;
         _ownerKind = ownerKind;
@@ -581,7 +584,14 @@ internal sealed class NativeOwnerKernel
         _initialCapacity = initialCapacity;
         _initialRegionBytes = initialRegionBytes;
         _generation = 0;
-        _lifecycle = NativeOwnerLifecycle.Active;
+        _lifecycle = doNotLeaseOnDeclaration
+            ? NativeOwnerLifecycle.Unleased
+            : NativeOwnerLifecycle.Active;
+
+        if (doNotLeaseOnDeclaration)
+        {
+            return;
+        }
 
         NativeGeneration generation = new(_generation);
         _current = generation;
@@ -616,7 +626,8 @@ internal sealed class NativeOwnerKernel
         int initialCapacity,
         int elementSize,
         string ownerKind,
-        NativeReturn returnOnDispose)
+        NativeReturn returnOnDispose,
+        bool doNotLeaseOnDeclaration)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(initialCapacity);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(elementSize);
@@ -627,13 +638,15 @@ internal sealed class NativeOwnerKernel
             returnOnDispose,
             elementSize,
             initialCapacity,
-            initialRegionBytes: 0);
+            initialRegionBytes: 0,
+            doNotLeaseOnDeclaration);
     }
 
     internal static NativeOwnerKernel CreateRegion(
         nuint preAllocateBytes,
         string ownerKind,
-        NativeReturn returnOnDispose)
+        NativeReturn returnOnDispose,
+        bool doNotLeaseOnDeclaration)
     {
         NativeReturnValidation.Validate(returnOnDispose, nameof(returnOnDispose));
         return new NativeOwnerKernel(
@@ -642,7 +655,8 @@ internal sealed class NativeOwnerKernel
             returnOnDispose,
             elementSize: 0,
             initialCapacity: 0,
-            preAllocateBytes);
+            preAllocateBytes,
+            doNotLeaseOnDeclaration);
     }
 
     internal NativePoolLease Rent(int length)
@@ -680,7 +694,7 @@ internal sealed class NativeOwnerKernel
         }
     }
 
-    internal NativeRegionAllocation AllocateRegion(int length, int elementSize, nuint alignment)
+    internal NativeRegionAllocation LeaseRegion(int length, int elementSize, nuint alignment)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(length);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(elementSize);
@@ -693,10 +707,10 @@ internal sealed class NativeOwnerKernel
 
         lock (_gate)
         {
-            NativeGeneration generation = EnsureActiveLocked("Allocate");
+            NativeGeneration generation = EnsureActiveLocked("Lease");
             if (_kind != NativeOwnerKind.Region)
             {
-                throw CreateStateException("Allocate", "A pool does not expose heterogeneous region allocations.", allocationId: 0);
+                throw CreateStateException("Lease", "A pool does not expose heterogeneous region allocations.", allocationId: 0);
             }
 
             NativeSegment? segment = null;
@@ -861,15 +875,10 @@ internal sealed class NativeOwnerKernel
     {
         lock (_gate)
         {
-            if (_kind != NativeOwnerKind.Pool)
-            {
-                throw CreateStateException("LeaseFromMemory", "NativeRegion is a single-generation lexical owner and cannot be re-leased.", 0);
-            }
-
             EnsureNotDisposedLocked("LeaseFromMemory", 0);
             if (_lifecycle == NativeOwnerLifecycle.Active)
             {
-                throw CreateStateException("LeaseFromMemory", "The pool is already active; return its current generation first.", 0);
+                throw CreateStateException("LeaseFromMemory", "The owner is already active; return its current generation first.", 0);
             }
 
             if (_lifecycle == NativeOwnerLifecycle.Returning)
@@ -877,12 +886,33 @@ internal sealed class NativeOwnerKernel
                 throw CreateInUseException("LeaseFromMemory", _generation, 0, 0, "The previous generation is still returning.");
             }
 
+            if (_kind == NativeOwnerKind.Region && _lifecycle == NativeOwnerLifecycle.Returned)
+            {
+                throw CreateStateException("LeaseFromMemory", "NativeRegion is a single-generation lexical owner and cannot be re-leased.", 0);
+            }
+
+            if (_lifecycle is not (NativeOwnerLifecycle.Unleased or NativeOwnerLifecycle.Returned))
+            {
+                throw CreateStateException("LeaseFromMemory", "The owner has no leasable generation.", 0);
+            }
+
             NativeGeneration candidate = new(_generation);
             try
             {
-                if (_initialCapacity > 0)
+                if (_kind == NativeOwnerKind.Pool && _initialCapacity > 0)
                 {
                     candidate.AvailableSlabs.Add(AddPoolSlabLocked(candidate, _initialCapacity, "pool re-lease", _lifecycle));
+                }
+                else if (_kind == NativeOwnerKind.Region && _initialRegionBytes > 0)
+                {
+                    NativeSegment segment = NativeSegment.AllocateZeroed(
+                        _initialRegionBytes,
+                        _ownerKind,
+                        candidate.Number,
+                        "initial region reservation",
+                        _lifecycle);
+                    candidate.Owner.AddSegment(segment);
+                    candidate.RegionSegment = segment;
                 }
             }
             catch
@@ -911,6 +941,13 @@ internal sealed class NativeOwnerKernel
             }
 
             if (_lifecycle == NativeOwnerLifecycle.Returned)
+            {
+                _lifecycle = NativeOwnerLifecycle.Disposed;
+                GC.SuppressFinalize(this);
+                return;
+            }
+
+            if (_lifecycle == NativeOwnerLifecycle.Unleased)
             {
                 _lifecycle = NativeOwnerLifecycle.Disposed;
                 GC.SuppressFinalize(this);
@@ -952,6 +989,11 @@ internal sealed class NativeOwnerKernel
             if (_lifecycle == NativeOwnerLifecycle.Returning)
             {
                 throw CreateInUseException(operation, _generation, 0, 0, "Another lifecycle transition is already returning the generation.");
+            }
+
+            if (_lifecycle == NativeOwnerLifecycle.Unleased)
+            {
+                throw CreateStateException(operation, "The owner has not been leased; activate it with LeaseFromMemory first.", 0);
             }
 
             NativeGeneration generation = _current!;
@@ -1011,6 +1053,11 @@ internal sealed class NativeOwnerKernel
         if (_lifecycle == NativeOwnerLifecycle.Returning)
         {
             throw CreateInUseException(operation, generationNumber, allocationId, 0, "The owner is returning and rejects new operations.");
+        }
+
+        if (_lifecycle == NativeOwnerLifecycle.Unleased)
+        {
+            throw CreateStateException(operation, "The owner has not been leased; activate it with LeaseFromMemory first.", allocationId);
         }
 
         return _current ?? throw new InvalidOperationException("The active native owner has no generation.");

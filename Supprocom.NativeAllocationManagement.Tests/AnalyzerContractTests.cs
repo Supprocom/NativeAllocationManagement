@@ -159,10 +159,21 @@ public sealed class AnalyzerContractTests
                 public static void Run()
                 {
                     NativeRegion unscoped = new();
-                    Local<int> first = unscoped.Allocate<int>(1);
-                    using NativeRegion outer = new();
-                    using NativeRegion inner = new();
-                    Local<int> second = outer.Allocate<int>(1);
+                    Local<int> first = unscoped.Lease<int>(1);
+                    unscoped.Dispose();
+                    {
+                        NativeRegion naked = new();
+                        Local<int> nakedValue = naked.Lease<int>(1);
+                        naked.Dispose();
+                    }
+                    using (NativeRegion outer = new())
+                    {
+                        using (NativeRegion inner = new())
+                        {
+                            Local<int> second = outer.Lease<int>(1);
+                            _ = second.Length;
+                        }
+                    }
                 }
             }
             """);
@@ -170,6 +181,82 @@ public sealed class AnalyzerContractTests
         string[] ids = NativeDiagnostics(diagnostics);
         Assert.Contains("NAM1006", ids);
         Assert.Contains("NAM1010", ids);
+    }
+
+    [Fact]
+    public async Task RegionUsingStatementMustHaveABracedBody()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    using (NativeRegion region = new())
+                        Local<int> local = region.Lease<int>(1);
+                }
+            }
+            """);
+
+        string[] ids = NativeDiagnostics(diagnostics);
+        Assert.Contains("NAM1006", ids);
+        Assert.DoesNotContain("NAM1012", ids);
+    }
+
+    [Fact]
+    public async Task RegionParametersAndFactoryReturnsAreRejected()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static NativeRegion Create() => new();
+
+                public static NativeRegion Alias(NativeRegion region)
+                {
+                    NativeRegion alias = region;
+                    return alias;
+                }
+            }
+            """);
+
+        string[] ids = NativeDiagnostics(diagnostics);
+        Assert.Contains("NAM1006", ids);
+        Assert.Contains("NAM1001", ids);
+    }
+
+    [Fact]
+    public async Task RegionOrdinaryLocalInTryFinallyIsStillRejected()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    NativeRegion region = new();
+                    try
+                    {
+                        Local<int> value = region.Lease<int>(1);
+                        value[0] = 1;
+                    }
+                    finally
+                    {
+                        region.Dispose();
+                    }
+                }
+            }
+            """);
+
+        string[] ids = NativeDiagnostics(diagnostics);
+        Assert.Contains("NAM1006", ids);
+        Assert.DoesNotContain("NAM1012", ids);
     }
 
     [Fact]
@@ -412,7 +499,7 @@ public sealed class AnalyzerContractTests
                     Local<int> value;
                     using (NativeRegion region = new())
                     {
-                        value = region.Allocate<int>(1);
+                        value = region.Lease<int>(1);
                     }
 
                     _ = value.Length;
@@ -424,56 +511,170 @@ public sealed class AnalyzerContractTests
     }
 
     [Fact]
-    public async Task TopLevelUsingDeclarationKeepsRegionLocalInsideCompilationUnitScope()
+    public async Task ExplicitRegionUsingStatementWithDelayedActivationIsAccepted()
     {
         ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
             """
             using Supprocom.NativeAllocationManagement;
 
-            using NativeRegion region = new();
-            Local<int> value = region.Allocate<int>(1);
-            value[0] = 42;
+                public static void Run()
+                {
+                    using (NativeRegion region = new(doNotLeaseOnDeclaration: true))
+                    {
+                        region.LeaseFromMemory();
+                        Local<int> value = region.Lease<int>(1);
+                        value[0] = 42;
+                    }
+                }
             """);
 
-        Assert.DoesNotContain("NAM1012", NativeDiagnostics(diagnostics));
-        Assert.DoesNotContain("NAM1010", NativeDiagnostics(diagnostics));
+        Assert.Empty(NativeDiagnostics(diagnostics));
     }
 
     [Fact]
-    public async Task TopLevelRegionLocalCannotEscapeThroughAnOrdinaryCall()
+    public async Task DelayedPoolAndRegionActivationAreAcceptedOnlyAfterPublication()
     {
         ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
             """
             using Supprocom.NativeAllocationManagement;
 
-            using NativeRegion region = new();
-            Local<int> value = region.Allocate<int>(1);
-            Consumer.Take(value);
-
-            public static class Consumer
+            public static class Sample
             {
-                public static void Take(Local<int> value) { }
+                public static void Run()
+                {
+                    using NativePool<int> pool = new(doNotLeaseOnDeclaration: true);
+                    pool.LeaseFromMemory();
+                    using Pooled<int> values = pool.Rent(1);
+
+                    using (NativeRegion region = new(doNotLeaseOnDeclaration: true))
+                    {
+                        region.LeaseFromMemory();
+                        Local<int> local = region.Lease<int>(1);
+                        local[0] = values[0];
+                    }
+                }
             }
             """);
 
-        Assert.Contains("NAM1012", NativeDiagnostics(diagnostics));
+        Assert.Empty(NativeDiagnostics(diagnostics));
     }
 
     [Fact]
-    public async Task TopLevelNestedUsingDeclarationsRemainRejected()
+    public async Task UnleasedPoolAndRegionRejectUseBeforeActivation()
     {
         ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
             """
             using Supprocom.NativeAllocationManagement;
 
-            using NativeRegion outer = new();
-            using NativeRegion inner = new();
-            Local<int> value = outer.Allocate<int>(1);
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    NativePool<int> pool = new(doNotLeaseOnDeclaration: true);
+                    Pooled<int> values = pool.Rent(1);
+                    pool.Dispose();
+
+                    using (NativeRegion region = new(doNotLeaseOnDeclaration: true))
+                    {
+                        Local<int> local = region.Lease<int>(1);
+                        _ = local.Length;
+                    }
+                }
+            }
+            """);
+
+        string[] ids = NativeDiagnostics(diagnostics);
+        Assert.Equal(2, ids.Count(id => id == "NAM1009"));
+    }
+
+    [Fact]
+    public async Task AmbiguousDelayedActivationRemainsUnsafe()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run(bool activate)
+                {
+                    NativePool<int> pool = new(doNotLeaseOnDeclaration: true);
+                    if (activate)
+                    {
+                        pool.LeaseFromMemory();
+                    }
+
+                    Pooled<int> values = pool.Rent(1);
+                    values.Dispose();
+                    pool.Dispose();
+                }
+            }
+            """);
+
+        Assert.Contains("NAM1009", NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task TopLevelRegionUsingDeclarationIsRejectedWithoutLocalEscape()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            using NativeRegion region = new(doNotLeaseOnDeclaration: true);
+            region.LeaseFromMemory();
+            Local<int> value = region.Lease<int>(1);
             value[0] = 42;
             """);
 
-        Assert.Contains("NAM1010", NativeDiagnostics(diagnostics));
-        Assert.DoesNotContain("NAM1012", NativeDiagnostics(diagnostics));
+        string[] ids = NativeDiagnostics(diagnostics);
+        Assert.Contains("NAM1006", ids);
+        Assert.DoesNotContain("NAM1012", ids);
+    }
+
+    [Fact]
+    public async Task BlockRegionUsingDeclarationIsRejectedWithoutLocalEscape()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    using NativeRegion region = new(doNotLeaseOnDeclaration: true);
+                    region.LeaseFromMemory();
+                    Local<int> value = region.Lease<int>(1);
+                    value[0] = 42;
+                }
+            }
+            """);
+
+        string[] ids = NativeDiagnostics(diagnostics);
+        Assert.Contains("NAM1006", ids);
+        Assert.DoesNotContain("NAM1012", ids);
+    }
+
+    [Fact]
+    public async Task RegionUsingDeclarationsDoNotCreateNestedRegionDiagnostics()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            using NativeRegion outer = new(doNotLeaseOnDeclaration: true);
+            using NativeRegion inner = new(doNotLeaseOnDeclaration: true);
+            outer.LeaseFromMemory();
+            inner.LeaseFromMemory();
+            Local<int> value = outer.Lease<int>(1);
+            value[0] = 42;
+            """);
+
+        string[] ids = NativeDiagnostics(diagnostics);
+        Assert.Equal(2, ids.Count(id => id == "NAM1006"));
+        Assert.DoesNotContain("NAM1010", ids);
+        Assert.DoesNotContain("NAM1012", ids);
     }
 
     [Fact]
@@ -489,13 +690,13 @@ public sealed class AnalyzerContractTests
                 {
                     using (NativeRegion first = new())
                     {
-                        Local<int> value = first.Allocate<int>(1);
+                        Local<int> value = first.Lease<int>(1);
                         value[0] = 1;
                     }
 
                     using (NativeRegion second = new())
                     {
-                        Local<int> value = second.Allocate<int>(1);
+                        Local<int> value = second.Lease<int>(1);
                         value[0] = 2;
                     }
                 }

@@ -35,9 +35,17 @@ public sealed class PackageSmokeTests
                 {
                     public static void Run()
                     {
-                        using NativePool<int> pool = new();
+                        using NativePool<int> pool = new(doNotLeaseOnDeclaration: true);
+                        pool.LeaseFromMemory();
                         using Pooled<int> values = pool.Rent(1);
                         values[0] = 7;
+
+                        using (NativeRegion region = new(doNotLeaseOnDeclaration: true))
+                        {
+                            region.LeaseFromMemory();
+                            Local<int> local = region.Lease<int>(1);
+                            local[0] = values[0];
+                        }
                     }
                 }
                 """);
@@ -59,7 +67,7 @@ public sealed class PackageSmokeTests
     }
 
     [Fact]
-    public async Task PackageAnalyzerAcceptsTopLevelRegionUsingDeclaration()
+    public async Task PackageAnalyzerAcceptsExplicitRegionUsingStatementWithDelayedActivation()
     {
         PackageEvidence package = await GetPackageAsync();
         WriteEvidence(package);
@@ -72,9 +80,12 @@ public sealed class PackageSmokeTests
                 """
                 using Supprocom.NativeAllocationManagement;
 
-                using NativeRegion region = new();
-                Local<int> value = region.Allocate<int>(1);
-                value[0] = 42;
+                using (NativeRegion region = new(doNotLeaseOnDeclaration: true))
+                {
+                    region.LeaseFromMemory();
+                    Local<int> value = region.Lease<int>(1);
+                    value[0] = 42;
+                }
                 """);
 
             string project = Path.Combine(consumerRoot, "Consumer.csproj");
@@ -93,7 +104,7 @@ public sealed class PackageSmokeTests
     }
 
     [Fact]
-    public async Task PackageAnalyzerRejectsTopLevelRegionLocalEscape()
+    public async Task PackageAnalyzerRejectsTopLevelRegionUsingDeclarationWithoutLocalEscape()
     {
         PackageEvidence package = await GetPackageAsync();
         WriteEvidence(package);
@@ -106,49 +117,9 @@ public sealed class PackageSmokeTests
                 """
                 using Supprocom.NativeAllocationManagement;
 
-                using NativeRegion region = new();
-                Local<int> value = region.Allocate<int>(1);
-                Consumer.Take(value);
-
-                public static class Consumer
-                {
-                    public static void Take(Local<int> value) { }
-                }
-                """);
-
-            string project = Path.Combine(consumerRoot, "Consumer.csproj");
-            CommandResult restore = await RunDotnetAsync(
-                $"restore \"{project}\" --nologo --force --no-cache --packages \"{Path.Combine(consumerRoot, ".packages")}\" --source \"{package.SourceDirectory}\"",
-                consumerRoot);
-            Assert.True(restore.ExitCode == 0, restore.Output);
-
-            CommandResult build = await RunDotnetAsync($"build \"{project}\" --no-restore --nologo", consumerRoot);
-            Assert.True(build.ExitCode != 0, build.Output);
-            Assert.Contains("NAM1012", build.Output, StringComparison.OrdinalIgnoreCase);
-        }
-        finally
-        {
-            DeleteConsumerRoot(consumerRoot);
-        }
-    }
-
-    [Fact]
-    public async Task PackageAnalyzerRejectsTopLevelNestedRegionsWithoutMisclassifyingTheLocal()
-    {
-        PackageEvidence package = await GetPackageAsync();
-        WriteEvidence(package);
-        string consumerRoot = CreateConsumerRoot();
-        try
-        {
-            WriteConsumerProject(consumerRoot, package, excludeAnalyzer: false, suppressDiagnostics: false, executable: true);
-            File.WriteAllText(
-                Path.Combine(consumerRoot, "Program.cs"),
-                """
-                using Supprocom.NativeAllocationManagement;
-
-                using NativeRegion outer = new();
-                using NativeRegion inner = new();
-                Local<int> value = outer.Allocate<int>(1);
+                using NativeRegion region = new(doNotLeaseOnDeclaration: true);
+                region.LeaseFromMemory();
+                Local<int> value = region.Lease<int>(1);
                 value[0] = 42;
                 """);
 
@@ -160,8 +131,180 @@ public sealed class PackageSmokeTests
 
             CommandResult build = await RunDotnetAsync($"build \"{project}\" --no-restore --nologo", consumerRoot);
             Assert.True(build.ExitCode != 0, build.Output);
-            Assert.Contains("NAM1010", build.Output, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("NAM1006", build.Output, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("NAM1012", build.Output, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            DeleteConsumerRoot(consumerRoot);
+        }
+    }
+
+    [Fact]
+    public async Task PackageAnalyzerRejectsRegionUsingDeclarationsWithoutNestedOrLocalDiagnostics()
+    {
+        PackageEvidence package = await GetPackageAsync();
+        WriteEvidence(package);
+        string consumerRoot = CreateConsumerRoot();
+        try
+        {
+            WriteConsumerProject(consumerRoot, package, excludeAnalyzer: false, suppressDiagnostics: false, executable: true);
+            File.WriteAllText(
+                Path.Combine(consumerRoot, "Program.cs"),
+                """
+                using Supprocom.NativeAllocationManagement;
+
+                using NativeRegion outer = new(doNotLeaseOnDeclaration: true);
+                using NativeRegion inner = new(doNotLeaseOnDeclaration: true);
+                outer.LeaseFromMemory();
+                inner.LeaseFromMemory();
+                Local<int> value = outer.Lease<int>(1);
+                value[0] = 42;
+                """);
+
+            string project = Path.Combine(consumerRoot, "Consumer.csproj");
+            CommandResult restore = await RunDotnetAsync(
+                $"restore \"{project}\" --nologo --force --no-cache --packages \"{Path.Combine(consumerRoot, ".packages")}\" --source \"{package.SourceDirectory}\"",
+                consumerRoot);
+            Assert.True(restore.ExitCode == 0, restore.Output);
+
+            CommandResult build = await RunDotnetAsync($"build \"{project}\" --no-restore --nologo", consumerRoot);
+            Assert.True(build.ExitCode != 0, build.Output);
+            Assert.Contains("NAM1006", build.Output, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("NAM1010", build.Output, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("NAM1012", build.Output, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            DeleteConsumerRoot(consumerRoot);
+        }
+    }
+
+    [Fact]
+    public async Task PackageAnalyzerRejectsBlockRegionUsingDeclarationWithoutLocalEscape()
+    {
+        PackageEvidence package = await GetPackageAsync();
+        WriteEvidence(package);
+        string consumerRoot = CreateConsumerRoot();
+        try
+        {
+            WriteConsumerProject(consumerRoot, package, excludeAnalyzer: false, suppressDiagnostics: false);
+            File.WriteAllText(
+                Path.Combine(consumerRoot, "Program.cs"),
+                """
+                using Supprocom.NativeAllocationManagement;
+
+                public static class Consumer
+                {
+                    public static void Run()
+                    {
+                        using NativeRegion region = new(doNotLeaseOnDeclaration: true);
+                        region.LeaseFromMemory();
+                        Local<int> value = region.Lease<int>(1);
+                        value[0] = 42;
+                    }
+                }
+                """);
+
+            string project = Path.Combine(consumerRoot, "Consumer.csproj");
+            CommandResult restore = await RunDotnetAsync(
+                $"restore \"{project}\" --nologo --force --no-cache --packages \"{Path.Combine(consumerRoot, ".packages")}\" --source \"{package.SourceDirectory}\"",
+                consumerRoot);
+            Assert.True(restore.ExitCode == 0, restore.Output);
+
+            CommandResult build = await RunDotnetAsync($"build \"{project}\" --no-restore --nologo", consumerRoot);
+            Assert.True(build.ExitCode != 0, build.Output);
+            Assert.Contains("NAM1006", build.Output, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("NAM1012", build.Output, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            DeleteConsumerRoot(consumerRoot);
+        }
+    }
+
+    [Fact]
+    public async Task PackageAnalyzerRejectsPreActivationUse()
+    {
+        PackageEvidence package = await GetPackageAsync();
+        WriteEvidence(package);
+        string consumerRoot = CreateConsumerRoot();
+        try
+        {
+            WriteConsumerProject(consumerRoot, package, excludeAnalyzer: false, suppressDiagnostics: false);
+            File.WriteAllText(
+                Path.Combine(consumerRoot, "Program.cs"),
+                """
+                using Supprocom.NativeAllocationManagement;
+
+                public static class Consumer
+                {
+                    public static void Run()
+                    {
+                        NativePool<int> pool = new(doNotLeaseOnDeclaration: true);
+                        _ = pool.Rent(1);
+                        pool.Dispose();
+
+                        using (NativeRegion region = new(doNotLeaseOnDeclaration: true))
+                        {
+                            Local<int> value = region.Lease<int>(1);
+                            _ = value.Length;
+                        }
+                    }
+                }
+                """);
+
+            string project = Path.Combine(consumerRoot, "Consumer.csproj");
+            CommandResult restore = await RunDotnetAsync(
+                $"restore \"{project}\" --nologo --force --no-cache --packages \"{Path.Combine(consumerRoot, ".packages")}\" --source \"{package.SourceDirectory}\"",
+                consumerRoot);
+            Assert.True(restore.ExitCode == 0, restore.Output);
+
+            CommandResult build = await RunDotnetAsync($"build \"{project}\" --no-restore --nologo", consumerRoot);
+            Assert.True(build.ExitCode != 0, build.Output);
+            Assert.Contains("NAM1009", build.Output, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            DeleteConsumerRoot(consumerRoot);
+        }
+    }
+
+    [Fact]
+    public async Task PackageDoesNotExposeRemovedRegionOperation()
+    {
+        PackageEvidence package = await GetPackageAsync();
+        WriteEvidence(package);
+        string consumerRoot = CreateConsumerRoot();
+        try
+        {
+            WriteConsumerProject(consumerRoot, package, excludeAnalyzer: false, suppressDiagnostics: false);
+            File.WriteAllText(
+                Path.Combine(consumerRoot, "Program.cs"),
+                """
+                using Supprocom.NativeAllocationManagement;
+
+                public static class Consumer
+                {
+                    public static void Run()
+                    {
+                        using (NativeRegion region = new())
+                        {
+                            _ = region.Allocate<int>(1);
+                        }
+                    }
+                }
+                """);
+
+            string project = Path.Combine(consumerRoot, "Consumer.csproj");
+            CommandResult restore = await RunDotnetAsync(
+                $"restore \"{project}\" --nologo --force --no-cache --packages \"{Path.Combine(consumerRoot, ".packages")}\" --source \"{package.SourceDirectory}\"",
+                consumerRoot);
+            Assert.True(restore.ExitCode == 0, restore.Output);
+
+            CommandResult build = await RunDotnetAsync($"build \"{project}\" --no-restore --nologo", consumerRoot);
+            Assert.True(build.ExitCode != 0, build.Output);
+            Assert.Contains("CS1061", build.Output, StringComparison.OrdinalIgnoreCase);
         }
         finally
         {

@@ -428,7 +428,7 @@ internal static class Program
         for (int iteration = 0; iteration < WorkloadIterations; iteration++)
         {
             NativeRegion region = new((nuint)(WorkloadElements * sizeof(int)), NativeReturn.ToNativeMemory);
-            Local<int> values = region.Allocate<int>(WorkloadElements);
+            Local<int> values = region.Lease<int>(WorkloadElements);
             callback.Run(values);
             region.Dispose();
         }

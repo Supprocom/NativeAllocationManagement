@@ -33,7 +33,7 @@ internal static class NativeAllocationDiagnosticDescriptors
     internal static readonly DiagnosticDescriptor RegionMustBeUsing = Create(
         "NAM1006",
         "Region construction must be lexical",
-        "NativeRegion '{0}' must be directly declared through using. A region is a non-transferable lexical allocation boundary.");
+        "NativeRegion '{0}' must be the direct resource of a braced using statement. A region is a non-transferable lexical allocation boundary.");
 
     internal static readonly DiagnosticDescriptor BorrowBlocksReturn = Create(
         "NAM1007",

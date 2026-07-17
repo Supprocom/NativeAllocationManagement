@@ -291,7 +291,7 @@ public sealed class RuntimeConcurrencyCoverageTests
         foreach (NativeReturn policy in Enum.GetValues<NativeReturn>())
         {
             NativeRegion operationRegion = new(16, policy);
-            Local<int> operationLocal = operationRegion.Allocate<int>(1);
+            Local<int> operationLocal = operationRegion.Lease<int>(1);
             NativeAllocationInUseException? inUse = null;
             NativeMemoryTestHooks.SetOperationEnteredWithAllocation((operation, kernel, _, _) =>
             {
@@ -323,7 +323,7 @@ public sealed class RuntimeConcurrencyCoverageTests
             }
 
             NativeRegion returnRegion = new(16, policy);
-            Local<int> returnLocal = returnRegion.Allocate<int>(1);
+            Local<int> returnLocal = returnRegion.Lease<int>(1);
             NativeMemoryTestHooks.SetBeforeOperationEntryWithKernel((operation, kernel) =>
             {
                 if (operation == nameof(Local<int>.Access))

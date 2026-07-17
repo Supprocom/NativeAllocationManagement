@@ -53,6 +53,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         private readonly HashSet<ISymbol> _usingResourceSymbols = new(SymbolEqualityComparer.Default);
         private readonly List<FlowSnapshot> _exitSnapshots = [];
         private readonly HashSet<string> _reported = new(StringComparer.Ordinal);
+        private readonly HashSet<ISymbol> _reportedRegionParameters = new(SymbolEqualityComparer.Default);
         private int _closureDepth;
         private int _finallyProtectionDepth;
         private int _finallyDepth;
@@ -67,6 +68,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         internal void AnalyzeOperationBlock(IOperation operationBlock)
         {
             _context.CancellationToken.ThrowIfCancellationRequested();
+            ReportRegionParameters();
 
             if (operationBlock is IMethodBodyOperation methodBody)
             {
@@ -89,6 +91,27 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             _cfgMode = false;
             Visit(operationBlock);
             _exitSnapshots.Add(CaptureSnapshot());
+        }
+
+        private void ReportRegionParameters()
+        {
+            if (_context.OwningSymbol is not IMethodSymbol method)
+            {
+                return;
+            }
+
+            foreach (IParameterSymbol parameter in method.Parameters.Where(parameter => IsNativeRegion(parameter.Type)))
+            {
+                if (!_reportedRegionParameters.Add(parameter))
+                {
+                    continue;
+                }
+
+                SyntaxNode syntax = parameter.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax(_context.CancellationToken)
+                    ?? method.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax(_context.CancellationToken)
+                    ?? throw new InvalidOperationException("The NativeRegion parameter has no source declaration.");
+                Report(NativeAllocationDiagnosticDescriptors.RegionMustBeUsing, syntax, parameter.Name);
+            }
         }
 
         internal void Complete()
@@ -542,6 +565,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
                     merged.Returned &= owner.Returned;
                     merged.Disposed &= owner.Disposed;
+                    merged.Unleased &= owner.Unleased;
                     merged.Ambiguous |= owner.Ambiguous;
                 }
 
@@ -551,7 +575,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 }
 
                 if (paths.Any(path => path.Owners.TryGetValue(symbol, out OwnerState? owner) && owner.Returned != merged.Returned)
-                    || paths.Any(path => path.Owners.TryGetValue(symbol, out OwnerState? owner) && owner.Disposed != merged.Disposed))
+                    || paths.Any(path => path.Owners.TryGetValue(symbol, out OwnerState? owner) && owner.Disposed != merged.Disposed)
+                    || paths.Any(path => path.Owners.TryGetValue(symbol, out OwnerState? owner) && owner.Unleased != merged.Unleased))
                 {
                     merged.Ambiguous = true;
                 }
@@ -699,7 +724,9 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             }
 
             GenerationRelationKind relation = JoinGenerationRelations(states.Select(state => state.GenerationRelation));
-            if (states.Any(state => state.Returned != first.Returned || state.Disposed != first.Disposed))
+            if (states.Any(state => state.Returned != first.Returned
+                || state.Disposed != first.Disposed
+                || state.Unleased != first.Unleased))
             {
                 return GenerationRelationKind.Unknown;
             }
@@ -776,6 +803,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 if (!right.Owners.TryGetValue(pair.Key, out OwnerState? other)
                     || pair.Value.Returned != other.Returned
                     || pair.Value.Disposed != other.Disposed
+                    || pair.Value.Unleased != other.Unleased
                     || pair.Value.Ambiguous != other.Ambiguous
                     || pair.Value.Generation != other.Generation
                     || pair.Value.GenerationRelation != other.GenerationRelation)
@@ -1317,9 +1345,11 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         {
             Target target = FindTarget(operation);
             bool isRegion = IsNativeRegion(operation.Type);
-            bool isUsing = IsUsingSyntax(operation.Syntax, target.Symbol);
+            bool isUsing = isRegion
+                ? IsDirectBracedRegionUsingStatement(operation.Syntax, target.Symbol)
+                : IsUsingSyntax(operation.Syntax, target.Symbol);
             bool requiresDeterministicReturn = RequiresDeterministicReturn(operation);
-            TextSpan? regionScope = isRegion ? GetUsingScope(operation.Syntax, target.Symbol) : null;
+            TextSpan? regionScope = isRegion && isUsing ? GetUsingScope(operation.Syntax, target.Symbol) : null;
 
             if (target.Symbol is null)
             {
@@ -1341,6 +1371,15 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 requiresDeterministicReturn,
                 operation.Syntax,
                 regionScope);
+            switch (GetDeclarationActivation(operation))
+            {
+                case DeclarationActivation.Unleased:
+                    owner.Unleased = true;
+                    break;
+                case DeclarationActivation.Unknown:
+                    owner.Ambiguous = true;
+                    break;
+            }
             _owners[target.Symbol] = owner;
 
             if (isRegion && !isUsing)
@@ -1420,7 +1459,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
         private void ProcessOwnerLifecycle(OwnerState owner, string name, SyntaxNode syntax)
         {
-            if (name is "Rent" or "Allocate")
+            if (name is "Rent" or "Lease")
             {
                 CheckOwnerActive(owner, syntax, name);
                 return;
@@ -1472,18 +1511,31 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
             if (name == "LeaseFromMemory")
             {
-                if (owner.IsUsing && !owner.IsRegion)
+                if (owner.IsUsing && !owner.IsRegion && !owner.Unleased)
                 {
                     Report(NativeAllocationDiagnosticDescriptors.ScopedLifecycle, syntax, owner.DisplayName, name);
                     return;
                 }
 
-                if (owner.IsRegion || owner.Ambiguous || owner.GenerationRelation == GenerationRelationKind.Unknown || !owner.Returned || owner.Disposed)
+                if (owner.Ambiguous || owner.GenerationRelation == GenerationRelationKind.Unknown || owner.Disposed)
                 {
                     Report(NativeAllocationDiagnosticDescriptors.InvalidLifecycle, syntax, owner.DisplayName, name);
                     return;
                 }
 
+                if (owner.IsRegion && !owner.Unleased)
+                {
+                    Report(NativeAllocationDiagnosticDescriptors.InvalidLifecycle, syntax, owner.DisplayName, name);
+                    return;
+                }
+
+                if (!owner.Unleased && !owner.Returned)
+                {
+                    Report(NativeAllocationDiagnosticDescriptors.InvalidLifecycle, syntax, owner.DisplayName, name);
+                    return;
+                }
+
+                owner.Unleased = false;
                 owner.Returned = false;
                 owner.Ambiguous = false;
                 return;
@@ -1516,6 +1568,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
                 owner.Disposed = true;
                 owner.Ambiguous = false;
+                owner.Unleased = false;
                 owner.Returned = true;
                 foreach (HandleState handle in _handles.Values)
                 {
@@ -1573,7 +1626,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
         private bool CheckOwnerActive(OwnerState owner, SyntaxNode syntax, string operation)
         {
-            if (owner.Ambiguous || owner.GenerationRelation == GenerationRelationKind.Unknown || owner.Disposed || owner.Returned)
+            if (owner.Ambiguous || owner.GenerationRelation == GenerationRelationKind.Unknown || owner.Disposed || owner.Returned || owner.Unleased)
             {
                 Report(NativeAllocationDiagnosticDescriptors.InvalidLifecycle, syntax, owner.DisplayName, operation);
                 return false;
@@ -2559,11 +2612,40 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             return sawPolicy;
         }
 
+        private enum DeclarationActivation
+        {
+            Active,
+            Unleased,
+            Unknown
+        }
+
+        private static DeclarationActivation GetDeclarationActivation(IObjectCreationOperation operation)
+        {
+            foreach (IArgumentOperation argument in operation.Arguments)
+            {
+                if (argument.Parameter?.Name != "doNotLeaseOnDeclaration")
+                {
+                    continue;
+                }
+
+                if (!argument.Value.ConstantValue.HasValue)
+                {
+                    return DeclarationActivation.Unknown;
+                }
+
+                return argument.Value.ConstantValue.Value is bool value
+                    ? value ? DeclarationActivation.Unleased : DeclarationActivation.Active
+                    : DeclarationActivation.Unknown;
+            }
+
+            return DeclarationActivation.Active;
+        }
+
         private static bool IsHandleCreatingInvocation(IOperation operation)
         {
             return operation is IInvocationOperation invocation
                 && ((invocation.TargetMethod.Name == "Rent" && IsNativePool(invocation.Instance?.Type))
-                    || (invocation.TargetMethod.Name == "Allocate" && IsNativeRegion(invocation.Instance?.Type)));
+                    || (invocation.TargetMethod.Name == "Lease" && IsNativeRegion(invocation.Instance?.Type)));
         }
 
         private static Target FindTarget(IOperation operation)
@@ -2688,41 +2770,20 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 .FirstOrDefault(statement => IsDirectUsingInitializer(statement, syntax, symbol));
             if (usingStatement is not null)
             {
-                return usingStatement.Statement?.Span ?? usingStatement.Span;
+                return usingStatement.Statement is BlockSyntax block
+                    ? block.Span
+                    : null;
             }
 
-            LocalDeclarationStatementSyntax? usingDeclaration = syntax.AncestorsAndSelf()
-                .OfType<LocalDeclarationStatementSyntax>()
-                .FirstOrDefault(statement => statement.UsingKeyword.IsKind(SyntaxKind.UsingKeyword)
-                    && IsDirectUsingDeclarationInitializer(statement, syntax, symbol));
-            if (usingDeclaration is null)
-            {
-                return null;
-            }
-
-            return GetUsingDeclarationScope(usingDeclaration);
+            return null;
         }
 
-        private static TextSpan GetUsingDeclarationScope(LocalDeclarationStatementSyntax usingDeclaration)
+        private static bool IsDirectBracedRegionUsingStatement(SyntaxNode syntax, ISymbol? symbol)
         {
-            SyntaxNode? parent = usingDeclaration.Parent;
-            if (parent is GlobalStatementSyntax globalStatement
-                && globalStatement.Parent is CompilationUnitSyntax compilationUnit)
-            {
-                return TextSpan.FromBounds(usingDeclaration.SpanStart, compilationUnit.Span.End);
-            }
-
-            if (parent is BlockSyntax block)
-            {
-                return TextSpan.FromBounds(usingDeclaration.SpanStart, block.Span.End);
-            }
-
-            if (parent is SwitchSectionSyntax switchSection)
-            {
-                return TextSpan.FromBounds(usingDeclaration.SpanStart, switchSection.Span.End);
-            }
-
-            return parent?.Span ?? usingDeclaration.Span;
+            return syntax.AncestorsAndSelf()
+                .OfType<UsingStatementSyntax>()
+                .Any(statement => statement.Statement is BlockSyntax
+                    && IsDirectUsingInitializer(statement, syntax, symbol));
         }
 
         private static bool IsDirectUsingInitializer(UsingStatementSyntax statement, SyntaxNode syntax, ISymbol? symbol)
@@ -2826,6 +2887,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             internal bool RequiresDeterministicReturn { get; }
             internal bool Returned { get; set; }
             internal bool Disposed { get; set; }
+            internal bool Unleased { get; set; }
             internal bool Ambiguous { get; set; }
             internal int Generation { get; set; }
             internal GenerationRelationKind GenerationRelation { get; set; } = GenerationRelationKind.Exact;
@@ -2846,6 +2908,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     RegionScope);
                 copy.Returned = Returned;
                 copy.Disposed = Disposed;
+                copy.Unleased = Unleased;
                 copy.Ambiguous = Ambiguous;
                 copy.Generation = Generation;
                 copy.GenerationRelation = GenerationRelation;

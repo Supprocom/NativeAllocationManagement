@@ -21,7 +21,7 @@ public sealed class LifecycleConformanceTests
             Assert.Equal(testCase.Result, actual[^1].ToString());
         }
 
-        Assert.Equal(5, cases.Length);
+        Assert.Equal(9, cases.Length);
     }
 
     private static IReadOnlyList<NativeOwnerLifecycle> Execute(LifecycleCase testCase)
@@ -31,8 +31,13 @@ public sealed class LifecycleConformanceTests
 
         if (testCase.Owner == "pool")
         {
-            NativePool<int> pool = new(testCase.InitialReservation, returnPolicy);
+            NativePool<int> pool = new(testCase.InitialReservation, returnPolicy, testCase.DelayedActivation);
             states.Add(pool.CurrentLifecycle);
+            if (testCase.DelayedActivation)
+            {
+                pool.LeaseFromMemory();
+                states.Add(pool.CurrentLifecycle);
+            }
             ExecuteReturn(pool, testCase.ReturnKind);
             if (testCase.ReturnKind != "none")
             {
@@ -52,8 +57,13 @@ public sealed class LifecycleConformanceTests
 
         if (testCase.Owner == "region")
         {
-            NativeRegion region = new((nuint)testCase.InitialReservation, returnPolicy);
+            NativeRegion region = new((nuint)testCase.InitialReservation, returnPolicy, testCase.DelayedActivation);
             states.Add(region.CurrentLifecycle);
+            if (testCase.DelayedActivation)
+            {
+                region.LeaseFromMemory();
+                states.Add(region.CurrentLifecycle);
+            }
             ExecuteReturn(region, testCase.ReturnKind);
             if (testCase.ReturnKind != "none")
             {
@@ -121,6 +131,7 @@ public sealed class LifecycleConformanceTests
         string ReturnPolicy,
         string ReturnKind,
         bool ReLease,
+        bool DelayedActivation,
         string[] States,
         string Result);
 }

@@ -14,20 +14,23 @@ public sealed class NativePool<T> : IDisposable
     internal NativeOwnerLifecycle CurrentLifecycle => _kernel.Lifecycle;
 
     /// <summary>
-    /// Creates an active pool generation.
+    /// Creates a pool, active immediately unless declaration leasing is disabled.
     /// </summary>
     /// <param name="initialCapacity">Optional number of elements reserved immediately.</param>
     /// <param name="returnOnDispose">The physical cleanup policy used by <see cref="Dispose"/>.</param>
+    /// <param name="doNotLeaseOnDeclaration">When true, defer the first generation until <see cref="LeaseFromMemory"/>.</param>
     public NativePool(
         int initialCapacity = 0,
-        NativeReturn returnOnDispose = NativeReturn.ToGarbageCollector)
+        NativeReturn returnOnDispose = NativeReturn.ToGarbageCollector,
+        bool doNotLeaseOnDeclaration = false)
     {
         NativeReturnValidation.Validate(returnOnDispose, nameof(returnOnDispose));
         _kernel = NativeOwnerKernel.CreatePool(
             initialCapacity,
             Unsafe.SizeOf<T>(),
             $"NativePool<{typeof(T).FullName ?? typeof(T).Name}>",
-            returnOnDispose);
+            returnOnDispose,
+            doNotLeaseOnDeclaration);
     }
 
     /// <summary>

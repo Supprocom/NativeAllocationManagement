@@ -6,6 +6,7 @@
     "returnPolicy": "ToGarbageCollector",
     "returnKind": "none",
     "reLease": false,
+    "delayedActivation": false,
     "states": ["Active", "Disposed"],
     "result": "Disposed"
   },
@@ -16,6 +17,7 @@
     "returnPolicy": "ToNativeMemory",
     "returnKind": "native",
     "reLease": true,
+    "delayedActivation": false,
     "states": ["Active", "Returned", "Active", "Disposed"],
     "result": "Disposed"
   },
@@ -26,6 +28,7 @@
     "returnPolicy": "ToGarbageCollector",
     "returnKind": "garbageCollector",
     "reLease": true,
+    "delayedActivation": false,
     "states": ["Active", "Returned", "Active", "Disposed"],
     "result": "Disposed"
   },
@@ -36,6 +39,7 @@
     "returnPolicy": "ToNativeMemory",
     "returnKind": "native",
     "reLease": false,
+    "delayedActivation": false,
     "states": ["Active", "Returned", "Disposed"],
     "result": "Disposed"
   },
@@ -46,7 +50,52 @@
     "returnPolicy": "ToGarbageCollector",
     "returnKind": "garbageCollector",
     "reLease": false,
+    "delayedActivation": false,
     "states": ["Active", "Returned", "Disposed"],
+    "result": "Disposed"
+  },
+  {
+    "name": "pool-delayed-native-return-no-reservation",
+    "owner": "pool",
+    "initialReservation": 0,
+    "returnPolicy": "ToNativeMemory",
+    "returnKind": "native",
+    "reLease": true,
+    "delayedActivation": true,
+    "states": ["Unleased", "Active", "Returned", "Active", "Disposed"],
+    "result": "Disposed"
+  },
+  {
+    "name": "pool-delayed-gc-return-with-reservation",
+    "owner": "pool",
+    "initialReservation": 4,
+    "returnPolicy": "ToGarbageCollector",
+    "returnKind": "garbageCollector",
+    "reLease": true,
+    "delayedActivation": true,
+    "states": ["Unleased", "Active", "Returned", "Active", "Disposed"],
+    "result": "Disposed"
+  },
+  {
+    "name": "region-delayed-native-return-no-reservation",
+    "owner": "region",
+    "initialReservation": 0,
+    "returnPolicy": "ToNativeMemory",
+    "returnKind": "native",
+    "reLease": false,
+    "delayedActivation": true,
+    "states": ["Unleased", "Active", "Returned", "Disposed"],
+    "result": "Disposed"
+  },
+  {
+    "name": "region-delayed-gc-return-with-reservation",
+    "owner": "region",
+    "initialReservation": 64,
+    "returnPolicy": "ToGarbageCollector",
+    "returnKind": "garbageCollector",
+    "reLease": false,
+    "delayedActivation": true,
+    "states": ["Unleased", "Active", "Returned", "Disposed"],
     "result": "Disposed"
   }
 ]
