@@ -2695,7 +2695,34 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 .OfType<LocalDeclarationStatementSyntax>()
                 .FirstOrDefault(statement => statement.UsingKeyword.IsKind(SyntaxKind.UsingKeyword)
                     && IsDirectUsingDeclarationInitializer(statement, syntax, symbol));
-            return usingDeclaration?.Parent?.Span ?? usingDeclaration?.Span;
+            if (usingDeclaration is null)
+            {
+                return null;
+            }
+
+            return GetUsingDeclarationScope(usingDeclaration);
+        }
+
+        private static TextSpan GetUsingDeclarationScope(LocalDeclarationStatementSyntax usingDeclaration)
+        {
+            SyntaxNode? parent = usingDeclaration.Parent;
+            if (parent is GlobalStatementSyntax globalStatement
+                && globalStatement.Parent is CompilationUnitSyntax compilationUnit)
+            {
+                return TextSpan.FromBounds(usingDeclaration.SpanStart, compilationUnit.Span.End);
+            }
+
+            if (parent is BlockSyntax block)
+            {
+                return TextSpan.FromBounds(usingDeclaration.SpanStart, block.Span.End);
+            }
+
+            if (parent is SwitchSectionSyntax switchSection)
+            {
+                return TextSpan.FromBounds(usingDeclaration.SpanStart, switchSection.Span.End);
+            }
+
+            return parent?.Span ?? usingDeclaration.Span;
         }
 
         private static bool IsDirectUsingInitializer(UsingStatementSyntax statement, SyntaxNode syntax, ISymbol? symbol)

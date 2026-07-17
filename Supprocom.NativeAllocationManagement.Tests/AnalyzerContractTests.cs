@@ -424,6 +424,59 @@ public sealed class AnalyzerContractTests
     }
 
     [Fact]
+    public async Task TopLevelUsingDeclarationKeepsRegionLocalInsideCompilationUnitScope()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            using NativeRegion region = new();
+            Local<int> value = region.Allocate<int>(1);
+            value[0] = 42;
+            """);
+
+        Assert.DoesNotContain("NAM1012", NativeDiagnostics(diagnostics));
+        Assert.DoesNotContain("NAM1010", NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task TopLevelRegionLocalCannotEscapeThroughAnOrdinaryCall()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            using NativeRegion region = new();
+            Local<int> value = region.Allocate<int>(1);
+            Consumer.Take(value);
+
+            public static class Consumer
+            {
+                public static void Take(Local<int> value) { }
+            }
+            """);
+
+        Assert.Contains("NAM1012", NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task TopLevelNestedUsingDeclarationsRemainRejected()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            using NativeRegion outer = new();
+            using NativeRegion inner = new();
+            Local<int> value = outer.Allocate<int>(1);
+            value[0] = 42;
+            """);
+
+        Assert.Contains("NAM1010", NativeDiagnostics(diagnostics));
+        Assert.DoesNotContain("NAM1012", NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
     public async Task SequentialRegionStatementsAreAccepted()
     {
         ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(

@@ -59,6 +59,117 @@ public sealed class PackageSmokeTests
     }
 
     [Fact]
+    public async Task PackageAnalyzerAcceptsTopLevelRegionUsingDeclaration()
+    {
+        PackageEvidence package = await GetPackageAsync();
+        WriteEvidence(package);
+        string consumerRoot = CreateConsumerRoot();
+        try
+        {
+            WriteConsumerProject(consumerRoot, package, excludeAnalyzer: false, suppressDiagnostics: false, executable: true);
+            File.WriteAllText(
+                Path.Combine(consumerRoot, "Program.cs"),
+                """
+                using Supprocom.NativeAllocationManagement;
+
+                using NativeRegion region = new();
+                Local<int> value = region.Allocate<int>(1);
+                value[0] = 42;
+                """);
+
+            string project = Path.Combine(consumerRoot, "Consumer.csproj");
+            CommandResult restore = await RunDotnetAsync(
+                $"restore \"{project}\" --nologo --force --no-cache --packages \"{Path.Combine(consumerRoot, ".packages")}\" --source \"{package.SourceDirectory}\"",
+                consumerRoot);
+            Assert.True(restore.ExitCode == 0, restore.Output);
+
+            CommandResult build = await RunDotnetAsync($"build \"{project}\" --no-restore --nologo", consumerRoot);
+            Assert.True(build.ExitCode == 0, build.Output);
+        }
+        finally
+        {
+            DeleteConsumerRoot(consumerRoot);
+        }
+    }
+
+    [Fact]
+    public async Task PackageAnalyzerRejectsTopLevelRegionLocalEscape()
+    {
+        PackageEvidence package = await GetPackageAsync();
+        WriteEvidence(package);
+        string consumerRoot = CreateConsumerRoot();
+        try
+        {
+            WriteConsumerProject(consumerRoot, package, excludeAnalyzer: false, suppressDiagnostics: false, executable: true);
+            File.WriteAllText(
+                Path.Combine(consumerRoot, "Program.cs"),
+                """
+                using Supprocom.NativeAllocationManagement;
+
+                using NativeRegion region = new();
+                Local<int> value = region.Allocate<int>(1);
+                Consumer.Take(value);
+
+                public static class Consumer
+                {
+                    public static void Take(Local<int> value) { }
+                }
+                """);
+
+            string project = Path.Combine(consumerRoot, "Consumer.csproj");
+            CommandResult restore = await RunDotnetAsync(
+                $"restore \"{project}\" --nologo --force --no-cache --packages \"{Path.Combine(consumerRoot, ".packages")}\" --source \"{package.SourceDirectory}\"",
+                consumerRoot);
+            Assert.True(restore.ExitCode == 0, restore.Output);
+
+            CommandResult build = await RunDotnetAsync($"build \"{project}\" --no-restore --nologo", consumerRoot);
+            Assert.True(build.ExitCode != 0, build.Output);
+            Assert.Contains("NAM1012", build.Output, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            DeleteConsumerRoot(consumerRoot);
+        }
+    }
+
+    [Fact]
+    public async Task PackageAnalyzerRejectsTopLevelNestedRegionsWithoutMisclassifyingTheLocal()
+    {
+        PackageEvidence package = await GetPackageAsync();
+        WriteEvidence(package);
+        string consumerRoot = CreateConsumerRoot();
+        try
+        {
+            WriteConsumerProject(consumerRoot, package, excludeAnalyzer: false, suppressDiagnostics: false, executable: true);
+            File.WriteAllText(
+                Path.Combine(consumerRoot, "Program.cs"),
+                """
+                using Supprocom.NativeAllocationManagement;
+
+                using NativeRegion outer = new();
+                using NativeRegion inner = new();
+                Local<int> value = outer.Allocate<int>(1);
+                value[0] = 42;
+                """);
+
+            string project = Path.Combine(consumerRoot, "Consumer.csproj");
+            CommandResult restore = await RunDotnetAsync(
+                $"restore \"{project}\" --nologo --force --no-cache --packages \"{Path.Combine(consumerRoot, ".packages")}\" --source \"{package.SourceDirectory}\"",
+                consumerRoot);
+            Assert.True(restore.ExitCode == 0, restore.Output);
+
+            CommandResult build = await RunDotnetAsync($"build \"{project}\" --no-restore --nologo", consumerRoot);
+            Assert.True(build.ExitCode != 0, build.Output);
+            Assert.Contains("NAM1010", build.Output, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("NAM1012", build.Output, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            DeleteConsumerRoot(consumerRoot);
+        }
+    }
+
+    [Fact]
     public async Task PackageAnalyzerRejectsNestedRootAbandonedBeforeOwnerDisposeInIsolatedConsumer()
     {
         PackageEvidence package = await GetPackageAsync();
@@ -283,10 +394,11 @@ public sealed class PackageSmokeTests
         string consumerRoot,
         PackageEvidence package,
         bool excludeAnalyzer,
-        bool suppressDiagnostics)
+        bool suppressDiagnostics,
+        bool executable = false)
     {
         string analyzerAssets = excludeAnalyzer ? " ExcludeAssets=\"analyzers\"" : string.Empty;
-        string outputType = suppressDiagnostics ? "Exe" : "Library";
+        string outputType = executable || suppressDiagnostics ? "Exe" : "Library";
         string analyzerRemovalTarget = excludeAnalyzer
             ? """
               <Target Name="RemoveBundledAnalyzerAsset" BeforeTargets="NAMVerifyAnalyzerPresence">
