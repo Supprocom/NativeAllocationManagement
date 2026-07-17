@@ -4,9 +4,12 @@
   </PropertyGroup>
 
   <Target Name="NAMVerifyAnalyzerPresence" BeforeTargets="CoreCompile" DependsOnTargets="ResolvePackageAssets">
-    <Error Condition="'$([System.String]::Copy('@(Analyzer)').ToLowerInvariant().Contains('supprocom.nativeallocationmanagement.analyzers.dll'))' != 'True'"
+    <ItemGroup>
+      <_NAMBundledAnalyzer Include="@(Analyzer)"
+                           Condition="$([System.String]::Copy('%(Analyzer.Identity)').ToLowerInvariant().Contains('supprocom.nativeallocationmanagement.analyzers.dll'))" />
+    </ItemGroup>
+    <Error Condition="'@(_NAMBundledAnalyzer)' == ''"
            Code="NAM9001"
-           Text="Supprocom.NativeAllocationManagement requires its bundled Roslyn analyzer. The analyzer asset is missing or was excluded; restore the package without excluding analyzers or explicitly opt out with NAMSkipAnalyzerVerification=true." />
+           Text="Supprocom.NativeAllocationManagement requires its bundled Roslyn analyzer. The analyzer asset is missing or was excluded; restore the package without excluding analyzer assets." />
   </Target>
 </Project>
-

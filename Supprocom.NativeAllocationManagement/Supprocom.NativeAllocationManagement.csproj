@@ -20,15 +20,14 @@
     <None Include="..\LICENSE.md" Pack="true" PackagePath="LICENSE.md" />
   </ItemGroup>
 
-  <Target Name="BuildBundledAnalyzer" BeforeTargets="Build;Pack">
+  <Target Name="BuildBundledAnalyzer" BeforeTargets="Build;_IntermediatePack">
     <MSBuild Projects="$(MSBuildProjectDirectory)\..\Supprocom.NativeAllocationManagement.Analyzers\Supprocom.NativeAllocationManagement.Analyzers.csproj" Targets="Build" Properties="Configuration=$(Configuration)" />
   </Target>
 
-  <Target Name="IncludeBundledAnalyzer" BeforeTargets="Pack">
+  <Target Name="IncludeBundledAnalyzer" BeforeTargets="_IntermediatePack" DependsOnTargets="BuildBundledAnalyzer">
     <ItemGroup>
       <None Include="$(MSBuildProjectDirectory)\..\Supprocom.NativeAllocationManagement.Analyzers\bin\$(Configuration)\netstandard2.0\Supprocom.NativeAllocationManagement.Analyzers.dll" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
       <None Include="$(MSBuildProjectDirectory)\buildTransitive\Supprocom.NativeAllocationManagement.targets" Pack="true" PackagePath="buildTransitive/Supprocom.NativeAllocationManagement.targets" Visible="false" />
     </ItemGroup>
   </Target>
 </Project>
-

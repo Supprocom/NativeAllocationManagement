@@ -303,6 +303,24 @@ public sealed class RuntimeLifecycleTests
         pool.Dispose();
     }
 
+    [Fact]
+    public void ReLeaseAllocationFailureDoesNotPublishAPartialGeneration()
+    {
+        NativeMemoryTestHooks.Reset();
+        NativePool<int> pool = new(initialCapacity: 2);
+        pool.ReturnToNativeMemory();
+        NativeMemoryTestHooks.FailNextAllocation();
+
+        Assert.Throws<NativeAllocationFailedException>(pool.LeaseFromMemory);
+        Assert.Throws<NativeAllocationReturnedException>(() => pool.Rent(1));
+
+        pool.LeaseFromMemory();
+        Pooled<int> lease = pool.Rent(1);
+        Assert.Equal(0, lease[0]);
+        lease.Dispose();
+        pool.Dispose();
+    }
+
     private static void DetachOneGeneration()
     {
         NativePool<int> pool = new(initialCapacity: 4);
