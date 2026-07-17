@@ -424,6 +424,91 @@ public sealed class AnalyzerContractTests
         Assert.DoesNotContain("NAM1009", NativeDiagnostics(diagnostics));
     }
 
+    [Fact]
+    public async Task EarlyReturnCannotAbandonAnActiveNativeValue()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run(bool condition)
+                {
+                    NativePool<int> pool = new(returnOnDispose: NativeReturn.ToNativeMemory);
+                    Pooled<int> values = pool.Rent(1);
+                    if (condition)
+                    {
+                        return;
+                    }
+
+                    values.Dispose();
+                    pool.Dispose();
+                }
+            }
+            """);
+
+        Assert.Contains("NAM1003", NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task FinallyCleanupMakesAnEarlyReturnValid()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run(bool condition)
+                {
+                    NativePool<int> pool = new(returnOnDispose: NativeReturn.ToNativeMemory);
+                    Pooled<int> values = pool.Rent(1);
+                    try
+                    {
+                        if (condition)
+                        {
+                            return;
+                        }
+
+                        values[0] = 1;
+                    }
+                    finally
+                    {
+                        values.Dispose();
+                        pool.Dispose();
+                    }
+                }
+            }
+            """);
+
+        Assert.Empty(NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task YieldCannotCrossAnActiveLease()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using System.Collections.Generic;
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static IEnumerable<int> Run()
+                {
+                    NativePool<int> pool = new();
+                    Pooled<int> values = pool.Rent(1);
+                    yield return 1;
+                    values.Dispose();
+                    pool.Dispose();
+                }
+            }
+            """);
+
+        Assert.Contains("NAM1011", NativeDiagnostics(diagnostics));
+    }
+
     private static string[] NativeDiagnostics(ImmutableArray<Diagnostic> diagnostics)
     {
         return diagnostics

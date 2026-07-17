@@ -27,6 +27,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         {
             startContext.RegisterOperationBlockAction(blockContext =>
             {
+                blockContext.CancellationToken.ThrowIfCancellationRequested();
                 MethodFlowAnalyzer analyzer = new(blockContext);
                 foreach (IOperation operationBlock in blockContext.OperationBlocks)
                 {
@@ -48,6 +49,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         private readonly HashSet<OwnerState> _borrowedOwners = [];
         private readonly HashSet<string> _reported = new(StringComparer.Ordinal);
         private int _closureDepth;
+        private int _finallyProtectionDepth;
+        private int _finallyDepth;
 
         internal MethodFlowAnalyzer(OperationBlockAnalysisContext context)
         {
@@ -56,8 +59,10 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
         internal void Complete()
         {
+            _context.CancellationToken.ThrowIfCancellationRequested();
             foreach (HandleState handle in _handles.Values)
             {
+                _context.CancellationToken.ThrowIfCancellationRequested();
                 if (handle.Returned || handle.IsUsing || handle.Owner.IsRegion)
                 {
                     continue;
@@ -71,6 +76,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
             foreach (OwnerState owner in _owners.Values)
             {
+                _context.CancellationToken.ThrowIfCancellationRequested();
                 if (owner.IsField || owner.IsUsing || owner.IsRegion || owner.Returned || owner.Disposed)
                 {
                     continue;
@@ -88,6 +94,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
         private FlowSnapshot CaptureSnapshot()
         {
+            _context.CancellationToken.ThrowIfCancellationRequested();
             Dictionary<ISymbol, OwnerState> owners = new(SymbolEqualityComparer.Default);
             Dictionary<OwnerState, OwnerState> ownerCopies = new();
             foreach (KeyValuePair<ISymbol, OwnerState> pair in _owners)
@@ -305,6 +312,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
         public override void VisitInvocation(IInvocationOperation operation)
         {
+            _context.CancellationToken.ThrowIfCancellationRequested();
             if (operation.IsImplicit)
             {
                 base.VisitInvocation(operation);
@@ -437,25 +445,49 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         public override void VisitTry(ITryOperation operation)
         {
             FlowSnapshot before = CaptureSnapshot();
-            Visit(operation.Body);
-            FlowSnapshot tryPath = CaptureSnapshot();
-            FlowSnapshot catchEntry = MergeSnapshotsForResult(before, tryPath);
-            List<FlowSnapshot> paths = [tryPath, catchEntry];
-
-            foreach (ICatchClauseOperation catchClause in operation.Catches)
+            int previousProtectionDepth = _finallyProtectionDepth;
+            if (operation.Finally is not null)
             {
-                RestoreSnapshot(catchEntry);
-                Visit(catchClause);
-                paths.Add(CaptureSnapshot());
+                _finallyProtectionDepth++;
+            }
+
+            FlowSnapshot tryPath;
+            List<FlowSnapshot> paths;
+            try
+            {
+                Visit(operation.Body);
+                tryPath = CaptureSnapshot();
+                FlowSnapshot catchEntry = MergeSnapshotsForResult(before, tryPath);
+                paths = [tryPath, catchEntry];
+
+                foreach (ICatchClauseOperation catchClause in operation.Catches)
+                {
+                    RestoreSnapshot(catchEntry);
+                    Visit(catchClause);
+                    paths.Add(CaptureSnapshot());
+                }
+            }
+            finally
+            {
+                _finallyProtectionDepth = previousProtectionDepth;
             }
 
             if (operation.Finally is not null)
             {
-                for (int index = 0; index < paths.Count; index++)
+                int previousFinallyDepth = _finallyDepth;
+                _finallyDepth++;
+                try
                 {
-                    RestoreSnapshot(paths[index]);
-                    Visit(operation.Finally);
-                    paths[index] = CaptureSnapshot();
+                    for (int index = 0; index < paths.Count; index++)
+                    {
+                        RestoreSnapshot(paths[index]);
+                        Visit(operation.Finally);
+                        paths[index] = CaptureSnapshot();
+                    }
+                }
+                finally
+                {
+                    _finallyDepth = previousFinallyDepth;
                 }
             }
 
@@ -579,8 +611,22 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             {
                 ReportActiveHandlesAcrossBoundary(operation.Syntax);
             }
+            else if (value is null && _finallyProtectionDepth == 0 && _finallyDepth == 0)
+            {
+                ReportActiveExit(operation.Syntax);
+            }
 
             base.VisitReturn(operation);
+        }
+
+        public override void VisitThrow(IThrowOperation operation)
+        {
+            if (_finallyProtectionDepth == 0 && _finallyDepth == 0)
+            {
+                ReportActiveExit(operation.Syntax);
+            }
+
+            base.VisitThrow(operation);
         }
 
         public override void VisitAwait(IAwaitOperation operation)
@@ -999,6 +1045,36 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 if (!handle.Returned)
                 {
                     Report(NativeAllocationDiagnosticDescriptors.AcrossAsync, syntax, handle.DisplayName);
+                }
+            }
+        }
+
+        private void ReportActiveExit(SyntaxNode syntax)
+        {
+            foreach (HandleState handle in _handles.Values)
+            {
+                if (!handle.Returned && !handle.IsUsing && !handle.Owner.IsRegion)
+                {
+                    Report(
+                        NativeAllocationDiagnosticDescriptors.LifetimeEscape,
+                        syntax,
+                        handle.DisplayName);
+                }
+            }
+
+            foreach (OwnerState owner in _owners.Values)
+            {
+                if (!owner.IsField
+                    && !owner.IsUsing
+                    && !owner.IsRegion
+                    && owner.RequiresDeterministicReturn
+                    && !owner.Returned
+                    && !owner.Disposed)
+                {
+                    Report(
+                        NativeAllocationDiagnosticDescriptors.LifetimeEscape,
+                        syntax,
+                        owner.DisplayName);
                 }
             }
         }
