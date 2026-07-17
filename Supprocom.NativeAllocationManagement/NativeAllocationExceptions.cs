@@ -13,7 +13,8 @@ public class NativeAllocationException : InvalidOperationException
         string operation,
         int activeOperationCount,
         long allocationId,
-        Exception? innerException = null)
+        Exception? innerException = null,
+        NativeOwnerLifecycle currentLifecycle = NativeOwnerLifecycle.Active)
         : base(message, innerException)
     {
         OwnerKind = ownerKind;
@@ -22,6 +23,7 @@ public class NativeAllocationException : InvalidOperationException
         Operation = operation;
         ActiveOperationCount = activeOperationCount;
         AllocationId = allocationId;
+        CurrentLifecycle = currentLifecycle;
     }
 
     /// <summary>Gets the owner kind and element description.</summary>
@@ -41,6 +43,9 @@ public class NativeAllocationException : InvalidOperationException
 
     /// <summary>Gets the derived allocation identity, or zero for owner-only failures.</summary>
     public long AllocationId { get; }
+
+    /// <summary>Gets the owner lifecycle observed when the operation failed.</summary>
+    public NativeOwnerLifecycle CurrentLifecycle { get; }
 }
 
 /// <summary>Raised when a default-initialized owner-shaped value is used.</summary>
@@ -69,8 +74,9 @@ public sealed class NativeAllocationReturnedException : NativeAllocationExceptio
         long currentGeneration,
         string operation,
         int activeOperationCount,
-        long allocationId)
-        : base(message, ownerKind, generation, currentGeneration, operation, activeOperationCount, allocationId)
+        long allocationId,
+        NativeOwnerLifecycle currentLifecycle = NativeOwnerLifecycle.Active)
+        : base(message, ownerKind, generation, currentGeneration, operation, activeOperationCount, allocationId, currentLifecycle: currentLifecycle)
     {
     }
 }
@@ -85,8 +91,9 @@ public sealed class NativeAllocationDisposedException : NativeAllocationExceptio
         long currentGeneration,
         string operation,
         int activeOperationCount,
-        long allocationId)
-        : base(message, ownerKind, generation, currentGeneration, operation, activeOperationCount, allocationId)
+        long allocationId,
+        NativeOwnerLifecycle currentLifecycle = NativeOwnerLifecycle.Active)
+        : base(message, ownerKind, generation, currentGeneration, operation, activeOperationCount, allocationId, currentLifecycle: currentLifecycle)
     {
     }
 }
@@ -101,8 +108,9 @@ public sealed class NativeAllocationInUseException : NativeAllocationException
         long currentGeneration,
         string operation,
         int activeOperationCount,
-        long allocationId)
-        : base(message, ownerKind, generation, currentGeneration, operation, activeOperationCount, allocationId)
+        long allocationId,
+        NativeOwnerLifecycle currentLifecycle = NativeOwnerLifecycle.Active)
+        : base(message, ownerKind, generation, currentGeneration, operation, activeOperationCount, allocationId, currentLifecycle: currentLifecycle)
     {
     }
 }
@@ -117,8 +125,9 @@ public sealed class NativeAllocationStateException : NativeAllocationException
         long currentGeneration,
         string operation,
         int activeOperationCount,
-        long allocationId)
-        : base(message, ownerKind, generation, currentGeneration, operation, activeOperationCount, allocationId)
+        long allocationId,
+        NativeOwnerLifecycle currentLifecycle = NativeOwnerLifecycle.Active)
+        : base(message, ownerKind, generation, currentGeneration, operation, activeOperationCount, allocationId, currentLifecycle: currentLifecycle)
     {
     }
 }
@@ -131,16 +140,18 @@ public sealed class NativeAllocationFailedException : NativeAllocationException
         string ownerKind,
         long generation,
         string operation,
-        Exception? innerException = null)
+        Exception? innerException = null,
+        NativeOwnerLifecycle currentLifecycle = NativeOwnerLifecycle.Active)
         : base(
-            $"Native allocation of {requestedBytes} bytes failed during {operation}. Earlier valid segments remain owned; no partially usable handle was returned.",
+            $"Native allocation of {requestedBytes} bytes failed during {operation} (lifecycle {currentLifecycle}). Earlier valid segments remain owned; no partially usable handle was returned.",
             ownerKind,
             generation,
             generation,
             operation,
             activeOperationCount: 0,
             allocationId: 0,
-            innerException)
+            innerException,
+            currentLifecycle)
     {
         RequestedBytes = requestedBytes;
     }
@@ -148,4 +159,3 @@ public sealed class NativeAllocationFailedException : NativeAllocationException
     /// <summary>Gets the requested native byte count.</summary>
     public nuint RequestedBytes { get; }
 }
-

@@ -63,13 +63,20 @@ public sealed class ConcurrencyTests
     {
         NativePool<int> pool = new();
         ManualResetEventSlim entered = new();
-        ManualResetEventSlim release = new();
-        NativeMemoryTestHooks.SetOperationEntered(operation =>
+        NativeAllocationInUseException? returnException = null;
+        NativeMemoryTestHooks.SetOperationEnteredWithAllocation((operation, kernel, generation, allocationId) =>
         {
             if (operation == nameof(Pooled<int>.Access))
             {
                 entered.Set();
-                release.Wait(TimeSpan.FromSeconds(10));
+                try
+                {
+                    kernel.ReturnLease(generation, allocationId);
+                }
+                catch (NativeAllocationInUseException exception)
+                {
+                    returnException = exception;
+                }
             }
         });
 
@@ -94,8 +101,8 @@ public sealed class ConcurrencyTests
             });
 
             Assert.True(entered.Wait(TimeSpan.FromSeconds(10)));
-            release.Set();
             Assert.Null(await worker);
+            Assert.NotNull(returnException);
             Pooled<int> reused = pool.Rent(2);
             Assert.Equal(0, reused[0]);
             reused.Dispose();
@@ -103,7 +110,6 @@ public sealed class ConcurrencyTests
         }
         finally
         {
-            release.Set();
             NativeMemoryTestHooks.Reset();
         }
     }

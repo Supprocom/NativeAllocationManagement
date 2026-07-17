@@ -7,6 +7,10 @@
     <IsPackable>true</IsPackable>
     <PackageId>Supprocom.NativeAllocationManagement</PackageId>
     <Version>0.1.0</Version>
+    <Authors>Supprocom</Authors>
+    <Company>Supprocom</Company>
+    <Description>Safe, generation-bound C# owners for reusable unmanaged pool storage and heterogeneous native regions.</Description>
+    <PackageDescription>Safe, generation-bound C# owners for reusable unmanaged pool storage and heterogeneous native regions.</PackageDescription>
     <PackageLicenseExpression>AGPL-3.0-only</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageTags>native-memory;memory-pool;native-region;roslyn-analyzer</PackageTags>

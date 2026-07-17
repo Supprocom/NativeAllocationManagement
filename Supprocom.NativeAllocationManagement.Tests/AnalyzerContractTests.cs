@@ -13,6 +13,7 @@ public sealed class AnalyzerContractTests
     {
         ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
             """
+            using System;
             using Supprocom.NativeAllocationManagement;
 
             public static class Sample
@@ -27,6 +28,31 @@ public sealed class AnalyzerContractTests
                 private static void Fill(scoped Span<int> span)
                 {
                     span[0] = 1;
+                }
+            }
+            """);
+
+        Assert.Empty(NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task ScopedPoolAndLeaseStatementFormsHaveNoOwnershipDiagnostics()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    using (NativePool<int> pool = new())
+                    {
+                        using (Pooled<int> values = pool.Rent(1))
+                        {
+                            values[0] = 1;
+                        }
+                    }
                 }
             }
             """);
@@ -58,6 +84,37 @@ public sealed class AnalyzerContractTests
             """);
 
         Assert.Contains("NAM1004", NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task DiagnosticsCarryStructuredSourceAndProvenanceFacts()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    NativePool<int> pool = new();
+                    Pooled<int> stale = pool.Rent(1);
+                    pool.ReturnToNativeMemory();
+                    _ = stale.Length;
+                }
+            }
+            """);
+
+        Diagnostic diagnostic = diagnostics.First(item => item.Id == "NAM1004");
+        Assert.Equal("NAM1004", diagnostic.Properties["NAM.DiagnosticId"]);
+        Assert.Contains("stale", diagnostic.Properties["NAM.Provenance"]!);
+        Assert.Equal(diagnostic.Properties["NAM.Provenance"], diagnostic.Properties["NAM.ProvenancePath"]);
+        Assert.NotEmpty(diagnostic.Properties["NAM.Operation"]!);
+        Assert.Equal("NAM1004", diagnostic.Properties["NAM.OperationId"]);
+        Assert.Contains(":", diagnostic.Properties["NAM.Source"]!);
+        Assert.NotEmpty(diagnostic.Properties["NAM.SourceFile"]!);
+        Assert.NotEmpty(diagnostic.Properties["NAM.SourceLine"]!);
+        Assert.NotEmpty(diagnostic.Properties["NAM.SourceColumn"]!);
     }
 
     [Fact]
@@ -246,6 +303,7 @@ public sealed class AnalyzerContractTests
                     Pooled<int> values = pool.Rent(1);
                     values.Dispose();
                     pool.Dispose();
+
                 }
             }
             """);
@@ -411,6 +469,7 @@ public sealed class AnalyzerContractTests
                     Pooled<int> values = pool.Rent(1);
                     values.Dispose();
                     pool.Dispose();
+
                 }
 
                 private static void ReturnPool(NativePool<int> pool)
@@ -509,7 +568,657 @@ public sealed class AnalyzerContractTests
         Assert.Contains("NAM1011", NativeDiagnostics(diagnostics));
     }
 
-    private static string[] NativeDiagnostics(ImmutableArray<Diagnostic> diagnostics)
+    [Fact]
+    public async Task EveryPostReturnHandleOperationIsRejected()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    NativePool<int> pool = new();
+                    Pooled<int> stale = pool.Rent(2);
+                    pool.ReturnToNativeMemory();
+                    _ = stale.Length;
+                    _ = stale.Capacity;
+                    _ = stale[0];
+                    stale[0] = 1;
+                    stale.Clear();
+                    stale.CopyFrom(new int[2]);
+                    stale.CopyTo(new int[2]);
+                    stale.Access(static _ => { });
+                    _ = stale.Read(static span => span[0]);
+                    stale.Dispose();
+                    pool.Dispose();
+                }
+            }
+            """);
+
+        Assert.True(
+            NativeDiagnostics(diagnostics).Count(id => id == "NAM1004") >= 10,
+            string.Join(", ", NativeDiagnostics(diagnostics)));
+    }
+
+    [Fact]
+    public async Task ExpressionAndExceptionalExitsRemainChecked()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using System;
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static Pooled<int> ReturnHandle(NativePool<int> pool) => pool.Rent(1);
+
+                public static void ReturnInsideTry(bool condition)
+                {
+                    NativePool<int> pool = new(returnOnDispose: NativeReturn.ToNativeMemory);
+                    Pooled<int> value = pool.Rent(1);
+                    try
+                    {
+                        if (condition)
+                        {
+                            return;
+                        }
+
+                        throw new InvalidOperationException();
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        return;
+                    }
+                    finally
+                    {
+                        if (condition)
+                        {
+                            value.Dispose();
+                            pool.Dispose();
+                        }
+                    }
+                }
+
+                public static void ThrowWithoutCleanup()
+                {
+                    NativePool<int> pool = new(returnOnDispose: NativeReturn.ToNativeMemory);
+                    Pooled<int> value = pool.Rent(1);
+                    throw new InvalidOperationException();
+                }
+            }
+            """);
+
+        string[] ids = NativeDiagnostics(diagnostics);
+        Assert.Contains("NAM1013", ids);
+        Assert.Contains("NAM1003", ids);
+    }
+
+    [Fact]
+    public async Task OneBranchOnlyOwnerReturnRemainsAmbiguous()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run(bool condition)
+                {
+                    NativePool<int> pool = new(returnOnDispose: NativeReturn.ToNativeMemory);
+                    if (condition)
+                    {
+                        pool.ReturnToNativeMemory();
+                    }
+
+                    pool.LeaseFromMemory();
+                }
+            }
+            """);
+
+        Assert.Contains("NAM1009", NativeDiagnostics(diagnostics));
+        Assert.Contains("NAM1003", NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task OneBranchOnlyLeaseDisposalRemainsAmbiguous()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run(bool condition)
+                {
+                    NativePool<int> pool = new();
+                    Pooled<int> values = pool.Rent(1);
+                    if (condition)
+                    {
+                        values.Dispose();
+                    }
+
+                    pool.Dispose();
+                }
+            }
+            """);
+
+        Assert.Contains("NAM1003", NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task ZeroOneManyLoopIterationsRemainConservative()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run(int attempts)
+                {
+                    NativePool<int> pool = new();
+                    for (int index = 0; index < attempts; index++)
+                    {
+                        if (index == 0)
+                        {
+                            continue;
+                        }
+
+                        pool.ReturnToNativeMemory();
+                        if (index == 2)
+                        {
+                            break;
+                        }
+                    }
+
+                    pool.LeaseFromMemory();
+                }
+            }
+            """);
+
+        Assert.Contains("NAM1009", NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task SwitchWithoutDefaultAndExceptionalExitRemainConservative()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using System;
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run(int value)
+                {
+                    NativePool<int> pool = new();
+                    switch (value)
+                    {
+                        case 1:
+                            pool.ReturnToNativeMemory();
+                            break;
+                    }
+
+                    try
+                    {
+                        pool.ReturnToGarbageCollector();
+                    }
+                    catch (InvalidOperationException)
+                    {
+                    }
+
+                    pool.LeaseFromMemory();
+                }
+            }
+            """);
+
+        Assert.Contains("NAM1009", NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task GotoAndRetryPathsRemainConservative()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run(bool condition, bool shouldReturn)
+                {
+                    NativePool<int> pool = new();
+                Retry:
+                    if (condition)
+                    {
+                        condition = false;
+                        goto Retry;
+                    }
+
+                    if (shouldReturn)
+                    {
+                        pool.ReturnToNativeMemory();
+                    }
+
+                    pool.LeaseFromMemory();
+                }
+            }
+            """);
+
+        Assert.Contains("NAM1009", NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task GotoCanSkipCleanupAndMustNotSuppressExitDiagnostics()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run(bool condition)
+                {
+                    NativePool<int> pool = new(returnOnDispose: NativeReturn.ToNativeMemory);
+                    Pooled<int> value = pool.Rent(1);
+                    if (condition)
+                    {
+                        goto Done;
+                    }
+
+                    value.Dispose();
+                    pool.Dispose();
+                Done:
+                    _ = value.Length;
+                }
+            }
+            """);
+
+        Assert.Contains("NAM1003", NativeDiagnostics(diagnostics));
+        Assert.Contains("NAM1004", NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task ValueReturnsReportActiveOwnershipAtEveryExit()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static int Run(bool condition)
+                {
+                    NativePool<int> pool = new(returnOnDispose: NativeReturn.ToNativeMemory);
+                    Pooled<int> values = pool.Rent(1);
+                    if (condition)
+                    {
+                        return 42;
+                    }
+
+                    return 7;
+                }
+            }
+            """);
+
+        Assert.Contains("NAM1003", NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task UnrelatedUsingBodiesDoNotCreateAutomaticCleanupScopes()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using System;
+            using Supprocom.NativeAllocationManagement;
+
+            public sealed class DisposableThing : IDisposable
+            {
+                public void Dispose() { }
+            }
+
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    using (new DisposableThing())
+                    {
+                        NativeRegion region = new();
+                        NativePool<int> pool = new(returnOnDispose: NativeReturn.ToNativeMemory);
+                        Pooled<int> values = pool.Rent(1);
+                    }
+                }
+            }
+            """);
+
+        string[] ids = NativeDiagnostics(diagnostics);
+        Assert.Contains("NAM1006", ids);
+        Assert.Contains("NAM1003", ids);
+        Assert.DoesNotContain("NAM1005", ids);
+    }
+
+    [Fact]
+    public async Task ConditionalAndDeferredLifecycleHelpersRemainUnknown()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using System;
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run(bool condition)
+                {
+                    NativePool<int> pool = new();
+                    ConditionalReturn(pool, condition);
+                    Action deferred = () => pool.ReturnToNativeMemory();
+                    deferred();
+                    pool.LeaseFromMemory();
+                }
+
+                private static void ConditionalReturn(NativePool<int> pool, bool condition)
+                {
+                    if (condition)
+                    {
+                        pool.ReturnToNativeMemory();
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("NAM1009", NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task MultipleTransitionAndTryHelpersRemainUnknown()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using System;
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    NativePool<int> pool = new();
+                    Multiple(pool);
+                    TryReturn(pool);
+                    pool.LeaseFromMemory();
+                }
+
+                private static void Multiple(NativePool<int> pool)
+                {
+                    pool.ReturnToNativeMemory();
+                    pool.ReturnToGarbageCollector();
+                }
+
+                private static void TryReturn(NativePool<int> pool)
+                {
+                    try
+                    {
+                        pool.ReturnToNativeMemory();
+                    }
+                    finally
+                    {
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("NAM1009", NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task FieldProofRejectsTextOnlyConditionalAndDeferredDisposal()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using System;
+            using Supprocom.NativeAllocationManagement;
+
+            public sealed class Sample : IDisposable
+            {
+                private readonly NativePool<int> _pool = new(returnOnDispose: NativeReturn.ToNativeMemory);
+
+                public void Dispose()
+                {
+                    Console.WriteLine(nameof(_pool));
+                    if (DateTime.UtcNow.Ticks == 0)
+                    {
+                        _pool.Dispose();
+                    }
+
+                    Action deferred = () => _pool.Dispose();
+                }
+            }
+            """);
+
+        Assert.Contains("NAM1015", NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task FieldProofAcceptsDelegatedAndExplicitInterfaceDisposal()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using System;
+            using Supprocom.NativeAllocationManagement;
+
+            public sealed class Delegated : IDisposable
+            {
+                private readonly NativePool<int> _pool = new(returnOnDispose: NativeReturn.ToNativeMemory);
+                public void Dispose() => Release();
+                private void Release() => _pool.Dispose();
+            }
+
+            public sealed class Explicit : IDisposable
+            {
+                private readonly NativePool<int> _pool = new(returnOnDispose: NativeReturn.ToNativeMemory);
+                void IDisposable.Dispose() => _pool.Dispose();
+            }
+            """);
+
+        Assert.Empty(NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task HelperWithUnconditionalTryFinallyLifecycleIsAccepted()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    NativePool<int> pool = new();
+                    ReturnPool(pool);
+                    pool.LeaseFromMemory();
+                    Pooled<int> value = pool.Rent(1);
+                    value.Dispose();
+                    pool.Dispose();
+                }
+
+                private static void ReturnPool(NativePool<int> pool)
+                {
+                    try
+                    {
+                        pool.ReturnToNativeMemory();
+                    }
+                    finally
+                    {
+                    }
+                }
+            }
+            """);
+
+        Assert.DoesNotContain("NAM1009", NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task NestedAndPostTransitionEarlyReturnHelpersAreAccepted()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    NativePool<int> pool = new();
+                    ReturnOuter(pool);
+                    pool.LeaseFromMemory();
+                    Pooled<int> values = pool.Rent(1);
+                    values.Dispose();
+                    pool.Dispose();
+
+                    NativePool<int> second = new();
+                    ReturnThenMaybeExit(second, condition: true);
+                    second.LeaseFromMemory();
+                    Pooled<int> secondValues = second.Rent(1);
+                    secondValues.Dispose();
+                    second.Dispose();
+                }
+
+                private static void ReturnOuter(NativePool<int> pool)
+                    => ReturnInner(pool);
+
+                private static void ReturnInner(NativePool<int> pool)
+                    => pool.ReturnToNativeMemory();
+
+                private static void ReturnThenMaybeExit(NativePool<int> pool, bool condition)
+                {
+                    pool.ReturnToNativeMemory();
+                    if (condition)
+                    {
+                        return;
+                    }
+                }
+            }
+            """);
+
+        Assert.DoesNotContain("NAM1009", NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task HelperWithAnEarlyReturnOrNormalCatchIsUnknown()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using System;
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run(bool condition)
+                {
+                    NativePool<int> pool = new();
+                    ReturnMaybe(pool, condition);
+                    ReturnWithCatch(pool);
+                    pool.LeaseFromMemory();
+                }
+
+                private static void ReturnMaybe(NativePool<int> pool, bool condition)
+                {
+                    if (condition)
+                    {
+                        return;
+                    }
+
+                    pool.ReturnToNativeMemory();
+                }
+
+                private static void ReturnWithCatch(NativePool<int> pool)
+                {
+                    try
+                    {
+                        pool.ReturnToNativeMemory();
+                    }
+                    catch (InvalidOperationException)
+                    {
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("NAM1009", NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task FieldProofFollowsTheNormalBaseAndDerivedDisposeChain()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using System;
+            using Supprocom.NativeAllocationManagement;
+
+            public class Base : IDisposable
+            {
+                protected readonly NativePool<int> BasePool = new(returnOnDispose: NativeReturn.ToNativeMemory);
+
+                public void Dispose() => Dispose(disposing: true);
+
+                protected virtual void Dispose(bool disposing)
+                {
+                    if (disposing)
+                    {
+                        BasePool.Dispose();
+                    }
+                }
+            }
+
+            public sealed class Derived : Base
+            {
+                private readonly NativePool<int> _pool = new(returnOnDispose: NativeReturn.ToNativeMemory);
+
+                protected override void Dispose(bool disposing)
+                {
+                    base.Dispose(disposing);
+                    if (disposing)
+                    {
+                        _pool.Dispose();
+                    }
+                }
+            }
+            """);
+
+        Assert.Empty(NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task FieldProofDoesNotAcceptAnUncalledDisposeBooleanOverload()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using System;
+            using Supprocom.NativeAllocationManagement;
+
+            public sealed class Sample : IDisposable
+            {
+                private readonly NativePool<int> _pool = new(returnOnDispose: NativeReturn.ToNativeMemory);
+
+                public void Dispose()
+                {
+                }
+
+                private void Dispose(bool disposing)
+                {
+                    if (disposing)
+                    {
+                        _pool.Dispose();
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("NAM1015", NativeDiagnostics(diagnostics));
+    }
+
+    internal static string[] NativeDiagnostics(ImmutableArray<Diagnostic> diagnostics)
     {
         return diagnostics
             .Where(diagnostic => diagnostic.Id.StartsWith("NAM", StringComparison.Ordinal))
@@ -517,7 +1226,7 @@ public sealed class AnalyzerContractTests
             .ToArray();
     }
 
-    private static async Task<ImmutableArray<Diagnostic>> AnalyzeAsync(string source)
+    internal static async Task<ImmutableArray<Diagnostic>> AnalyzeAsync(string source)
     {
         CSharpParseOptions parseOptions = new(LanguageVersion.Preview);
         SyntaxTree tree = CSharpSyntaxTree.ParseText(source, parseOptions);

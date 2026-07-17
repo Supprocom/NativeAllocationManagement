@@ -9,11 +9,16 @@ internal enum NativeOwnerKind
     Region
 }
 
-internal enum NativeOwnerLifecycle
+/// <summary>Describes the lifecycle gate state of a native owner.</summary>
+public enum NativeOwnerLifecycle
 {
+    /// <summary>The owner accepts allocations and bounded native operations.</summary>
     Active,
+    /// <summary>A lifecycle transition has claimed the owner gate.</summary>
     Returning,
+    /// <summary>The current generation is stale and cannot be used.</summary>
     Returned,
+    /// <summary>The owner is permanently closed.</summary>
     Disposed
 }
 
@@ -34,7 +39,9 @@ internal readonly record struct NativeMemoryTestMetrics(
     long AllocationCount,
     long ZeroedAllocationCount,
     long FreeCount,
-    long DetachedGenerationCount);
+    long DetachedGenerationCount,
+    long OutstandingNativeBytes,
+    long DetachedNativeBytes);
 
 internal static class NativeMemoryTestHooks
 {
@@ -42,18 +49,34 @@ internal static class NativeMemoryTestHooks
     private static long _zeroedAllocationCount;
     private static long _freeCount;
     private static long _detachedGenerationCount;
+    private static long _outstandingNativeBytes;
+    private static long _detachedNativeBytes;
+    private static long _metricsEpoch;
     private static int _forcedFailures;
+    private static int _forcedClearFailures;
     private static Action<string>? _operationEntered;
+    private static Action<string>? _beforeOperationEntry;
+    private static Action<string, NativeOwnerKernel>? _beforeOperationEntryWithKernel;
+    private static Action<string, NativeOwnerKernel, long, long>? _operationEnteredWithAllocation;
 
     internal static void Reset()
     {
+        Interlocked.Increment(ref _metricsEpoch);
         Interlocked.Exchange(ref _allocationCount, 0);
         Interlocked.Exchange(ref _zeroedAllocationCount, 0);
         Interlocked.Exchange(ref _freeCount, 0);
         Interlocked.Exchange(ref _detachedGenerationCount, 0);
+        Interlocked.Exchange(ref _outstandingNativeBytes, 0);
+        Interlocked.Exchange(ref _detachedNativeBytes, 0);
         Interlocked.Exchange(ref _forcedFailures, 0);
+        Interlocked.Exchange(ref _forcedClearFailures, 0);
         Volatile.Write(ref _operationEntered, null);
+        Volatile.Write(ref _beforeOperationEntry, null);
+        Volatile.Write(ref _beforeOperationEntryWithKernel, null);
+        Volatile.Write(ref _operationEnteredWithAllocation, null);
     }
+
+    internal static long CurrentMetricsEpoch => Volatile.Read(ref _metricsEpoch);
 
     internal static void FailNextAllocation()
     {
@@ -77,23 +100,75 @@ internal static class NativeMemoryTestHooks
         }
     }
 
-    internal static void RecordAllocation(bool zeroed)
+    internal static void FailNextClear()
     {
+        Interlocked.Increment(ref _forcedClearFailures);
+    }
+
+    internal static bool ConsumeForcedClearFailure()
+    {
+        while (true)
+        {
+            int current = Volatile.Read(ref _forcedClearFailures);
+            if (current == 0)
+            {
+                return false;
+            }
+
+            if (Interlocked.CompareExchange(ref _forcedClearFailures, current - 1, current) == current)
+            {
+                return true;
+            }
+        }
+    }
+
+    internal static long RecordAllocation(nuint byteLength, bool zeroed)
+    {
+        long metricsEpoch = CurrentMetricsEpoch;
         Interlocked.Increment(ref _allocationCount);
+        Interlocked.Add(ref _outstandingNativeBytes, checked((long)byteLength));
         if (zeroed)
         {
             Interlocked.Increment(ref _zeroedAllocationCount);
         }
+
+        return metricsEpoch;
     }
 
-    internal static void RecordFree()
+    internal static void RecordFree(nuint byteLength, bool detached, long metricsEpoch)
     {
+        if (metricsEpoch != CurrentMetricsEpoch)
+        {
+            return;
+        }
+
         Interlocked.Increment(ref _freeCount);
+        long bytes = checked((long)byteLength);
+        Interlocked.Add(ref _outstandingNativeBytes, -bytes);
+        if (detached)
+        {
+            Interlocked.Add(ref _detachedNativeBytes, -bytes);
+        }
     }
 
-    internal static void RecordDetach()
+    internal static void RecordDetachedGeneration(long metricsEpoch)
     {
+        if (metricsEpoch != CurrentMetricsEpoch)
+        {
+            return;
+        }
+
         Interlocked.Increment(ref _detachedGenerationCount);
+    }
+
+    internal static void RecordDetachedBytes(nuint byteLength, long metricsEpoch)
+    {
+        if (metricsEpoch != CurrentMetricsEpoch)
+        {
+            return;
+        }
+
+        Interlocked.Add(ref _detachedNativeBytes, checked((long)byteLength));
     }
 
     internal static NativeMemoryTestMetrics Snapshot()
@@ -102,7 +177,9 @@ internal static class NativeMemoryTestHooks
             Volatile.Read(ref _allocationCount),
             Volatile.Read(ref _zeroedAllocationCount),
             Volatile.Read(ref _freeCount),
-            Volatile.Read(ref _detachedGenerationCount));
+            Volatile.Read(ref _detachedGenerationCount),
+            Volatile.Read(ref _outstandingNativeBytes),
+            Volatile.Read(ref _detachedNativeBytes));
     }
 
     internal static void SetOperationEntered(Action<string>? callback)
@@ -110,25 +187,57 @@ internal static class NativeMemoryTestHooks
         Volatile.Write(ref _operationEntered, callback);
     }
 
-    internal static void NotifyOperationEntered(string operation)
+    internal static void SetBeforeOperationEntry(Action<string>? callback)
+    {
+        Volatile.Write(ref _beforeOperationEntry, callback);
+    }
+
+    internal static void SetBeforeOperationEntryWithKernel(Action<string, NativeOwnerKernel>? callback)
+    {
+        Volatile.Write(ref _beforeOperationEntryWithKernel, callback);
+    }
+
+    internal static void SetOperationEnteredWithAllocation(Action<string, NativeOwnerKernel, long, long>? callback)
+    {
+        Volatile.Write(ref _operationEnteredWithAllocation, callback);
+    }
+
+    internal static void NotifyBeforeOperationEntry(string operation, NativeOwnerKernel kernel)
+    {
+        Volatile.Read(ref _beforeOperationEntry)?.Invoke(operation);
+        Volatile.Read(ref _beforeOperationEntryWithKernel)?.Invoke(operation, kernel);
+    }
+
+    internal static void NotifyOperationEntered(string operation, NativeOwnerKernel kernel, long generation, long allocationId)
     {
         Volatile.Read(ref _operationEntered)?.Invoke(operation);
+        Volatile.Read(ref _operationEnteredWithAllocation)?.Invoke(operation, kernel, generation, allocationId);
     }
 }
 
 internal sealed class NativeSegment
 {
     private IntPtr _pointer;
+    private int _detached;
+    private readonly long _metricsEpoch;
 
-    private NativeSegment(IntPtr pointer, nuint byteLength)
+    private NativeSegment(IntPtr pointer, nuint byteLength, long metricsEpoch)
     {
         _pointer = pointer;
         ByteLength = byteLength;
+        _metricsEpoch = metricsEpoch;
     }
 
     internal nuint ByteLength { get; }
 
+    internal long MetricsEpoch => _metricsEpoch;
+
     internal IntPtr Pointer => Volatile.Read(ref _pointer);
+
+    internal void MarkDetached()
+    {
+        Volatile.Write(ref _detached, 1);
+    }
 
     internal static NativeSegment AllocateZeroed(
         nuint byteLength,
@@ -156,8 +265,8 @@ internal sealed class NativeSegment
                     throw new NativeAllocationFailedException(byteLength, ownerKind, generation, operation);
                 }
 
-                NativeMemoryTestHooks.RecordAllocation(zeroed: true);
-                return new NativeSegment(pointer, byteLength);
+                long metricsEpoch = NativeMemoryTestHooks.RecordAllocation(byteLength, zeroed: true);
+                return new NativeSegment(pointer, byteLength, metricsEpoch);
             }
         }
         catch (OutOfMemoryException exception)
@@ -179,7 +288,7 @@ internal sealed class NativeSegment
             NativeMemory.Free((void*)pointer);
         }
 
-        NativeMemoryTestHooks.RecordFree();
+        NativeMemoryTestHooks.RecordFree(ByteLength, Volatile.Read(ref _detached) != 0, _metricsEpoch);
     }
 
     ~NativeSegment()
@@ -274,10 +383,13 @@ internal sealed class NativeGenerationOwner
     private readonly object _gate = new();
     private List<NativeSegment>? _segments = new();
     private int _released;
+    private int _detached;
+    private readonly long _metricsEpoch;
 
     internal NativeGenerationOwner(long generation)
     {
         Generation = generation;
+        _metricsEpoch = NativeMemoryTestHooks.CurrentMetricsEpoch;
     }
 
     internal long Generation { get; }
@@ -300,12 +412,26 @@ internal sealed class NativeGenerationOwner
 
     internal void Detach()
     {
-        if (Volatile.Read(ref _released) != 0)
+        if (Volatile.Read(ref _released) != 0 || Interlocked.Exchange(ref _detached, 1) != 0)
         {
             return;
         }
 
-        NativeMemoryTestHooks.RecordDetach();
+        lock (_gate)
+        {
+            if (_segments is null)
+            {
+                return;
+            }
+
+            foreach (NativeSegment segment in _segments)
+            {
+                segment.MarkDetached();
+                NativeMemoryTestHooks.RecordDetachedBytes(segment.ByteLength, segment.MetricsEpoch);
+            }
+        }
+
+        NativeMemoryTestHooks.RecordDetachedGeneration(_metricsEpoch);
     }
 
     internal void ReleaseToNative()
@@ -610,6 +736,7 @@ internal sealed class NativeOwnerKernel
     internal NativeOperationToken EnterOperation(long generationNumber, long allocationId, string operation)
     {
         NativeOperationToken token;
+        NativeMemoryTestHooks.NotifyBeforeOperationEntry(operation, this);
         lock (_gate)
         {
             NativeGeneration generation = EnsureActiveLocked(operation, generationNumber, allocationId);
@@ -619,7 +746,7 @@ internal sealed class NativeOwnerKernel
             token = new NativeOperationToken(this, generation.Owner, allocation, generationNumber, operation);
         }
 
-        NativeMemoryTestHooks.NotifyOperationEntered(operation);
+        NativeMemoryTestHooks.NotifyOperationEntered(operation, this, generationNumber, allocationId);
         return token;
     }
 
@@ -675,17 +802,32 @@ internal sealed class NativeOwnerKernel
                     "The lease has an active native operation. No slab was cleared or requeued.");
             }
 
-            allocation.Lifecycle = NativeAllocationLifecycle.Returning;
-            generation.LeaseReturnsInProgress++;
-
             if (allocation.Slab is not null && allocation.Length > 0)
             {
-                ClearAllocation(allocation);
-                generation.AvailableSlabs.Add(allocation.Slab);
+                generation.AvailableSlabs.EnsureCapacity(generation.AvailableSlabs.Count + 1);
             }
 
-            allocation.Lifecycle = NativeAllocationLifecycle.Returned;
-            generation.LeaseReturnsInProgress--;
+            allocation.Lifecycle = NativeAllocationLifecycle.Returning;
+            generation.LeaseReturnsInProgress++;
+            try
+            {
+                if (allocation.Slab is not null && allocation.Length > 0)
+                {
+                    ClearAllocation(allocation);
+                    generation.AvailableSlabs.Add(allocation.Slab);
+                }
+
+                allocation.Lifecycle = NativeAllocationLifecycle.Returned;
+            }
+            catch
+            {
+                allocation.Lifecycle = NativeAllocationLifecycle.Active;
+                throw;
+            }
+            finally
+            {
+                generation.LeaseReturnsInProgress--;
+            }
         }
     }
 
@@ -863,13 +1005,14 @@ internal sealed class NativeOwnerKernel
         if (_lifecycle == NativeOwnerLifecycle.Disposed)
         {
             throw new NativeAllocationDisposedException(
-                $"{_ownerKind}.{operation} cannot run because the owner is permanently disposed.",
+                $"{_ownerKind}.{operation} cannot run because the owner is permanently disposed (lifecycle {NativeOwnerLifecycle.Disposed}).",
                 _ownerKind,
                 _generation,
                 _generation,
                 operation,
                 ActiveOperationCountLocked(),
-                allocationId);
+                allocationId,
+                currentLifecycle: NativeOwnerLifecycle.Disposed);
         }
     }
 
@@ -953,6 +1096,11 @@ internal sealed class NativeOwnerKernel
             return;
         }
 
+        if (NativeMemoryTestHooks.ConsumeForcedClearFailure())
+        {
+            throw new InvalidOperationException("Injected native clear failure before the staging slab was changed.");
+        }
+
         nuint byteLength = checked((nuint)allocation.Length * (nuint)_elementSize);
         unsafe
         {
@@ -1015,13 +1163,14 @@ internal sealed class NativeOwnerKernel
         string reason)
     {
         return new NativeAllocationReturnedException(
-            $"{_ownerKind}.{operation} cannot access native storage. {reason} The handle belongs to generation {generation}; the owner is currently at generation {currentGeneration}.",
+            $"{_ownerKind}.{operation} cannot access native storage. {reason} The handle belongs to generation {generation}; the owner is currently at generation {currentGeneration} (lifecycle {_lifecycle}).",
             _ownerKind,
             generation,
             currentGeneration,
             operation,
             ActiveOperationCountLocked(),
-            allocationId);
+            allocationId,
+            currentLifecycle: _lifecycle);
     }
 
     private NativeAllocationInUseException CreateInUseException(
@@ -1032,25 +1181,27 @@ internal sealed class NativeOwnerKernel
         string reason)
     {
         return new NativeAllocationInUseException(
-            $"{_ownerKind}.{operation} could not complete for generation {generation} because native ownership is in use. {reason}",
+            $"{_ownerKind}.{operation} could not complete for generation {generation} because native ownership is in use (lifecycle {_lifecycle}). {reason}",
             _ownerKind,
             generation,
             _generation,
             operation,
             activeOperationCount,
-            allocationId);
+            allocationId,
+            currentLifecycle: _lifecycle);
     }
 
     private NativeAllocationStateException CreateStateException(string operation, string reason, long allocationId)
     {
         return new NativeAllocationStateException(
-            $"{_ownerKind}.{operation} is invalid for the current owner state. {reason}",
+            $"{_ownerKind}.{operation} is invalid for the current owner state (lifecycle {_lifecycle}). {reason}",
             _ownerKind,
             _generation,
             _generation,
             operation,
             ActiveOperationCountLocked(),
-            allocationId);
+            allocationId,
+            currentLifecycle: _lifecycle);
     }
 
     private void DisposeFromFinalizer()

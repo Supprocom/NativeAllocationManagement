@@ -38,6 +38,7 @@ public sealed class RuntimeLifecycleTests
         Pooled<int> second = pool.Rent(9);
         Assert.Equal(4, first.Capacity);
         Assert.True(second.Capacity >= 9);
+        Assert.Equal(0, second[0]);
 
         first.Access(static span => span.Fill(17));
         first.Dispose();
@@ -198,6 +199,54 @@ public sealed class RuntimeLifecycleTests
     }
 
     [Fact]
+    public void RegionUsingCleanupRunsOnFallthroughReturnAndException()
+    {
+        NativeMemoryTestHooks.Reset();
+        long freeBefore = NativeMemoryTestHooks.Snapshot().FreeCount;
+        RegionFallthrough();
+        RegionReturn();
+        RegionGoto();
+        RegionLoop();
+        try
+        {
+            RegionThrow();
+        }
+        catch (InvalidOperationException)
+        {
+        }
+
+        Assert.True(NativeMemoryTestHooks.Snapshot().FreeCount >= freeBefore + 5);
+    }
+
+    [Fact]
+    public void DetachedOldGenerationIsReclaimedWhileAReLeasedGenerationRemainsActive()
+    {
+        GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+        GC.WaitForPendingFinalizers();
+        GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+        NativeMemoryTestHooks.Reset();
+        NativePool<long> pool = new(initialCapacity: 4);
+        Pooled<long> oldLease = pool.Rent(4);
+        oldLease.Access(static span => span.Fill(41));
+        pool.ReturnToGarbageCollector();
+        long detachedAfterReturn = NativeMemoryTestHooks.Snapshot().DetachedNativeBytes;
+        pool.LeaseFromMemory();
+        Pooled<long> currentLease = pool.Rent(4);
+        Assert.Equal(0, currentLease[0]);
+
+        oldLease.Dispose();
+        oldLease = default;
+        GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+        GC.WaitForPendingFinalizers();
+        GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+
+        Assert.True(NativeMemoryTestHooks.Snapshot().DetachedNativeBytes < detachedAfterReturn);
+        Assert.Equal(0, currentLease[0]);
+        currentLease.Dispose();
+        pool.Dispose();
+    }
+
+    [Fact]
     public void CallbackExceptionsReleaseTheOperationToken()
     {
         NativePool<int> pool = new(returnOnDispose: NativeReturn.ToNativeMemory);
@@ -271,8 +320,25 @@ public sealed class RuntimeLifecycleTests
     public void DefaultOwnersAndHandlesFailOnEveryMeaningfulMember()
     {
         Assert.Throws<NativeAllocationUninitializedException>(ReadDefaultPooled);
+        Assert.Throws<NativeAllocationUninitializedException>(ReadDefaultPooledCapacity);
+        Assert.Throws<NativeAllocationUninitializedException>(ReadDefaultPooledIndexer);
+        Assert.Throws<NativeAllocationUninitializedException>(ClearDefaultPooled);
+        Assert.Throws<NativeAllocationUninitializedException>(CopyFromDefaultPooled);
+        Assert.Throws<NativeAllocationUninitializedException>(CopyToDefaultPooled);
+        Assert.Throws<NativeAllocationUninitializedException>(AccessDefaultPooled);
+        Assert.Throws<NativeAllocationUninitializedException>(ReadCallbackDefaultPooled);
         Assert.Throws<NativeAllocationUninitializedException>(DisposeDefaultPooled);
         Assert.Throws<NativeAllocationUninitializedException>(ReadDefaultLocal);
+        Assert.Throws<NativeAllocationUninitializedException>(ReadDefaultLocalCapacity);
+        Assert.Throws<NativeAllocationUninitializedException>(ReadDefaultLocalIndexer);
+        Assert.Throws<NativeAllocationUninitializedException>(ClearDefaultLocal);
+        Assert.Throws<NativeAllocationUninitializedException>(CopyFromDefaultLocal);
+        Assert.Throws<NativeAllocationUninitializedException>(CopyToDefaultLocal);
+        Assert.Throws<NativeAllocationUninitializedException>(AccessDefaultLocal);
+        Assert.Throws<NativeAllocationUninitializedException>(ReadCallbackDefaultLocal);
+        Assert.Throws<NativeAllocationUninitializedException>(AllocateDefaultRegion);
+        Assert.Throws<NativeAllocationUninitializedException>(ReturnNativeDefaultRegion);
+        Assert.Throws<NativeAllocationUninitializedException>(ReturnGarbageDefaultRegion);
         Assert.Throws<NativeAllocationUninitializedException>(DisposeDefaultRegion);
     }
 
@@ -321,6 +387,179 @@ public sealed class RuntimeLifecycleTests
         pool.Dispose();
     }
 
+    [Fact]
+    public void FailedIndividualLeaseReturnRestoresActiveStateWithoutRequeueing()
+    {
+        NativeMemoryTestHooks.Reset();
+        NativePool<int> pool = new(initialCapacity: 4, returnOnDispose: NativeReturn.ToNativeMemory);
+        Pooled<int> lease = pool.Rent(4);
+        lease[0] = 23;
+        NativeMemoryTestHooks.FailNextClear();
+
+        Exception? failure = null;
+        try
+        {
+            lease.Dispose();
+        }
+        catch (Exception exception)
+        {
+            failure = exception;
+        }
+
+        Assert.IsType<InvalidOperationException>(failure);
+        Assert.Equal(23, lease[0]);
+
+        lease.Dispose();
+        Pooled<int> reused = pool.Rent(2);
+        Assert.Equal(0, reused[0]);
+        reused.Dispose();
+        pool.Dispose();
+    }
+
+    [Fact]
+    public void ReturnPoliciesCoverPoolsAndRegionsWithAndWithoutInitialReservation()
+    {
+        NativeMemoryTestHooks.Reset();
+        foreach (NativeReturn policy in Enum.GetValues<NativeReturn>())
+        {
+            foreach (int initialCapacity in new[] { 0, 4 })
+            {
+                NativeMemoryTestMetrics poolBefore = NativeMemoryTestHooks.Snapshot();
+                NativePool<int> pool = new(initialCapacity, policy);
+                Pooled<int> lease = pool.Rent(initialCapacity == 0 ? 1 : 3);
+                lease.Dispose();
+                pool.Dispose();
+                NativeMemoryTestMetrics poolAfter = NativeMemoryTestHooks.Snapshot();
+                Assert.True(poolAfter.AllocationCount > poolBefore.AllocationCount);
+                if (policy == NativeReturn.ToNativeMemory)
+                {
+                    Assert.True(poolAfter.FreeCount > poolBefore.FreeCount);
+                }
+                else
+                {
+                    Assert.True(poolAfter.DetachedGenerationCount > poolBefore.DetachedGenerationCount);
+                }
+
+                NativeMemoryTestMetrics regionBefore = NativeMemoryTestHooks.Snapshot();
+                NativeRegion region = new((nuint)(initialCapacity * sizeof(long)), policy);
+                Local<long> local = region.Allocate<long>(2);
+                local[0] = 8;
+
+                region.Dispose();
+                NativeMemoryTestMetrics regionAfter = NativeMemoryTestHooks.Snapshot();
+                Assert.True(regionAfter.AllocationCount > regionBefore.AllocationCount);
+                if (policy == NativeReturn.ToNativeMemory)
+                {
+                    Assert.True(regionAfter.FreeCount > regionBefore.FreeCount);
+                }
+                else
+                {
+                    Assert.True(regionAfter.DetachedGenerationCount > regionBefore.DetachedGenerationCount);
+                }
+            }
+        }
+    }
+
+    [Fact]
+    public void DoubleReturnAndPostDisposeExposeStructuredLifecycleFacts()
+    {
+        foreach (NativeReturn policy in Enum.GetValues<NativeReturn>())
+        {
+            NativePool<int> pool = new(returnOnDispose: policy);
+            Pooled<int> stale = pool.Rent(1);
+            if (policy == NativeReturn.ToNativeMemory)
+            {
+                pool.ReturnToNativeMemory();
+            }
+            else
+            {
+                pool.ReturnToGarbageCollector();
+            }
+
+            NativeAllocationReturnedException returned = CaptureReturned(stale);
+            Assert.Equal(NativeOwnerLifecycle.Returned, returned.CurrentLifecycle);
+            Assert.True(returned.CurrentGeneration > returned.Generation);
+            Assert.DoesNotContain("0x", returned.Message, StringComparison.OrdinalIgnoreCase);
+            if (policy == NativeReturn.ToNativeMemory)
+            {
+                Assert.Throws<NativeAllocationReturnedException>(pool.ReturnToNativeMemory);
+            }
+            else
+            {
+                Assert.Throws<NativeAllocationReturnedException>(pool.ReturnToGarbageCollector);
+            }
+
+            stale.Dispose();
+            pool.LeaseFromMemory();
+            pool.Dispose();
+            NativeAllocationDisposedException disposed = Assert.Throws<NativeAllocationDisposedException>(() => pool.Rent(1));
+            Assert.Equal(NativeOwnerLifecycle.Disposed, disposed.CurrentLifecycle);
+            Assert.Contains("lifecycle", disposed.Message, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    [Fact]
+    public void InvalidCopyArgumentsDoNotChangeNativeOrManagedState()
+    {
+        NativePool<int> pool = new();
+        Pooled<int> lease = pool.Rent(2);
+        lease[0] = 11;
+        lease[1] = 12;
+        int[] source = [31];
+        int[] destination = [41];
+
+        Assert.IsType<ArgumentException>(CaptureArgumentFailure(lease, 0));
+        Assert.IsType<ArgumentException>(CaptureArgumentFailure(lease, 1));
+        Assert.Equal(new[] { 31 }, source);
+        Assert.Equal(new[] { 41 }, destination);
+        Assert.Equal(11, lease[0]);
+        Assert.Equal(12, lease[1]);
+
+        lease.Dispose();
+        pool.Dispose();
+    }
+
+    [Fact]
+    public void NullCallbacksFailBeforeNativeStateChanges()
+    {
+        NativePool<int> pool = new();
+        Pooled<int> pooled = pool.Rent(1);
+        NativeMemoryTestMetrics before = NativeMemoryTestHooks.Snapshot();
+        Assert.IsType<ArgumentNullException>(CaptureNullPooledCallback(pooled, read: false));
+        Assert.IsType<ArgumentNullException>(CaptureNullPooledCallback(pooled, read: true));
+        NativeMemoryTestMetrics afterPooled = NativeMemoryTestHooks.Snapshot();
+        Assert.Equal(before.OutstandingNativeBytes, afterPooled.OutstandingNativeBytes);
+        pooled.Dispose();
+        pool.Dispose();
+
+        NativeRegion region = new();
+        Local<int> local = region.Allocate<int>(1);
+        NativeMemoryTestMetrics beforeLocal = NativeMemoryTestHooks.Snapshot();
+        Assert.IsType<ArgumentNullException>(CaptureNullLocalCallback(local, read: false));
+        Assert.IsType<ArgumentNullException>(CaptureNullLocalCallback(local, read: true));
+        NativeMemoryTestMetrics afterLocal = NativeMemoryTestHooks.Snapshot();
+        Assert.Equal(beforeLocal.OutstandingNativeBytes, afterLocal.OutstandingNativeBytes);
+        region.Dispose();
+    }
+
+    [Fact]
+    public void DetachedNativeBytesRemainAccountedUntilFinalization()
+    {
+        NativeMemoryTestHooks.Reset();
+        NativePool<long> pool = new(initialCapacity: 4);
+        Pooled<long> lease = pool.Rent(4);
+        long allocatedBytes = NativeMemoryTestHooks.Snapshot().OutstandingNativeBytes;
+        pool.ReturnToGarbageCollector();
+        NativeMemoryTestMetrics detached = NativeMemoryTestHooks.Snapshot();
+        Assert.True(allocatedBytes > 0);
+        Assert.Equal(allocatedBytes, detached.DetachedNativeBytes);
+        Assert.Equal(allocatedBytes, detached.OutstandingNativeBytes);
+        lease.Dispose();
+        pool = null!;
+        GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+        GC.WaitForPendingFinalizers();
+    }
+
     private static void DetachOneGeneration()
     {
         NativePool<int> pool = new(initialCapacity: 4);
@@ -328,6 +567,59 @@ public sealed class RuntimeLifecycleTests
         lease.Access(static span => span.Fill(1));
         pool.ReturnToGarbageCollector();
         lease.Dispose();
+    }
+
+    private static void RegionFallthrough()
+    {
+        using NativeRegion region = new(16, NativeReturn.ToNativeMemory);
+        Local<int> local = region.Allocate<int>(1);
+        local[0] = 1;
+    }
+
+    private static int RegionReturn()
+    {
+        using NativeRegion region = new(16, NativeReturn.ToNativeMemory);
+        Local<int> local = region.Allocate<int>(1);
+        local[0] = 2;
+        return local[0];
+    }
+
+    private static void RegionGoto()
+    {
+        using NativeRegion region = new(16, NativeReturn.ToNativeMemory);
+        Local<int> local = region.Allocate<int>(1);
+        if (local.Length == 1)
+        {
+            goto End;
+        }
+
+        local[0] = 4;
+    End:
+        _ = local.Length;
+    }
+
+    private static void RegionLoop()
+    {
+        using NativeRegion region = new(16, NativeReturn.ToNativeMemory);
+        Local<int> local = region.Allocate<int>(1);
+        for (int index = 0; index < 2; index++)
+        {
+            if (index == 0)
+            {
+                continue;
+            }
+
+            local[0] = index;
+            break;
+        }
+    }
+
+    private static void RegionThrow()
+    {
+        using NativeRegion region = new(16, NativeReturn.ToNativeMemory);
+        Local<int> local = region.Allocate<int>(1);
+        local[0] = 3;
+        throw new InvalidOperationException("region exit");
     }
 
     private static void ReadFirst(Pooled<int> lease)
@@ -352,10 +644,112 @@ public sealed class RuntimeLifecycleTests
         value.Dispose();
     }
 
+    private static void ReadDefaultPooledCapacity()
+    {
+        Pooled<int> value = default;
+        _ = value.Capacity;
+    }
+
+    private static void ReadDefaultPooledIndexer()
+    {
+        Pooled<int> value = default;
+        _ = value[0];
+    }
+
+    private static void ClearDefaultPooled()
+    {
+        Pooled<int> value = default;
+        value.Clear();
+    }
+
+    private static void CopyFromDefaultPooled()
+    {
+        Pooled<int> value = default;
+        value.CopyFrom(ReadOnlySpan<int>.Empty);
+    }
+
+    private static void CopyToDefaultPooled()
+    {
+        Pooled<int> value = default;
+        value.CopyTo(Span<int>.Empty);
+    }
+
+    private static void AccessDefaultPooled()
+    {
+        Pooled<int> value = default;
+        value.Access(static _ => { });
+    }
+
+    private static void ReadCallbackDefaultPooled()
+    {
+        Pooled<int> value = default;
+        _ = value.Read(static _ => 0);
+    }
+
     private static void ReadDefaultLocal()
     {
         Local<int> value = default;
         _ = value.Length;
+    }
+
+    private static void ReadDefaultLocalCapacity()
+    {
+        Local<int> value = default;
+        _ = value.Capacity;
+    }
+
+    private static void ReadDefaultLocalIndexer()
+    {
+        Local<int> value = default;
+        _ = value[0];
+    }
+
+    private static void ClearDefaultLocal()
+    {
+        Local<int> value = default;
+        value.Clear();
+    }
+
+    private static void CopyFromDefaultLocal()
+    {
+        Local<int> value = default;
+        value.CopyFrom(ReadOnlySpan<int>.Empty);
+    }
+
+    private static void CopyToDefaultLocal()
+    {
+        Local<int> value = default;
+        value.CopyTo(Span<int>.Empty);
+    }
+
+    private static void AccessDefaultLocal()
+    {
+        Local<int> value = default;
+        value.Access(static _ => { });
+    }
+
+    private static void ReadCallbackDefaultLocal()
+    {
+        Local<int> value = default;
+        _ = value.Read(static _ => 0);
+    }
+
+    private static void AllocateDefaultRegion()
+    {
+        NativeRegion value = default;
+        _ = value.Allocate<int>(1);
+    }
+
+    private static void ReturnNativeDefaultRegion()
+    {
+        NativeRegion value = default;
+        value.ReturnToNativeMemory();
+    }
+
+    private static void ReturnGarbageDefaultRegion()
+    {
+        NativeRegion value = default;
+        value.ReturnToGarbageCollector();
     }
 
     private static void DisposeDefaultRegion()
@@ -379,6 +773,48 @@ public sealed class RuntimeLifecycleTests
                 default:
                     _ = lease[2];
                     break;
+            }
+        }
+        catch (Exception exception)
+        {
+            return exception;
+        }
+
+        return null;
+    }
+
+    private static Exception? CaptureNullPooledCallback(Pooled<int> pooled, bool read)
+    {
+        try
+        {
+            if (read)
+            {
+                _ = pooled.Read<int>(null!);
+            }
+            else
+            {
+                pooled.Access(null!);
+            }
+        }
+        catch (Exception exception)
+        {
+            return exception;
+        }
+
+        return null;
+    }
+
+    private static Exception? CaptureNullLocalCallback(Local<int> local, bool read)
+    {
+        try
+        {
+            if (read)
+            {
+                _ = local.Read<int>(null!);
+            }
+            else
+            {
+                local.Access(null!);
             }
         }
         catch (Exception exception)

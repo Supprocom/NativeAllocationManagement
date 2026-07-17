@@ -2,5 +2,5 @@
   <Project Path="Supprocom.NativeAllocationManagement/Supprocom.NativeAllocationManagement.csproj" />
   <Project Path="Supprocom.NativeAllocationManagement.Analyzers/Supprocom.NativeAllocationManagement.Analyzers.csproj" />
   <Project Path="Supprocom.NativeAllocationManagement.Tests/Supprocom.NativeAllocationManagement.Tests.csproj" />
+  <Project Path="Supprocom.NativeAllocationManagement.Performance/Supprocom.NativeAllocationManagement.Performance.csproj" />
 </Solution>
-
