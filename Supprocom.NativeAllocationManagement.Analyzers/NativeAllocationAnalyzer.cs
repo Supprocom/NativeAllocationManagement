@@ -102,7 +102,12 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 _context.CancellationToken.ThrowIfCancellationRequested();
                 foreach (HandleState handle in exit.Handles.Values)
                 {
-                    if (handle.Returned && !handle.Ambiguous && !handle.GenerationUnknown || handle.IsUsing || handle.Owner.IsRegion)
+                    if (!IsVisibleAtMethodExit(handle.Symbol))
+                    {
+                        continue;
+                    }
+
+                    if (handle.Returned && !handle.Ambiguous && handle.GenerationRelation != GenerationRelationKind.Unknown || handle.IsUsing || handle.Owner.IsRegion)
                     {
                         continue;
                     }
@@ -116,7 +121,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 foreach (OwnerState owner in exit.Owners.Values)
                 {
                     _context.CancellationToken.ThrowIfCancellationRequested();
-                    if (owner.IsField || owner.IsUsing || owner.IsRegion || (owner.Returned && !owner.Ambiguous && !owner.GenerationUnknown) || (owner.Disposed && !owner.Ambiguous && !owner.GenerationUnknown))
+                    if (owner.IsField || owner.IsUsing || owner.IsRegion || (owner.Returned && !owner.Ambiguous && owner.GenerationRelation != GenerationRelationKind.Unknown) || (owner.Disposed && !owner.Ambiguous && owner.GenerationRelation != GenerationRelationKind.Unknown))
                     {
                         continue;
                     }
@@ -130,6 +135,41 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     }
                 }
             }
+        }
+
+        private bool IsVisibleAtMethodExit(ISymbol? symbol)
+        {
+            if (symbol is not ILocalSymbol local || local.DeclaringSyntaxReferences.Length == 0)
+            {
+                return true;
+            }
+
+            SyntaxNode declaration = local.DeclaringSyntaxReferences[0].GetSyntax(_context.CancellationToken);
+            if (declaration.AncestorsAndSelf().OfType<SwitchSectionSyntax>().Any())
+            {
+                return false;
+            }
+
+            BlockSyntax? containingBlock = declaration.AncestorsAndSelf().OfType<BlockSyntax>().FirstOrDefault();
+            BlockSyntax? methodBlock = declaration.AncestorsAndSelf()
+                .Select(GetCallableBody)
+                .FirstOrDefault(body => body is not null);
+            return containingBlock is null || ReferenceEquals(containingBlock, methodBlock);
+        }
+
+        private static BlockSyntax? GetCallableBody(SyntaxNode syntax)
+        {
+            return syntax switch
+            {
+                MethodDeclarationSyntax method => method.Body,
+                ConstructorDeclarationSyntax constructor => constructor.Body,
+                DestructorDeclarationSyntax destructor => destructor.Body,
+                OperatorDeclarationSyntax operatorDeclaration => operatorDeclaration.Body,
+                ConversionOperatorDeclarationSyntax conversion => conversion.Body,
+                AccessorDeclarationSyntax accessor => accessor.Body,
+                LocalFunctionStatementSyntax localFunction => localFunction.Body,
+                _ => null
+            };
         }
 
         private void AnalyzeControlFlowGraph(ControlFlowGraph graph)
@@ -408,20 +448,27 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     merged.Returned &= owner.Returned;
                     merged.Disposed &= owner.Disposed;
                     merged.Ambiguous |= owner.Ambiguous;
-                    merged.Generation = Math.Max(merged.Generation, owner.Generation);
-                    merged.GenerationUnknown |= owner.GenerationUnknown || owner.Generation != first.Generation;
                 }
 
                 if (!presentOnEveryPath)
                 {
                     merged.Ambiguous = true;
-                    merged.GenerationUnknown = true;
                 }
 
                 if (paths.Any(path => path.Owners.TryGetValue(symbol, out OwnerState? owner) && owner.Returned != merged.Returned)
                     || paths.Any(path => path.Owners.TryGetValue(symbol, out OwnerState? owner) && owner.Disposed != merged.Disposed))
                 {
                     merged.Ambiguous = true;
+                }
+
+                merged.GenerationRelation = MergeOwnerGenerationRelation(paths, first);
+                if (merged.GenerationRelation == GenerationRelationKind.Unknown)
+                {
+                    merged.Generation = paths
+                        .Where(path => path.Owners.ContainsKey(symbol))
+                        .Select(path => path.Owners[symbol].Generation)
+                        .DefaultIfEmpty(first.Generation)
+                        .Max();
                 }
 
                 owners.Add(symbol, merged);
@@ -460,19 +507,26 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
                     mergedHandle.Returned &= handle.Returned;
                     mergedHandle.Ambiguous |= handle.Ambiguous;
-                    mergedHandle.GenerationUnknown |= handle.GenerationUnknown || handle.Generation != first.Generation;
-                    mergedHandle.Generation = Math.Max(mergedHandle.Generation, handle.Generation);
                 }
 
                 if (!presentOnEveryPath)
                 {
                     mergedHandle.Ambiguous = true;
-                    mergedHandle.GenerationUnknown = true;
                 }
 
                 if (paths.Any(path => path.Handles.TryGetValue(symbol, out HandleState? handle) && handle.Returned != mergedHandle.Returned))
                 {
                     mergedHandle.Ambiguous = true;
+                }
+
+                mergedHandle.GenerationRelation = MergeHandleGenerationRelation(paths, symbol, first, mergedHandle);
+                if (mergedHandle.GenerationRelation == GenerationRelationKind.Unknown)
+                {
+                    mergedHandle.Generation = paths
+                        .Where(path => path.Handles.ContainsKey(symbol))
+                        .Select(path => path.Handles[symbol].Generation)
+                        .DefaultIfEmpty(first.Generation)
+                        .Max();
                 }
 
                 handles.Add(symbol, mergedHandle);
@@ -534,6 +588,87 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             return new FlowSnapshot(owners, handles, [.. snapshot.Regions], borrowed);
         }
 
+        private static GenerationRelationKind MergeOwnerGenerationRelation(
+            IReadOnlyList<FlowSnapshot> paths,
+            OwnerState first)
+        {
+            OwnerState[] states = paths
+                .Select(path => path.Owners.TryGetValue(first.Symbol!, out OwnerState? owner) ? owner : null)
+                .Where(owner => owner is not null)
+                .Cast<OwnerState>()
+                .ToArray();
+
+            if (states.Length != paths.Count || states.Any(state => state.Ambiguous))
+            {
+                return GenerationRelationKind.Unknown;
+            }
+
+            GenerationRelationKind relation = JoinGenerationRelations(states.Select(state => state.GenerationRelation));
+            if (states.Any(state => state.Returned != first.Returned || state.Disposed != first.Disposed))
+            {
+                return GenerationRelationKind.Unknown;
+            }
+
+            return states.Any(state => state.Generation != first.Generation)
+                ? relation == GenerationRelationKind.Unknown ? GenerationRelationKind.Unknown : GenerationRelationKind.Current
+                : relation;
+        }
+
+        private static GenerationRelationKind MergeHandleGenerationRelation(
+            IReadOnlyList<FlowSnapshot> paths,
+            ISymbol symbol,
+            HandleState first,
+            HandleState merged)
+        {
+            HandleState[] states = paths
+                .Select(path => path.Handles.TryGetValue(symbol, out HandleState? handle) ? handle : null)
+                .Where(handle => handle is not null)
+                .Cast<HandleState>()
+                .ToArray();
+
+            if (states.Length != paths.Count || states.Any(state => state.Ambiguous))
+            {
+                return GenerationRelationKind.Unknown;
+            }
+
+            GenerationRelationKind relation = JoinGenerationRelations(states.Select(state => state.GenerationRelation));
+            if (states.Any(state => state.Returned != first.Returned))
+            {
+                return GenerationRelationKind.Unknown;
+            }
+
+            if (!states.Any(state => state.Generation != first.Generation))
+            {
+                return relation;
+            }
+
+            // A returned handle is stale regardless of the numeric generation used by
+            // the path that returned it. An active handle with two generation numbers
+            // is not proven to refer to one current allocation and remains unknown.
+            return merged.Returned
+                ? relation == GenerationRelationKind.Unknown ? GenerationRelationKind.Unknown : GenerationRelationKind.Current
+                : GenerationRelationKind.Unknown;
+        }
+
+        private static GenerationRelationKind JoinGenerationRelations(IEnumerable<GenerationRelationKind> relations)
+        {
+            GenerationRelationKind result = GenerationRelationKind.Exact;
+            foreach (GenerationRelationKind relation in relations)
+            {
+                if (relation == GenerationRelationKind.Unknown)
+                {
+                    return GenerationRelationKind.Unknown;
+                }
+
+                if (relation == GenerationRelationKind.Current)
+                {
+                    result = GenerationRelationKind.Current;
+                }
+            }
+
+            return result;
+        }
+
         private static bool SnapshotEquivalent(FlowSnapshot left, FlowSnapshot right)
         {
             if (left.Owners.Count != right.Owners.Count || left.Handles.Count != right.Handles.Count)
@@ -548,7 +683,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     || pair.Value.Disposed != other.Disposed
                     || pair.Value.Ambiguous != other.Ambiguous
                     || pair.Value.Generation != other.Generation
-                    || pair.Value.GenerationUnknown != other.GenerationUnknown)
+                    || pair.Value.GenerationRelation != other.GenerationRelation)
                 {
                     return false;
                 }
@@ -560,7 +695,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     || pair.Value.Returned != other.Returned
                     || pair.Value.Ambiguous != other.Ambiguous
                     || pair.Value.Generation != other.Generation
-                    || pair.Value.GenerationUnknown != other.GenerationUnknown)
+                    || pair.Value.GenerationRelation != other.GenerationRelation)
                 {
                     return false;
                 }
@@ -1184,6 +1319,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 owner.Generation,
                 IsUsingSyntax(operation.Syntax, target.Symbol),
                 operation.Syntax);
+            handle.GenerationRelation = owner.GenerationRelation;
             _handles[target.Symbol] = handle;
         }
 
@@ -1220,18 +1356,19 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     return;
                 }
 
-                long oldGeneration = owner.Generation;
                 owner.Returned = true;
                 owner.Ambiguous = false;
-                owner.GenerationUnknown = false;
+                owner.GenerationRelation = owner.GenerationRelation == GenerationRelationKind.Unknown
+                    ? GenerationRelationKind.Current
+                    : owner.GenerationRelation;
                 owner.Generation++;
                 foreach (HandleState handle in _handles.Values)
                 {
-                    if (ReferenceEquals(handle.Owner, owner)
-                        && (handle.GenerationUnknown || handle.Generation == oldGeneration))
+                    if (ReferenceEquals(handle.Owner, owner) && !handle.Returned)
                     {
                         handle.Returned = true;
                         handle.Ambiguous = false;
+                        handle.GenerationRelation = GenerationRelationKind.Current;
                     }
                 }
 
@@ -1246,7 +1383,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     return;
                 }
 
-                if (owner.IsRegion || owner.Ambiguous || owner.GenerationUnknown || !owner.Returned || owner.Disposed)
+                if (owner.IsRegion || owner.Ambiguous || owner.GenerationRelation == GenerationRelationKind.Unknown || !owner.Returned || owner.Disposed)
                 {
                     Report(NativeAllocationDiagnosticDescriptors.InvalidLifecycle, syntax, owner.DisplayName, name);
                     return;
@@ -1254,8 +1391,6 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
                 owner.Returned = false;
                 owner.Ambiguous = false;
-                owner.GenerationUnknown = false;
-                owner.Generation++;
                 return;
             }
 
@@ -1278,7 +1413,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     return;
                 }
 
-                if (owner.Ambiguous || owner.GenerationUnknown || owner.Disposed)
+                if (owner.Ambiguous || owner.GenerationRelation == GenerationRelationKind.Unknown || owner.Disposed)
                 {
                     Report(NativeAllocationDiagnosticDescriptors.InvalidLifecycle, syntax, owner.DisplayName, name);
                     return;
@@ -1286,7 +1421,6 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
                 owner.Disposed = true;
                 owner.Ambiguous = false;
-                owner.GenerationUnknown = false;
                 owner.Returned = true;
                 foreach (HandleState handle in _handles.Values)
                 {
@@ -1344,7 +1478,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
         private bool CheckOwnerActive(OwnerState owner, SyntaxNode syntax, string operation)
         {
-            if (owner.Ambiguous || owner.GenerationUnknown || owner.Disposed || owner.Returned)
+            if (owner.Ambiguous || owner.GenerationRelation == GenerationRelationKind.Unknown || owner.Disposed || owner.Returned)
             {
                 Report(NativeAllocationDiagnosticDescriptors.InvalidLifecycle, syntax, owner.DisplayName, operation);
                 return false;
@@ -1366,13 +1500,15 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             }
 
             if (handle.Ambiguous
-                || handle.GenerationUnknown
+                || handle.GenerationRelation == GenerationRelationKind.Unknown
                 || handle.Owner.Ambiguous
-                || handle.Owner.GenerationUnknown
+                || handle.Owner.GenerationRelation == GenerationRelationKind.Unknown
                 || handle.Returned
                 || handle.Owner.Returned
                 || handle.Owner.Disposed
-                || handle.Generation != handle.Owner.Generation)
+                || handle.Generation != handle.Owner.Generation
+                    && !(handle.GenerationRelation == GenerationRelationKind.Current
+                        && handle.Owner.GenerationRelation == GenerationRelationKind.Current))
             {
                 Report(
                     NativeAllocationDiagnosticDescriptors.ReturnedHandle,
@@ -1429,7 +1565,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         {
             foreach (HandleState handle in _handles.Values)
             {
-                if (!handle.Returned || handle.Ambiguous || handle.GenerationUnknown)
+                if (!handle.Returned || handle.Ambiguous || handle.GenerationRelation == GenerationRelationKind.Unknown)
                 {
                     Report(NativeAllocationDiagnosticDescriptors.AcrossAsync, syntax, handle.DisplayName);
                 }
@@ -1440,7 +1576,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         {
             foreach (HandleState handle in _handles.Values)
             {
-                if ((!handle.Returned || handle.Ambiguous || handle.GenerationUnknown) && !handle.IsUsing && !handle.Owner.IsRegion)
+                if ((!handle.Returned || handle.Ambiguous || handle.GenerationRelation == GenerationRelationKind.Unknown) && !handle.IsUsing && !handle.Owner.IsRegion)
                 {
                     Report(
                         NativeAllocationDiagnosticDescriptors.LifetimeEscape,
@@ -1455,8 +1591,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     && !owner.IsUsing
                     && !owner.IsRegion
                     && owner.RequiresDeterministicReturn
-                    && (!owner.Returned || owner.Ambiguous || owner.GenerationUnknown)
-                    && (!owner.Disposed || owner.Ambiguous || owner.GenerationUnknown))
+                    && (!owner.Returned || owner.Ambiguous || owner.GenerationRelation == GenerationRelationKind.Unknown)
+                    && (!owner.Disposed || owner.Ambiguous || owner.GenerationRelation == GenerationRelationKind.Unknown))
                 {
                     Report(
                         NativeAllocationDiagnosticDescriptors.LifetimeEscape,
@@ -2531,6 +2667,13 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 messageArgs: arguments));
         }
 
+        private enum GenerationRelationKind
+        {
+            Exact,
+            Current,
+            Unknown
+        }
+
         private sealed class OwnerState
         {
             internal OwnerState(
@@ -2563,7 +2706,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             internal bool Disposed { get; set; }
             internal bool Ambiguous { get; set; }
             internal int Generation { get; set; }
-            internal bool GenerationUnknown { get; set; }
+            internal GenerationRelationKind GenerationRelation { get; set; } = GenerationRelationKind.Exact;
             internal SyntaxNode Syntax { get; }
             internal TextSpan? RegionScope { get; }
             internal string DisplayName => Symbol?.Name ?? Type.Name;
@@ -2583,7 +2726,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 copy.Disposed = Disposed;
                 copy.Ambiguous = Ambiguous;
                 copy.Generation = Generation;
-                copy.GenerationUnknown = GenerationUnknown;
+                copy.GenerationRelation = GenerationRelation;
                 return copy;
             }
         }
@@ -2605,7 +2748,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             internal bool IsUsing { get; set; }
             internal bool Returned { get; set; }
             internal bool Ambiguous { get; set; }
-            internal bool GenerationUnknown { get; set; }
+            internal GenerationRelationKind GenerationRelation { get; set; } = GenerationRelationKind.Exact;
             internal SyntaxNode Syntax { get; }
             internal string DisplayName => Symbol?.Name ?? Owner.Type.Name;
 
@@ -2616,7 +2759,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     Returned = Returned
                 };
                 copy.Ambiguous = Ambiguous;
-                copy.GenerationUnknown = GenerationUnknown;
+                copy.GenerationRelation = GenerationRelation;
                 return copy;
             }
         }

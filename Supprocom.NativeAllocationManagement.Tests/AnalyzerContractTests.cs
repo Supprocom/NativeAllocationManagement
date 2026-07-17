@@ -742,6 +742,132 @@ public sealed class AnalyzerContractTests
     }
 
     [Fact]
+    public async Task BalancedReusablePoolGenerationLoopAcceptsZeroOneAndManyIterations()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run(int iterations)
+                {
+                    NativePool<int> pool = new();
+                    for (int index = 0; index < iterations; index++)
+                    {
+                        pool.ReturnToNativeMemory();
+                        pool.LeaseFromMemory();
+                        Pooled<int> values = pool.Rent(1);
+                        values.Dispose();
+                    }
+
+                    pool.Dispose();
+                }
+            }
+            """);
+
+        Assert.Empty(NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task BalancedReusablePoolLoopAcceptsBothReturnPoliciesOnEveryCycle()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run(int iterations, bool native)
+                {
+                    NativePool<int> pool = new();
+                    for (int index = 0; index < iterations; index++)
+                    {
+                        if (native)
+                        {
+                            pool.ReturnToNativeMemory();
+                        }
+                        else
+                        {
+                            pool.ReturnToGarbageCollector();
+                        }
+
+                        pool.LeaseFromMemory();
+                        Pooled<int> values = pool.Rent(1);
+                        values.Dispose();
+                    }
+
+                    pool.Dispose();
+                }
+            }
+            """);
+
+        Assert.Empty(NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task BalancedReusablePoolRetryGotoAcceptsEveryCompletedCycle()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run(int iterations)
+                {
+                    NativePool<int> pool = new();
+                    int completed = 0;
+                Retry:
+                    if (completed == iterations)
+                    {
+                        goto Done;
+                    }
+
+                    completed++;
+                    pool.ReturnToNativeMemory();
+                    pool.LeaseFromMemory();
+                    goto Retry;
+
+                Done:
+                    pool.Dispose();
+                }
+            }
+            """);
+
+        Assert.Empty(NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task HandleRetainedFromAnEarlierGenerationRemainsStaleAfterBalancedCycles()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run(int iterations)
+                {
+                    NativePool<int> pool = new();
+                    Pooled<int> stale = pool.Rent(1);
+                    for (int index = 0; index < iterations; index++)
+                    {
+                        pool.ReturnToNativeMemory();
+                        pool.LeaseFromMemory();
+                        _ = stale.Length;
+                    }
+
+                    pool.Dispose();
+                }
+            }
+            """);
+
+        Assert.Contains("NAM1004", NativeDiagnostics(diagnostics));
+        Assert.DoesNotContain("NAM1009", NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
     public async Task SwitchWithoutDefaultAndExceptionalExitRemainConservative()
     {
         ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(

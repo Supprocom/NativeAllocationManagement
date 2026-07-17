@@ -123,7 +123,7 @@ public sealed class RuntimeLifecycleTests
     [Fact]
     public void LeaseFromMemoryDoesNotReviveOldValuesAndDisposeIsPermanent()
     {
-        NativePool<int> pool = new(initialCapacity: 2);
+        NativePool<int> pool = new();
         Pooled<int> oldLease = pool.Rent(1);
         pool.ReturnToGarbageCollector();
         pool.LeaseFromMemory();
@@ -140,7 +140,7 @@ public sealed class RuntimeLifecycleTests
     [Fact]
     public void ConcurrentReLeasePublishesExactlyOneGeneration()
     {
-        NativePool<int> pool = new();
+        NativePool<int> pool = new(initialCapacity: 2);
         pool.ReturnToNativeMemory();
         int successes = 0;
         int stateFailures = 0;
@@ -319,27 +319,27 @@ public sealed class RuntimeLifecycleTests
     [Fact]
     public void DefaultOwnersAndHandlesFailOnEveryMeaningfulMember()
     {
-        Assert.Throws<NativeAllocationUninitializedException>(ReadDefaultPooled);
-        Assert.Throws<NativeAllocationUninitializedException>(ReadDefaultPooledCapacity);
-        Assert.Throws<NativeAllocationUninitializedException>(ReadDefaultPooledIndexer);
-        Assert.Throws<NativeAllocationUninitializedException>(ClearDefaultPooled);
-        Assert.Throws<NativeAllocationUninitializedException>(CopyFromDefaultPooled);
-        Assert.Throws<NativeAllocationUninitializedException>(CopyToDefaultPooled);
-        Assert.Throws<NativeAllocationUninitializedException>(AccessDefaultPooled);
-        Assert.Throws<NativeAllocationUninitializedException>(ReadCallbackDefaultPooled);
-        Assert.Throws<NativeAllocationUninitializedException>(DisposeDefaultPooled);
-        Assert.Throws<NativeAllocationUninitializedException>(ReadDefaultLocal);
-        Assert.Throws<NativeAllocationUninitializedException>(ReadDefaultLocalCapacity);
-        Assert.Throws<NativeAllocationUninitializedException>(ReadDefaultLocalIndexer);
-        Assert.Throws<NativeAllocationUninitializedException>(ClearDefaultLocal);
-        Assert.Throws<NativeAllocationUninitializedException>(CopyFromDefaultLocal);
-        Assert.Throws<NativeAllocationUninitializedException>(CopyToDefaultLocal);
-        Assert.Throws<NativeAllocationUninitializedException>(AccessDefaultLocal);
-        Assert.Throws<NativeAllocationUninitializedException>(ReadCallbackDefaultLocal);
-        Assert.Throws<NativeAllocationUninitializedException>(AllocateDefaultRegion);
-        Assert.Throws<NativeAllocationUninitializedException>(ReturnNativeDefaultRegion);
-        Assert.Throws<NativeAllocationUninitializedException>(ReturnGarbageDefaultRegion);
-        Assert.Throws<NativeAllocationUninitializedException>(DisposeDefaultRegion);
+        AssertUninitialized(ReadDefaultPooled);
+        AssertUninitialized(ReadDefaultPooledCapacity);
+        AssertUninitialized(ReadDefaultPooledIndexer);
+        AssertUninitialized(ClearDefaultPooled);
+        AssertUninitialized(CopyFromDefaultPooled);
+        AssertUninitialized(CopyToDefaultPooled);
+        AssertUninitialized(AccessDefaultPooled);
+        AssertUninitialized(ReadCallbackDefaultPooled);
+        AssertUninitialized(DisposeDefaultPooled);
+        AssertUninitialized(ReadDefaultLocal);
+        AssertUninitialized(ReadDefaultLocalCapacity);
+        AssertUninitialized(ReadDefaultLocalIndexer);
+        AssertUninitialized(ClearDefaultLocal);
+        AssertUninitialized(CopyFromDefaultLocal);
+        AssertUninitialized(CopyToDefaultLocal);
+        AssertUninitialized(AccessDefaultLocal);
+        AssertUninitialized(ReadCallbackDefaultLocal);
+        AssertUninitialized(AllocateDefaultRegion);
+        AssertUninitialized(ReturnNativeDefaultRegion);
+        AssertUninitialized(ReturnGarbageDefaultRegion);
+        AssertUninitialized(DisposeDefaultRegion);
     }
 
     [Fact]
@@ -362,7 +362,8 @@ public sealed class RuntimeLifecycleTests
         NativePool<int> pool = new(initialCapacity: 2);
         Pooled<int> existing = pool.Rent(2);
         NativeMemoryTestHooks.FailNextAllocation();
-        Assert.Throws<NativeAllocationFailedException>(() => pool.Rent(100));
+        NativeAllocationFailedException failure = Assert.Throws<NativeAllocationFailedException>(() => pool.Rent(100));
+        Assert.Equal(NativeOwnerLifecycle.Active, failure.CurrentLifecycle);
         existing[0] = 7;
         Assert.Equal(7, existing[0]);
         existing.Dispose();
@@ -377,13 +378,57 @@ public sealed class RuntimeLifecycleTests
         pool.ReturnToNativeMemory();
         NativeMemoryTestHooks.FailNextAllocation();
 
-        Assert.Throws<NativeAllocationFailedException>(pool.LeaseFromMemory);
+        NativeAllocationFailedException failure = Assert.Throws<NativeAllocationFailedException>(pool.LeaseFromMemory);
+        Assert.Equal(NativeOwnerLifecycle.Returned, failure.CurrentLifecycle);
         Assert.Throws<NativeAllocationReturnedException>(() => pool.Rent(1));
 
         pool.LeaseFromMemory();
         Pooled<int> lease = pool.Rent(1);
         Assert.Equal(0, lease[0]);
         lease.Dispose();
+        pool.Dispose();
+    }
+
+    [Fact]
+    public void AllocationFailuresReportInitialActiveGrowthAndReturnedReLeaseLifecycle()
+    {
+        NativeMemoryTestHooks.Reset();
+        NativeMemoryTestHooks.FailNextAllocation();
+        NativeAllocationFailedException initial = Assert.Throws<NativeAllocationFailedException>(
+            () => new NativePool<int>(initialCapacity: 2));
+        Assert.Equal(NativeOwnerLifecycle.Active, initial.CurrentLifecycle);
+
+        NativeMemoryTestHooks.FailNextAllocation();
+        NativeAllocationFailedException initialRegion = Assert.Throws<NativeAllocationFailedException>(
+            () => new NativeRegion(preAllocateBytes: 8));
+        Assert.Equal(NativeOwnerLifecycle.Active, initialRegion.CurrentLifecycle);
+
+        NativeRegion region = new(preAllocateBytes: 1);
+        NativeMemoryTestHooks.FailNextAllocation();
+        NativeAllocationFailedException regionGrowth;
+        try
+        {
+            _ = region.Allocate<long>(32);
+            throw new Xunit.Sdk.XunitException("Expected a native region growth allocation failure.");
+        }
+        catch (NativeAllocationFailedException exception)
+        {
+            regionGrowth = exception;
+        }
+        Assert.Equal(NativeOwnerLifecycle.Active, regionGrowth.CurrentLifecycle);
+        region.Dispose();
+
+        NativePool<int> pool = new(initialCapacity: 2);
+        NativeMemoryTestHooks.FailNextAllocation();
+        NativeAllocationFailedException growth = Assert.Throws<NativeAllocationFailedException>(() => pool.Rent(4));
+        Assert.Equal(NativeOwnerLifecycle.Active, growth.CurrentLifecycle);
+
+        pool.ReturnToNativeMemory();
+        NativeMemoryTestHooks.FailNextAllocation();
+        NativeAllocationFailedException reLease = Assert.Throws<NativeAllocationFailedException>(pool.LeaseFromMemory);
+        Assert.Equal(NativeOwnerLifecycle.Returned, reLease.CurrentLifecycle);
+
+        pool.LeaseFromMemory();
         pool.Dispose();
     }
 
@@ -496,6 +541,15 @@ public sealed class RuntimeLifecycleTests
             Assert.Equal(NativeOwnerLifecycle.Disposed, disposed.CurrentLifecycle);
             Assert.Contains("lifecycle", disposed.Message, StringComparison.OrdinalIgnoreCase);
         }
+    }
+
+    [Fact]
+    public void StateExceptionsReportTheObservedActiveLifecycle()
+    {
+        NativePool<int> pool = new();
+        NativeAllocationStateException state = Assert.Throws<NativeAllocationStateException>(pool.LeaseFromMemory);
+        Assert.Equal(NativeOwnerLifecycle.Active, state.CurrentLifecycle);
+        pool.Dispose();
     }
 
     [Fact]
@@ -630,6 +684,12 @@ public sealed class RuntimeLifecycleTests
     private static void ReadLocal(Local<byte> local)
     {
         _ = local[0];
+    }
+
+    private static void AssertUninitialized(Action operation)
+    {
+        NativeAllocationUninitializedException exception = Assert.Throws<NativeAllocationUninitializedException>(operation);
+        Assert.Equal(NativeOwnerLifecycle.Uninitialized, exception.CurrentLifecycle);
     }
 
     private static void ReadDefaultPooled()

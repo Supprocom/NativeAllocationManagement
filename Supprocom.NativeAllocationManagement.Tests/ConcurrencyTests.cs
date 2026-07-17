@@ -31,6 +31,7 @@ public sealed class ConcurrencyTests
             Assert.True(entered.Wait(TimeSpan.FromSeconds(10)));
             NativeAllocationInUseException exception = Assert.Throws<NativeAllocationInUseException>(pool.ReturnToNativeMemory);
             Assert.Contains("No lease was invalidated", exception.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(NativeOwnerLifecycle.Active, exception.CurrentLifecycle);
             release.Set();
             await worker;
 

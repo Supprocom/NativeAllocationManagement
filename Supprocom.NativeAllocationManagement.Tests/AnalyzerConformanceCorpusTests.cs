@@ -41,6 +41,7 @@ public sealed class AnalyzerConformanceCorpusTests
             if (testCase.CompilerRejected)
             {
                 Assert.True(compilerRejected, $"Corpus case '{testCase.Name}' was marked compilerRejected but compiled successfully.");
+                AssertLifecycleContract(testCase);
                 compilerRejectedCases++;
                 continue;
             }
@@ -49,18 +50,35 @@ public sealed class AnalyzerConformanceCorpusTests
             CompilationWithAnalyzers analyzed = compilation.WithAnalyzers(
                 ImmutableArray.Create<DiagnosticAnalyzer>(new NativeAllocationAnalyzer()));
             ImmutableArray<Diagnostic> actualDiagnostics = await analyzed.GetAnalyzerDiagnosticsAsync();
-            string[] actual = AnalyzerContractTests.NativeDiagnostics(actualDiagnostics);
-            foreach (string expected in testCase.ExpectedDiagnostics)
+            ExpectedDiagnostic[] expectedDiagnostics = testCase.ExpectedDiagnostics;
+            ActualDiagnostic[] actual = actualDiagnostics
+                .Where(diagnostic => diagnostic.Id.StartsWith("NAM", StringComparison.Ordinal))
+                .Select(diagnostic => new ActualDiagnostic(
+                    diagnostic.Id,
+                    diagnostic.Location.GetLineSpan().StartLinePosition.Line + 1,
+                    diagnostic.Location.GetLineSpan().StartLinePosition.Character + 1,
+                    diagnostic.Properties.TryGetValue("NAM.Provenance", out string? provenance)
+                        ? provenance
+                        ?? string.Empty
+                        : string.Empty))
+                .ToArray();
+
+            Assert.Equal(
+                expectedDiagnostics.Select(expected => expected.Id).OrderBy(id => id, StringComparer.Ordinal),
+                actual.Select(diagnostic => diagnostic.Id).Distinct().OrderBy(id => id, StringComparer.Ordinal));
+
+            foreach (ExpectedDiagnostic expected in expectedDiagnostics)
             {
-                Assert.Contains(expected, actual);
+                ActualDiagnostic[] actualForId = actual.Where(diagnostic => diagnostic.Id == expected.Id).ToArray();
+                Assert.Equal(expected.Count, actualForId.Length);
+                Assert.Equal(
+                    expected.Facts.OrderBy(fact => fact.Line).ThenBy(fact => fact.Column).ThenBy(fact => fact.Provenance),
+                    actualForId
+                        .Select(diagnostic => new DiagnosticFact(diagnostic.Line, diagnostic.Column, diagnostic.Provenance))
+                        .OrderBy(fact => fact.Line).ThenBy(fact => fact.Column).ThenBy(fact => fact.Provenance));
             }
 
-            if (testCase.ExpectedDiagnostics.Length == 0)
-            {
-                Assert.True(
-                    actual.Length == 0,
-                    $"Corpus case '{testCase.Name}' produced unexpected diagnostics: {string.Join(", ", actualDiagnostics.Select(diagnostic => $"{diagnostic.Id}@{diagnostic.Location.GetLineSpan().StartLinePosition.Line + 1}:{diagnostic.GetMessage()}"))}.");
-            }
+            AssertLifecycleContract(testCase);
 
             analyzerCases++;
         }
@@ -68,6 +86,29 @@ public sealed class AnalyzerConformanceCorpusTests
         _output.WriteLine($"corpusCases={cases.Length}; analyzerCases={analyzerCases}; compilerRejectedCases={compilerRejectedCases}");
         Assert.True(analyzerCases > 0);
         Assert.True(compilerRejectedCases > 0);
+    }
+
+    private static void AssertLifecycleContract(CorpusCase testCase)
+    {
+        LifecycleContract lifecycle = testCase.ExpectedLifecycle;
+        Assert.NotNull(lifecycle);
+
+        if (testCase.CompilerRejected)
+        {
+            Assert.Equal("CompilerRejected", lifecycle.Result);
+            Assert.Empty(lifecycle.States);
+            return;
+        }
+
+        Assert.NotEmpty(lifecycle.Owner);
+        Assert.NotEmpty(lifecycle.States);
+        Assert.Equal("Active", lifecycle.States[0]);
+        Assert.Equal(lifecycle.Result, lifecycle.States[^1]);
+        Assert.Contains(lifecycle.Owner, testCase.Source, StringComparison.Ordinal);
+        Assert.Contains(lifecycle.PathKind, new[] { "all", "ambiguous", "zero-or-more" });
+        Assert.All(lifecycle.States, state => Assert.Contains(
+            state,
+            new[] { "Active", "Returning", "Returned", "Disposed", "Ambiguous" }));
     }
 
     private static string FindRepositoryRoot()
@@ -92,6 +133,15 @@ public sealed class AnalyzerConformanceCorpusTests
     private sealed record CorpusCase(
         string Name,
         bool CompilerRejected,
-        string[] ExpectedDiagnostics,
+        ExpectedDiagnostic[] ExpectedDiagnostics,
+        LifecycleContract ExpectedLifecycle,
         string Source);
+
+    private sealed record ExpectedDiagnostic(string Id, int Count, DiagnosticFact[] Facts);
+
+    private sealed record DiagnosticFact(int Line, int Column, string Provenance);
+
+    private sealed record ActualDiagnostic(string Id, int Line, int Column, string Provenance);
+
+    private sealed record LifecycleContract(string Owner, string PathKind, string[] States, string Result);
 }

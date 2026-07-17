@@ -19,7 +19,9 @@ public enum NativeOwnerLifecycle
     /// <summary>The current generation is stale and cannot be used.</summary>
     Returned,
     /// <summary>The owner is permanently closed.</summary>
-    Disposed
+    Disposed,
+    /// <summary>The owner-shaped value was never constructed.</summary>
+    Uninitialized
 }
 
 internal enum NativeAllocationLifecycle
@@ -243,7 +245,8 @@ internal sealed class NativeSegment
         nuint byteLength,
         string ownerKind,
         long generation,
-        string operation)
+        string operation,
+        NativeOwnerLifecycle currentLifecycle)
     {
         if (byteLength == 0)
         {
@@ -252,7 +255,7 @@ internal sealed class NativeSegment
 
         if (NativeMemoryTestHooks.ConsumeForcedFailure())
         {
-            throw new NativeAllocationFailedException(byteLength, ownerKind, generation, operation);
+            throw new NativeAllocationFailedException(byteLength, ownerKind, generation, operation, currentLifecycle);
         }
 
         try
@@ -262,7 +265,7 @@ internal sealed class NativeSegment
                 IntPtr pointer = (IntPtr)NativeMemory.AllocZeroed(byteLength);
                 if (pointer == IntPtr.Zero)
                 {
-                    throw new NativeAllocationFailedException(byteLength, ownerKind, generation, operation);
+                    throw new NativeAllocationFailedException(byteLength, ownerKind, generation, operation, currentLifecycle);
                 }
 
                 long metricsEpoch = NativeMemoryTestHooks.RecordAllocation(byteLength, zeroed: true);
@@ -271,7 +274,7 @@ internal sealed class NativeSegment
         }
         catch (OutOfMemoryException exception)
         {
-            throw new NativeAllocationFailedException(byteLength, ownerKind, generation, operation, exception);
+            throw new NativeAllocationFailedException(byteLength, ownerKind, generation, operation, currentLifecycle, exception);
         }
     }
 
@@ -576,7 +579,7 @@ internal sealed class NativeOwnerKernel
         {
             if (_kind == NativeOwnerKind.Pool && _initialCapacity > 0)
             {
-                generation.AvailableSlabs.Add(AddPoolSlabLocked(generation, _initialCapacity, "initial pool reservation"));
+                generation.AvailableSlabs.Add(AddPoolSlabLocked(generation, _initialCapacity, "initial pool reservation", _lifecycle));
             }
             else if (_kind == NativeOwnerKind.Region && _initialRegionBytes > 0)
             {
@@ -584,7 +587,8 @@ internal sealed class NativeOwnerKernel
                     _initialRegionBytes,
                     _ownerKind,
                     _generation,
-                    "initial region reservation");
+                    "initial region reservation",
+                    _lifecycle);
                 generation.Owner.AddSegment(segment);
                 generation.RegionSegment = segment;
             }
@@ -648,7 +652,7 @@ internal sealed class NativeOwnerKernel
                 slab = TakeSmallestAvailableSlabLocked(generation, length);
                 if (slab is null)
                 {
-                    slab = AddPoolSlabLocked(generation, length, "pool growth");
+                    slab = AddPoolSlabLocked(generation, length, "pool growth", _lifecycle);
                 }
             }
 
@@ -701,7 +705,8 @@ internal sealed class NativeOwnerKernel
                         segmentBytes,
                         _ownerKind,
                         generation.Number,
-                        "region growth");
+                        "region growth",
+                        _lifecycle);
                     generation.Owner.AddSegment(nextSegment);
                     segment = nextSegment;
                     offset = 0;
@@ -866,7 +871,7 @@ internal sealed class NativeOwnerKernel
             {
                 if (_initialCapacity > 0)
                 {
-                    candidate.AvailableSlabs.Add(AddPoolSlabLocked(candidate, _initialCapacity, "pool re-lease"));
+                    candidate.AvailableSlabs.Add(AddPoolSlabLocked(candidate, _initialCapacity, "pool re-lease", _lifecycle));
                 }
             }
             catch
@@ -1046,11 +1051,20 @@ internal sealed class NativeOwnerKernel
         return allocation;
     }
 
-    private NativeSlab AddPoolSlabLocked(NativeGeneration generation, int capacity, string operation)
+    private NativeSlab AddPoolSlabLocked(
+        NativeGeneration generation,
+        int capacity,
+        string operation,
+        NativeOwnerLifecycle currentLifecycle)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(capacity);
         nuint byteLength = CalculateByteLength(capacity, _elementSize, operation);
-        NativeSegment segment = NativeSegment.AllocateZeroed(byteLength, _ownerKind, generation.Number, operation);
+        NativeSegment segment = NativeSegment.AllocateZeroed(
+            byteLength,
+            _ownerKind,
+            generation.Number,
+            operation,
+            currentLifecycle);
         try
         {
             generation.Owner.AddSegment(segment);
