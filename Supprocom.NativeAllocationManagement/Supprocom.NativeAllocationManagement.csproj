@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Supprocom.NativeAllocationManagement</RootNamespace>
+    <AssemblyName>Supprocom.NativeAllocationManagement</AssemblyName>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <IsPackable>true</IsPackable>
+    <PackageId>Supprocom.NativeAllocationManagement</PackageId>
+    <Version>0.1.0</Version>
+    <PackageLicenseExpression>AGPL-3.0-only</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageTags>native-memory;memory-pool;native-region;roslyn-analyzer</PackageTags>
+    <PackageReleaseNotes>Initial V1 native pool and region allocation contract.</PackageReleaseNotes>
+    <PackageOutputPath>$(MSBuildThisFileDirectory)..\artifacts\packages\</PackageOutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Supprocom.NativeAllocationManagement.Analyzers\Supprocom.NativeAllocationManagement.Analyzers.csproj" ReferenceOutputAssembly="false" />
+    <None Include="..\README.md" Pack="true" PackagePath="README.md" />
+    <None Include="..\LICENSE.md" Pack="true" PackagePath="LICENSE.md" />
+  </ItemGroup>
+
+  <Target Name="BuildBundledAnalyzer" BeforeTargets="Build;Pack">
+    <MSBuild Projects="$(MSBuildProjectDirectory)\..\Supprocom.NativeAllocationManagement.Analyzers\Supprocom.NativeAllocationManagement.Analyzers.csproj" Targets="Build" Properties="Configuration=$(Configuration)" />
+  </Target>
+
+  <Target Name="IncludeBundledAnalyzer" BeforeTargets="Pack">
+    <ItemGroup>
+      <None Include="$(MSBuildProjectDirectory)\..\Supprocom.NativeAllocationManagement.Analyzers\bin\$(Configuration)\netstandard2.0\Supprocom.NativeAllocationManagement.Analyzers.dll" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
+      <None Include="$(MSBuildProjectDirectory)\buildTransitive\Supprocom.NativeAllocationManagement.targets" Pack="true" PackagePath="buildTransitive/Supprocom.NativeAllocationManagement.targets" Visible="false" />
+    </ItemGroup>
+  </Target>
+</Project>
+

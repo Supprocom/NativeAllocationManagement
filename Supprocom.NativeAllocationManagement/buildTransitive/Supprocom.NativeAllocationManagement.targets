@@ -1,0 +1,12 @@
+<Project>
+  <PropertyGroup>
+    <NAMAnalyzerAssemblyName>Supprocom.NativeAllocationManagement.Analyzers.dll</NAMAnalyzerAssemblyName>
+  </PropertyGroup>
+
+  <Target Name="NAMVerifyAnalyzerPresence" BeforeTargets="CoreCompile" DependsOnTargets="ResolvePackageAssets">
+    <Error Condition="'$([System.String]::Copy('@(Analyzer)').ToLowerInvariant().Contains('supprocom.nativeallocationmanagement.analyzers.dll'))' != 'True'"
+           Code="NAM9001"
+           Text="Supprocom.NativeAllocationManagement requires its bundled Roslyn analyzer. The analyzer asset is missing or was excluded; restore the package without excluding analyzers or explicitly opt out with NAMSkipAnalyzerVerification=true." />
+  </Target>
+</Project>
+
