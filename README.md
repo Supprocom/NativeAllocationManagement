@@ -6,6 +6,16 @@ native storage. `NativePool<T>` reuses typed native slabs across leases, while
 readonly ref-struct handles that retain owner and generation identity without exposing a
 revocable pointer or an unbounded native-backed span.
 
+Install version `0.1.1` with a normal package reference. The package supplies both the
+runtime assembly and its required ownership analyzer.
+
+```xml
+<PackageReference Include="Supprocom.NativeAllocationManagement" Version="0.1.1" />
+```
+
+The [getting-started guide][getting-started] explains pool leases, heterogeneous regions,
+delayed activation, generation reuse, and the ownership rules with complete examples.
+
 The package includes its Roslyn ownership analyzer and build-transitive enforcement in the
 same installation. Normal access is bounded to synchronous callbacks:
 
@@ -57,3 +67,7 @@ segments together. The package targets .NET 10 and the first release intentional
 supports `unmanaged` element types only.
 
 This project is licensed under the GNU Affero General Public License, version 3 only.
+The complete terms and project-specific source offer are in [LICENSE.md](LICENSE.md).
+
+[getting-started]:
+  https://github.com/Supprocom/NativeAllocationManagement/blob/main/docs/getting-started.md
