@@ -94,8 +94,7 @@ using (NativeRegion region = new(
 A region may lease several unmanaged types because it aligns each allocation inside a
 shared chain of native segments. `Local<T>` values do not have individual disposal. They
 remain valid only inside the region body, and leaving that body invalidates every local
-allocation together. The public operation is named `Lease<T>`; there is intentionally no
-`Allocate<T>` compatibility member.
+allocation together.
 
 ## Deferring the first native allocation
 
@@ -174,8 +173,8 @@ finally
 gate succeeds. `ReturnToGarbageCollector` invalidates the generation immediately but
 detaches its segments to a finalizable generation owner, so physical release occurs later
 without forcing a collection. `Dispose` applies the policy selected by `returnOnDispose`.
-A region is deliberately single-generation and cannot be leased again after either
-whole-generation return operation.
+A region is single-generation and cannot be leased again after either whole-generation
+return operation.
 
 If a bounded operation has already entered, a concurrent return or disposal throws
 `NativeAllocationInUseException`. The failed lifecycle operation restores the active

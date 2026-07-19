@@ -63,8 +63,8 @@ one with `ReturnToNativeMemory()` or `ReturnToGarbageCollector()` followed by
 
 `NativeRegion` is a lexical owner and must be the direct resource of an explicit braced
 using statement. It supports mixed unmanaged element types and releases all of its
-segments together. The package targets .NET 10 and the first release intentionally
-supports `unmanaged` element types only.
+segments together. The package targets .NET 10 and supports `unmanaged` element types
+only.
 
 This project is licensed under the GNU Affero General Public License, version 3 only.
 The complete terms and project-specific source offer are in [LICENSE.md](LICENSE.md).
