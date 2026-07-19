@@ -1,10 +1,19 @@
 # Supprocom.NativeAllocationManagement
 
-`Supprocom.NativeAllocationManagement` provides safe C# owners for contiguous unmanaged
-native storage. `NativePool<T>` reuses typed native slabs across leases, while
-`NativeRegion` provides heterogeneous lexical storage. `Pooled<T>` and `Local<T>` are
-readonly ref-struct handles that retain owner and generation identity without exposing a
-revocable pointer or an unbounded native-backed span.
+Performance-sensitive C# often turns memory control into ceremony: rent managed buffers,
+return them, force a collection, and hope the garbage collector's machine spirit releases
+the backing storage at the right time. Those rituals can reduce allocations, but they do
+not give the program ownership of the pool or a deterministic boundary for its memory.
+
+`Supprocom.NativeAllocationManagement` replaces that ceremony with direct ownership of
+native memory. `NativePool<T>` owns and reuses typed native slabs, while
+`NativeRegion` owns heterogeneous storage for one lexical scope. The caller can
+invalidate a complete generation and choose immediate physical release or deferred
+cleanup. Runtime generation and operation checks prevent stale access, while the bundled
+analyzer borrow-checks owners and derived handles and points to the ownership path or
+scoped borrow behind a lifetime error. `Pooled<T>` and `Local<T>` expose storage only
+through bounded operations, so direct control does not require persistent pointers,
+unbounded spans, or garbage-collection superstition.
 
 Install version `0.1.1` with a normal package reference. The package supplies both the
 runtime assembly and its required ownership analyzer.
