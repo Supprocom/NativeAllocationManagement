@@ -49,6 +49,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         private readonly HashSet<string> _lifecycleSummaryVisiting = new(StringComparer.Ordinal);
         private readonly List<RegionScope> _regions = [];
         private readonly HashSet<OwnerState> _borrowedOwners = [];
+        private readonly List<(ISymbol? OwnerSymbol, string HandleName)> _borrowScopes = [];
         private readonly Dictionary<ISymbol, ControlFlowRegion> _localLifetimeRegions = new(SymbolEqualityComparer.Default);
         private readonly HashSet<ISymbol> _usingResourceSymbols = new(SymbolEqualityComparer.Default);
         private readonly List<FlowSnapshot> _exitSnapshots = [];
@@ -926,6 +927,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             if (borrowedOwner is not null)
             {
                 _borrowedOwners.Add(borrowedOwner);
+                _borrowScopes.Add((borrowedOwner.Symbol, handle!.DisplayName));
                 ReportBorrowedCallbackLifecycle(operation, borrowedOwner);
             }
 
@@ -937,6 +939,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             {
                 if (borrowedOwner is not null)
                 {
+                    _borrowScopes.RemoveAt(_borrowScopes.Count - 1);
                     _borrowedOwners.Remove(borrowedOwner);
                 }
             }
@@ -1467,7 +1470,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
             if (name is "ReturnToNativeMemory" or "ReturnToGarbageCollector")
             {
-                if (_borrowedOwners.Contains(owner))
+                bool deferredPoolReturn = name == "ReturnToGarbageCollector" && !owner.IsRegion;
+                if (IsOwnerActivelyBorrowed(owner) && !deferredPoolReturn)
                 {
                     string borrow = FindBorrowDisplayName(owner);
                     Report(
@@ -1488,6 +1492,11 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 if (!CheckOwnerActive(owner, syntax, name))
                 {
                     return;
+                }
+
+                if (deferredPoolReturn)
+                {
+                    ReportDeferredPoolReturn(owner, syntax);
                 }
 
                 owner.Returned = true;
@@ -1543,7 +1552,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
             if (name == "Dispose")
             {
-                if (_borrowedOwners.Contains(owner))
+                if (IsOwnerActivelyBorrowed(owner))
                 {
                     Report(
                         NativeAllocationDiagnosticDescriptors.BorrowBlocksReturn,
@@ -1613,15 +1622,52 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     ISymbol? receiver = model.GetSymbolInfo(member.Expression, _context.CancellationToken).Symbol;
                     if (SymbolEqualityComparer.Default.Equals(receiver, owner.Symbol))
                     {
-                        Report(
-                            NativeAllocationDiagnosticDescriptors.BorrowBlocksReturn,
-                            invocation,
-                            owner.DisplayName,
-                            lifecycleName,
-                            FindBorrowDisplayName(owner));
+                        if (lifecycleName == "ReturnToGarbageCollector" && !owner.IsRegion && !owner.IsUsing)
+                        {
+                            ReportDeferredPoolReturn(owner, invocation);
+                        }
+                        else
+                        {
+                            Report(
+                                NativeAllocationDiagnosticDescriptors.BorrowBlocksReturn,
+                                invocation,
+                                owner.DisplayName,
+                                lifecycleName,
+                                FindBorrowDisplayName(owner));
+                        }
                     }
                 }
             }
+        }
+
+        private void ReportDeferredPoolReturn(OwnerState owner, SyntaxNode syntax)
+        {
+            foreach (HandleState handle in _handles.Values
+                .Where(handle => ReferenceEquals(handle.Owner, owner) && !IsHandleEnded(handle))
+                .OrderBy(handle => handle.Syntax.SpanStart))
+            {
+                string path = IsActivelyBorrowed(handle)
+                    ? handle.DisplayName + " -> scoped callback"
+                    : handle.DisplayName;
+                Report(
+                    NativeAllocationDiagnosticDescriptors.DeferredReturnLiveValue,
+                    syntax,
+                    owner.DisplayName,
+                    path);
+            }
+        }
+
+        private bool IsActivelyBorrowed(HandleState handle)
+        {
+            return _borrowScopes.Any(scope =>
+                SymbolEqualityComparer.Default.Equals(scope.OwnerSymbol, handle.Owner.Symbol)
+                && scope.HandleName == handle.DisplayName);
+        }
+
+        private bool IsOwnerActivelyBorrowed(OwnerState owner)
+        {
+            return _borrowScopes.Any(scope =>
+                SymbolEqualityComparer.Default.Equals(scope.OwnerSymbol, owner.Symbol));
         }
 
         private bool CheckOwnerActive(OwnerState owner, SyntaxNode syntax, string operation)
@@ -1752,6 +1798,15 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
         private string FindBorrowDisplayName(OwnerState owner)
         {
+            for (int index = _borrowScopes.Count - 1; index >= 0; index--)
+            {
+                (ISymbol? ownerSymbol, string handleName) = _borrowScopes[index];
+                if (SymbolEqualityComparer.Default.Equals(ownerSymbol, owner.Symbol))
+                {
+                    return handleName + " -> scoped callback";
+                }
+            }
+
             foreach (HandleState handle in _handles.Values)
             {
                 if (ReferenceEquals(handle.Owner, owner) && !handle.Returned)

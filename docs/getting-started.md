@@ -13,7 +13,7 @@ build-transitive package target rejects installations that remove the bundled an
 
 ```xml
 <ItemGroup>
-  <PackageReference Include="Supprocom.NativeAllocationManagement" Version="0.1.1" />
+  <PackageReference Include="Supprocom.NativeAllocationManagement" Version="0.1.2" />
 </ItemGroup>
 ```
 
@@ -170,24 +170,60 @@ finally
 ```
 
 `ReturnToNativeMemory` releases the current generation synchronously after the safety
-gate succeeds. `ReturnToGarbageCollector` invalidates the generation immediately but
+gate succeeds. `ReturnToGarbageCollector` invalidates a pool generation immediately and
 detaches its segments to a finalizable generation owner, so physical release occurs later
 without forcing a collection. `Dispose` applies the policy selected by `returnOnDispose`.
 A region is single-generation and cannot be leased again after either whole-generation
 return operation.
 
-If a bounded operation has already entered, a concurrent return or disposal throws
-`NativeAllocationInUseException`. The failed lifecycle operation restores the active
-state without invalidating a lease or releasing a segment. If a lifecycle operation wins
-first, later handle access throws `NativeAllocationReturnedException` before calculating
-a native address.
+An entered pool operation changes the distinction between those policies. Immediate
+native release and disposal throw `NativeAllocationInUseException`, restore the active
+state, and leave every lease untouched. A garbage-collected pool return succeeds instead:
+the entered operation token retains the detached generation owner and may finish, while
+the generation becomes returned immediately and rejects every later handle operation.
+Regions retain the strict operation gate for both return policies.
+
+The following return therefore produces `NAM1017` while remaining memory-safe. The
+callback has already entered, so its span remains valid until it exits. The old
+`Pooled<int>` value is stale as soon as the return succeeds.
+
+```csharp
+using Supprocom.NativeAllocationManagement;
+
+NativePool<int> pool = new(returnOnDispose: NativeReturn.ToNativeMemory);
+try
+{
+    Pooled<int> values = pool.Rent(4);
+    values.Access(span =>
+    {
+        pool.ReturnToGarbageCollector();
+        span.Fill(42);
+    });
+
+    pool.LeaseFromMemory();
+    Pooled<int> current = pool.Rent(4);
+    current.Dispose();
+}
+finally
+{
+    pool.Dispose();
+}
+```
+
+The analyzer emits one ordinary `NAM1017` warning for every live `Pooled<T>` value when
+the current generation is returned to the garbage collector. If the value is actively
+borrowed, the diagnostic ownership path also names the scoped callback that retains the
+detached storage. The warning follows the consuming project's normal compiler policy;
+`TreatWarningsAsErrors` promotes it to an error without package-specific exceptions.
 
 ## Working with the ownership analyzer
 
-The analyzer treats ownership diagnostics as build errors. A native owner has one binding,
-a derived handle cannot be copied to another owner-shaped local, a pooled value cannot be
-passed through an unknown retaining call, and a region local cannot cross its region
-boundary. Active handles also cannot cross `await` or `yield`.
+The analyzer treats unsafe ownership violations as build errors. A native owner has one
+binding, a derived handle cannot be copied to another owner-shaped local, a pooled value
+cannot be passed through an unknown retaining call, and a region local cannot cross its
+region boundary. Active handles also cannot cross `await` or `yield`. `NAM1017` is the
+deliberate warning-level exception because a garbage-collected pool return invalidates
+old values without freeing an already entered operation's storage.
 
 A helper can carry a pool lifecycle effect when its source is available and every reachable
 path proves the same direct return, lease, or disposal effect on the matching owner

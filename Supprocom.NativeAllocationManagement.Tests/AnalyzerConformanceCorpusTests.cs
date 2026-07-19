@@ -56,6 +56,7 @@ public sealed class AnalyzerConformanceCorpusTests
                     diagnostic.Id,
                     diagnostic.Location.GetLineSpan().StartLinePosition.Line + 1,
                     diagnostic.Location.GetLineSpan().StartLinePosition.Character + 1,
+                    diagnostic.Severity.ToString(),
                     diagnostic.Properties.TryGetValue("NAM.Provenance", out string? provenance)
                         ? provenance
                         ?? string.Empty
@@ -70,6 +71,11 @@ public sealed class AnalyzerConformanceCorpusTests
             {
                 ActualDiagnostic[] actualForId = actual.Where(diagnostic => diagnostic.Id == expected.Id).ToArray();
                 Assert.Equal(expected.Count, actualForId.Length);
+                if (expected.Severity is not null)
+                {
+                    Assert.All(actualForId, diagnostic => Assert.Equal(expected.Severity, diagnostic.Severity));
+                }
+
                 Assert.Equal(
                     expected.Facts.OrderBy(fact => fact.Line).ThenBy(fact => fact.Column).ThenBy(fact => fact.Provenance),
                     actualForId
@@ -110,10 +116,19 @@ public sealed class AnalyzerConformanceCorpusTests
         ExpectedDiagnostic[] ExpectedDiagnostics,
         string Source);
 
-    private sealed record ExpectedDiagnostic(string Id, int Count, DiagnosticFact[] Facts);
+    private sealed record ExpectedDiagnostic(
+        string Id,
+        int Count,
+        DiagnosticFact[] Facts,
+        string? Severity = null);
 
     private sealed record DiagnosticFact(int Line, int Column, string Provenance);
 
-    private sealed record ActualDiagnostic(string Id, int Line, int Column, string Provenance);
+    private sealed record ActualDiagnostic(
+        string Id,
+        int Line,
+        int Column,
+        string Severity,
+        string Provenance);
 
 }

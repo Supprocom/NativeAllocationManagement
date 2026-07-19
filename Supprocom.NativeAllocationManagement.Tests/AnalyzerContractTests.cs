@@ -281,6 +281,65 @@ public sealed class AnalyzerContractTests
     }
 
     [Fact]
+    public async Task GarbageCollectorReturnWarnsForEveryLivePoolHandle()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    NativePool<int> pool = new();
+                    Pooled<int> first = pool.Rent(1);
+                    Pooled<int> second = pool.Rent(1);
+                    pool.ReturnToGarbageCollector();
+                    pool.Dispose();
+                }
+            }
+            """);
+
+        Diagnostic[] warnings = diagnostics
+            .Where(diagnostic => diagnostic.Id == "NAM1017")
+            .ToArray();
+        Assert.Equal(2, warnings.Length);
+        Assert.All(warnings, diagnostic => Assert.Equal(DiagnosticSeverity.Warning, diagnostic.Severity));
+        Assert.Equal(
+            ["pool -> first", "pool -> second"],
+            warnings
+                .Select(diagnostic => diagnostic.Properties["NAM.Provenance"] ?? string.Empty)
+                .OrderBy(provenance => provenance, StringComparer.Ordinal)
+                .ToArray());
+    }
+
+    [Fact]
+    public async Task GarbageCollectorReturnInsideBorrowWarnsWithBorrowProvenance()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    NativePool<int> pool = new();
+                    Pooled<int> values = pool.Rent(1);
+                    values.Access(_ => pool.ReturnToGarbageCollector());
+                    pool.Dispose();
+                }
+            }
+            """);
+
+        Diagnostic warning = Assert.Single(
+            diagnostics.Where(diagnostic => diagnostic.Id == "NAM1017"));
+        Assert.Equal(DiagnosticSeverity.Warning, warning.Severity);
+        Assert.Equal("pool -> values -> scoped callback", warning.Properties["NAM.Provenance"]);
+        Assert.DoesNotContain("NAM1007", NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
     public async Task ScopedPoolCannotUseExplicitLifecycleOrLeaseAfterReturn()
     {
         ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(

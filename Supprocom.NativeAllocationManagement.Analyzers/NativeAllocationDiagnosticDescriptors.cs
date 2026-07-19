@@ -75,6 +75,12 @@ internal static class NativeAllocationDiagnosticDescriptors
         "Pooled value crosses an unknown call",
         "Pooled value '{0}' cannot cross call '{1}'. The called API does not prove that it is non-retaining; pass copied managed data or invoke a span-based helper inside Access or Read.");
 
+    internal static readonly DiagnosticDescriptor DeferredReturnLiveValue = Create(
+        "NAM1017",
+        "Deferred pool return crosses a live native value",
+        "'{0}' returns its current pool generation to garbage collection while '{1}' is still live. The value becomes stale immediately; a scoped callback shown in the ownership path retains detached storage until it exits.",
+        DiagnosticSeverity.Warning);
+
     internal static readonly DiagnosticDescriptor AnalyzerMissing = Create(
         "NAM9001",
         "Bundled analyzer is required",
@@ -95,16 +101,21 @@ internal static class NativeAllocationDiagnosticDescriptors
         PooledEscape,
         FieldDisposal,
         UnknownCall,
+        DeferredReturnLiveValue,
         AnalyzerMissing);
 
-    private static DiagnosticDescriptor Create(string id, string title, string message)
+    private static DiagnosticDescriptor Create(
+        string id,
+        string title,
+        string message,
+        DiagnosticSeverity severity = DiagnosticSeverity.Error)
     {
         return new DiagnosticDescriptor(
             id,
             title,
             message,
             "Supprocom.NativeAllocationManagement",
-            DiagnosticSeverity.Error,
+            severity,
             isEnabledByDefault: true,
             description: message,
             helpLinkUri: "https://github.com/Supprocom/NativeAllocationManagement#ownership-diagnostics",

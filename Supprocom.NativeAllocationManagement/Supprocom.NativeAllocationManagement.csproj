@@ -6,7 +6,7 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <IsPackable>true</IsPackable>
     <PackageId>Supprocom.NativeAllocationManagement</PackageId>
-    <Version>0.1.1</Version>
+    <Version>0.1.2</Version>
     <Authors>Supprocom</Authors>
     <Company>Supprocom</Company>
     <Description>Safe, generation-bound C# owners for reusable unmanaged pool storage and heterogeneous native regions.</Description>
@@ -14,7 +14,7 @@
     <PackageLicenseExpression>AGPL-3.0-only</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageTags>native-memory;memory-pool;native-region;roslyn-analyzer</PackageTags>
-    <PackageReleaseNotes>Add the complete license text and example-driven usage documentation.</PackageReleaseNotes>
+    <PackageReleaseNotes>Allow garbage-collected pool returns to invalidate a generation during an entered operation, with NAM1017 warnings for live pooled values.</PackageReleaseNotes>
     <PackageOutputPath>$(MSBuildThisFileDirectory)..\artifacts\packages\</PackageOutputPath>
   </PropertyGroup>
 

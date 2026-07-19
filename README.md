@@ -11,15 +11,15 @@ native memory. `NativePool<T>` owns and reuses typed native slabs, while
 invalidate a complete generation and choose immediate physical release or deferred
 cleanup. Runtime generation and operation checks prevent stale access, while the bundled
 analyzer borrow-checks owners and derived handles and points to the ownership path or
-scoped borrow behind a lifetime error. `Pooled<T>` and `Local<T>` expose storage only
+scoped borrow behind a lifetime diagnostic. `Pooled<T>` and `Local<T>` expose storage only
 through bounded operations, so direct control does not require persistent pointers,
 unbounded spans, or garbage-collection superstition.
 
-Install version `0.1.1` with a normal package reference. The package supplies both the
+Install version `0.1.2` with a normal package reference. The package supplies both the
 runtime assembly and its required ownership analyzer.
 
 ```xml
-<PackageReference Include="Supprocom.NativeAllocationManagement" Version="0.1.1" />
+<PackageReference Include="Supprocom.NativeAllocationManagement" Version="0.1.2" />
 ```
 
 The [getting-started guide][getting-started] explains pool leases, heterogeneous regions,
@@ -69,6 +69,22 @@ owner. `new NativePool<T>(returnOnDispose: NativeReturn.ToNativeMemory)` selects
 deterministic release. A manually managed pool can end one generation and start a later
 one with `ReturnToNativeMemory()` or `ReturnToGarbageCollector()` followed by
 `LeaseFromMemory()`; old `Pooled<T>` values remain stale and are never revived.
+
+`ReturnToGarbageCollector()` closes the current pool generation even when a bounded
+operation has already entered. That operation token keeps the detached segments alive
+until the operation exits, while every later operation through an old `Pooled<T>` value
+fails as stale. The analyzer reports ordinary warning `NAM1017` for every pooled value
+that is still live at the return, including the scoped callback in its ownership path
+when the return occurs inside `Access` or `Read`. A consumer's normal warning policy
+applies, so `TreatWarningsAsErrors` promotes `NAM1017` to an error.
+
+## Ownership diagnostics
+
+The analyzer uses errors for ownership violations that cannot execute safely, including
+escaping handles and immediate native release during a borrow. The deferred-release
+case above is a warning because entered operations retain their detached storage and can
+finish safely. `ReturnToNativeMemory()` and `Dispose()` remain hard operation gates: they
+reject an entered operation rather than freeing storage beneath it.
 
 `NativeRegion` is a lexical owner and must be the direct resource of an explicit braced
 using statement. It supports mixed unmanaged element types and releases all of its

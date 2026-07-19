@@ -998,7 +998,11 @@ internal sealed class NativeOwnerKernel
 
             NativeGeneration generation = _current!;
             _lifecycle = NativeOwnerLifecycle.Returning;
-            if (generation.ActiveOperations != 0 || generation.LeaseReturnsInProgress != 0)
+            bool canDetachEnteredPoolOperations =
+                _kind == NativeOwnerKind.Pool
+                && policy == NativeReturn.ToGarbageCollector;
+            if ((!canDetachEnteredPoolOperations && generation.ActiveOperations != 0)
+                || generation.LeaseReturnsInProgress != 0)
             {
                 _lifecycle = NativeOwnerLifecycle.Active;
                 throw CreateInUseException(

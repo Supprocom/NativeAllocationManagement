@@ -457,6 +457,66 @@ public sealed class PackageSmokeTests
     }
 
     [Fact]
+    public async Task DeferredReturnWarningFollowsConsumerWarningsAsErrorsPolicy()
+    {
+        PackageEvidence package = await GetPackageAsync();
+        WriteEvidence(package);
+        string consumerRoot = CreateConsumerRoot();
+        try
+        {
+            WriteConsumerProject(
+                consumerRoot,
+                package,
+                excludeAnalyzer: false,
+                suppressDiagnostics: false);
+            File.WriteAllText(
+                Path.Combine(consumerRoot, "Consumer.cs"),
+                """
+                using Supprocom.NativeAllocationManagement;
+
+                public static class Consumer
+                {
+                    public static void Run()
+                    {
+                        NativePool<int> pool = new();
+                        Pooled<int> values = pool.Rent(1);
+                        pool.ReturnToGarbageCollector();
+                        pool.Dispose();
+                    }
+                }
+                """);
+
+            string project = Path.Combine(consumerRoot, "Consumer.csproj");
+            CommandResult restore = await RunDotnetAsync(
+                $"restore \"{project}\" --nologo --force --no-cache --packages \"{Path.Combine(consumerRoot, ".packages")}\" --source \"{package.SourceDirectory}\"",
+                consumerRoot);
+            Assert.True(restore.ExitCode == 0, restore.Output);
+
+            CommandResult warningBuild = await RunDotnetAsync(
+                $"build \"{project}\" --no-restore --nologo",
+                consumerRoot);
+            Assert.True(warningBuild.ExitCode == 0, warningBuild.Output);
+            Assert.Contains("warning NAM1017", warningBuild.Output, StringComparison.OrdinalIgnoreCase);
+
+            WriteConsumerProject(
+                consumerRoot,
+                package,
+                excludeAnalyzer: false,
+                suppressDiagnostics: false,
+                treatWarningsAsErrors: true);
+            CommandResult errorBuild = await RunDotnetAsync(
+                $"build \"{project}\" --no-restore --nologo",
+                consumerRoot);
+            Assert.True(errorBuild.ExitCode != 0, errorBuild.Output);
+            Assert.Contains("error NAM1017", errorBuild.Output, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            DeleteConsumerRoot(consumerRoot);
+        }
+    }
+
+    [Fact]
     public async Task SuppressedAnalyzerStillGetsTheRuntimeStaleHandleGuard()
     {
         PackageEvidence package = await GetPackageAsync();
@@ -474,6 +534,40 @@ public sealed class PackageSmokeTests
                 {
                     public static int Main()
                     {
+                        NativePool<int> deferredPool = new(returnOnDispose: NativeReturn.ToNativeMemory);
+                        Pooled<int> borrowed = deferredPool.Rent(1);
+                        bool callbackCompleted = false;
+                        borrowed.Access(span =>
+                        {
+                            deferredPool.ReturnToGarbageCollector();
+                            span[0] = 42;
+                            callbackCompleted = span[0] == 42;
+                        });
+                        if (!callbackCompleted)
+                        {
+                            return 12;
+                        }
+
+                        try
+                        {
+                            _ = borrowed.Length;
+                            return 13;
+                        }
+                        catch (NativeAllocationReturnedException)
+                        {
+                            borrowed.Dispose();
+                        }
+
+                        deferredPool.LeaseFromMemory();
+                        Pooled<int> current = deferredPool.Rent(1);
+                        if (current[0] != 0)
+                        {
+                            return 14;
+                        }
+
+                        current.Dispose();
+                        deferredPool.Dispose();
+
                         NativePool<int> pool = new(returnOnDispose: NativeReturn.ToNativeMemory);
                         Pooled<int> stale = pool.Rent(1);
                         pool.ReturnToNativeMemory();
@@ -538,10 +632,14 @@ public sealed class PackageSmokeTests
         PackageEvidence package,
         bool excludeAnalyzer,
         bool suppressDiagnostics,
-        bool executable = false)
+        bool executable = false,
+        bool treatWarningsAsErrors = false)
     {
         string analyzerAssets = excludeAnalyzer ? " ExcludeAssets=\"analyzers\"" : string.Empty;
         string outputType = executable || suppressDiagnostics ? "Exe" : "Library";
+        string warningsAsErrors = treatWarningsAsErrors
+            ? "<TreatWarningsAsErrors>true</TreatWarningsAsErrors>"
+            : string.Empty;
         string analyzerRemovalTarget = excludeAnalyzer
             ? """
               <Target Name="RemoveBundledAnalyzerAsset" BeforeTargets="NAMVerifyAnalyzerPresence">
@@ -551,7 +649,9 @@ public sealed class PackageSmokeTests
               </Target>
             """
             : string.Empty;
-        string noWarn = suppressDiagnostics ? "<NoWarn>$(NoWarn);NAM1003;NAM1004;NAM1007</NoWarn>" : string.Empty;
+        string noWarn = suppressDiagnostics
+            ? "<NoWarn>$(NoWarn);NAM1003;NAM1004;NAM1007;NAM1017</NoWarn>"
+            : string.Empty;
         File.WriteAllText(
             Path.Combine(consumerRoot, "Consumer.csproj"),
             $"""
@@ -562,6 +662,7 @@ public sealed class PackageSmokeTests
                 <ImplicitUsings>enable</ImplicitUsings>
                 <Nullable>enable</Nullable>
                 {noWarn}
+                {warningsAsErrors}
               </PropertyGroup>
               <ItemGroup>
                 <PackageReference Include="Supprocom.NativeAllocationManagement" Version="{package.Version}"{analyzerAssets} />
@@ -582,7 +683,7 @@ public sealed class PackageSmokeTests
             }
 
             string repositoryRoot = FindRepositoryRoot();
-            string version = "0.1.1-smoke." + Guid.NewGuid().ToString("N")[..12];
+            string version = "0.1.2-smoke." + Guid.NewGuid().ToString("N")[..12];
             string packageDirectory = Path.Combine(Path.GetTempPath(), "nam-package-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(packageDirectory);
             string packagePath = Path.Combine(packageDirectory, $"Supprocom.NativeAllocationManagement.{version}.nupkg");

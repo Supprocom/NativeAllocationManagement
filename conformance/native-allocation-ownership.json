@@ -329,6 +329,21 @@
     "source": "using Supprocom.NativeAllocationManagement;\npublic sealed class Holder { private NativeRegion _region = new(); }"
   },
   {
+    "name": "deferred-pool-return-live-handle-warning",
+    "compilerRejected": false,
+    "expectedDiagnostics": [
+      {
+        "id": "NAM1017",
+        "count": 1,
+        "severity": "Warning",
+        "facts": [
+          { "line": 2, "column": 121, "provenance": "pool -> value" }
+        ]
+      }
+    ],
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativePool<int> pool = new(); Pooled<int> value = pool.Rent(1); pool.ReturnToGarbageCollector(); pool.Dispose(); } }"
+  },
+  {
     "name": "nested-fallthrough-leak",
     "compilerRejected": false,
     "expectedDiagnostics": [

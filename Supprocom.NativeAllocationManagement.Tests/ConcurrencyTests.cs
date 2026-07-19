@@ -48,6 +48,84 @@ public sealed class ConcurrencyTests
     }
 
     [Fact]
+    public async Task GarbageCollectorReturnDetachesWhileAnEnteredBorrowKeepsTheGenerationAlive()
+    {
+        GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+        GC.WaitForPendingFinalizers();
+        GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+        NativeMemoryTestHooks.Reset();
+
+        NativePool<int> pool = new(
+            initialCapacity: 1,
+            returnOnDispose: NativeReturn.ToNativeMemory);
+        ManualResetEventSlim entered = new();
+        ManualResetEventSlim release = new();
+        NativeMemoryTestHooks.SetOperationEntered(operation =>
+        {
+            if (operation == nameof(Pooled<int>.Access))
+            {
+                entered.Set();
+                release.Wait(TimeSpan.FromSeconds(10));
+            }
+        });
+
+        try
+        {
+            Task worker = Task.Run(() =>
+            {
+                Pooled<int> lease = pool.Rent(1);
+                lease.Access(static span => span[0] = 42);
+                lease.Dispose();
+            });
+
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(10)));
+            NativeMemoryTestMetrics beforeReturn = NativeMemoryTestHooks.Snapshot();
+            pool.ReturnToGarbageCollector();
+            NativeMemoryTestMetrics detached = NativeMemoryTestHooks.Snapshot();
+            Assert.Equal(beforeReturn.DetachedGenerationCount + 1, detached.DetachedGenerationCount);
+            Assert.Equal(beforeReturn.OutstandingNativeBytes, detached.DetachedNativeBytes);
+            Assert.Equal(NativeOwnerLifecycle.Returned, pool.CurrentLifecycle);
+
+            GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+            GC.WaitForPendingFinalizers();
+            GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+            NativeMemoryTestMetrics whileBorrowed = NativeMemoryTestHooks.Snapshot();
+            Assert.Equal(detached.DetachedNativeBytes, whileBorrowed.DetachedNativeBytes);
+            Assert.Equal(detached.FreeCount, whileBorrowed.FreeCount);
+
+            NativeMemoryTestHooks.SetOperationEntered(null);
+            pool.LeaseFromMemory();
+            Pooled<int> current = pool.Rent(1);
+            current[0] = 7;
+            Assert.Equal(7, current[0]);
+            current.Dispose();
+
+            release.Set();
+            await worker;
+
+            for (int attempt = 0;
+                attempt < 3 && NativeMemoryTestHooks.Snapshot().DetachedNativeBytes != 0;
+                attempt++)
+            {
+                GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+                GC.WaitForPendingFinalizers();
+                GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+            }
+
+            Assert.Equal(0, NativeMemoryTestHooks.Snapshot().DetachedNativeBytes);
+            Pooled<int> verified = pool.Rent(1);
+            Assert.Equal(0, verified[0]);
+            verified.Dispose();
+            pool.Dispose();
+        }
+        finally
+        {
+            release.Set();
+            NativeMemoryTestHooks.Reset();
+        }
+    }
+
+    [Fact]
     public void ReturnWinsBeforeOperationEntryAndOperationFailsBeforeAddressCalculation()
     {
         NativePool<int> pool = new();

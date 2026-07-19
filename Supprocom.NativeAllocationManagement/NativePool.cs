@@ -54,6 +54,8 @@ public sealed class NativePool<T> : IDisposable
 
     /// <summary>
     /// Invalidates the current generation and detaches its segments to a finalizable owner.
+    /// An operation that already entered may finish because its operation token retains the
+    /// detached generation; every later operation through an old lease is rejected.
     /// </summary>
     public void ReturnToGarbageCollector()
     {

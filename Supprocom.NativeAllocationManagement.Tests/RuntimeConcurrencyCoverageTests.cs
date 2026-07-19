@@ -5,7 +5,7 @@ namespace Supprocom.NativeAllocationManagement.Tests;
 public sealed class RuntimeConcurrencyCoverageTests
 {
     [Fact]
-    public async Task EveryNativeTouchRejectsBothWholeGenerationReturnPoliciesWhileEntered()
+    public async Task EveryNativeTouchAppliesTheSelectedReturnPolicyWhileEntered()
     {
         string[] operations = ["get_Item", "set_Item", "Clear", "CopyFrom", "CopyTo", "Access", "Read"];
         foreach (NativeReturn policy in Enum.GetValues<NativeReturn>())
@@ -374,13 +374,31 @@ public sealed class RuntimeConcurrencyCoverageTests
             Task worker = Task.Run(() => ExecuteOperation(pool, operation));
             Assert.True(entered.Wait(TimeSpan.FromSeconds(10)), $"Operation {operation} did not enter.");
 
-            NativeAllocationInUseException exception = policy == NativeReturn.ToNativeMemory
-                ? Assert.Throws<NativeAllocationInUseException>(pool.ReturnToNativeMemory)
-                : Assert.Throws<NativeAllocationInUseException>(pool.ReturnToGarbageCollector);
-            Assert.Contains("No lease was invalidated", exception.Message, StringComparison.OrdinalIgnoreCase);
+            if (policy == NativeReturn.ToNativeMemory)
+            {
+                NativeAllocationInUseException exception =
+                    Assert.Throws<NativeAllocationInUseException>(pool.ReturnToNativeMemory);
+                Assert.Contains("No lease was invalidated", exception.Message, StringComparison.OrdinalIgnoreCase);
+                Assert.Equal(NativeOwnerLifecycle.Active, pool.CurrentLifecycle);
+                release.Set();
+                await worker;
+            }
+            else
+            {
+                pool.ReturnToGarbageCollector();
+                Assert.Equal(NativeOwnerLifecycle.Returned, pool.CurrentLifecycle);
+                Assert.Throws<NativeAllocationReturnedException>(() => pool.Rent(1));
 
-            release.Set();
-            await worker;
+                NativeMemoryTestHooks.SetOperationEntered(null);
+                pool.LeaseFromMemory();
+                Pooled<int> current = pool.Rent(1);
+                current[0] = 17;
+                Assert.Equal(17, current[0]);
+                current.Dispose();
+
+                release.Set();
+                await worker;
+            }
         }
         finally
         {
