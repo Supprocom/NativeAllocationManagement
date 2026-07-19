@@ -568,6 +568,13 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     merged.Disposed &= owner.Disposed;
                     merged.Unleased &= owner.Unleased;
                     merged.Ambiguous |= owner.Ambiguous;
+                    foreach (GenerationLivenessFact fact in owner.LivenessFacts)
+                    {
+                        if (!merged.LivenessFacts.Any(existing => existing.SameAs(fact)))
+                        {
+                            merged.LivenessFacts.Add(fact);
+                        }
+                    }
                 }
 
                 if (!presentOnEveryPath)
@@ -792,6 +799,14 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             return result;
         }
 
+        private static bool LivenessFactsEquivalent(
+            IReadOnlyList<GenerationLivenessFact> left,
+            IReadOnlyList<GenerationLivenessFact> right)
+        {
+            return left.Count == right.Count
+                && left.All(fact => right.Any(other => other.SameAs(fact)));
+        }
+
         private static bool SnapshotEquivalent(FlowSnapshot left, FlowSnapshot right)
         {
             if (left.Owners.Count != right.Owners.Count || left.Handles.Count != right.Handles.Count)
@@ -807,7 +822,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     || pair.Value.Unleased != other.Unleased
                     || pair.Value.Ambiguous != other.Ambiguous
                     || pair.Value.Generation != other.Generation
-                    || pair.Value.GenerationRelation != other.GenerationRelation)
+                    || pair.Value.GenerationRelation != other.GenerationRelation
+                    || !LivenessFactsEquivalent(pair.Value.LivenessFacts, other.LivenessFacts))
                 {
                     return false;
                 }
@@ -1138,6 +1154,10 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     string callName = operation.Parent is IInvocationOperation invocation
                         ? invocation.TargetMethod.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)
                         : "an unknown call";
+                    RecordGenerationLiveness(
+                        handle,
+                        GenerationLivenessKind.UnknownRetention,
+                        handle.DisplayName + " -> " + callName);
                     Report(
                         handle.Owner.IsRegion
                             ? NativeAllocationDiagnosticDescriptors.LocalEscape
@@ -1241,6 +1261,10 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             {
                 if (_handles.TryGetValue(operation.Local, out HandleState? handle) && !handle.Returned)
                 {
+                    RecordGenerationLiveness(
+                        handle,
+                        GenerationLivenessKind.UnknownRetention,
+                        handle.DisplayName + " -> a closure");
                     Report(
                         handle.Owner.IsRegion
                             ? NativeAllocationDiagnosticDescriptors.LocalEscape
@@ -1269,6 +1293,10 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             {
                 if (GetHandle(operand) is HandleState handle)
                 {
+                    RecordGenerationLiveness(
+                        handle,
+                        GenerationLivenessKind.AliasOrEscape,
+                        handle.DisplayName + " -> " + (operation.Type?.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat) ?? "a converted value"));
                     Report(
                         handle.Owner.IsRegion
                             ? NativeAllocationDiagnosticDescriptors.LocalEscape
@@ -1471,15 +1499,17 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             if (name is "ReturnToNativeMemory" or "ReturnToGarbageCollector")
             {
                 bool deferredPoolReturn = name == "ReturnToGarbageCollector" && !owner.IsRegion;
-                if (IsOwnerActivelyBorrowed(owner) && !deferredPoolReturn)
+                if (owner.IsRegion && IsOwnerActivelyBorrowed(owner))
                 {
                     string borrow = FindBorrowDisplayName(owner);
-                    Report(
-                        NativeAllocationDiagnosticDescriptors.BorrowBlocksReturn,
+                    ReportWithProvenance(
+                        NativeAllocationDiagnosticDescriptors.GenerationReturnLiveValue,
                         syntax,
+                        owner.DisplayName + " -> " + borrow,
                         owner.DisplayName,
                         name,
-                        borrow);
+                        borrow,
+                        "End the bounded callback before returning the region.");
                     return;
                 }
 
@@ -1494,9 +1524,14 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     return;
                 }
 
-                if (deferredPoolReturn)
+                GenerationReturnLiveness[] findings = owner.IsRegion
+                    ? []
+                    : FindGenerationReturnLiveness(owner);
+                ReportGenerationReturnLiveness(owner, name, syntax, findings);
+
+                if (!deferredPoolReturn && findings.Any(finding => finding.Kind == GenerationLivenessKind.ActiveBorrow))
                 {
-                    ReportDeferredPoolReturn(owner, syntax);
+                    return;
                 }
 
                 owner.Returned = true;
@@ -1554,12 +1589,15 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             {
                 if (IsOwnerActivelyBorrowed(owner))
                 {
-                    Report(
-                        NativeAllocationDiagnosticDescriptors.BorrowBlocksReturn,
+                    string borrow = FindBorrowDisplayName(owner);
+                    ReportWithProvenance(
+                        NativeAllocationDiagnosticDescriptors.GenerationReturnLiveValue,
                         syntax,
+                        owner.DisplayName + " -> " + borrow,
                         owner.DisplayName,
                         name,
-                        FindBorrowDisplayName(owner));
+                        borrow,
+                        "End the bounded callback before disposing the owner.");
                     return;
                 }
 
@@ -1589,13 +1627,101 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             }
         }
 
-        private void ReportBorrowedCallbackLifecycle(IInvocationOperation operation, OwnerState owner)
+        private GenerationReturnLiveness[] FindGenerationReturnLiveness(OwnerState owner)
         {
-            if (owner.Symbol is null)
+            List<GenerationReturnLiveness> findings = [];
+            HashSet<string> paths = new(StringComparer.Ordinal);
+
+            foreach (HandleState handle in _handles.Values
+                .Where(handle => ReferenceEquals(handle.Owner, owner)
+                    && !IsHandleEnded(handle)
+                    && IsCurrentGeneration(handle, owner))
+                .OrderBy(handle => handle.Syntax.SpanStart))
             {
-                return;
+                GenerationLivenessKind kind = IsActivelyBorrowed(handle)
+                    ? GenerationLivenessKind.ActiveBorrow
+                    : GenerationLivenessKind.RootReference;
+                string path = kind == GenerationLivenessKind.ActiveBorrow
+                    ? handle.DisplayName + " -> scoped callback"
+                    : handle.DisplayName;
+                if (paths.Add(kind + ":" + path))
+                {
+                    findings.Add(new GenerationReturnLiveness(kind, path));
+                }
             }
 
+            foreach (GenerationLivenessFact fact in owner.LivenessFacts
+                .Where(fact => IsCurrentGeneration(fact, owner))
+                .OrderBy(fact => fact.Path, StringComparer.Ordinal))
+            {
+                if (paths.Add(fact.Kind + ":" + fact.Path))
+                {
+                    findings.Add(new GenerationReturnLiveness(fact.Kind, fact.Path));
+                }
+            }
+
+            return findings.ToArray();
+        }
+
+        private static bool IsCurrentGeneration(HandleState handle, OwnerState owner)
+        {
+            return handle.Generation == owner.Generation
+                || handle.GenerationRelation == GenerationRelationKind.Current
+                    && owner.GenerationRelation == GenerationRelationKind.Current;
+        }
+
+        private static bool IsCurrentGeneration(GenerationLivenessFact fact, OwnerState owner)
+        {
+            return fact.Generation == owner.Generation
+                || fact.GenerationRelation == GenerationRelationKind.Current
+                    && owner.GenerationRelation == GenerationRelationKind.Current;
+        }
+
+        private void ReportGenerationReturnLiveness(
+            OwnerState owner,
+            string operation,
+            SyntaxNode syntax,
+            IEnumerable<GenerationReturnLiveness> findings)
+        {
+            DiagnosticDescriptor descriptor = operation == "ReturnToNativeMemory"
+                ? NativeAllocationDiagnosticDescriptors.GenerationReturnLiveValue
+                : NativeAllocationDiagnosticDescriptors.DeferredReturnLiveValue;
+
+            foreach (GenerationReturnLiveness finding in findings)
+            {
+                ReportWithProvenance(
+                    descriptor,
+                    syntax,
+                    owner.DisplayName + " -> " + finding.Path,
+                    owner.DisplayName,
+                    operation,
+                    finding.Path,
+                    DescribeGenerationLiveness(finding.Kind, operation));
+            }
+        }
+
+        private static string DescribeGenerationLiveness(GenerationLivenessKind kind, string operation)
+        {
+            return kind switch
+            {
+                GenerationLivenessKind.RootReference when operation == "ReturnToNativeMemory"
+                    => "The root/reference would become stale at the generation boundary; end it before deterministic native return.",
+                GenerationLivenessKind.RootReference
+                    => "The root/reference becomes stale immediately; it does not retain detached native storage.",
+                GenerationLivenessKind.ActiveBorrow when operation == "ReturnToNativeMemory"
+                    => "An entered bounded operation still holds the generation; end the callback before deterministic native return.",
+                GenerationLivenessKind.ActiveBorrow
+                    => "The entered operation token retains detached native storage until the callback exits.",
+                GenerationLivenessKind.AliasOrEscape
+                    => "The owner-derived value has an alias or escape path that must end before the generation boundary.",
+                GenerationLivenessKind.UnknownRetention
+                    => "The value may be retained across the generation boundary; prove non-retention before returning the owner.",
+                _ => "End the owner-derived value before returning the generation."
+            };
+        }
+
+        private void ReportBorrowedCallbackLifecycle(IInvocationOperation operation, OwnerState owner)
+        {
             SemanticModel model = _context.Compilation.GetSemanticModel(operation.Syntax.SyntaxTree);
             foreach (IArgumentOperation argument in operation.Arguments)
             {
@@ -1614,46 +1740,46 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     }
 
                     string lifecycleName = member.Name.Identifier.ValueText;
-                    if (ToLifecycleEffect(lifecycleName) is LifecycleEffect.None)
+                    if (lifecycleName is not ("ReturnToNativeMemory" or "ReturnToGarbageCollector"))
                     {
                         continue;
                     }
 
                     ISymbol? receiver = model.GetSymbolInfo(member.Expression, _context.CancellationToken).Symbol;
-                    if (SymbolEqualityComparer.Default.Equals(receiver, owner.Symbol))
+                    if (!SymbolEqualityComparer.Default.Equals(receiver, owner.Symbol))
                     {
-                        if (lifecycleName == "ReturnToGarbageCollector" && !owner.IsRegion && !owner.IsUsing)
-                        {
-                            ReportDeferredPoolReturn(owner, invocation);
-                        }
-                        else
-                        {
-                            Report(
-                                NativeAllocationDiagnosticDescriptors.BorrowBlocksReturn,
-                                invocation,
-                                owner.DisplayName,
-                                lifecycleName,
-                                FindBorrowDisplayName(owner));
-                        }
+                        continue;
+                    }
+
+                    if (owner.IsUsing && !owner.IsRegion)
+                    {
+                        Report(
+                            NativeAllocationDiagnosticDescriptors.ScopedLifecycle,
+                            invocation,
+                            owner.DisplayName,
+                            lifecycleName);
+                    }
+                    else if (!owner.IsRegion)
+                    {
+                        ReportGenerationReturnLiveness(
+                            owner,
+                            lifecycleName,
+                            invocation,
+                            FindGenerationReturnLiveness(owner));
+                    }
+                    else
+                    {
+                        string borrow = FindBorrowDisplayName(owner);
+                        ReportWithProvenance(
+                            NativeAllocationDiagnosticDescriptors.GenerationReturnLiveValue,
+                            invocation,
+                            owner.DisplayName + " -> " + borrow,
+                            owner.DisplayName,
+                            lifecycleName,
+                            borrow,
+                            "End the bounded callback before returning the region.");
                     }
                 }
-            }
-        }
-
-        private void ReportDeferredPoolReturn(OwnerState owner, SyntaxNode syntax)
-        {
-            foreach (HandleState handle in _handles.Values
-                .Where(handle => ReferenceEquals(handle.Owner, owner) && !IsHandleEnded(handle))
-                .OrderBy(handle => handle.Syntax.SpanStart))
-            {
-                string path = IsActivelyBorrowed(handle)
-                    ? handle.DisplayName + " -> scoped callback"
-                    : handle.DisplayName;
-                Report(
-                    NativeAllocationDiagnosticDescriptors.DeferredReturnLiveValue,
-                    syntax,
-                    owner.DisplayName,
-                    path);
             }
         }
 
@@ -1727,6 +1853,12 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 return;
             }
 
+            string destination = target.Symbol?.Name ?? "an escaping destination";
+            RecordGenerationLiveness(
+                handle,
+                GenerationLivenessKind.AliasOrEscape,
+                handle.DisplayName + " -> " + destination);
+
             if (target.Symbol is ILocalSymbol && !SymbolEqualityComparer.Default.Equals(handle.Symbol, target.Symbol))
             {
                 Report(
@@ -1743,7 +1875,24 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     : NativeAllocationDiagnosticDescriptors.PooledEscape,
                 target.Syntax,
                 handle.DisplayName,
-                target.Symbol?.Name ?? "an escaping destination");
+                destination);
+        }
+
+        private static void RecordGenerationLiveness(
+            HandleState handle,
+            GenerationLivenessKind kind,
+            string path)
+        {
+            if (handle.Owner.IsRegion || handle.Owner.Symbol is null || handle.Returned)
+            {
+                return;
+            }
+
+            handle.Owner.LivenessFacts.Add(new GenerationLivenessFact(
+                handle.Generation,
+                handle.GenerationRelation,
+                kind,
+                path));
         }
 
         private void ReportOwnerTransfer(OwnerState owner, Target target)
@@ -1761,6 +1910,13 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             {
                 if (!handle.Returned || handle.Ambiguous || handle.GenerationRelation == GenerationRelationKind.Unknown)
                 {
+                    if (!handle.Owner.IsRegion)
+                    {
+                        RecordGenerationLiveness(
+                            handle,
+                            GenerationLivenessKind.UnknownRetention,
+                            handle.DisplayName + " -> an asynchronous boundary");
+                    }
                     Report(NativeAllocationDiagnosticDescriptors.AcrossAsync, syntax, handle.DisplayName);
                 }
             }
@@ -2872,6 +3028,24 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
         private void Report(DiagnosticDescriptor descriptor, SyntaxNode syntax, params object[] arguments)
         {
+            ReportCore(descriptor, syntax, provenance: null, arguments);
+        }
+
+        private void ReportWithProvenance(
+            DiagnosticDescriptor descriptor,
+            SyntaxNode syntax,
+            string provenance,
+            params object[] arguments)
+        {
+            ReportCore(descriptor, syntax, provenance, arguments);
+        }
+
+        private void ReportCore(
+            DiagnosticDescriptor descriptor,
+            SyntaxNode syntax,
+            string? provenance,
+            params object[] arguments)
+        {
             if (_suppressDiagnostics)
             {
                 return;
@@ -2884,14 +3058,15 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             }
 
             FileLinePositionSpan line = syntax.GetLocation().GetLineSpan();
-            string provenance = string.Join(" -> ", arguments.Select(argument => argument?.ToString() ?? string.Empty));
+            string diagnosticProvenance = provenance
+                ?? string.Join(" -> ", arguments.Select(argument => argument?.ToString() ?? string.Empty));
             string sourceFile = string.IsNullOrEmpty(line.Path)
                 ? syntax.SyntaxTree.FilePath is { Length: > 0 } filePath ? filePath : "<in-memory>"
                 : line.Path;
             ImmutableDictionary<string, string?> properties = ImmutableDictionary<string, string?>.Empty
                 .Add("NAM.DiagnosticId", descriptor.Id)
-                .Add("NAM.Provenance", provenance)
-                .Add("NAM.ProvenancePath", provenance)
+                .Add("NAM.Provenance", diagnosticProvenance)
+                .Add("NAM.ProvenancePath", diagnosticProvenance)
                 .Add("NAM.Source", $"{sourceFile}:{line.StartLinePosition.Line + 1}:{line.StartLinePosition.Character + 1}")
                 .Add("NAM.SourceFile", sourceFile)
                 .Add("NAM.SourceLine", (line.StartLinePosition.Line + 1).ToString(System.Globalization.CultureInfo.InvariantCulture))
@@ -2910,6 +3085,54 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             Exact,
             Current,
             Unknown
+        }
+
+        private enum GenerationLivenessKind
+        {
+            RootReference,
+            ActiveBorrow,
+            AliasOrEscape,
+            UnknownRetention
+        }
+
+        private sealed class GenerationLivenessFact
+        {
+            internal GenerationLivenessFact(
+                int generation,
+                GenerationRelationKind generationRelation,
+                GenerationLivenessKind kind,
+                string path)
+            {
+                Generation = generation;
+                GenerationRelation = generationRelation;
+                Kind = kind;
+                Path = path;
+            }
+
+            internal int Generation { get; }
+            internal GenerationRelationKind GenerationRelation { get; }
+            internal GenerationLivenessKind Kind { get; }
+            internal string Path { get; }
+
+            internal bool SameAs(GenerationLivenessFact other)
+            {
+                return Generation == other.Generation
+                    && GenerationRelation == other.GenerationRelation
+                    && Kind == other.Kind
+                    && Path == other.Path;
+            }
+        }
+
+        private readonly struct GenerationReturnLiveness
+        {
+            internal GenerationReturnLiveness(GenerationLivenessKind kind, string path)
+            {
+                Kind = kind;
+                Path = path;
+            }
+
+            internal GenerationLivenessKind Kind { get; }
+            internal string Path { get; }
         }
 
         private sealed class OwnerState
@@ -2948,6 +3171,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             internal GenerationRelationKind GenerationRelation { get; set; } = GenerationRelationKind.Exact;
             internal SyntaxNode Syntax { get; }
             internal TextSpan? RegionScope { get; }
+            internal List<GenerationLivenessFact> LivenessFacts { get; } = [];
             internal string DisplayName => Symbol?.Name ?? Type.Name;
 
             internal OwnerState Clone()
@@ -2967,6 +3191,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 copy.Ambiguous = Ambiguous;
                 copy.Generation = Generation;
                 copy.GenerationRelation = GenerationRelation;
+                copy.LivenessFacts.AddRange(LivenessFacts);
                 return copy;
             }
         }

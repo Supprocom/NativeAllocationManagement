@@ -517,6 +517,51 @@ public sealed class PackageSmokeTests
     }
 
     [Fact]
+    public async Task NativeReturnLiveRootIsAHardPackageAnalyzerError()
+    {
+        PackageEvidence package = await GetPackageAsync();
+        WriteEvidence(package);
+        string consumerRoot = CreateConsumerRoot();
+        try
+        {
+            WriteConsumerProject(consumerRoot, package, excludeAnalyzer: false, suppressDiagnostics: false);
+            File.WriteAllText(
+                Path.Combine(consumerRoot, "Consumer.cs"),
+                """
+                using Supprocom.NativeAllocationManagement;
+
+                public static class Consumer
+                {
+                    public static void Run()
+                    {
+                        NativePool<int> pool = new();
+                        Pooled<int> value = pool.Rent(1);
+                        pool.ReturnToNativeMemory();
+                        pool.Dispose();
+                    }
+                }
+                """);
+
+            string project = Path.Combine(consumerRoot, "Consumer.csproj");
+            CommandResult restore = await RunDotnetAsync(
+                $"restore \"{project}\" --nologo --force --no-cache --packages \"{Path.Combine(consumerRoot, ".packages")}\" --source \"{package.SourceDirectory}\"",
+                consumerRoot);
+            Assert.True(restore.ExitCode == 0, restore.Output);
+
+            CommandResult build = await RunDotnetAsync(
+                $"build \"{project}\" --no-restore --nologo",
+                consumerRoot);
+            Assert.True(build.ExitCode != 0, build.Output);
+            Assert.Contains("error NAM1007", build.Output, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("NAM1017", build.Output, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            DeleteConsumerRoot(consumerRoot);
+        }
+    }
+
+    [Fact]
     public async Task SuppressedAnalyzerStillGetsTheRuntimeStaleHandleGuard()
     {
         PackageEvidence package = await GetPackageAsync();

@@ -73,18 +73,22 @@ one with `ReturnToNativeMemory()` or `ReturnToGarbageCollector()` followed by
 `ReturnToGarbageCollector()` closes the current pool generation even when a bounded
 operation has already entered. That operation token keeps the detached segments alive
 until the operation exits, while every later operation through an old `Pooled<T>` value
-fails as stale. The analyzer reports ordinary warning `NAM1017` for every pooled value
-that is still live at the return, including the scoped callback in its ownership path
-when the return occurs inside `Access` or `Read`. A consumer's normal warning policy
-applies, so `TreatWarningsAsErrors` promotes `NAM1017` to an error.
+fails as stale. Both whole-generation return policies use one analyzer liveness query.
+It reports each live root/reference, active callback, alias, escape, or unknown-retention
+path as error `NAM1007` for `ReturnToNativeMemory()` and ordinary warning `NAM1017` for
+`ReturnToGarbageCollector()`, with equivalent provenance. A plain stale root does not
+retain detached storage; the entered operation token is what retains the detached owner
+until its callback exits. A consumer's normal warning policy applies, so
+`TreatWarningsAsErrors` promotes `NAM1017` to an error.
 
 ## Ownership diagnostics
 
 The analyzer uses errors for ownership violations that cannot execute safely, including
-escaping handles and immediate native release during a borrow. The deferred-release
-case above is a warning because entered operations retain their detached storage and can
-finish safely. `ReturnToNativeMemory()` and `Dispose()` remain hard operation gates: they
-reject an entered operation rather than freeing storage beneath it.
+escaping handles and every shared liveness finding at immediate native return. The
+deferred-release case remains an ordinary warning because its policy can detach the
+generation while an entered operation token retains the native owner until the callback
+finishes. `ReturnToNativeMemory()` and `Dispose()` remain hard runtime operation gates:
+they reject an entered operation rather than freeing storage beneath it.
 
 `NativeRegion` is a lexical owner and must be the direct resource of an explicit braced
 using statement. It supports mixed unmanaged element types and releases all of its

@@ -172,7 +172,10 @@ finally
 `ReturnToNativeMemory` releases the current generation synchronously after the safety
 gate succeeds. `ReturnToGarbageCollector` invalidates a pool generation immediately and
 detaches its segments to a finalizable generation owner, so physical release occurs later
-without forcing a collection. `Dispose` applies the policy selected by `returnOnDispose`.
+without forcing a collection. Both return calls use the same analyzer liveness query:
+every live root/reference, active callback, alias, escape, or unknown-retention path is
+`NAM1007` error for native return and `NAM1017` warning for garbage-collector return.
+`Dispose` applies the policy selected by `returnOnDispose`.
 A region is single-generation and cannot be leased again after either whole-generation
 return operation.
 
@@ -185,7 +188,10 @@ Regions retain the strict operation gate for both return policies.
 
 The following return therefore produces `NAM1017` while remaining memory-safe. The
 callback has already entered, so its span remains valid until it exits. The old
-`Pooled<int>` value is stale as soon as the return succeeds.
+`Pooled<int>` value is stale as soon as the return succeeds. The equivalent
+`ReturnToNativeMemory` source produces hard error `NAM1007`; a plain root is reported as
+stale liveness, while the entered operation token is the fact that retains detached
+storage until the callback exits.
 
 ```csharp
 using Supprocom.NativeAllocationManagement;

@@ -35,10 +35,10 @@ internal static class NativeAllocationDiagnosticDescriptors
         "Region construction must be lexical",
         "NativeRegion '{0}' must be the direct resource of a braced using statement. A region is a non-transferable lexical allocation boundary.");
 
-    internal static readonly DiagnosticDescriptor BorrowBlocksReturn = Create(
+    internal static readonly DiagnosticDescriptor GenerationReturnLiveValue = Create(
         "NAM1007",
-        "Native return has a live bounded borrow",
-        "{0}.{1} cannot release native storage because the current generation is borrowed through '{2}'. End the bounded callback before returning the owner.");
+        "Native return has live generation state",
+        "{0}.{1} cannot end the current native generation while '{2}' remains live. {3}");
 
     internal static readonly DiagnosticDescriptor InvalidLifecycle = Create(
         "NAM1009",
@@ -77,8 +77,8 @@ internal static class NativeAllocationDiagnosticDescriptors
 
     internal static readonly DiagnosticDescriptor DeferredReturnLiveValue = Create(
         "NAM1017",
-        "Deferred pool return crosses a live native value",
-        "'{0}' returns its current pool generation to garbage collection while '{1}' is still live. The value becomes stale immediately; a scoped callback shown in the ownership path retains detached storage until it exits.",
+        "Deferred pool return has live generation state",
+        "{0}.{1} ends its current pool generation while '{2}' is still live. {3}",
         DiagnosticSeverity.Warning);
 
     internal static readonly DiagnosticDescriptor AnalyzerMissing = Create(
@@ -93,7 +93,7 @@ internal static class NativeAllocationDiagnosticDescriptors
         ReturnedHandle,
         ScopedLifecycle,
         RegionMustBeUsing,
-        BorrowBlocksReturn,
+        GenerationReturnLiveValue,
         InvalidLifecycle,
         NestedRegion,
         AcrossAsync,

@@ -340,6 +340,263 @@ public sealed class AnalyzerContractTests
     }
 
     [Fact]
+    public async Task GenerationReturnPoliciesShareTheSameLivenessMatrix()
+    {
+        (string Name, string Source, string[] Provenance)[] cases =
+        [
+            (
+                "one-root",
+                """
+                using Supprocom.NativeAllocationManagement;
+                public static class Sample
+                {
+                    public static void Run()
+                    {
+                        NativePool<int> pool = new();
+                        Pooled<int> value = pool.Rent(1);
+                        pool.ReturnToNativeMemory();
+                        pool.Dispose();
+                    }
+                }
+                """,
+                ["pool -> value"]),
+            (
+                "multiple-roots",
+                """
+                using Supprocom.NativeAllocationManagement;
+                public static class Sample
+                {
+                    public static void Run()
+                    {
+                        NativePool<int> pool = new();
+                        Pooled<int> first = pool.Rent(1);
+                        Pooled<int> second = pool.Rent(1);
+                        pool.ReturnToNativeMemory();
+                        pool.Dispose();
+                    }
+                }
+                """,
+                ["pool -> first", "pool -> second"]),
+            (
+                "access-borrow",
+                """
+                using Supprocom.NativeAllocationManagement;
+                public static class Sample
+                {
+                    public static void Run()
+                    {
+                        NativePool<int> pool = new();
+                        Pooled<int> value = pool.Rent(1);
+                        value.Access(_ => pool.ReturnToNativeMemory());
+                        pool.Dispose();
+                    }
+                }
+                """,
+                ["pool -> value -> scoped callback"]),
+            (
+                "read-borrow",
+                """
+                using Supprocom.NativeAllocationManagement;
+                public static class Sample
+                {
+                    public static void Run()
+                    {
+                        NativePool<int> pool = new();
+                        Pooled<int> value = pool.Rent(1);
+                        _ = value.Read(_ => { pool.ReturnToNativeMemory(); return 0; });
+                        pool.Dispose();
+                    }
+                }
+                """,
+                ["pool -> value -> scoped callback"]),
+            (
+                "copied-alias",
+                """
+                using Supprocom.NativeAllocationManagement;
+                public static class Sample
+                {
+                    public static void Run()
+                    {
+                        NativePool<int> pool = new();
+                        Pooled<int> value = pool.Rent(1);
+                        Pooled<int> alias = value;
+                        pool.ReturnToNativeMemory();
+                        pool.Dispose();
+                    }
+                }
+                """,
+                ["pool -> value", "pool -> value -> alias"]),
+            (
+                "unknown-retention",
+                """
+                using Supprocom.NativeAllocationManagement;
+                public static class Sample
+                {
+                    public static void Run()
+                    {
+                        NativePool<int> pool = new();
+                        Pooled<int> value = pool.Rent(1);
+                        Consume(value);
+                        pool.ReturnToNativeMemory();
+                        pool.Dispose();
+                    }
+
+                    private static void Consume(Pooled<int> value) { }
+                }
+                """,
+                ["pool -> value", "pool -> value -> void Sample.Consume(Pooled<int> value)"]),
+            (
+                "ended-root",
+                """
+                using Supprocom.NativeAllocationManagement;
+                public static class Sample
+                {
+                    public static void Run()
+                    {
+                        NativePool<int> pool = new();
+                        Pooled<int> value = pool.Rent(1);
+                        value.Dispose();
+                        pool.ReturnToNativeMemory();
+                        pool.Dispose();
+                    }
+                }
+                """,
+                []),
+            (
+                "no-roots",
+                """
+                using Supprocom.NativeAllocationManagement;
+                public static class Sample
+                {
+                    public static void Run()
+                    {
+                        NativePool<int> pool = new();
+                        pool.ReturnToNativeMemory();
+                        pool.LeaseFromMemory();
+                        pool.Dispose();
+                    }
+                }
+                """,
+                []),
+            (
+                "both-branches",
+                """
+                using Supprocom.NativeAllocationManagement;
+                public static class Sample
+                {
+                    public static void Run(bool condition)
+                    {
+                        NativePool<int> pool = new();
+                        Pooled<int> value = pool.Rent(1);
+                        if (condition)
+                        {
+                            pool.ReturnToNativeMemory();
+                        }
+                        else
+                        {
+                            pool.ReturnToNativeMemory();
+                        }
+                        pool.Dispose();
+                    }
+                }
+                """,
+                ["pool -> value", "pool -> value"]),
+            (
+                "loop-generations",
+                """
+                using Supprocom.NativeAllocationManagement;
+                public static class Sample
+                {
+                    public static void Run(int iterations)
+                    {
+                        NativePool<int> pool = new();
+                        for (int index = 0; index < iterations; index++)
+                        {
+                            Pooled<int> value = pool.Rent(1);
+                            pool.ReturnToNativeMemory();
+                            pool.LeaseFromMemory();
+                        }
+                        pool.Dispose();
+                    }
+                }
+                """,
+                ["pool -> value"]),
+            (
+                "helper-return",
+                """
+                using Supprocom.NativeAllocationManagement;
+                public static class Sample
+                {
+                    public static void Run()
+                    {
+                        NativePool<int> pool = new();
+                        Pooled<int> value = pool.Rent(1);
+                        ReturnPool(pool);
+                        pool.Dispose();
+                    }
+
+                    private static void ReturnPool(NativePool<int> pool)
+                        => pool.ReturnToNativeMemory();
+                }
+                """,
+                ["pool -> value"]),
+            (
+                "re-leased-generation",
+                """
+                using Supprocom.NativeAllocationManagement;
+                public static class Sample
+                {
+                    public static void Run()
+                    {
+                        NativePool<int> pool = new();
+                        Pooled<int> oldValue = pool.Rent(1);
+                        pool.ReturnToNativeMemory();
+                        pool.LeaseFromMemory();
+                        Pooled<int> currentValue = pool.Rent(1);
+                        currentValue.Dispose();
+                        pool.Dispose();
+                    }
+                }
+                """,
+                ["pool -> oldValue"])
+        ];
+
+        foreach ((string name, string source, string[] provenance) in cases)
+        {
+            ImmutableArray<Diagnostic> nativeDiagnostics = await AnalyzeAsync(source);
+            ImmutableArray<Diagnostic> garbageCollectorDiagnostics = await AnalyzeAsync(
+                source.Replace("ReturnToNativeMemory", "ReturnToGarbageCollector", StringComparison.Ordinal));
+
+            Diagnostic[] nativeLiveness = nativeDiagnostics
+                .Where(diagnostic => diagnostic.Id == "NAM1007")
+                .ToArray();
+            Diagnostic[] garbageCollectorLiveness = garbageCollectorDiagnostics
+                .Where(diagnostic => diagnostic.Id == "NAM1017")
+                .ToArray();
+
+            Assert.Equal(
+                provenance.OrderBy(path => path, StringComparer.Ordinal),
+                nativeLiveness
+                    .Select(diagnostic => diagnostic.Properties["NAM.Provenance"] ?? string.Empty)
+                    .OrderBy(path => path, StringComparer.Ordinal));
+            Assert.Equal(
+                provenance.OrderBy(path => path, StringComparer.Ordinal),
+                garbageCollectorLiveness
+                    .Select(diagnostic => diagnostic.Properties["NAM.Provenance"] ?? string.Empty)
+                    .OrderBy(path => path, StringComparer.Ordinal));
+            Assert.All(nativeLiveness, diagnostic => Assert.Equal(DiagnosticSeverity.Error, diagnostic.Severity));
+            Assert.All(garbageCollectorLiveness, diagnostic => Assert.Equal(DiagnosticSeverity.Warning, diagnostic.Severity));
+            Assert.DoesNotContain("NAM1017", NativeDiagnostics(nativeDiagnostics));
+            Assert.DoesNotContain("NAM1007", NativeDiagnostics(garbageCollectorDiagnostics));
+
+            if (provenance.Length != garbageCollectorLiveness.Length)
+            {
+                throw new Xunit.Sdk.XunitException($"Generation return case '{name}' produced mismatched liveness counts.");
+            }
+        }
+    }
+
+    [Fact]
     public async Task ScopedPoolCannotUseExplicitLifecycleOrLeaseAfterReturn()
     {
         ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
@@ -1256,7 +1513,7 @@ public sealed class AnalyzerContractTests
     }
 
     [Fact]
-    public async Task NestedRootEndedByWholeGenerationReturnIsAccepted()
+    public async Task NestedRootEndedByWholeGenerationReturnReportsNativeReturnLiveness()
     {
         ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
             """
@@ -1278,7 +1535,10 @@ public sealed class AnalyzerContractTests
             }
             """);
 
-        Assert.Empty(NativeDiagnostics(diagnostics));
+        Diagnostic diagnostic = Assert.Single(
+            diagnostics.Where(item => item.Id == "NAM1007"));
+        Assert.Equal(DiagnosticSeverity.Error, diagnostic.Severity);
+        Assert.Equal("pool -> value", diagnostic.Properties["NAM.Provenance"]);
     }
 
     [Fact]
