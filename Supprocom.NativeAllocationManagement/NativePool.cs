@@ -12,6 +12,10 @@ public sealed class NativePool<T> : IDisposable
 
     internal int CurrentReferenceRootCountForTest => _kernel.CurrentReferenceRootCountForTest();
 
+    internal int QuarantinedSegmentCountForTest => _kernel.QuarantinedSegmentCountForTest();
+
+    internal long[] CurrentSegmentOrdinalsForTest => _kernel.CurrentSegmentOrdinalsForTest();
+
     /// <summary>Creates a typed pool, active immediately unless declaration leasing is disabled.</summary>
     /// <param name="initialCapacity">Optional number of elements reserved immediately or on activation.</param>
     /// <param name="returnMemoryOnDispose">The physical cleanup policy used by <see cref="Dispose"/>.</param>

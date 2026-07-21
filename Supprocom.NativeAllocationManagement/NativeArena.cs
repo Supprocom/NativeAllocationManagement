@@ -13,6 +13,8 @@ public sealed class NativeArena : IDisposable
 
     internal (int Ordinary, int Scoped, int SegmentCount) CurrentBumpTraversalForTest => _kernel.CurrentBumpTraversalForTest();
 
+    internal long[] CurrentSegmentOrdinalsForTest => _kernel.CurrentSegmentOrdinalsForTest();
+
     /// <summary>Creates an active arena unless the first generation is explicitly deferred.</summary>
     /// <param name="preAllocateBytes">Optional initial byte reservation.</param>
     /// <param name="returnMemoryOnDispose">The physical cleanup policy used by <see cref="Dispose"/>.</param>

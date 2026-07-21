@@ -126,6 +126,76 @@ public sealed class MechanismRegressionTests
     }
 
     [Fact]
+    public void RolloverCommitBoundaryFailuresPreserveTheActiveGenerationAndNativeValues()
+    {
+        NativeMemoryTestHooks.Reset();
+        NativePool<string> pool = new(initialCapacity: 1, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        try
+        {
+            Pooled<string> first = pool.Rent(1);
+            first[0] = "first";
+            Pooled<string> second = pool.Rent(2);
+            second[0] = "second-0";
+            second[1] = "second-1";
+
+            NativeMemoryTestHooks.FailAtCommitBoundary(1);
+            Assert.Throws<InvalidOperationException>(() => pool.ReleaseLeasesToNativeMemory());
+            Assert.Equal(NativeOwnerLifecycle.Active, pool.CurrentLifecycle);
+            Assert.Equal("first", first[0]);
+            Assert.Equal("second-0", second[0]);
+            Assert.Equal("second-1", second[1]);
+            Assert.Equal(3, pool.CurrentReferenceRootCountForTest);
+
+            NativeMemoryTestHooks.FailAtCommitBoundary(3);
+            Assert.Throws<InvalidOperationException>(() => pool.ReleaseLeasesToNativeMemory());
+            Assert.Equal(NativeOwnerLifecycle.Active, pool.CurrentLifecycle);
+            Assert.Equal("first", first[0]);
+            Assert.Equal("second-0", second[0]);
+            Assert.Equal("second-1", second[1]);
+            Assert.Equal(3, pool.CurrentReferenceRootCountForTest);
+
+            pool.ReleaseLeasesToNativeMemory();
+            Assert.Equal(NativeOwnerLifecycle.Active, pool.CurrentLifecycle);
+        }
+        finally
+        {
+            NativeMemoryTestHooks.Reset();
+            pool.Dispose();
+        }
+    }
+
+    [Fact]
+    public void ReturnAndScopedRecycleCommitBoundaryFailuresLeaveUsableState()
+    {
+        NativePool<int> returnPool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativePool<int> scopedPool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        try
+        {
+            Pooled<int> returned = returnPool.Rent(1);
+            returned[0] = 41;
+            NativeMemoryTestHooks.FailAtCommitBoundary(1);
+            Assert.Throws<InvalidOperationException>(() => returnPool.ReturnMemoryToNativeMemory());
+            Assert.Equal(NativeOwnerLifecycle.Active, returnPool.CurrentLifecycle);
+            Assert.Equal(41, returned[0]);
+            returnPool.ReturnMemoryToNativeMemory();
+
+            scoped Pooled<int> scoped = scopedPool.LeaseScoped(1);
+            scoped[0] = 73;
+            NativeMemoryTestHooks.FailAtCommitBoundary(1);
+            Assert.Throws<InvalidOperationException>(() => scopedPool.RecycleScoped());
+            Assert.Equal(NativeOwnerLifecycle.Active, scopedPool.CurrentLifecycle);
+            Assert.Equal(73, scoped[0]);
+            scopedPool.RecycleScoped();
+        }
+        finally
+        {
+            NativeMemoryTestHooks.Reset();
+            returnPool.Dispose();
+            scopedPool.Dispose();
+        }
+    }
+
+    [Fact]
     public async Task TolerantLeaseReleaseDoesNotClearAReusedSlabUnderAnEnteredOperation()
     {
         NativeMemoryTestHooks.Reset();
@@ -257,6 +327,200 @@ public sealed class MechanismRegressionTests
         {
             allowCallback.Set();
             retainedOwner = null;
+            NativeMemoryTestHooks.Reset();
+            pool.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task RetiredArenaRejoinRestoresPhysicalOrderAndTheScopedTraversalFrontier()
+    {
+        NativeMemoryTestHooks.Reset();
+        NativeArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        ManualResetEventSlim entered = new();
+        ManualResetEventSlim allowCallback = new();
+        NativeMemoryTestHooks.SetOperationEntered(operation =>
+        {
+            if (operation == nameof(ArenaLease<byte>.Access))
+            {
+                entered.Set();
+            }
+        });
+
+        try
+        {
+            Task worker = Task.Run(() =>
+            {
+                ArenaLease<byte> first = arena.Scratch<byte>(4_096);
+                first.Access(_ => allowCallback.Wait(TimeSpan.FromSeconds(10)));
+            });
+
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(10)));
+            _ = arena.Scratch<byte>(4_096);
+            arena.ReleaseLeasesToGarbageCollector();
+            _ = arena.Scratch<byte>(8_192);
+            allowCallback.Set();
+            await worker;
+
+            Assert.Equal([1L, 2L], arena.CurrentSegmentOrdinalsForTest);
+            ArenaLease<byte> scoped = arena.ScratchScoped<byte>(1);
+            Assert.Equal(2, arena.CurrentBumpTraversalForTest.SegmentCount);
+            arena.RecycleScoped();
+        }
+        finally
+        {
+            allowCallback.Set();
+            NativeMemoryTestHooks.Reset();
+            arena.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task RetiredPoolRejoinPreservesReversePhysicalTrimOrder()
+    {
+        NativeMemoryTestHooks.Reset();
+        NativePool<int> pool = new(initialCapacity: 1, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        ManualResetEventSlim entered = new();
+        ManualResetEventSlim allowCallback = new();
+        NativeMemoryTestHooks.SetOperationEntered(operation =>
+        {
+            if (operation == nameof(Pooled<int>.Access))
+            {
+                entered.Set();
+            }
+        });
+
+        try
+        {
+            Task worker = Task.Run(() =>
+            {
+                Pooled<int> first = pool.Rent(1);
+                first.Access(_ => allowCallback.Wait(TimeSpan.FromSeconds(10)));
+            });
+
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(10)));
+            _ = pool.Rent(2);
+            pool.ReleaseLeasesToGarbageCollector();
+            allowCallback.Set();
+            await worker;
+
+            Assert.Equal([1L, 2L], pool.CurrentSegmentOrdinalsForTest);
+            Assert.Equal((nuint)(2 * sizeof(int)), pool.TrimRetainedMemoryByBytes(1));
+            Assert.Equal([1L], pool.CurrentSegmentOrdinalsForTest);
+            Assert.Equal((nuint)sizeof(int), pool.TrimRetainedMemory());
+        }
+        finally
+        {
+            allowCallback.Set();
+            NativeMemoryTestHooks.Reset();
+            pool.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task RetiredDrainClearFailureQuarantinesStorageInsteadOfReusingIt()
+    {
+        NativeMemoryTestHooks.Reset();
+        NativePool<int> pool = new(initialCapacity: 1, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        ManualResetEventSlim entered = new();
+        ManualResetEventSlim allowCallback = new();
+        NativeMemoryTestHooks.SetOperationEntered(operation =>
+        {
+            if (operation == nameof(Pooled<int>.Access))
+            {
+                entered.Set();
+            }
+        });
+
+        try
+        {
+            Task<Exception?> worker = Task.Run(() =>
+            {
+                try
+                {
+                    Pooled<int> lease = pool.Rent(1);
+                    lease.Access(_ => allowCallback.Wait(TimeSpan.FromSeconds(10)));
+                    return null;
+                }
+                catch (Exception exception)
+                {
+                    return exception;
+                }
+            });
+
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(10)));
+            pool.ReleaseLeasesToGarbageCollector();
+            NativeMemoryTestHooks.FailAfterCommitBoundary(1);
+            allowCallback.Set();
+            NativeAllocationQuarantinedException failure = Assert.IsType<NativeAllocationQuarantinedException>(await worker);
+            Assert.Equal("clear", failure.Boundary);
+            Assert.Equal(1, failure.SegmentOrdinal);
+            Assert.Equal(1, pool.QuarantinedSegmentCountForTest);
+            Assert.Empty(pool.CurrentSegmentOrdinalsForTest);
+            long freeBeforeFreshRent = NativeMemoryTestHooks.Snapshot().FreeCount;
+
+            Pooled<int> fresh = pool.Rent(1);
+            Assert.Equal([2L], pool.CurrentSegmentOrdinalsForTest);
+            fresh[0] = 9;
+            fresh.Dispose();
+            Assert.Equal(freeBeforeFreshRent, NativeMemoryTestHooks.Snapshot().FreeCount);
+        }
+        finally
+        {
+            allowCallback.Set();
+            NativeMemoryTestHooks.Reset();
+            pool.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task RetiredDrainTransferFailureQuarantinesTheTransferredSegment()
+    {
+        NativeMemoryTestHooks.Reset();
+        NativePool<int> pool = new(initialCapacity: 1, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        ManualResetEventSlim entered = new();
+        ManualResetEventSlim allowCallback = new();
+        NativeMemoryTestHooks.SetOperationEntered(operation =>
+        {
+            if (operation == nameof(Pooled<int>.Access))
+            {
+                entered.Set();
+            }
+        });
+
+        try
+        {
+            Task<Exception?> worker = Task.Run(() =>
+            {
+                try
+                {
+                    Pooled<int> lease = pool.Rent(1);
+                    lease.Access(_ => allowCallback.Wait(TimeSpan.FromSeconds(10)));
+                    return null;
+                }
+                catch (Exception exception)
+                {
+                    return exception;
+                }
+            });
+
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(10)));
+            pool.ReleaseLeasesToGarbageCollector();
+            NativeMemoryTestHooks.FailAfterCommitBoundary(2);
+            allowCallback.Set();
+            NativeAllocationQuarantinedException failure = Assert.IsType<NativeAllocationQuarantinedException>(await worker);
+            Assert.Equal("slab transfer", failure.Boundary);
+            Assert.Equal(1, failure.SegmentOrdinal);
+            Assert.Equal(1, pool.QuarantinedSegmentCountForTest);
+            Assert.Empty(pool.CurrentSegmentOrdinalsForTest);
+
+            Pooled<int> fresh = pool.Rent(1);
+            Assert.Equal([2L], pool.CurrentSegmentOrdinalsForTest);
+            fresh.Dispose();
+        }
+        finally
+        {
+            allowCallback.Set();
             NativeMemoryTestHooks.Reset();
             pool.Dispose();
         }

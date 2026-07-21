@@ -116,6 +116,47 @@ public sealed class NativeAllocationInUseException : NativeAllocationException
     }
 }
 
+/// <summary>
+/// Raised when cleanup of an ended generation cannot safely rejoin its native
+/// storage with the active owner. The storage remains quarantined and cannot be
+/// reused until its owner is disposed or finalized.
+/// </summary>
+public sealed class NativeAllocationQuarantinedException : NativeAllocationException
+{
+    internal NativeAllocationQuarantinedException(
+        string message,
+        string ownerKind,
+        long generation,
+        long currentGeneration,
+        string operation,
+        int activeOperationCount,
+        long allocationId,
+        long segmentOrdinal,
+        string boundary,
+        NativeOwnerLifecycle currentLifecycle,
+        Exception? innerException = null)
+        : base(
+            message,
+            ownerKind,
+            generation,
+            currentGeneration,
+            operation,
+            activeOperationCount,
+            allocationId,
+            currentLifecycle,
+            innerException)
+    {
+        SegmentOrdinal = segmentOrdinal;
+        Boundary = boundary;
+    }
+
+    /// <summary>Gets the immutable physical segment ordinal that was quarantined.</summary>
+    public long SegmentOrdinal { get; }
+
+    /// <summary>Gets the cleanup boundary at which quarantine was required.</summary>
+    public string Boundary { get; }
+}
+
 /// <summary>Raised when an operation is incompatible with the owner's current lifecycle state.</summary>
 public sealed class NativeAllocationStateException : NativeAllocationException
 {
