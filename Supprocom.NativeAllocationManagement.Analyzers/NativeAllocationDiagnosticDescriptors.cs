@@ -27,8 +27,8 @@ internal static class NativeAllocationDiagnosticDescriptors
 
     internal static readonly DiagnosticDescriptor ScopedLifecycle = Create(
         "NAM1005",
-        "Scoped pool lifecycle is automatic",
-        "'{0}' cannot call '{1}' inside a using pool scope. The generated cleanup owns this lifecycle boundary.");
+        "Using-owner lifecycle is automatic",
+        "'{0}' cannot call '{1}' inside a using-owner scope. The generated cleanup owns this lifecycle boundary.");
 
     internal static readonly DiagnosticDescriptor RegionMustBeUsing = Create(
         "NAM1006",
@@ -81,6 +81,23 @@ internal static class NativeAllocationDiagnosticDescriptors
         "{0}.{1} ends its current pool generation while '{2}' is still live. {3}",
         DiagnosticSeverity.Warning);
 
+    internal static readonly DiagnosticDescriptor ScopedAcquisitionEscape = Create(
+        "NAM1018",
+        "Scoped acquisition must initialize a scoped local",
+        "Scoped acquisition '{0}' must directly initialize a scoped local. It cannot be returned, passed, discarded, stored, aggregated, or hidden behind a helper.");
+
+    internal static readonly DiagnosticDescriptor OrdinaryAcquisitionScopedWarning = Create(
+        "NAM1019",
+        "Ordinary native acquisition does not recycle scoped storage",
+        "'{0}' is a scoped local initialized by an ordinary native acquisition. Use the matching scoped acquisition when scoped recycling is intended.",
+        DiagnosticSeverity.Warning);
+
+    internal static readonly DiagnosticDescriptor MissingScopedCompletion = Create(
+        "NAM1020",
+        "Scoped native storage is not recycled on every exit",
+        "Scoped allocations from '{0}' leave this lexical region without a proven RecycleScoped completion. Place the same operation after the scope or in finally.",
+        DiagnosticSeverity.Warning);
+
     internal static readonly DiagnosticDescriptor AnalyzerMissing = Create(
         "NAM9001",
         "Bundled analyzer is required",
@@ -102,6 +119,9 @@ internal static class NativeAllocationDiagnosticDescriptors
         FieldDisposal,
         UnknownCall,
         DeferredReturnLiveValue,
+        ScopedAcquisitionEscape,
+        OrdinaryAcquisitionScopedWarning,
+        MissingScopedCompletion,
         AnalyzerMissing);
 
     private static DiagnosticDescriptor Create(

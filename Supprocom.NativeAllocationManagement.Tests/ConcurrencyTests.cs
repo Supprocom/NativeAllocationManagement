@@ -7,7 +7,7 @@ public sealed class ConcurrencyTests
     [Fact]
     public async Task ReturnFailsAfterAnOperationTokenWinsAndLeavesGenerationUsable()
     {
-        NativePool<int> pool = new(returnOnDispose: NativeReturn.ToNativeMemory);
+        NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         ManualResetEventSlim entered = new();
         ManualResetEventSlim release = new();
         NativeMemoryTestHooks.SetOperationEntered(operation =>
@@ -29,7 +29,7 @@ public sealed class ConcurrencyTests
             });
 
             Assert.True(entered.Wait(TimeSpan.FromSeconds(10)));
-            NativeAllocationInUseException exception = Assert.Throws<NativeAllocationInUseException>(pool.ReturnToNativeMemory);
+            NativeAllocationInUseException exception = Assert.Throws<NativeAllocationInUseException>(pool.ReturnMemoryToNativeMemory);
             Assert.Contains("No lease was invalidated", exception.Message, StringComparison.OrdinalIgnoreCase);
             Assert.Equal(NativeOwnerLifecycle.Active, exception.CurrentLifecycle);
             release.Set();
@@ -57,7 +57,7 @@ public sealed class ConcurrencyTests
 
         NativePool<int> pool = new(
             initialCapacity: 1,
-            returnOnDispose: NativeReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         ManualResetEventSlim entered = new();
         ManualResetEventSlim release = new();
         NativeMemoryTestHooks.SetOperationEntered(operation =>
@@ -80,7 +80,7 @@ public sealed class ConcurrencyTests
 
             Assert.True(entered.Wait(TimeSpan.FromSeconds(10)));
             NativeMemoryTestMetrics beforeReturn = NativeMemoryTestHooks.Snapshot();
-            pool.ReturnToGarbageCollector();
+            pool.ReturnMemoryToGarbageCollector();
             NativeMemoryTestMetrics detached = NativeMemoryTestHooks.Snapshot();
             Assert.Equal(beforeReturn.DetachedGenerationCount + 1, detached.DetachedGenerationCount);
             Assert.Equal(beforeReturn.OutstandingNativeBytes, detached.DetachedNativeBytes);
@@ -130,7 +130,7 @@ public sealed class ConcurrencyTests
     {
         NativePool<int> pool = new();
         Pooled<int> lease = pool.Rent(1);
-        pool.ReturnToNativeMemory();
+        pool.ReturnMemoryToNativeMemory();
         NativeAllocationReturnedException exception = CaptureReturned(lease);
         Assert.Contains("returned", exception.Message, StringComparison.OrdinalIgnoreCase);
         lease.Dispose();

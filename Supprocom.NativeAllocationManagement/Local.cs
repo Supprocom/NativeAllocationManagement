@@ -1,22 +1,14 @@
 namespace Supprocom.NativeAllocationManagement;
 
-/// <summary>
-/// A region-bound unmanaged handle that remains valid until its enclosing region ends.
-/// </summary>
-/// <typeparam name="T">The unmanaged element type.</typeparam>
+/// <summary>A generation-bound heterogeneous handle owned by a NativeRegion.</summary>
+/// <typeparam name="T">The value or reference type stored by the region.</typeparam>
 public readonly ref struct Local<T>
-    where T : unmanaged
 {
     private readonly NativeOwnerKernel? _kernel;
     private readonly long _generation;
     private readonly long _allocationId;
 
-    internal Local(
-        NativeOwnerKernel kernel,
-        long generation,
-        long allocationId,
-        int length,
-        int capacity)
+    internal Local(NativeOwnerKernel kernel, long generation, long allocationId, int length, int capacity)
     {
         _kernel = kernel;
         _generation = generation;
@@ -28,7 +20,7 @@ public readonly ref struct Local<T>
     /// <summary>Gets the logical element count.</summary>
     public int Length => GetMetadata(nameof(Length)).Length;
 
-    /// <summary>Gets the allocation capacity in elements.</summary>
+    /// <summary>Gets the physical capacity in elements.</summary>
     public int Capacity => GetMetadata(nameof(Capacity)).Capacity;
 
     /// <summary>Reads or writes one value through the owner operation gate.</summary>
@@ -36,13 +28,10 @@ public readonly ref struct Local<T>
     {
         get
         {
-            NativeOwnerKernel kernel = GetKernel("get_Item");
-            NativeHandleMetadata metadata = kernel.ValidateHandle(_generation, _allocationId, "get_Item");
-            ValidateIndex(index, metadata.Length);
-            NativeOperationToken token = kernel.EnterOperation(_generation, _allocationId, "get_Item");
+            NativeOperationToken token = EnterIndexedOperation("get_Item", index);
             try
             {
-                return token.GetSpan<T>()[index];
+                return token.GetValue<T>(index);
             }
             finally
             {
@@ -51,13 +40,10 @@ public readonly ref struct Local<T>
         }
         set
         {
-            NativeOwnerKernel kernel = GetKernel("set_Item");
-            NativeHandleMetadata metadata = kernel.ValidateHandle(_generation, _allocationId, "set_Item");
-            ValidateIndex(index, metadata.Length);
-            NativeOperationToken token = kernel.EnterOperation(_generation, _allocationId, "set_Item");
+            NativeOperationToken token = EnterIndexedOperation("set_Item", index);
             try
             {
-                token.GetSpan<T>()[index] = value;
+                token.SetValue(index, value);
             }
             finally
             {
@@ -69,11 +55,10 @@ public readonly ref struct Local<T>
     /// <summary>Zeroes the logical range while holding one native operation token.</summary>
     public void Clear()
     {
-        NativeOwnerKernel kernel = GetKernel(nameof(Clear));
-        NativeOperationToken token = kernel.EnterOperation(_generation, _allocationId, nameof(Clear));
+        NativeOperationToken token = GetKernel(nameof(Clear)).EnterOperation(_generation, _allocationId, nameof(Clear));
         try
         {
-            token.GetSpan<T>().Clear();
+            token.GetView<T>().Clear();
         }
         finally
         {
@@ -84,17 +69,16 @@ public readonly ref struct Local<T>
     /// <summary>Copies exactly the logical range from a bounded source span.</summary>
     public void CopyFrom(scoped ReadOnlySpan<T> source)
     {
-        NativeOwnerKernel kernel = GetKernel(nameof(CopyFrom));
-        NativeHandleMetadata metadata = kernel.ValidateHandle(_generation, _allocationId, nameof(CopyFrom));
+        NativeHandleMetadata metadata = GetMetadata(nameof(CopyFrom));
         if (source.Length != metadata.Length)
         {
             throw new ArgumentException("The source length must equal the local logical length.", nameof(source));
         }
 
-        NativeOperationToken token = kernel.EnterOperation(_generation, _allocationId, nameof(CopyFrom));
+        NativeOperationToken token = GetKernel(nameof(CopyFrom)).EnterOperation(_generation, _allocationId, nameof(CopyFrom));
         try
         {
-            source.CopyTo(token.GetSpan<T>());
+            token.GetView<T>().CopyFrom(source);
         }
         finally
         {
@@ -102,20 +86,19 @@ public readonly ref struct Local<T>
         }
     }
 
-    /// <summary>Copies exactly the logical range into a bounded destination span.</summary>
+    /// <summary>Copies the logical range into a destination with sufficient capacity.</summary>
     public void CopyTo(scoped Span<T> destination)
     {
-        NativeOwnerKernel kernel = GetKernel(nameof(CopyTo));
-        NativeHandleMetadata metadata = kernel.ValidateHandle(_generation, _allocationId, nameof(CopyTo));
+        NativeHandleMetadata metadata = GetMetadata(nameof(CopyTo));
         if (destination.Length < metadata.Length)
         {
             throw new ArgumentException("The destination must contain at least the local logical length.", nameof(destination));
         }
 
-        NativeOperationToken token = kernel.EnterOperation(_generation, _allocationId, nameof(CopyTo));
+        NativeOperationToken token = GetKernel(nameof(CopyTo)).EnterOperation(_generation, _allocationId, nameof(CopyTo));
         try
         {
-            token.GetSpan<T>().CopyTo(destination);
+            token.GetView<T>().CopyTo(destination);
         }
         finally
         {
@@ -124,14 +107,13 @@ public readonly ref struct Local<T>
     }
 
     /// <summary>Runs one synchronous bounded mutation callback.</summary>
-    public void Access(NativeSpanAction<T> action)
+    public void Access(NativeLeaseAction<T> action)
     {
         ArgumentNullException.ThrowIfNull(action);
-        NativeOwnerKernel kernel = GetKernel(nameof(Access));
-        NativeOperationToken token = kernel.EnterOperation(_generation, _allocationId, nameof(Access));
+        NativeOperationToken token = GetKernel(nameof(Access)).EnterOperation(_generation, _allocationId, nameof(Access));
         try
         {
-            action(token.GetSpan<T>());
+            action(token.GetView<T>());
         }
         finally
         {
@@ -140,14 +122,13 @@ public readonly ref struct Local<T>
     }
 
     /// <summary>Runs one synchronous bounded read callback and returns its managed result.</summary>
-    public TResult Read<TResult>(NativeSpanFunc<T, TResult> action)
+    public TResult Read<TResult>(NativeLeaseFunc<T, TResult> action)
     {
         ArgumentNullException.ThrowIfNull(action);
-        NativeOwnerKernel kernel = GetKernel(nameof(Read));
-        NativeOperationToken token = kernel.EnterOperation(_generation, _allocationId, nameof(Read));
+        NativeOperationToken token = GetKernel(nameof(Read)).EnterOperation(_generation, _allocationId, nameof(Read));
         try
         {
-            return action(token.GetSpan<T>());
+            return action(token.GetView<T>());
         }
         finally
         {
@@ -155,15 +136,17 @@ public readonly ref struct Local<T>
         }
     }
 
-    private NativeOwnerKernel GetKernel(string operation)
+    private NativeOperationToken EnterIndexedOperation(string operation, int index)
     {
-        return _kernel ?? throw new NativeAllocationUninitializedException(nameof(Local<T>), operation);
+        NativeHandleMetadata metadata = GetMetadata(operation);
+        ValidateIndex(index, metadata.Length);
+        return GetKernel(operation).EnterOperation(_generation, _allocationId, operation);
     }
 
-    private NativeHandleMetadata GetMetadata(string operation)
-    {
-        return GetKernel(operation).ValidateHandle(_generation, _allocationId, operation);
-    }
+    private NativeOwnerKernel GetKernel(string operation) =>
+        _kernel ?? throw new NativeAllocationUninitializedException(nameof(Local<T>), operation);
+
+    private NativeHandleMetadata GetMetadata(string operation) => GetKernel(operation).ValidateHandle(_generation, _allocationId, operation);
 
     private static void ValidateIndex(int index, int length)
     {
@@ -174,4 +157,3 @@ public readonly ref struct Local<T>
         }
     }
 }
-

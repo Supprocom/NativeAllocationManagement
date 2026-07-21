@@ -21,18 +21,25 @@ public sealed class LifecycleConformanceTests
             Assert.Equal(testCase.Result, actual[^1].ToString());
         }
 
-        Assert.Equal(9, cases.Length);
+        Assert.Equal(18, cases.Length);
     }
 
     private static IReadOnlyList<NativeOwnerLifecycle> Execute(LifecycleCase testCase)
     {
         List<NativeOwnerLifecycle> states = [];
-        NativeReturn returnPolicy = Enum.Parse<NativeReturn>(testCase.ReturnPolicy, ignoreCase: false);
+        NativeMemoryReturn returnPolicy = Enum.Parse<NativeMemoryReturn>(testCase.ReturnPolicy, ignoreCase: false);
 
         if (testCase.Owner == "pool")
         {
             NativePool<int> pool = new(testCase.InitialReservation, returnPolicy, testCase.DelayedActivation);
             states.Add(pool.CurrentLifecycle);
+            if (testCase.ReturnKind == "disposeBeforeActivation")
+            {
+                pool.Dispose();
+                states.Add(pool.CurrentLifecycle);
+                return states;
+            }
+
             if (testCase.DelayedActivation)
             {
                 pool.LeaseFromMemory();
@@ -59,6 +66,13 @@ public sealed class LifecycleConformanceTests
         {
             NativeRegion region = new((nuint)testCase.InitialReservation, returnPolicy, testCase.DelayedActivation);
             states.Add(region.CurrentLifecycle);
+            if (testCase.ReturnKind == "disposeBeforeActivation")
+            {
+                region.Dispose();
+                states.Add(region.CurrentLifecycle);
+                return states;
+            }
+
             if (testCase.DelayedActivation)
             {
                 region.LeaseFromMemory();
@@ -75,6 +89,44 @@ public sealed class LifecycleConformanceTests
             return states;
         }
 
+        if (testCase.Owner == "arena")
+        {
+            NativeArena arena = new((nuint)testCase.InitialReservation, returnPolicy, testCase.DelayedActivation);
+            states.Add(arena.CurrentLifecycle);
+            if (testCase.ReturnKind == "disposeBeforeActivation")
+            {
+                arena.Dispose();
+                states.Add(arena.CurrentLifecycle);
+                return states;
+            }
+
+            if (testCase.DelayedActivation)
+            {
+                arena.LeaseFromMemory();
+                states.Add(arena.CurrentLifecycle);
+            }
+
+            ExecuteReturn(arena, testCase.ReturnKind);
+            if (testCase.ReturnKind is "native" or "garbageCollector")
+            {
+                states.Add(arena.CurrentLifecycle);
+            }
+            else if (testCase.ReturnKind is "releaseNative" or "releaseGarbageCollector")
+            {
+                states.Add(arena.CurrentLifecycle);
+            }
+
+            if (testCase.ReLease)
+            {
+                arena.LeaseFromMemory();
+                states.Add(arena.CurrentLifecycle);
+            }
+
+            arena.Dispose();
+            states.Add(arena.CurrentLifecycle);
+            return states;
+        }
+
         throw new InvalidDataException($"Unknown lifecycle owner '{testCase.Owner}'.");
     }
 
@@ -83,10 +135,10 @@ public sealed class LifecycleConformanceTests
         switch (returnKind)
         {
             case "native":
-                pool.ReturnToNativeMemory();
+                pool.ReturnMemoryToNativeMemory();
                 break;
             case "garbageCollector":
-                pool.ReturnToGarbageCollector();
+                pool.ReturnMemoryToGarbageCollector();
                 break;
             case "none":
                 break;
@@ -100,15 +152,38 @@ public sealed class LifecycleConformanceTests
         switch (returnKind)
         {
             case "native":
-                region.ReturnToNativeMemory();
+                region.ReturnMemoryToNativeMemory();
                 break;
             case "garbageCollector":
-                region.ReturnToGarbageCollector();
+                region.ReturnMemoryToGarbageCollector();
                 break;
             case "none":
                 break;
             default:
                 throw new InvalidDataException($"Unknown region return kind '{returnKind}'.");
+        }
+    }
+
+    private static void ExecuteReturn(NativeArena arena, string returnKind)
+    {
+        switch (returnKind)
+        {
+            case "native":
+                arena.ReturnMemoryToNativeMemory();
+                break;
+            case "garbageCollector":
+                arena.ReturnMemoryToGarbageCollector();
+                break;
+            case "releaseNative":
+                arena.ReleaseLeasesToNativeMemory();
+                break;
+            case "releaseGarbageCollector":
+                arena.ReleaseLeasesToGarbageCollector();
+                break;
+            case "none":
+                break;
+            default:
+                throw new InvalidDataException($"Unknown arena return kind '{returnKind}'.");
         }
     }
 

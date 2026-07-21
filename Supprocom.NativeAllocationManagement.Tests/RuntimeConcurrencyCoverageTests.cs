@@ -8,7 +8,7 @@ public sealed class RuntimeConcurrencyCoverageTests
     public async Task EveryNativeTouchAppliesTheSelectedReturnPolicyWhileEntered()
     {
         string[] operations = ["get_Item", "set_Item", "Clear", "CopyFrom", "CopyTo", "Access", "Read"];
-        foreach (NativeReturn policy in Enum.GetValues<NativeReturn>())
+        foreach (NativeMemoryReturn policy in Enum.GetValues<NativeMemoryReturn>())
         {
             NativePool<int> pool = new();
             try
@@ -30,7 +30,7 @@ public sealed class RuntimeConcurrencyCoverageTests
     public async Task EveryNativeTouchRejectsAWholeGenerationReturnThatWinsBeforeEntry()
     {
         string[] operations = ["get_Item", "set_Item", "Clear", "CopyFrom", "CopyTo", "Access", "Read"];
-        foreach (NativeReturn policy in Enum.GetValues<NativeReturn>())
+        foreach (NativeMemoryReturn policy in Enum.GetValues<NativeMemoryReturn>())
         {
             foreach (string operation in operations)
             {
@@ -40,11 +40,39 @@ public sealed class RuntimeConcurrencyCoverageTests
     }
 
     [Fact]
+    public async Task EveryArenaNativeTouchAppliesBothReturnPoliciesWhileEntered()
+    {
+        string[] operations = ["get_Item", "set_Item", "Clear", "CopyFrom", "CopyTo", "Access", "Read"];
+        foreach (NativeMemoryReturn policy in Enum.GetValues<NativeMemoryReturn>())
+        {
+            foreach (string operation in operations)
+            {
+                await RaceArenaTransitionAgainstOperationAsync(policy, operation, returnMemory: true);
+                await RaceArenaTransitionAgainstOperationAsync(policy, operation, returnMemory: false);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task EveryArenaNativeTouchRejectsASelectedTransitionThatWinsBeforeEntry()
+    {
+        string[] operations = ["get_Item", "set_Item", "Clear", "CopyFrom", "CopyTo", "Access", "Read"];
+        foreach (NativeMemoryReturn policy in Enum.GetValues<NativeMemoryReturn>())
+        {
+            foreach (string operation in operations)
+            {
+                await RaceArenaTransitionWinsBeforeEntryAsync(policy, operation, returnMemory: true);
+                await RaceArenaTransitionWinsBeforeEntryAsync(policy, operation, returnMemory: false);
+            }
+        }
+    }
+
+    [Fact]
     public async Task DisposeRestoresActiveStateAfterAConcurrentOperationWins()
     {
-        foreach (NativeReturn policy in Enum.GetValues<NativeReturn>())
+        foreach (NativeMemoryReturn policy in Enum.GetValues<NativeMemoryReturn>())
         {
-            NativePool<int> pool = new(returnOnDispose: policy);
+            NativePool<int> pool = new(returnMemoryOnDispose: policy);
             ManualResetEventSlim entered = new();
             ManualResetEventSlim release = new();
             Exception? disposeException = null;
@@ -99,11 +127,95 @@ public sealed class RuntimeConcurrencyCoverageTests
     }
 
     [Fact]
+    public async Task TrimNeverFreesAUnitWhileItsOperationIsEntered()
+    {
+        foreach (NativeMemoryReturn policy in Enum.GetValues<NativeMemoryReturn>())
+        {
+            for (int trimKind = 0; trimKind < 3; trimKind++)
+            {
+                NativePool<int> pool = new(initialCapacity: 16, returnMemoryOnDispose: policy);
+                ManualResetEventSlim entered = new();
+                ManualResetEventSlim release = new();
+                NativeMemoryTestHooks.SetOperationEntered(operation =>
+                {
+                    if (operation == nameof(Pooled<int>.Access))
+                    {
+                        entered.Set();
+                        release.Wait(TimeSpan.FromSeconds(10));
+                    }
+                });
+
+                try
+                {
+                    Task worker = Task.Run(() =>
+                    {
+                        Pooled<int> lease = pool.Rent(4);
+                        try
+                        {
+                            lease.Access(static span => span[0] = 1);
+                        }
+                        finally
+                        {
+                            lease.Dispose();
+                        }
+                    });
+
+                    Assert.True(entered.Wait(TimeSpan.FromSeconds(10)));
+                    Assert.Equal((nuint)0, TrimPool(pool, trimKind));
+                    release.Set();
+                    await worker;
+                    Assert.True(TrimPool(pool, trimKind) > 0);
+                }
+                finally
+                {
+                    release.Set();
+                    NativeMemoryTestHooks.Reset();
+                    pool.Dispose();
+                }
+
+                NativeArena arena = new(4096, policy);
+                entered = new ManualResetEventSlim();
+                release = new ManualResetEventSlim();
+                NativeMemoryTestHooks.SetOperationEntered(operation =>
+                {
+                    if (operation == nameof(ArenaLease<int>.Access))
+                    {
+                        entered.Set();
+                        release.Wait(TimeSpan.FromSeconds(10));
+                    }
+                });
+
+                try
+                {
+                    Task worker = Task.Run(() =>
+                    {
+                        ArenaLease<int> lease = arena.Scratch<int>(4);
+                        lease.Access(static span => span[0] = 2);
+                    });
+
+                    Assert.True(entered.Wait(TimeSpan.FromSeconds(10)));
+                    Assert.Equal((nuint)0, TrimArena(arena, trimKind));
+                    release.Set();
+                    await worker;
+                    arena.ReleaseLeasesToNativeMemory();
+                    Assert.True(TrimArena(arena, trimKind) > 0);
+                }
+                finally
+                {
+                    release.Set();
+                    NativeMemoryTestHooks.Reset();
+                    arena.Dispose();
+                }
+            }
+        }
+    }
+
+    [Fact]
     public void ReturnAndReLeaseRaceIsSerializedForBothPolicies()
     {
-        foreach (NativeReturn policy in Enum.GetValues<NativeReturn>())
+        foreach (NativeMemoryReturn policy in Enum.GetValues<NativeMemoryReturn>())
         {
-            NativePool<int> pool = new(returnOnDispose: policy);
+            NativePool<int> pool = new(returnMemoryOnDispose: policy);
             using Barrier barrier = new(3);
             Exception? returnException = null;
             Exception? leaseException = null;
@@ -158,7 +270,7 @@ public sealed class RuntimeConcurrencyCoverageTests
         for (int iteration = 0; iteration < 16; iteration++)
         {
             NativePool<int> pool = new();
-            pool.ReturnToNativeMemory();
+            pool.ReturnMemoryToNativeMemory();
             using Barrier barrier = new(3);
             Exception? leaseException = null;
             Exception? disposeException = null;
@@ -223,7 +335,7 @@ public sealed class RuntimeConcurrencyCoverageTests
 
         try
         {
-            pool.ReturnToNativeMemory();
+            pool.ReturnMemoryToNativeMemory();
             Assert.IsType<NativeAllocationReturnedException>(CaptureReturned(copiedLease));
             Assert.IsType<NativeAllocationReturnedException>(CaptureReturned(fieldLease));
         }
@@ -252,7 +364,7 @@ public sealed class RuntimeConcurrencyCoverageTests
                 barrier.SignalAndWait(TimeSpan.FromSeconds(10));
                 try
                 {
-                    pool.ReturnToNativeMemory();
+                    pool.ReturnMemoryToNativeMemory();
                 }
                 catch (Exception exception)
                 {
@@ -288,7 +400,7 @@ public sealed class RuntimeConcurrencyCoverageTests
     [Fact]
     public void LocalOperationWinsAndReturnWinsBeforeEntryForBothPolicies()
     {
-        foreach (NativeReturn policy in Enum.GetValues<NativeReturn>())
+        foreach (NativeMemoryReturn policy in Enum.GetValues<NativeMemoryReturn>())
         {
             NativeRegion operationRegion = new(16, policy);
             Local<int> operationLocal = operationRegion.Lease<int>(1);
@@ -313,12 +425,37 @@ public sealed class RuntimeConcurrencyCoverageTests
             try
             {
                 operationLocal.Access(static span => span[0] = 9);
-                Assert.NotNull(inUse);
+                if (policy == NativeMemoryReturn.ToNativeMemory)
+                {
+                    Assert.NotNull(inUse);
+                }
+                else
+                {
+                    Assert.Null(inUse);
+                    Assert.Equal(NativeOwnerLifecycle.Returned, operationRegion.CurrentLifecycle);
+                }
             }
             finally
             {
                 NativeMemoryTestHooks.Reset();
-                operationRegion.ReturnToNativeMemory();
+                if (policy == NativeMemoryReturn.ToNativeMemory)
+                {
+                    operationRegion.ReturnMemoryToNativeMemory();
+                }
+                else
+                {
+                    NativeAllocationReturnedException? returned = null;
+                    try
+                    {
+                        operationRegion.ReturnMemoryToNativeMemory();
+                    }
+                    catch (NativeAllocationReturnedException exception)
+                    {
+                        returned = exception;
+                    }
+
+                    Assert.NotNull(returned);
+                }
                 operationRegion.Dispose();
             }
 
@@ -355,7 +492,7 @@ public sealed class RuntimeConcurrencyCoverageTests
 
     private static async Task RaceReturnAgainstOperationAsync(
         NativePool<int> pool,
-        NativeReturn policy,
+        NativeMemoryReturn policy,
         string operation)
     {
         ManualResetEventSlim entered = new();
@@ -374,10 +511,10 @@ public sealed class RuntimeConcurrencyCoverageTests
             Task worker = Task.Run(() => ExecuteOperation(pool, operation));
             Assert.True(entered.Wait(TimeSpan.FromSeconds(10)), $"Operation {operation} did not enter.");
 
-            if (policy == NativeReturn.ToNativeMemory)
+            if (policy == NativeMemoryReturn.ToNativeMemory)
             {
                 NativeAllocationInUseException exception =
-                    Assert.Throws<NativeAllocationInUseException>(pool.ReturnToNativeMemory);
+                    Assert.Throws<NativeAllocationInUseException>(pool.ReturnMemoryToNativeMemory);
                 Assert.Contains("No lease was invalidated", exception.Message, StringComparison.OrdinalIgnoreCase);
                 Assert.Equal(NativeOwnerLifecycle.Active, pool.CurrentLifecycle);
                 release.Set();
@@ -385,7 +522,7 @@ public sealed class RuntimeConcurrencyCoverageTests
             }
             else
             {
-                pool.ReturnToGarbageCollector();
+                pool.ReturnMemoryToGarbageCollector();
                 Assert.Equal(NativeOwnerLifecycle.Returned, pool.CurrentLifecycle);
                 Assert.Throws<NativeAllocationReturnedException>(() => pool.Rent(1));
 
@@ -406,29 +543,219 @@ public sealed class RuntimeConcurrencyCoverageTests
         }
     }
 
-    private static void ReturnRegion(NativeOwnerKernel kernel, NativeReturn policy)
+    private static async Task RaceArenaTransitionAgainstOperationAsync(
+        NativeMemoryReturn policy,
+        string operation,
+        bool returnMemory)
     {
-        if (policy == NativeReturn.ToNativeMemory)
+        NativeArena arena = new(returnMemoryOnDispose: policy);
+        ManualResetEventSlim entered = new();
+        ManualResetEventSlim release = new();
+        NativeMemoryTestHooks.SetOperationEntered(name =>
         {
-            kernel.ReturnToNativeMemory();
+            if (name == operation)
+            {
+                entered.Set();
+                release.Wait(TimeSpan.FromSeconds(10));
+            }
+        });
+
+        try
+        {
+            Task worker = Task.Run(() =>
+            {
+                ArenaLease<int> lease = arena.Scratch<int>(2);
+                ExecuteArenaOperation(lease, operation);
+            });
+
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(10)), $"Arena operation {operation} did not enter.");
+            if (returnMemory)
+            {
+                if (policy == NativeMemoryReturn.ToNativeMemory)
+                {
+                    NativeAllocationInUseException exception = Assert.Throws<NativeAllocationInUseException>(arena.ReturnMemoryToNativeMemory);
+                    Assert.Equal(NativeOwnerLifecycle.Active, exception.CurrentLifecycle);
+                    Assert.Equal(NativeOwnerLifecycle.Active, arena.CurrentLifecycle);
+                }
+                else
+                {
+                    arena.ReturnMemoryToGarbageCollector();
+                    Assert.Equal(NativeOwnerLifecycle.Returned, arena.CurrentLifecycle);
+                }
+            }
+            else
+            {
+                if (policy == NativeMemoryReturn.ToNativeMemory)
+                {
+                    NativeAllocationInUseException exception = Assert.Throws<NativeAllocationInUseException>(arena.ReleaseLeasesToNativeMemory);
+                    Assert.Equal(NativeOwnerLifecycle.Active, exception.CurrentLifecycle);
+                    Assert.Equal(NativeOwnerLifecycle.Active, arena.CurrentLifecycle);
+                }
+                else
+                {
+                    arena.ReleaseLeasesToGarbageCollector();
+                    Assert.Equal(NativeOwnerLifecycle.Active, arena.CurrentLifecycle);
+                }
+            }
+
+            release.Set();
+            await worker;
+
+            if (returnMemory)
+            {
+                if (policy == NativeMemoryReturn.ToNativeMemory)
+                {
+                    arena.ReturnMemoryToNativeMemory();
+                }
+                else
+                {
+                    arena.LeaseFromMemory();
+                }
+            }
+            else if (policy == NativeMemoryReturn.ToNativeMemory)
+            {
+                arena.ReleaseLeasesToNativeMemory();
+            }
         }
-        else
+        finally
         {
-            kernel.ReturnToGarbageCollector();
+            release.Set();
+            NativeMemoryTestHooks.Reset();
+            arena.Dispose();
         }
     }
 
-    private static void Return(NativePool<int> pool, NativeReturn policy)
+    private static async Task RaceArenaTransitionWinsBeforeEntryAsync(
+        NativeMemoryReturn policy,
+        string operation,
+        bool returnMemory)
     {
-        if (policy == NativeReturn.ToNativeMemory)
+        NativeArena arena = new(returnMemoryOnDispose: policy);
+        ManualResetEventSlim beforeEntry = new();
+        ManualResetEventSlim release = new();
+        NativeMemoryTestHooks.SetBeforeOperationEntry(name =>
         {
-            pool.ReturnToNativeMemory();
+            if (name == operation)
+            {
+                beforeEntry.Set();
+                release.Wait(TimeSpan.FromSeconds(10));
+            }
+        });
+
+        try
+        {
+            Task<Exception?> worker = Task.Run(() =>
+            {
+                try
+                {
+                    ExecuteArenaOperation(arena.Scratch<int>(2), operation);
+                    return (Exception?)null;
+                }
+                catch (Exception exception)
+                {
+                    return exception;
+                }
+            });
+
+            Assert.True(beforeEntry.Wait(TimeSpan.FromSeconds(10)), $"Arena operation {operation} did not reach its entry barrier.");
+            if (returnMemory)
+            {
+                if (policy == NativeMemoryReturn.ToNativeMemory)
+                {
+                    arena.ReturnMemoryToNativeMemory();
+                }
+                else
+                {
+                    arena.ReturnMemoryToGarbageCollector();
+                }
+            }
+            else if (policy == NativeMemoryReturn.ToNativeMemory)
+            {
+                arena.ReleaseLeasesToNativeMemory();
+            }
+            else
+            {
+                arena.ReleaseLeasesToGarbageCollector();
+            }
+
+            release.Set();
+            Assert.IsType<NativeAllocationReturnedException>(await worker);
+        }
+        finally
+        {
+            release.Set();
+            NativeMemoryTestHooks.Reset();
+            arena.Dispose();
+        }
+    }
+
+    private static void ExecuteArenaOperation(ArenaLease<int> lease, string operation)
+    {
+        switch (operation)
+        {
+            case "get_Item":
+                _ = lease[0];
+                break;
+            case "set_Item":
+                lease[0] = 2;
+                break;
+            case "Clear":
+                lease.Clear();
+                break;
+            case "CopyFrom":
+                lease.CopyFrom(new int[2]);
+                break;
+            case "CopyTo":
+                lease.CopyTo(new int[2]);
+                break;
+            case "Access":
+                lease.Access(static span => span[0] = 1);
+                break;
+            case "Read":
+                _ = lease.Read(static span => span[0]);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(operation), operation, "Unknown test operation.");
+        }
+    }
+
+    private static void ReturnRegion(NativeOwnerKernel kernel, NativeMemoryReturn policy)
+    {
+        if (policy == NativeMemoryReturn.ToNativeMemory)
+        {
+            kernel.ReturnMemoryToNativeMemory();
         }
         else
         {
-            pool.ReturnToGarbageCollector();
+            kernel.ReturnMemoryToGarbageCollector();
         }
     }
+
+    private static void Return(NativePool<int> pool, NativeMemoryReturn policy)
+    {
+        if (policy == NativeMemoryReturn.ToNativeMemory)
+        {
+            pool.ReturnMemoryToNativeMemory();
+        }
+        else
+        {
+            pool.ReturnMemoryToGarbageCollector();
+        }
+    }
+
+    private static nuint TrimPool(NativePool<int> pool, int trimKind) => trimKind switch
+    {
+        0 => pool.TrimRetainedMemory(),
+        1 => pool.TrimRetainedMemoryByBytes(1),
+        _ => pool.TrimRetainedMemoryByLeaseSize(1)
+    };
+
+    private static nuint TrimArena(NativeArena arena, int trimKind) => trimKind switch
+    {
+        0 => arena.TrimRetainedMemory(),
+        1 => arena.TrimRetainedMemoryByBytes(1),
+        _ => arena.TrimRetainedMemoryByLeaseSize<int>(1)
+    };
 
     private static bool CaptureReturnedOrDisposed(Pooled<int> lease)
     {
@@ -506,7 +833,7 @@ public sealed class RuntimeConcurrencyCoverageTests
         internal NativePool<int> Pool { get; }
     }
 
-    private static async Task RaceReturnWinsBeforeOperationEntryAsync(NativeReturn policy, string operation)
+    private static async Task RaceReturnWinsBeforeOperationEntryAsync(NativeMemoryReturn policy, string operation)
     {
         NativePool<int> pool = new();
         ManualResetEventSlim beforeEntry = new();
@@ -541,13 +868,13 @@ public sealed class RuntimeConcurrencyCoverageTests
             });
 
             Assert.True(beforeEntry.Wait(TimeSpan.FromSeconds(10)), $"Operation {operation} did not reach its entry barrier.");
-            if (policy == NativeReturn.ToNativeMemory)
+            if (policy == NativeMemoryReturn.ToNativeMemory)
             {
-                pool.ReturnToNativeMemory();
+                pool.ReturnMemoryToNativeMemory();
             }
             else
             {
-                pool.ReturnToGarbageCollector();
+                pool.ReturnMemoryToGarbageCollector();
             }
 
             release.Set();

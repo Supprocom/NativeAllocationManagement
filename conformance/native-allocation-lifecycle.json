@@ -97,5 +97,104 @@
     "delayedActivation": true,
     "states": ["Unleased", "Active", "Returned", "Disposed"],
     "result": "Disposed"
+  },
+  {
+    "name": "arena-native-memory-return-with-release",
+    "owner": "arena",
+    "initialReservation": 0,
+    "returnPolicy": "ToNativeMemory",
+    "returnKind": "native",
+    "reLease": true,
+    "delayedActivation": false,
+    "states": ["Active", "Returned", "Active", "Disposed"],
+    "result": "Disposed"
+  },
+  {
+    "name": "arena-gc-memory-return-with-reservation",
+    "owner": "arena",
+    "initialReservation": 128,
+    "returnPolicy": "ToGarbageCollector",
+    "returnKind": "garbageCollector",
+    "reLease": true,
+    "delayedActivation": false,
+    "states": ["Active", "Returned", "Active", "Disposed"],
+    "result": "Disposed"
+  },
+  {
+    "name": "arena-native-lease-release",
+    "owner": "arena",
+    "initialReservation": 128,
+    "returnPolicy": "ToNativeMemory",
+    "returnKind": "releaseNative",
+    "reLease": false,
+    "delayedActivation": false,
+    "states": ["Active", "Active", "Disposed"],
+    "result": "Disposed"
+  },
+  {
+    "name": "arena-gc-lease-release",
+    "owner": "arena",
+    "initialReservation": 0,
+    "returnPolicy": "ToGarbageCollector",
+    "returnKind": "releaseGarbageCollector",
+    "reLease": false,
+    "delayedActivation": false,
+    "states": ["Active", "Active", "Disposed"],
+    "result": "Disposed"
+  },
+  {
+    "name": "arena-delayed-native-lease-release",
+    "owner": "arena",
+    "initialReservation": 256,
+    "returnPolicy": "ToNativeMemory",
+    "returnKind": "releaseNative",
+    "reLease": false,
+    "delayedActivation": true,
+    "states": ["Unleased", "Active", "Active", "Disposed"],
+    "result": "Disposed"
+  },
+  {
+    "name": "arena-delayed-gc-memory-return",
+    "owner": "arena",
+    "initialReservation": 256,
+    "returnPolicy": "ToGarbageCollector",
+    "returnKind": "garbageCollector",
+    "reLease": true,
+    "delayedActivation": true,
+    "states": ["Unleased", "Active", "Returned", "Active", "Disposed"],
+    "result": "Disposed"
+  },
+  {
+    "name": "pool-delayed-dispose-before-activation",
+    "owner": "pool",
+    "initialReservation": 8,
+    "returnPolicy": "ToNativeMemory",
+    "returnKind": "disposeBeforeActivation",
+    "reLease": false,
+    "delayedActivation": true,
+    "states": ["Unleased", "Disposed"],
+    "result": "Disposed"
+  },
+  {
+    "name": "region-delayed-dispose-before-activation",
+    "owner": "region",
+    "initialReservation": 64,
+    "returnPolicy": "ToGarbageCollector",
+    "returnKind": "disposeBeforeActivation",
+    "reLease": false,
+    "delayedActivation": true,
+    "states": ["Unleased", "Disposed"],
+    "result": "Disposed"
+  },
+  {
+    "name": "arena-delayed-dispose-before-activation",
+    "owner": "arena",
+    "initialReservation": 128,
+    "returnPolicy": "ToNativeMemory",
+    "returnKind": "disposeBeforeActivation",
+    "reLease": false,
+    "delayedActivation": true,
+    "states": ["Unleased", "Disposed"],
+    "result": "Disposed"
   }
 ]

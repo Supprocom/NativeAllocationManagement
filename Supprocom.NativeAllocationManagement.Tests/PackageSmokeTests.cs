@@ -37,15 +37,48 @@ public sealed class PackageSmokeTests
                     {
                         using NativePool<int> pool = new(doNotLeaseOnDeclaration: true);
                         pool.LeaseFromMemory();
-                        using Pooled<int> values = pool.Rent(1);
-                        values[0] = 7;
+                        {
+                            Pooled<int> values = pool.Rent(1);
+                            values[0] = 7;
+                            values.Dispose();
+                        }
+                        _ = pool.TrimRetainedMemory();
+                        _ = pool.TrimRetainedMemoryByBytes(1);
+                        _ = pool.TrimRetainedMemoryByLeaseSize(1);
 
                         using (NativeRegion region = new(doNotLeaseOnDeclaration: true))
                         {
                             region.LeaseFromMemory();
                             Local<int> local = region.Lease<int>(1);
-                            local[0] = values[0];
+                            local[0] = 7;
+                            _ = region.TrimRetainedMemory();
+                            _ = region.TrimRetainedMemoryByBytes(1);
+                            _ = region.TrimRetainedMemoryByLeaseSize<int>(1);
+                            {
+                                scoped Local<int> scopedLocal = region.LeaseScoped<int>(1);
+                                scopedLocal[0] = 11;
+                            }
+                            region.RecycleScoped();
                         }
+
+                        using NativeArena arena = new(doNotLeaseOnDeclaration: true);
+                        arena.LeaseFromMemory();
+                        {
+                            ArenaLease<string> labels = arena.Scratch<string>(1);
+                            labels[0] = "package";
+                        }
+
+                        arena.ReleaseLeasesToNativeMemory();
+                        _ = arena.TrimRetainedMemory();
+                        _ = arena.TrimRetainedMemoryByBytes(1);
+                        _ = arena.TrimRetainedMemoryByLeaseSize<int>(1);
+
+                        {
+                            scoped ArenaLease<int> scopedValues = arena.ScratchScoped<int>(1);
+                            scopedValues[0] = 9;
+                        }
+
+                        arena.RecycleScoped();
                     }
                 }
                 """);
@@ -271,7 +304,7 @@ public sealed class PackageSmokeTests
     }
 
     [Fact]
-    public async Task PackageDoesNotExposeRemovedRegionOperation()
+    public async Task PackageRegionRequiresLeaseOperation()
     {
         PackageEvidence package = await GetPackageAsync();
         WriteEvidence(package);
@@ -305,6 +338,50 @@ public sealed class PackageSmokeTests
             CommandResult build = await RunDotnetAsync($"build \"{project}\" --no-restore --nologo", consumerRoot);
             Assert.True(build.ExitCode != 0, build.Output);
             Assert.Contains("CS1061", build.Output, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            DeleteConsumerRoot(consumerRoot);
+        }
+    }
+
+    [Fact]
+    public async Task PackageRejectsTrimOnDerivedHandlesAndRemovedLifecycleSpellings()
+    {
+        PackageEvidence package = await GetPackageAsync();
+        WriteEvidence(package);
+        string consumerRoot = CreateConsumerRoot();
+        try
+        {
+            WriteConsumerProject(consumerRoot, package, excludeAnalyzer: false, suppressDiagnostics: false);
+            File.WriteAllText(
+                Path.Combine(consumerRoot, "Program.cs"),
+                """
+                using Supprocom.NativeAllocationManagement;
+
+                public static class Consumer
+                {
+                    public static void Run()
+                    {
+                        NativePool<int> pool = new();
+                        Pooled<int> value = pool.Rent(1);
+                        _ = value.TrimRetainedMemory();
+                        pool.ReturnToNativeMemory();
+                    }
+                }
+                """);
+
+            string project = Path.Combine(consumerRoot, "Consumer.csproj");
+            CommandResult restore = await RunDotnetAsync(
+                $"restore \"{project}\" --nologo --force --no-cache --packages \"{Path.Combine(consumerRoot, ".packages")}\" --source \"{package.SourceDirectory}\"",
+                consumerRoot);
+            Assert.True(restore.ExitCode == 0, restore.Output);
+
+            CommandResult build = await RunDotnetAsync($"build \"{project}\" --no-restore --nologo", consumerRoot);
+            Assert.True(build.ExitCode != 0, build.Output);
+            Assert.Contains("CS1061", build.Output, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("TrimRetainedMemory", build.Output, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("ReturnToNativeMemory", build.Output, StringComparison.OrdinalIgnoreCase);
         }
         finally
         {
@@ -391,7 +468,7 @@ public sealed class PackageSmokeTests
                     {
                         NativePool<int> pool = new();
                         Pooled<int> stale = pool.Rent(1);
-                        pool.ReturnToNativeMemory();
+                        pool.ReturnMemoryToNativeMemory();
                         _ = stale.Length;
                     }
                 }
@@ -480,7 +557,7 @@ public sealed class PackageSmokeTests
                     {
                         NativePool<int> pool = new();
                         Pooled<int> values = pool.Rent(1);
-                        pool.ReturnToGarbageCollector();
+                        pool.ReturnMemoryToGarbageCollector();
                         pool.Dispose();
                     }
                 }
@@ -517,7 +594,7 @@ public sealed class PackageSmokeTests
     }
 
     [Fact]
-    public async Task NativeReturnLiveRootIsAHardPackageAnalyzerError()
+    public async Task NativeMemoryReturnLiveRootIsAHardPackageAnalyzerError()
     {
         PackageEvidence package = await GetPackageAsync();
         WriteEvidence(package);
@@ -536,7 +613,7 @@ public sealed class PackageSmokeTests
                     {
                         NativePool<int> pool = new();
                         Pooled<int> value = pool.Rent(1);
-                        pool.ReturnToNativeMemory();
+                        pool.ReturnMemoryToNativeMemory();
                         pool.Dispose();
                     }
                 }
@@ -562,6 +639,63 @@ public sealed class PackageSmokeTests
     }
 
     [Fact]
+    public async Task ScopedCompletionWarningFollowsConsumerWarningsAsErrorsPolicy()
+    {
+        PackageEvidence package = await GetPackageAsync();
+        WriteEvidence(package);
+        string consumerRoot = CreateConsumerRoot();
+        try
+        {
+            WriteConsumerProject(consumerRoot, package, excludeAnalyzer: false, suppressDiagnostics: false);
+            File.WriteAllText(
+                Path.Combine(consumerRoot, "Consumer.cs"),
+                """
+                using Supprocom.NativeAllocationManagement;
+
+                public static class Consumer
+                {
+                    public static void Run()
+                    {
+                        using NativeArena arena = new();
+                        {
+                            scoped ArenaLease<int> values = arena.ScratchScoped<int>(1);
+                            values[0] = 1;
+                        }
+                    }
+                }
+                """);
+
+            string project = Path.Combine(consumerRoot, "Consumer.csproj");
+            CommandResult restore = await RunDotnetAsync(
+                $"restore \"{project}\" --nologo --force --no-cache --packages \"{Path.Combine(consumerRoot, ".packages")}\" --source \"{package.SourceDirectory}\"",
+                consumerRoot);
+            Assert.True(restore.ExitCode == 0, restore.Output);
+
+            CommandResult warningBuild = await RunDotnetAsync(
+                $"build \"{project}\" --no-restore --nologo",
+                consumerRoot);
+            Assert.True(warningBuild.ExitCode == 0, warningBuild.Output);
+            Assert.Contains("warning NAM1020", warningBuild.Output, StringComparison.OrdinalIgnoreCase);
+
+            WriteConsumerProject(
+                consumerRoot,
+                package,
+                excludeAnalyzer: false,
+                suppressDiagnostics: false,
+                treatWarningsAsErrors: true);
+            CommandResult errorBuild = await RunDotnetAsync(
+                $"build \"{project}\" --no-restore --nologo",
+                consumerRoot);
+            Assert.True(errorBuild.ExitCode != 0, errorBuild.Output);
+            Assert.Contains("error NAM1020", errorBuild.Output, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            DeleteConsumerRoot(consumerRoot);
+        }
+    }
+
+    [Fact]
     public async Task SuppressedAnalyzerStillGetsTheRuntimeStaleHandleGuard()
     {
         PackageEvidence package = await GetPackageAsync();
@@ -579,12 +713,12 @@ public sealed class PackageSmokeTests
                 {
                     public static int Main()
                     {
-                        NativePool<int> deferredPool = new(returnOnDispose: NativeReturn.ToNativeMemory);
+                        NativePool<int> deferredPool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
                         Pooled<int> borrowed = deferredPool.Rent(1);
                         bool callbackCompleted = false;
                         borrowed.Access(span =>
                         {
-                            deferredPool.ReturnToGarbageCollector();
+                            deferredPool.ReturnMemoryToGarbageCollector();
                             span[0] = 42;
                             callbackCompleted = span[0] == 42;
                         });
@@ -613,9 +747,9 @@ public sealed class PackageSmokeTests
                         current.Dispose();
                         deferredPool.Dispose();
 
-                        NativePool<int> pool = new(returnOnDispose: NativeReturn.ToNativeMemory);
+                        NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
                         Pooled<int> stale = pool.Rent(1);
-                        pool.ReturnToNativeMemory();
+                        pool.ReturnMemoryToNativeMemory();
                         try
                         {
                             _ = stale.Length;
@@ -627,11 +761,11 @@ public sealed class PackageSmokeTests
                             stale.Dispose();
                         }
 
-                        NativePool<int> guardedPool = new(returnOnDispose: NativeReturn.ToNativeMemory);
+                        NativePool<int> guardedPool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
                         Pooled<int> guarded = guardedPool.Rent(1);
                         try
                         {
-                            guarded.Access(_ => guardedPool.ReturnToNativeMemory());
+                            guarded.Access(_ => guardedPool.ReturnMemoryToNativeMemory());
                             return 11;
                         }
                         catch (NativeAllocationInUseException)
@@ -728,7 +862,7 @@ public sealed class PackageSmokeTests
             }
 
             string repositoryRoot = FindRepositoryRoot();
-            string version = "0.1.2-smoke." + Guid.NewGuid().ToString("N")[..12];
+            string version = "0.1.3-smoke." + Guid.NewGuid().ToString("N")[..12];
             string packageDirectory = Path.Combine(Path.GetTempPath(), "nam-package-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(packageDirectory);
             string packagePath = Path.Combine(packageDirectory, $"Supprocom.NativeAllocationManagement.{version}.nupkg");

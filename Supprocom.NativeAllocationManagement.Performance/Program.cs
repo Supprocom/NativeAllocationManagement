@@ -18,7 +18,7 @@ internal static class Program
     private const int MethodsPerProject = 12;
     private const int WorkloadIterations = 2_000;
     private const int WorkloadElements = 32_000;
-    private static readonly string[] WorkloadNames = ["managed-array", "array-pool", "native-pool", "native-region"];
+    private static readonly string[] WorkloadNames = ["managed-array", "array-pool", "native-pool", "native-region", "native-arena"];
     private static int _sink;
 
     private static async Task<int> Main(string[] args)
@@ -51,12 +51,12 @@ internal static class Program
 
         Console.WriteLine("## Isolated workload measurements");
         Console.WriteLine();
-        Console.WriteLine("| workload | elapsedMs | throughputPerSecond | managedAllocatedBytes | gen0 | gen1 | gen2 | lohBytesBeforeForcedGc | lohBytesAfterForcedGc | nativeBytesBefore | peakNativeBytes | finalNativeBytes | directBoundaryNs | accessBoundaryNs | readBoundaryNs | callbackBodyNs | boundaryMinusBodyNs | peakResidentBytes |");
-        Console.WriteLine("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
+        Console.WriteLine("| workload | elapsedMs | throughputPerSecond | managedAllocatedBytes | gen0 | gen1 | gen2 | lohSizeBeforeForcedGc | lohSizeAfterForcedGc | nativeBytesBefore | peakNativeBytes | peakRetainedNativeBytes | peakRetiredNativeBytes | trimmedNativeBytes | finalRetainedNativeBytes | finalRetiredNativeBytes | finalNativeBytes | directBoundaryNs | accessBoundaryNs | readBoundaryNs | callbackBodyNs | boundaryMinusBodyNs | peakResidentBytes |");
+        Console.WriteLine("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
         foreach (string workloadName in WorkloadNames)
         {
             WorkloadEvidence workload = await MeasureIsolatedWorkloadAsync(workloadName);
-            Console.WriteLine($"| {workload.Name} | {workload.ElapsedMs:F2} | {workload.ThroughputPerSecond:F2} | {workload.ManagedAllocatedBytes} | {workload.Gen0Collections} | {workload.Gen1Collections} | {workload.Gen2Collections} | {workload.LohBytesBeforeForcedGc} | {workload.LohBytesAfterForcedGc} | {workload.NativeBytesBefore} | {workload.PeakNativeBytes} | {workload.FinalNativeBytes} | {workload.DirectBoundaryNanoseconds:F2} | {workload.AccessBoundaryNanoseconds:F2} | {workload.ReadBoundaryNanoseconds:F2} | {workload.CallbackBodyNanoseconds:F2} | {workload.BoundaryMinusBodyNanoseconds:F2} | {workload.PeakResidentBytes} |");
+            Console.WriteLine($"| {workload.Name} | {workload.ElapsedMs:F2} | {workload.ThroughputPerSecond:F2} | {workload.ManagedAllocatedBytes} | {workload.Gen0Collections} | {workload.Gen1Collections} | {workload.Gen2Collections} | {workload.LohSizeBeforeForcedGc} | {workload.LohSizeAfterForcedGc} | {workload.NativeBytesBefore} | {workload.PeakNativeBytes} | {workload.PeakRetainedNativeBytes} | {workload.PeakRetiredNativeBytes} | {workload.TrimmedNativeBytes} | {workload.FinalRetainedNativeBytes} | {workload.FinalRetiredNativeBytes} | {workload.FinalNativeBytes} | {workload.DirectBoundaryNanoseconds:F2} | {workload.AccessBoundaryNanoseconds:F2} | {workload.ReadBoundaryNanoseconds:F2} | {workload.CallbackBodyNanoseconds:F2} | {workload.BoundaryMinusBodyNanoseconds:F2} | {workload.PeakResidentBytes} |");
         }
 
         GC.KeepAlive(_sink);
@@ -336,6 +336,7 @@ internal static class Program
             "array-pool" => RunArrayPool,
             "native-pool" => RunNativePool,
             "native-region" => RunNativeRegion,
+            "native-arena" => RunNativeArena,
             _ => throw new ArgumentOutOfRangeException(nameof(name), name, "Unknown workload.")
         };
 
@@ -345,7 +346,7 @@ internal static class Program
         int gen0Before = GC.CollectionCount(0);
         int gen1Before = GC.CollectionCount(1);
         int gen2Before = GC.CollectionCount(2);
-        long lohBefore = GetLohBytesAfterForcedGc();
+        long lohBefore = GetLohSizeAfterForcedGc();
         NativeMemoryTestMetrics nativeBefore = NativeMemoryTestHooks.Snapshot();
         long peakResident = Process.GetCurrentProcess().WorkingSet64;
         CallbackMeasurement callback = new(peakResident, nativeBefore.OutstandingNativeBytes);
@@ -357,7 +358,7 @@ internal static class Program
         GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
         long managedAllocated = GC.GetTotalAllocatedBytes(precise: true) - managedBefore;
         NativeMemoryTestMetrics nativeAfter = NativeMemoryTestHooks.Snapshot();
-        long lohAfter = GetLohBytesAfterForcedGc();
+        long lohAfter = GetLohSizeAfterForcedGc();
         return new WorkloadEvidence(
             name,
             clock.Elapsed.TotalMilliseconds,
@@ -370,6 +371,11 @@ internal static class Program
             lohAfter,
             nativeBefore.OutstandingNativeBytes,
             Math.Max(nativeAfter.OutstandingNativeBytes, callback.PeakNativeBytes),
+            callback.PeakRetainedNativeBytes,
+            callback.PeakRetiredNativeBytes,
+            callback.TrimmedNativeBytes,
+            nativeAfter.RetainedNativeBytes,
+            nativeAfter.RetiredNativeBytes,
             nativeAfter.OutstandingNativeBytes,
             callback.DirectBoundaryNanoseconds,
             callback.AccessBoundaryNanoseconds,
@@ -407,7 +413,7 @@ internal static class Program
 
     private static void RunNativePool(CallbackMeasurement callback)
     {
-        NativePool<int> pool = new(WorkloadElements, NativeReturn.ToNativeMemory);
+        NativePool<int> pool = new(WorkloadElements, NativeMemoryReturn.ToNativeMemory);
         try
         {
             for (int iteration = 0; iteration < WorkloadIterations; iteration++)
@@ -427,14 +433,51 @@ internal static class Program
     {
         for (int iteration = 0; iteration < WorkloadIterations; iteration++)
         {
-            NativeRegion region = new((nuint)(WorkloadElements * sizeof(int)), NativeReturn.ToNativeMemory);
-            Local<int> values = region.Lease<int>(WorkloadElements);
-            callback.Run(values);
-            region.Dispose();
+            using (NativeRegion region = new((nuint)(WorkloadElements * sizeof(int)), NativeMemoryReturn.ToNativeMemory))
+            {
+                Local<int> values = region.Lease<int>(WorkloadElements);
+                callback.Run(values);
+            }
         }
     }
 
-    private static long GetLohBytesAfterForcedGc()
+    private static void RunNativeArena(CallbackMeasurement callback)
+    {
+        NativeArena arena = new(
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        try
+        {
+            ArenaLease<byte> firstSpike = arena.Scratch<byte>(3 * 1024 * 1024);
+            _ = firstSpike.Length;
+            callback.SampleResources();
+            arena.ReleaseLeasesToNativeMemory();
+            nuint trimmedByBytes = arena.TrimRetainedMemoryByBytes(1);
+
+            ArenaLease<byte> secondSpike = arena.Scratch<byte>(5 * 1024 * 1024);
+            _ = secondSpike.Length;
+            callback.SampleResources();
+            arena.ReleaseLeasesToNativeMemory();
+            nuint trimmedByLeaseShape = arena.TrimRetainedMemoryByLeaseSize<byte>(1);
+            callback.RecordTrimmedBytes(checked(trimmedByBytes + trimmedByLeaseShape));
+
+            for (int iteration = 0; iteration < WorkloadIterations; iteration++)
+            {
+                ArenaLease<int> coordinates = arena.Scratch<int>(WorkloadElements);
+                ArenaLease<long> voxels = arena.Scratch<long>(WorkloadElements / 2);
+                ArenaLease<byte> upload = arena.Scratch<byte>(WorkloadElements * 2);
+                callback.Run(coordinates);
+                callback.Run(voxels);
+                callback.Run(upload);
+                arena.ReleaseLeasesToNativeMemory();
+            }
+        }
+        finally
+        {
+            arena.Dispose();
+        }
+    }
+
+    private static long GetLohSizeAfterForcedGc()
     {
         ReadOnlySpan<GCGenerationInfo> generations = GC.GetGCMemoryInfo().GenerationInfo;
         return generations.Length > 3 ? generations[3].SizeAfterBytes : -1;
@@ -458,6 +501,9 @@ internal static class Program
         internal long AccessCount { get; private set; }
         internal long ReadCount { get; private set; }
         internal long PeakNativeBytes { get; private set; }
+        internal long PeakRetainedNativeBytes { get; private set; }
+        internal long PeakRetiredNativeBytes { get; private set; }
+        internal long TrimmedNativeBytes { get; private set; }
         internal long PeakResidentBytes { get; private set; }
 
         internal double DirectBoundaryNanoseconds => Nanoseconds(DirectBoundaryTicks, DirectCount);
@@ -465,6 +511,13 @@ internal static class Program
         internal double ReadBoundaryNanoseconds => Nanoseconds(ReadBoundaryTicks, ReadCount);
         internal double BodyNanoseconds => Nanoseconds(BodyElapsedTicks, Count);
         internal double BoundaryMinusBodyNanoseconds => Nanoseconds(BoundaryElapsedTicks, Count) - BodyNanoseconds;
+
+        internal void RecordTrimmedBytes(nuint bytes)
+        {
+            TrimmedNativeBytes = checked(TrimmedNativeBytes + (long)bytes);
+        }
+
+        internal void SampleResources() => NoteCurrentResources();
 
         internal void Run(Span<int> values)
         {
@@ -478,12 +531,12 @@ internal static class Program
             long start = Stopwatch.GetTimestamp();
             if ((Count & 1) == 0)
             {
-                values.Access(RunBody);
+                values.Access(view => RunNativeBody(view));
                 CompleteBoundary(start, operation: 1);
             }
             else
             {
-                _ = values.Read<int>(RunReadBody);
+                _ = values.Read<int>(view => RunNativeReadBody(view));
                 CompleteBoundary(start, operation: 2);
             }
         }
@@ -493,12 +546,27 @@ internal static class Program
             long start = Stopwatch.GetTimestamp();
             if ((Count & 1) == 0)
             {
-                values.Access(RunBody);
+                values.Access(view => RunNativeBody(view));
                 CompleteBoundary(start, operation: 1);
             }
             else
             {
-                _ = values.Read<int>(RunReadBody);
+                _ = values.Read<int>(view => RunNativeReadBody(view));
+                CompleteBoundary(start, operation: 2);
+            }
+        }
+
+        internal void Run<T>(ArenaLease<T> values)
+        {
+            long start = Stopwatch.GetTimestamp();
+            if ((Count & 1) == 0)
+            {
+                values.Access(view => RunNativeBody(view));
+                CompleteBoundary(start, operation: 1);
+            }
+            else
+            {
+                _ = values.Read<int>(view => RunNativeReadBody(view));
                 CompleteBoundary(start, operation: 2);
             }
         }
@@ -519,6 +587,22 @@ internal static class Program
         {
             long start = Stopwatch.GetTimestamp();
             int value = values.Length == 0 ? 0 : values[0];
+            Volatile.Write(ref _sink, value);
+            BodyElapsedTicks += Stopwatch.GetTimestamp() - start;
+            return value;
+        }
+
+        private void RunNativeBody<T>(NativeLeaseView<T> values)
+        {
+            long start = Stopwatch.GetTimestamp();
+            Volatile.Write(ref _sink, values.Length);
+            BodyElapsedTicks += Stopwatch.GetTimestamp() - start;
+        }
+
+        private int RunNativeReadBody<T>(NativeLeaseView<T> values)
+        {
+            long start = Stopwatch.GetTimestamp();
+            int value = values.Length;
             Volatile.Write(ref _sink, value);
             BodyElapsedTicks += Stopwatch.GetTimestamp() - start;
             return value;
@@ -552,6 +636,8 @@ internal static class Program
         {
             NativeMemoryTestMetrics metrics = NativeMemoryTestHooks.Snapshot();
             PeakNativeBytes = Math.Max(PeakNativeBytes, metrics.OutstandingNativeBytes);
+            PeakRetainedNativeBytes = Math.Max(PeakRetainedNativeBytes, metrics.RetainedNativeBytes);
+            PeakRetiredNativeBytes = Math.Max(PeakRetiredNativeBytes, metrics.RetiredNativeBytes);
             if (Count == 1 || Count % 128 == 0)
             {
                 PeakResidentBytes = Math.Max(PeakResidentBytes, Process.GetCurrentProcess().WorkingSet64);
@@ -647,10 +733,15 @@ internal static class Program
         int Gen0Collections,
         int Gen1Collections,
         int Gen2Collections,
-        long LohBytesBeforeForcedGc,
-        long LohBytesAfterForcedGc,
+        long LohSizeBeforeForcedGc,
+        long LohSizeAfterForcedGc,
         long NativeBytesBefore,
         long PeakNativeBytes,
+        long PeakRetainedNativeBytes,
+        long PeakRetiredNativeBytes,
+        long TrimmedNativeBytes,
+        long FinalRetainedNativeBytes,
+        long FinalRetiredNativeBytes,
         long FinalNativeBytes,
         double DirectBoundaryNanoseconds,
         double AccessBoundaryNanoseconds,
