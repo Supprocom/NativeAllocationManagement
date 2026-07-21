@@ -14,7 +14,17 @@ public sealed class NativePool<T> : IDisposable
 
     internal int QuarantinedSegmentCountForTest => _kernel.QuarantinedSegmentCountForTest();
 
+    internal int QuarantinedGenerationCountForTest => _kernel.QuarantinedGenerationCountForTest();
+
+    internal long CurrentScopeEpochForTest => _kernel.CurrentScopeEpochForTest();
+
+    internal long GenerationCounterForTest => _kernel.GenerationCounterForTest();
+
     internal long[] CurrentSegmentOrdinalsForTest => _kernel.CurrentSegmentOrdinalsForTest();
+
+    internal void SetScopeEpochForTest(long value) => _kernel.SetScopeEpochForTest(value);
+
+    internal void SetGenerationCounterForTest(long value) => _kernel.SetGenerationCounterForTest(value);
 
     /// <summary>Creates a typed pool, active immediately unless declaration leasing is disabled.</summary>
     /// <param name="initialCapacity">Optional number of elements reserved immediately or on activation.</param>

@@ -126,6 +126,145 @@ public sealed class MechanismRegressionTests
     }
 
     [Fact]
+    public void RetiredSnapshotPreparationFailureLeavesTheActiveGenerationUntouched()
+    {
+        NativeMemoryTestHooks.Reset();
+        NativePool<int> pool = new(initialCapacity: 1, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        try
+        {
+            Pooled<int> lease = pool.Rent(1);
+            lease[0] = 57;
+            NativeMemoryTestHooks.FailNextRetiredSnapshotPreparation();
+
+            Assert.Throws<InvalidOperationException>(() => pool.ReturnMemoryToGarbageCollector());
+            Assert.Equal(NativeOwnerLifecycle.Active, pool.CurrentLifecycle);
+            Assert.Equal(57, lease[0]);
+            Assert.Equal(1, pool.CurrentAllocationRecordCountForTest);
+
+            pool.ReturnMemoryToNativeMemory();
+            Assert.Equal(NativeOwnerLifecycle.Returned, pool.CurrentLifecycle);
+        }
+        finally
+        {
+            NativeMemoryTestHooks.Reset();
+            pool.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task QuarantineReservationFailureLeavesTheActiveGenerationUntouched()
+    {
+        NativeMemoryTestHooks.Reset();
+        NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        ManualResetEventSlim entered = new();
+        ManualResetEventSlim allowCallback = new();
+        NativeMemoryTestHooks.SetOperationEntered(operation =>
+        {
+            if (operation == nameof(Pooled<int>.Access))
+            {
+                entered.Set();
+            }
+        });
+
+        try
+        {
+            Task<int> worker = Task.Run(() =>
+            {
+                Pooled<int> lease = pool.Rent(1);
+                lease[0] = 91;
+                lease.Access(_ => allowCallback.Wait(TimeSpan.FromSeconds(10)));
+                return lease[0];
+            });
+
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(10)));
+            NativeMemoryTestHooks.FailNextQuarantineReservation();
+            Assert.Throws<InvalidOperationException>(() => pool.ReleaseLeasesToGarbageCollector());
+            Assert.Equal(NativeOwnerLifecycle.Active, pool.CurrentLifecycle);
+
+            allowCallback.Set();
+            Assert.Equal(91, await worker);
+            Assert.Equal(1, pool.CurrentAllocationRecordCountForTest);
+            pool.ReleaseLeasesToGarbageCollector();
+            Assert.Equal(NativeOwnerLifecycle.Active, pool.CurrentLifecycle);
+        }
+        finally
+        {
+            allowCallback.Set();
+            NativeMemoryTestHooks.Reset();
+            pool.Dispose();
+        }
+    }
+
+    [Fact]
+    public void NativeReferenceSlotOffsetsValidateInNuintBeforeMutation()
+    {
+        int slotCount = checked(int.MaxValue / IntPtr.Size + 2);
+        int lastIndex = checked(slotCount - 1);
+        nuint expected = checked((nuint)lastIndex * (nuint)IntPtr.Size);
+        Assert.Equal(expected, NativeReferenceRootTable.ComputeSlotOffsetForTest(0, lastIndex, slotCount));
+
+        nuint overflowingOffset = checked(nuint.MaxValue - (nuint)IntPtr.Size + 1);
+        Assert.Throws<OverflowException>(() =>
+            NativeReferenceRootTable.ComputeSlotOffsetForTest(overflowingOffset, 0, 2));
+    }
+
+    [Fact]
+    public void ScopeEpochOverflowIsPrecomputedBeforeScopedClear()
+    {
+        NativeMemoryTestHooks.Reset();
+        NativePool<string> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        try
+        {
+            scoped Pooled<string> lease = pool.LeaseScoped(1);
+            lease[0] = "before epoch overflow";
+            pool.SetScopeEpochForTest(long.MaxValue);
+
+            Assert.Throws<OverflowException>(() => pool.RecycleScoped());
+            Assert.Equal(NativeOwnerLifecycle.Active, pool.CurrentLifecycle);
+            Assert.Equal(long.MaxValue, pool.CurrentScopeEpochForTest);
+            Assert.Equal(1, pool.CurrentReferenceRootCountForTest);
+            Assert.Equal("before epoch overflow", lease[0]);
+
+            pool.SetScopeEpochForTest(0);
+            pool.RecycleScoped();
+            Assert.Equal(0, pool.CurrentReferenceRootCountForTest);
+        }
+        finally
+        {
+            NativeMemoryTestHooks.Reset();
+            pool.Dispose();
+        }
+    }
+
+    [Fact]
+    public void DisposeGenerationOverflowIsPrecomputedBeforeClear()
+    {
+        NativeMemoryTestHooks.Reset();
+        NativePool<string> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        try
+        {
+            Pooled<string> lease = pool.Rent(1);
+            lease[0] = "before generation overflow";
+            pool.SetGenerationCounterForTest(long.MaxValue);
+
+            Assert.Throws<OverflowException>(() => pool.Dispose());
+            Assert.Equal(NativeOwnerLifecycle.Active, pool.CurrentLifecycle);
+            Assert.Equal(long.MaxValue, pool.GenerationCounterForTest);
+            Assert.Equal(1, pool.CurrentReferenceRootCountForTest);
+            Assert.Equal("before generation overflow", lease[0]);
+
+            pool.SetGenerationCounterForTest(0);
+            pool.Dispose();
+            Assert.Equal(NativeOwnerLifecycle.Disposed, pool.CurrentLifecycle);
+        }
+        finally
+        {
+            NativeMemoryTestHooks.Reset();
+            pool.Dispose();
+        }
+    }
+
+    [Fact]
     public void RolloverCommitBoundaryFailuresPreserveTheActiveGenerationAndNativeValues()
     {
         NativeMemoryTestHooks.Reset();
@@ -421,6 +560,7 @@ public sealed class MechanismRegressionTests
     public async Task RetiredDrainClearFailureQuarantinesStorageInsteadOfReusingIt()
     {
         NativeMemoryTestHooks.Reset();
+        Assert.Null(typeof(NativeOwnerKernel).Assembly.GetType("Supprocom.NativeAllocationManagement.NativeQuarantinedSegment"));
         NativePool<int> pool = new(initialCapacity: 1, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         ManualResetEventSlim entered = new();
         ManualResetEventSlim allowCallback = new();
@@ -456,6 +596,7 @@ public sealed class MechanismRegressionTests
             Assert.Equal("clear", failure.Boundary);
             Assert.Equal(1, failure.SegmentOrdinal);
             Assert.Equal(1, pool.QuarantinedSegmentCountForTest);
+            Assert.Equal(1, pool.QuarantinedGenerationCountForTest);
             Assert.Empty(pool.CurrentSegmentOrdinalsForTest);
             long freeBeforeFreshRent = NativeMemoryTestHooks.Snapshot().FreeCount;
 
@@ -464,6 +605,54 @@ public sealed class MechanismRegressionTests
             fresh[0] = 9;
             fresh.Dispose();
             Assert.Equal(freeBeforeFreshRent, NativeMemoryTestHooks.Snapshot().FreeCount);
+        }
+        finally
+        {
+            allowCallback.Set();
+            NativeMemoryTestHooks.Reset();
+            pool.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task RetiredDrainQuarantinesTheWholeGenerationWithMultipleBusySegments()
+    {
+        NativeMemoryTestHooks.Reset();
+        NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        ManualResetEventSlim bothEntered = new();
+        ManualResetEventSlim allowCallback = new();
+        int enteredCount = 0;
+        NativeMemoryTestHooks.SetOperationEntered(operation =>
+        {
+            if (operation == nameof(Pooled<int>.Access) && Interlocked.Increment(ref enteredCount) == 2)
+            {
+                bothEntered.Set();
+            }
+        });
+
+        try
+        {
+            Task<Exception?> firstWorker = Task.Run(() =>
+                HoldBusyLease(pool, 1, 12, allowCallback));
+            Task<Exception?> secondWorker = Task.Run(() =>
+                HoldBusyLease(pool, 2, 34, allowCallback));
+
+            Assert.True(bothEntered.Wait(TimeSpan.FromSeconds(10)));
+            pool.ReleaseLeasesToGarbageCollector();
+            NativeMemoryTestHooks.FailAfterCommitBoundary(1);
+            allowCallback.Set();
+            Exception? firstFailure = await firstWorker;
+            Exception? secondFailure = await secondWorker;
+            NativeAllocationQuarantinedException failure =
+                Assert.IsType<NativeAllocationQuarantinedException>(firstFailure ?? secondFailure);
+            Assert.Equal("clear", failure.Boundary);
+            Assert.Equal(2, pool.QuarantinedSegmentCountForTest);
+            Assert.Equal(1, pool.QuarantinedGenerationCountForTest);
+            Assert.Empty(pool.CurrentSegmentOrdinalsForTest);
+
+            Pooled<int> fresh = pool.Rent(1);
+            Assert.Equal([3L], pool.CurrentSegmentOrdinalsForTest);
+            fresh.Dispose();
         }
         finally
         {
@@ -512,6 +701,7 @@ public sealed class MechanismRegressionTests
             Assert.Equal("slab transfer", failure.Boundary);
             Assert.Equal(1, failure.SegmentOrdinal);
             Assert.Equal(1, pool.QuarantinedSegmentCountForTest);
+            Assert.Equal(1, pool.QuarantinedGenerationCountForTest);
             Assert.Empty(pool.CurrentSegmentOrdinalsForTest);
 
             Pooled<int> fresh = pool.Rent(1);
@@ -664,6 +854,25 @@ public sealed class MechanismRegressionTests
         WeakReference weakOwner = new(owner!);
         owner = null;
         return weakOwner;
+    }
+
+    private static Exception? HoldBusyLease(
+        NativePool<int> pool,
+        int length,
+        int value,
+        ManualResetEventSlim allowCallback)
+    {
+        try
+        {
+            Pooled<int> lease = pool.Rent(length);
+            lease[0] = value;
+            lease.Access(_ => allowCallback.Wait(TimeSpan.FromSeconds(10)));
+            return null;
+        }
+        catch (Exception exception)
+        {
+            return exception;
+        }
     }
 
     private readonly record struct ReferenceCell(string? Text, int Number);

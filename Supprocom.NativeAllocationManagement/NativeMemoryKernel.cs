@@ -72,6 +72,8 @@ internal static class NativeMemoryTestHooks
     private static int _commitBoundary;
     private static int _forcedPostCommitBoundary;
     private static int _postCommitBoundary;
+    private static int _forcedRetiredSnapshotPreparation;
+    private static int _forcedQuarantineReservation;
     private static Action<string>? _operationEntered;
     private static Action<string>? _beforeOperationEntry;
     private static Action<string, NativeOwnerKernel>? _beforeOperationEntryWithKernel;
@@ -95,6 +97,8 @@ internal static class NativeMemoryTestHooks
         Interlocked.Exchange(ref _commitBoundary, 0);
         Interlocked.Exchange(ref _forcedPostCommitBoundary, 0);
         Interlocked.Exchange(ref _postCommitBoundary, 0);
+        Interlocked.Exchange(ref _forcedRetiredSnapshotPreparation, 0);
+        Interlocked.Exchange(ref _forcedQuarantineReservation, 0);
         Volatile.Write(ref _operationEntered, null);
         Volatile.Write(ref _beforeOperationEntry, null);
         Volatile.Write(ref _beforeOperationEntryWithKernel, null);
@@ -152,6 +156,35 @@ internal static class NativeMemoryTestHooks
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(boundary);
         Volatile.Write(ref _forcedPostCommitBoundary, boundary);
+    }
+
+    internal static void FailNextRetiredSnapshotPreparation() =>
+        Interlocked.Increment(ref _forcedRetiredSnapshotPreparation);
+
+    internal static bool ConsumeRetiredSnapshotPreparationFailure() =>
+        ConsumeCounter(ref _forcedRetiredSnapshotPreparation);
+
+    internal static void FailNextQuarantineReservation() =>
+        Interlocked.Increment(ref _forcedQuarantineReservation);
+
+    internal static bool ConsumeQuarantineReservationFailure() =>
+        ConsumeCounter(ref _forcedQuarantineReservation);
+
+    private static bool ConsumeCounter(ref int counter)
+    {
+        while (true)
+        {
+            int current = Volatile.Read(ref counter);
+            if (current == 0)
+            {
+                return false;
+            }
+
+            if (Interlocked.CompareExchange(ref counter, current - 1, current) == current)
+            {
+                return true;
+            }
+        }
     }
 
     internal static void BeginCommitSequence() => Volatile.Write(ref _commitBoundary, 0);
@@ -485,14 +518,56 @@ internal sealed class NativeReferenceRootTable
     internal void ClearRange(NativeSegment segment, nuint offsetBytes, int slotCount)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(slotCount);
+        ValidateSlotRange(offsetBytes, slotCount);
         lock (_gate)
         {
             _availableIds.EnsureCapacity(checked(_availableIds.Count + slotCount));
             for (int index = 0; index < slotCount; index++)
             {
-                ClearLocked(segment, checked(offsetBytes + (nuint)(index * IntPtr.Size)));
+                ClearLocked(segment, ComputeSlotOffset(offsetBytes, index, slotCount));
             }
         }
+    }
+
+    internal void ClearRangeReserved(NativeSegment segment, nuint offsetBytes, int slotCount)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(slotCount);
+        ValidateSlotRange(offsetBytes, slotCount);
+        lock (_gate)
+        {
+            for (int index = 0; index < slotCount; index++)
+            {
+                ClearLocked(segment, ComputeSlotOffset(offsetBytes, index, slotCount));
+            }
+        }
+    }
+
+    internal static nuint ComputeSlotOffsetForTest(nuint offsetBytes, int index, int slotCount) =>
+        ComputeSlotOffset(offsetBytes, index, slotCount);
+
+    private static void ValidateSlotRange(nuint offsetBytes, int slotCount)
+    {
+        if (slotCount == 0)
+        {
+            return;
+        }
+
+        _ = ComputeSlotOffset(offsetBytes, checked(slotCount - 1), slotCount);
+    }
+
+    internal static nuint ComputeSlotOffset(nuint offsetBytes, int index, int slotCount)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(index);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(slotCount);
+        if (index >= slotCount)
+        {
+            throw new ArgumentOutOfRangeException(nameof(index));
+        }
+
+        nuint stride = (nuint)IntPtr.Size;
+        nuint totalBytes = checked((nuint)slotCount * stride);
+        _ = checked(offsetBytes + totalBytes - stride);
+        return checked(offsetBytes + checked((nuint)index * stride));
     }
 
     private void ClearLocked(NativeSegment segment, nuint offsetBytes)
@@ -609,7 +684,10 @@ internal sealed class NativeAllocation
         {
             return ReferenceRoots.Get<T>(
                 Segment ?? throw new InvalidOperationException("A reference allocation has no native segment."),
-                checked(OffsetBytes + (nuint)(index * IntPtr.Size)));
+                NativeReferenceRootTable.ComputeSlotOffset(
+                    OffsetBytes,
+                    index,
+                    checked((int)(StorageBytes / (nuint)IntPtr.Size))));
         }
 
         if (Length == 0 || Segment is null)
@@ -630,7 +708,10 @@ internal sealed class NativeAllocation
         {
             ReferenceRoots.Set(
                 Segment ?? throw new InvalidOperationException("A reference allocation has no native segment."),
-                checked(OffsetBytes + (nuint)(index * IntPtr.Size)),
+                NativeReferenceRootTable.ComputeSlotOffset(
+                    OffsetBytes,
+                    index,
+                    checked((int)(StorageBytes / (nuint)IntPtr.Size))),
                 value);
             return;
         }
@@ -647,14 +728,19 @@ internal sealed class NativeAllocation
         }
     }
 
-    internal void ClearValues()
+    internal void ClearValues(bool reservedRootCapacity = false)
     {
         if (ReferenceRoots is not null && Segment is not null && StorageBytes != 0)
         {
-            ReferenceRoots.ClearRange(
-                Segment,
-                OffsetBytes,
-                checked((int)(StorageBytes / (nuint)IntPtr.Size)));
+            int slotCount = checked((int)(StorageBytes / (nuint)IntPtr.Size));
+            if (reservedRootCapacity)
+            {
+                ReferenceRoots.ClearRangeReserved(Segment, OffsetBytes, slotCount);
+            }
+            else
+            {
+                ReferenceRoots.ClearRange(Segment, OffsetBytes, slotCount);
+            }
         }
 
         if (StorageBytes == 0 || Segment is null)
@@ -847,6 +933,16 @@ internal sealed class NativeGeneration
 
     internal bool MemoryDetached { get; set; }
 
+    // These arrays are prepared before the generation can become retired. Retired
+    // cleanup must never allocate a snapshot while it is draining or quarantining.
+    internal NativeSlab[] RetiredSlabs { get; set; } = [];
+
+    internal NativeBumpSegment[] RetiredBumps { get; set; } = [];
+
+    internal bool IsQuarantined { get; set; }
+
+    internal int RetiredSegmentCount => checked(RetiredSlabs.Length + RetiredBumps.Length);
+
     internal void AddSlabOrdered(NativeSlab slab)
     {
         int index = 0;
@@ -890,37 +986,6 @@ internal sealed class NativeGeneration
         BumpSegments.Insert(index, segment);
         return index;
     }
-}
-
-internal sealed class NativeQuarantinedSegment
-{
-    internal NativeQuarantinedSegment(
-        NativeSegment segment,
-        string ownerKind,
-        long generation,
-        long segmentOrdinal,
-        string operation,
-        string boundary)
-    {
-        Segment = segment;
-        OwnerKind = ownerKind;
-        Generation = generation;
-        SegmentOrdinal = segmentOrdinal;
-        Operation = operation;
-        Boundary = boundary;
-    }
-
-    internal NativeSegment Segment { get; }
-
-    internal string OwnerKind { get; }
-
-    internal long Generation { get; }
-
-    internal long SegmentOrdinal { get; }
-
-    internal string Operation { get; }
-
-    internal string Boundary { get; }
 }
 
 internal ref struct NativeOperationToken
@@ -983,7 +1048,7 @@ internal sealed class NativeOwnerKernel
     private NativeGeneration? _current;
     private NativeOwnerLifecycle _lifecycle;
     private readonly List<NativeGeneration> _retiredGenerations = [];
-    private readonly List<NativeQuarantinedSegment> _quarantinedSegments = [];
+    private readonly List<NativeGeneration> _quarantinedGenerations = [];
 
     internal NativeOwnerLifecycle Lifecycle
     {
@@ -1027,7 +1092,54 @@ internal sealed class NativeOwnerKernel
     {
         lock (_gate)
         {
-            return _quarantinedSegments.Count;
+            int count = 0;
+            foreach (NativeGeneration generation in _quarantinedGenerations)
+            {
+                count = checked(count + generation.RetiredSegmentCount);
+            }
+
+            return count;
+        }
+    }
+
+    internal int QuarantinedGenerationCountForTest()
+    {
+        lock (_gate)
+        {
+            return _quarantinedGenerations.Count;
+        }
+    }
+
+    internal long CurrentScopeEpochForTest()
+    {
+        lock (_gate)
+        {
+            return _current?.ScopeEpoch ?? 0;
+        }
+    }
+
+    internal long GenerationCounterForTest()
+    {
+        lock (_gate)
+        {
+            return _generation;
+        }
+    }
+
+    internal void SetScopeEpochForTest(long value)
+    {
+        lock (_gate)
+        {
+            NativeGeneration generation = EnsureActiveLocked("SetScopeEpochForTest");
+            generation.ScopeEpoch = value;
+        }
+    }
+
+    internal void SetGenerationCounterForTest(long value)
+    {
+        lock (_gate)
+        {
+            _generation = value;
         }
     }
 
@@ -1492,6 +1604,7 @@ internal sealed class NativeOwnerKernel
                 throw CreateInUseException("RecycleScoped", generation.Number, 0, generation.ActiveOperations, "A scoped allocation is still entered by a native operation.");
             }
 
+            long nextScopeEpoch = checked(generation.ScopeEpoch + 1);
             EnsureNoInjectedClearFailureLocked("RecycleScoped");
             PrepareGenerationClearLocked(
                 generation,
@@ -1500,9 +1613,9 @@ internal sealed class NativeOwnerKernel
             PreflightCommitBoundaries(
                 "RecycleScoped",
                 generation.ScopedPending.Count,
-                slabTransferCount: 0,
-                bumpTransferCount: 0);
-            foreach (NativeAllocation allocation in generation.ScopedPending.ToArray())
+                 slabTransferCount: 0,
+                 bumpTransferCount: 0);
+            foreach (NativeAllocation allocation in generation.ScopedPending)
             {
                 if (allocation.Lifecycle != NativeAllocationLifecycle.Active)
                 {
@@ -1537,7 +1650,7 @@ internal sealed class NativeOwnerKernel
 
             generation.ScopedPending.Clear();
             generation.ScopedBaseline = null;
-            generation.ScopeEpoch = checked(generation.ScopeEpoch + 1);
+            generation.ScopeEpoch = nextScopeEpoch;
             ResetBumpTraversal(generation);
         }
     }
@@ -1613,7 +1726,7 @@ internal sealed class NativeOwnerKernel
 
             if (_lifecycle == NativeOwnerLifecycle.Unleased)
             {
-                ReleaseQuarantinedSegmentsLocked();
+                ReleaseQuarantinedGenerationsLocked();
                 _lifecycle = NativeOwnerLifecycle.Disposed;
                 GC.SuppressFinalize(this);
                 return;
@@ -1621,7 +1734,7 @@ internal sealed class NativeOwnerKernel
 
             if (_lifecycle == NativeOwnerLifecycle.Returned)
             {
-                ReleaseQuarantinedSegmentsLocked();
+                ReleaseQuarantinedGenerationsLocked();
                 _lifecycle = NativeOwnerLifecycle.Disposed;
                 GC.SuppressFinalize(this);
                 return;
@@ -1633,13 +1746,14 @@ internal sealed class NativeOwnerKernel
                 throw CreateInUseException("Dispose", generation.Number, 0, generation.ActiveOperations, "No generation was invalidated or freed.");
             }
 
+            long nextGenerationNumber = checked(_generation + 1);
             EnsureNoInjectedClearFailureLocked("Dispose");
             PrepareGenerationClearLocked(generation, skipActiveOperations: false);
             ClearGenerationAllocationsLocked(generation, skipActiveOperations: false);
             _lifecycle = NativeOwnerLifecycle.Returning;
             InvalidateGenerationLocked(generation);
             _current = null;
-            _generation = checked(_generation + 1);
+            _generation = nextGenerationNumber;
             if (_returnMemoryOnDispose == NativeMemoryReturn.ToNativeMemory)
             {
                 generation.Owner.ReleaseToNative();
@@ -1649,7 +1763,7 @@ internal sealed class NativeOwnerKernel
                 generation.Owner.Detach();
             }
 
-            ReleaseQuarantinedSegmentsLocked();
+            ReleaseQuarantinedGenerationsLocked();
             _lifecycle = NativeOwnerLifecycle.Disposed;
             GC.SuppressFinalize(this);
         }
@@ -1845,10 +1959,17 @@ internal sealed class NativeOwnerKernel
                 throw CreateInUseException(operation, generation.Number, 0, generation.ActiveOperations, "No lease was invalidated, detached, or freed.");
             }
 
-            EnsureNoInjectedClearFailureLocked(operation);
             bool tolerant = policy == NativeMemoryReturn.ToGarbageCollector;
             long nextGenerationNumber = checked(_generation + 1);
-            PrepareGenerationClearLocked(generation, skipActiveOperations: tolerant);
+            EnsureNoInjectedClearFailureLocked(operation);
+            NativeSlab[] retiredSlabs = SnapshotRetiredSlabsLocked(generation, operation);
+            NativeBumpSegment[] retiredBumps = SnapshotRetiredBumpsLocked(generation, operation);
+            PrepareRetiredStorageLocked(
+                generation,
+                retiredSlabs,
+                retiredBumps,
+                operation,
+                reserveQuarantineSlot: tolerant && generation.ActiveOperations != 0);
             if (tolerant && generation.ActiveOperations != 0)
             {
                 _retiredGenerations.EnsureCapacity(checked(_retiredGenerations.Count + 1));
@@ -1901,13 +2022,11 @@ internal sealed class NativeOwnerKernel
             EnsureNoInjectedClearFailureLocked(operation);
             bool tolerant = policy == NativeMemoryReturn.ToGarbageCollector;
             long nextGenerationNumber = checked(current.Number + 1);
-            NativeSlab[] slabs = current.Slabs.ToArray();
-            NativeBumpSegment[] bumps = current.BumpSegments.ToArray();
+            NativeSlab[] slabs = SnapshotRetiredSlabsLocked(current, operation);
+            NativeBumpSegment[] bumps = SnapshotRetiredBumpsLocked(current, operation);
             NativeGeneration next = new(nextGenerationNumber);
             try
             {
-                PrepareGenerationClearLocked(current, skipActiveOperations: tolerant);
-
                 int slabTransferCount = 0;
                 foreach (NativeSlab slab in slabs)
                 {
@@ -1926,10 +2045,19 @@ internal sealed class NativeOwnerKernel
                     }
                 }
 
-                next.Slabs.EnsureCapacity(slabTransferCount);
-                next.AvailableSlabs.EnsureCapacity(slabTransferCount);
-                next.BumpSegments.EnsureCapacity(bumpTransferCount);
-                next.Owner.PrepareAddSegmentCapacity(checked(slabTransferCount + bumpTransferCount));
+                NativeSlab[] retiredSlabs = CreateRetiredSlabSnapshot(slabs, slabTransferCount, current);
+                NativeBumpSegment[] retiredBumps = CreateRetiredBumpSnapshot(bumps, bumpTransferCount, current);
+                PrepareRetiredStorageLocked(
+                    current,
+                    retiredSlabs,
+                    retiredBumps,
+                    operation,
+                    reserveQuarantineSlot: tolerant && current.ActiveOperations != 0);
+                next.Slabs.EnsureCapacity(checked(slabTransferCount + retiredSlabs.Length));
+                next.AvailableSlabs.EnsureCapacity(checked(slabTransferCount + retiredSlabs.Length));
+                next.BumpSegments.EnsureCapacity(checked(bumpTransferCount + retiredBumps.Length));
+                next.Owner.PrepareAddSegmentCapacity(
+                    checked(slabTransferCount + bumpTransferCount + retiredSlabs.Length + retiredBumps.Length));
                 if (current.ActiveOperations != 0)
                 {
                     _retiredGenerations.EnsureCapacity(checked(_retiredGenerations.Count + 1));
@@ -2011,8 +2139,8 @@ internal sealed class NativeOwnerKernel
 
     private void DrainRetiredGenerationLocked(NativeGeneration generation)
     {
-        NativeSlab[] slabs = generation.Slabs.ToArray();
-        NativeBumpSegment[] bumps = generation.BumpSegments.ToArray();
+        NativeSlab[] slabs = generation.RetiredSlabs;
+        NativeBumpSegment[] bumps = generation.RetiredBumps;
         NativeGeneration? current = _current;
         string operation = "DrainRetiredGeneration";
         long failedAllocationId = 0;
@@ -2021,19 +2149,7 @@ internal sealed class NativeOwnerKernel
 
         try
         {
-            PrepareGenerationClearLocked(generation, skipActiveOperations: false);
-            _quarantinedSegments.EnsureCapacity(
-                checked(_quarantinedSegments.Count + slabs.Length + bumps.Length));
-
             bool canRejoin = current is not null && _lifecycle != NativeOwnerLifecycle.Disposed;
-            if (canRejoin)
-            {
-                current!.Slabs.EnsureCapacity(checked(current.Slabs.Count + slabs.Length));
-                current.AvailableSlabs.EnsureCapacity(checked(current.AvailableSlabs.Count + slabs.Length));
-                current.BumpSegments.EnsureCapacity(checked(current.BumpSegments.Count + bumps.Length));
-                current.Owner.PrepareAddSegmentCapacity(checked(slabs.Length + bumps.Length));
-            }
-
             PreflightCommitBoundaries(
                 operation,
                 CountClearableAllocations(generation, skipActiveOperations: false),
@@ -2046,7 +2162,7 @@ internal sealed class NativeOwnerKernel
                 failedAllocationId = allocation.Id;
                 failedSegmentOrdinal = GetSegmentOrdinal(allocation);
                 failedBoundary = "clear";
-                ClearAllocationStorage(allocation);
+                ClearAllocationStorageReserved(allocation);
                 NativeMemoryTestHooks.CheckPostCommitBoundary(operation, "clear");
             }
 
@@ -2108,7 +2224,7 @@ internal sealed class NativeOwnerKernel
         catch (Exception exception)
         {
             _retiredGenerations.Remove(generation);
-            QuarantineGenerationSegmentsLocked(generation, current, slabs, bumps, operation, failedBoundary);
+            QuarantineGenerationStorageLocked(generation, current, slabs, bumps);
             if (generation.RetiredNativeBytes != 0)
             {
                 NativeMemoryTestHooks.RecordRetiredBytes((nuint)generation.RetiredNativeBytes, add: false, metricsEpoch: generation.Owner.MetricsEpoch);
@@ -2132,7 +2248,15 @@ internal sealed class NativeOwnerKernel
             return _current;
         }
 
-        return _retiredGenerations.FirstOrDefault(generation => generation.Number == generationNumber);
+        foreach (NativeGeneration generation in _retiredGenerations)
+        {
+            if (generation.Number == generationNumber)
+            {
+                return generation;
+            }
+        }
+
+        return null;
     }
 
     private void TransferSegmentLocked(NativeGeneration source, NativeGeneration destination, NativeSegment segment)
@@ -2141,13 +2265,11 @@ internal sealed class NativeOwnerKernel
         source.Owner.RemoveSegment(segment);
     }
 
-    private void QuarantineGenerationSegmentsLocked(
+    private void QuarantineGenerationStorageLocked(
         NativeGeneration generation,
         NativeGeneration? current,
         NativeSlab[] slabs,
-        NativeBumpSegment[] bumps,
-        string operation,
-        string boundary)
+        NativeBumpSegment[] bumps)
     {
         foreach (NativeSlab slab in slabs)
         {
@@ -2157,13 +2279,7 @@ internal sealed class NativeOwnerKernel
             current?.Slabs.Remove(slab);
             current?.AvailableSlabs.Remove(slab);
             current?.Owner.RemoveSegment(slab.Segment);
-            _quarantinedSegments.Add(new NativeQuarantinedSegment(
-                slab.Segment,
-                _ownerKind,
-                generation.Number,
-                slab.AllocationOrdinal,
-                operation,
-                boundary));
+            generation.Owner.AddSegment(slab.Segment);
         }
 
         foreach (NativeBumpSegment bump in bumps)
@@ -2172,17 +2288,13 @@ internal sealed class NativeOwnerKernel
             generation.Owner.RemoveSegment(bump.Segment);
             current?.BumpSegments.Remove(bump);
             current?.Owner.RemoveSegment(bump.Segment);
-            _quarantinedSegments.Add(new NativeQuarantinedSegment(
-                bump.Segment,
-                _ownerKind,
-                generation.Number,
-                bump.AllocationOrdinal,
-                operation,
-                boundary));
+            generation.Owner.AddSegment(bump.Segment);
         }
 
         generation.AvailableSlabs.Clear();
         generation.BumpSegments.Clear();
+        generation.IsQuarantined = true;
+        _quarantinedGenerations.Add(generation);
         if (current is not null)
         {
             ResetBumpTraversal(current);
@@ -2296,6 +2408,102 @@ internal sealed class NativeOwnerKernel
     private void ClearAllocationStorage(NativeAllocation allocation)
     {
         allocation.ClearValues();
+    }
+
+    private void ClearAllocationStorageReserved(NativeAllocation allocation)
+    {
+        allocation.ClearValues(reservedRootCapacity: true);
+    }
+
+    private static NativeSlab[] SnapshotRetiredSlabsLocked(NativeGeneration generation, string operation)
+    {
+        if (NativeMemoryTestHooks.ConsumeRetiredSnapshotPreparationFailure())
+        {
+            throw new InvalidOperationException($"Injected retired-generation snapshot preparation failure during {operation}.");
+        }
+
+        return generation.Slabs.ToArray();
+    }
+
+    private static NativeBumpSegment[] SnapshotRetiredBumpsLocked(NativeGeneration generation, string operation)
+    {
+        if (NativeMemoryTestHooks.ConsumeRetiredSnapshotPreparationFailure())
+        {
+            throw new InvalidOperationException($"Injected retired-generation snapshot preparation failure during {operation}.");
+        }
+
+        return generation.BumpSegments.ToArray();
+    }
+
+    private static NativeSlab[] CreateRetiredSlabSnapshot(
+        NativeSlab[] slabs,
+        int transferCount,
+        NativeGeneration generation)
+    {
+        int retiredCount = checked(slabs.Length - transferCount);
+        if (retiredCount == 0)
+        {
+            return [];
+        }
+
+        NativeSlab[] retired = new NativeSlab[retiredCount];
+        int index = 0;
+        foreach (NativeSlab slab in slabs)
+        {
+            if (IsSegmentBusy(generation, slab))
+            {
+                retired[index++] = slab;
+            }
+        }
+
+        return retired;
+    }
+
+    private static NativeBumpSegment[] CreateRetiredBumpSnapshot(
+        NativeBumpSegment[] bumps,
+        int transferCount,
+        NativeGeneration generation)
+    {
+        int retiredCount = checked(bumps.Length - transferCount);
+        if (retiredCount == 0)
+        {
+            return [];
+        }
+
+        NativeBumpSegment[] retired = new NativeBumpSegment[retiredCount];
+        int index = 0;
+        foreach (NativeBumpSegment bump in bumps)
+        {
+            if (IsSegmentBusy(generation, bump))
+            {
+                retired[index++] = bump;
+            }
+        }
+
+        return retired;
+    }
+
+    private void PrepareRetiredStorageLocked(
+        NativeGeneration generation,
+        NativeSlab[] retiredSlabs,
+        NativeBumpSegment[] retiredBumps,
+        string operation,
+        bool reserveQuarantineSlot)
+    {
+        generation.RetiredSlabs = retiredSlabs;
+        generation.RetiredBumps = retiredBumps;
+        PrepareGenerationClearLocked(generation, skipActiveOperations: false);
+        generation.Owner.PrepareAddSegmentCapacity(checked(retiredSlabs.Length + retiredBumps.Length));
+
+        if (reserveQuarantineSlot)
+        {
+            if (NativeMemoryTestHooks.ConsumeQuarantineReservationFailure())
+            {
+                throw new InvalidOperationException($"Injected quarantine-slot reservation failure during {operation}.");
+            }
+
+            _quarantinedGenerations.EnsureCapacity(checked(_quarantinedGenerations.Count + 1));
+        }
     }
 
     private static int ClearSlotCount(NativeAllocation allocation)
@@ -2644,9 +2852,9 @@ internal sealed class NativeOwnerKernel
                 retired.Owner.ReleaseToNative();
             }
 
-            foreach (NativeQuarantinedSegment quarantined in _quarantinedSegments)
+            foreach (NativeGeneration quarantined in _quarantinedGenerations)
             {
-                quarantined.Segment.FreeNow();
+                quarantined.Owner.ReleaseToNative();
             }
         }
         catch
@@ -2654,14 +2862,14 @@ internal sealed class NativeOwnerKernel
         }
     }
 
-    private void ReleaseQuarantinedSegmentsLocked()
+    private void ReleaseQuarantinedGenerationsLocked()
     {
-        foreach (NativeQuarantinedSegment quarantined in _quarantinedSegments)
+        foreach (NativeGeneration quarantined in _quarantinedGenerations)
         {
-            quarantined.Segment.FreeNow();
+            quarantined.Owner.ReleaseToNative();
         }
 
-        _quarantinedSegments.Clear();
+        _quarantinedGenerations.Clear();
     }
 
     ~NativeOwnerKernel() => DisposeFromFinalizer();
