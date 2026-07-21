@@ -14,7 +14,9 @@ public class NativeAllocationException : InvalidOperationException
         int activeOperationCount,
         long allocationId,
         NativeOwnerLifecycle currentLifecycle,
-        Exception? innerException = null)
+        Exception? innerException = null,
+        int ownerWideLeaseReturnCount = 0,
+        int ownerWideBusyGenerationCount = 0)
         : base(message, innerException)
     {
         OwnerKind = ownerKind;
@@ -24,6 +26,8 @@ public class NativeAllocationException : InvalidOperationException
         ActiveOperationCount = activeOperationCount;
         AllocationId = allocationId;
         CurrentLifecycle = currentLifecycle;
+        OwnerWideLeaseReturnCount = ownerWideLeaseReturnCount;
+        OwnerWideBusyGenerationCount = ownerWideBusyGenerationCount;
     }
 
     /// <summary>Gets the owner kind and element description.</summary>
@@ -46,6 +50,12 @@ public class NativeAllocationException : InvalidOperationException
 
     /// <summary>Gets the owner lifecycle observed when the operation failed.</summary>
     public NativeOwnerLifecycle CurrentLifecycle { get; }
+
+    /// <summary>Gets the number of owner-wide individual lease returns in progress when the failure was observed.</summary>
+    public int OwnerWideLeaseReturnCount { get; }
+
+    /// <summary>Gets the number of generations containing an active operation or lease return when the failure was observed.</summary>
+    public int OwnerWideBusyGenerationCount { get; }
 }
 
 /// <summary>Raised when a default-initialized owner-shaped value is used.</summary>
@@ -110,8 +120,20 @@ public sealed class NativeAllocationInUseException : NativeAllocationException
         string operation,
         int activeOperationCount,
         long allocationId,
-        NativeOwnerLifecycle currentLifecycle)
-        : base(message, ownerKind, generation, currentGeneration, operation, activeOperationCount, allocationId, currentLifecycle: currentLifecycle)
+        NativeOwnerLifecycle currentLifecycle,
+        int ownerWideLeaseReturnCount = 0,
+        int ownerWideBusyGenerationCount = 0)
+        : base(
+            message,
+            ownerKind,
+            generation,
+            currentGeneration,
+            operation,
+            activeOperationCount,
+            allocationId,
+            currentLifecycle: currentLifecycle,
+            ownerWideLeaseReturnCount: ownerWideLeaseReturnCount,
+            ownerWideBusyGenerationCount: ownerWideBusyGenerationCount)
     {
     }
 }

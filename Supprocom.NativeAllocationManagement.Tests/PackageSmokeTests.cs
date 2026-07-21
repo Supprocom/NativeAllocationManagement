@@ -920,6 +920,99 @@ public sealed class PackageSmokeTests
         }
     }
 
+    [Fact]
+    public async Task SuppressedAnalyzerStillGetsOwnerWideReturnAndDetachedGenerationGuards()
+    {
+        PackageEvidence package = await GetPackageAsync();
+        WriteEvidence(package);
+        string consumerRoot = CreateConsumerRoot();
+        try
+        {
+            WriteConsumerProject(consumerRoot, package, excludeAnalyzer: false, suppressDiagnostics: true, executable: true);
+            File.WriteAllText(
+                Path.Combine(consumerRoot, "Program.cs"),
+                """
+                using Supprocom.NativeAllocationManagement;
+
+                public static class Consumer
+                {
+                    public static int Main()
+                    {
+                        NativePool<int> strictPool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+                        Pooled<int> strictBorrow = strictPool.Rent(1);
+                        bool strictRejected = false;
+                        strictBorrow.Access(span =>
+                        {
+                            strictPool.ReleaseLeasesToGarbageCollector();
+                            try
+                            {
+                                strictPool.ReturnMemoryToNativeMemory();
+                            }
+                            catch (NativeAllocationInUseException)
+                            {
+                                strictRejected = true;
+                            }
+
+                            span[0] = 41;
+                            strictRejected &= span[0] == 41;
+                        });
+
+                        if (!strictRejected)
+                        {
+                            return 1;
+                        }
+
+                        strictPool.ReturnMemoryToNativeMemory();
+                        strictPool.Dispose();
+
+                        NativePool<int> gcPool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+                        Pooled<int> detachedBorrow = gcPool.Rent(1);
+                        bool detachedOperationWasValid = false;
+                        detachedBorrow.Access(span =>
+                        {
+                            gcPool.ReleaseLeasesToGarbageCollector();
+                            gcPool.ReturnMemoryToGarbageCollector();
+                            span[0] = 19;
+                            detachedOperationWasValid = span[0] == 19;
+                        });
+
+                        if (!detachedOperationWasValid)
+                        {
+                            return 2;
+                        }
+
+                        gcPool.LeaseFromMemory();
+                        Pooled<int> fresh = gcPool.Rent(1);
+                        if (fresh[0] != 0)
+                        {
+                            return 3;
+                        }
+
+                        fresh.Dispose();
+                        gcPool.Dispose();
+                        return 0;
+                    }
+                }
+                """);
+
+            string project = Path.Combine(consumerRoot, "Consumer.csproj");
+            CommandResult restore = await RunDotnetAsync(
+                $"restore \"{project}\" --nologo --force --no-cache --packages \"{Path.Combine(consumerRoot, ".packages")}\" --source \"{package.SourceDirectory}\"",
+                consumerRoot);
+            Assert.True(restore.ExitCode == 0, restore.Output);
+
+            CommandResult build = await RunDotnetAsync($"build \"{project}\" --no-restore --nologo", consumerRoot);
+            Assert.True(build.ExitCode == 0, build.Output);
+
+            CommandResult run = await RunDotnetAsync($"run \"{project}\" --no-build --no-restore --nologo", consumerRoot);
+            Assert.True(run.ExitCode == 0, run.Output);
+        }
+        finally
+        {
+            DeleteConsumerRoot(consumerRoot);
+        }
+    }
+
     private void WriteEvidence(PackageEvidence package)
     {
         _output.WriteLine($"package={package.Path}");
@@ -953,7 +1046,7 @@ public sealed class PackageSmokeTests
             """
             : string.Empty;
         string noWarn = suppressDiagnostics
-            ? "<NoWarn>$(NoWarn);NAM1003;NAM1004;NAM1007;NAM1017</NoWarn>"
+            ? "<NoWarn>$(NoWarn);NAM1003;NAM1004;NAM1007;NAM1009;NAM1017</NoWarn>"
             : string.Empty;
         File.WriteAllText(
             Path.Combine(consumerRoot, "Consumer.csproj"),
