@@ -717,6 +717,321 @@ public sealed class MechanismRegressionTests
     }
 
     [Fact]
+    public async Task PoolCumulativeRetiredReservationsHandleOldGenerationDrainAndMixedOrder()
+    {
+        const int generationCount = 6;
+        NativeMemoryTestHooks.Reset();
+        NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        ManualResetEventSlim[] allows = new ManualResetEventSlim[generationCount];
+        ManualResetEventSlim[] entered = new ManualResetEventSlim[generationCount];
+        Task<Exception?>[] workers = new Task<Exception?>[generationCount];
+
+        try
+        {
+            for (int index = 0; index < generationCount; index++)
+            {
+                allows[index] = new();
+                entered[index] = new();
+                int generationIndex = index;
+                workers[index] = Task.Run(() => HoldBusyLease(
+                    pool,
+                    generationIndex + 1,
+                    generationIndex + 1,
+                    allows[generationIndex],
+                    entered[generationIndex]));
+
+                Assert.True(entered[index].Wait(TimeSpan.FromSeconds(10)));
+                pool.ReleaseLeasesToGarbageCollector();
+                Assert.Equal(index + 1, pool.RetiredGenerationCountForTest);
+            }
+
+            (int Slabs, int AvailableSlabs, int Bumps, int OwnerSegments) capacities =
+                pool.CurrentBankCapacitiesForTest;
+            int quarantineCapacity = pool.QuarantineCapacityForTest;
+            Assert.True(capacities.Slabs >= generationCount);
+            Assert.True(capacities.AvailableSlabs >= generationCount);
+            Assert.True(capacities.OwnerSegments >= generationCount);
+            Assert.True(quarantineCapacity >= generationCount);
+
+            int[] drainOrder = [0, 4, 1, 5, 2, 3];
+            for (int step = 0; step < drainOrder.Length; step++)
+            {
+                int index = drainOrder[step];
+                allows[index].Set();
+                Assert.Null(await workers[index]);
+                Assert.Equal(generationCount - step - 1, pool.RetiredGenerationCountForTest);
+                Assert.Equal(capacities, pool.CurrentBankCapacitiesForTest);
+                Assert.Equal(quarantineCapacity, pool.QuarantineCapacityForTest);
+            }
+
+            Assert.Equal([1L, 2L, 3L, 4L, 5L, 6L], pool.CurrentSegmentOrdinalsForTest);
+            Pooled<int> fresh = pool.Rent(1);
+            Assert.Equal([1L, 2L, 3L, 4L, 5L, 6L], pool.CurrentSegmentOrdinalsForTest);
+            fresh.Dispose();
+            Assert.Equal(capacities, pool.CurrentBankCapacitiesForTest);
+        }
+        finally
+        {
+            foreach (ManualResetEventSlim allow in allows)
+            {
+                allow?.Set();
+            }
+
+            foreach (Task<Exception?> worker in workers)
+            {
+                if (worker is not null)
+                {
+                    try
+                    {
+                        _ = await worker;
+                    }
+                    catch
+                    {
+                    }
+                }
+            }
+
+            NativeMemoryTestHooks.Reset();
+            pool.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task PoolCumulativeQuarantineReservationsCoverEveryRetiredGeneration()
+    {
+        const int generationCount = 6;
+        NativeMemoryTestHooks.Reset();
+        NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        ManualResetEventSlim[] allows = new ManualResetEventSlim[generationCount];
+        ManualResetEventSlim[] entered = new ManualResetEventSlim[generationCount];
+        Task<Exception?>[] workers = new Task<Exception?>[generationCount];
+
+        try
+        {
+            for (int index = 0; index < generationCount; index++)
+            {
+                allows[index] = new();
+                entered[index] = new();
+                int generationIndex = index;
+                workers[index] = Task.Run(() => HoldBusyLease(
+                    pool,
+                    generationIndex + 1,
+                    generationIndex + 1,
+                    allows[generationIndex],
+                    entered[generationIndex]));
+
+                Assert.True(entered[index].Wait(TimeSpan.FromSeconds(10)));
+                pool.ReleaseLeasesToGarbageCollector();
+            }
+
+            (int Slabs, int AvailableSlabs, int Bumps, int OwnerSegments) capacities =
+                pool.CurrentBankCapacitiesForTest;
+            int quarantineCapacity = pool.QuarantineCapacityForTest;
+            Assert.True(quarantineCapacity >= generationCount);
+
+            for (int index = 0; index < generationCount; index++)
+            {
+                NativeMemoryTestHooks.FailAfterCommitBoundary(1);
+                allows[index].Set();
+                NativeAllocationQuarantinedException failure =
+                    Assert.IsType<NativeAllocationQuarantinedException>(await workers[index]);
+                Assert.Equal("clear", failure.Boundary);
+                Assert.Equal(index + 1, pool.QuarantinedGenerationCountForTest);
+                Assert.Equal(index + 1, pool.QuarantinedSegmentCountForTest);
+                Assert.Equal(generationCount - index - 1, pool.RetiredGenerationCountForTest);
+                Assert.Equal(capacities, pool.CurrentBankCapacitiesForTest);
+                Assert.Equal(quarantineCapacity, pool.QuarantineCapacityForTest);
+            }
+
+            Pooled<int> fresh = pool.Rent(1);
+            Assert.Equal([7L], pool.CurrentSegmentOrdinalsForTest);
+            fresh.Dispose();
+            Assert.Equal(capacities, pool.CurrentBankCapacitiesForTest);
+        }
+        finally
+        {
+            foreach (ManualResetEventSlim allow in allows)
+            {
+                allow?.Set();
+            }
+
+            foreach (Task<Exception?> worker in workers)
+            {
+                if (worker is not null)
+                {
+                    try
+                    {
+                        _ = await worker;
+                    }
+                    catch
+                    {
+                    }
+                }
+            }
+
+            NativeMemoryTestHooks.Reset();
+            pool.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task ArenaCumulativeRetiredReservationsHandleOldGenerationDrainAndMixedOrder()
+    {
+        const int generationCount = 6;
+        NativeMemoryTestHooks.Reset();
+        NativeArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        ManualResetEventSlim[] allows = new ManualResetEventSlim[generationCount];
+        ManualResetEventSlim[] entered = new ManualResetEventSlim[generationCount];
+        Task<Exception?>[] workers = new Task<Exception?>[generationCount];
+
+        try
+        {
+            for (int index = 0; index < generationCount; index++)
+            {
+                allows[index] = new();
+                entered[index] = new();
+                int generationIndex = index;
+                workers[index] = Task.Run(() => HoldBusyArenaLease(
+                    arena,
+                    generationIndex + 1,
+                    generationIndex + 1,
+                    allows[generationIndex],
+                    entered[generationIndex]));
+
+                Assert.True(entered[index].Wait(TimeSpan.FromSeconds(10)));
+                arena.ReleaseLeasesToGarbageCollector();
+                Assert.Equal(index + 1, arena.RetiredGenerationCountForTest);
+            }
+
+            (int Slabs, int AvailableSlabs, int Bumps, int OwnerSegments) capacities =
+                arena.CurrentBankCapacitiesForTest;
+            int quarantineCapacity = arena.QuarantineCapacityForTest;
+            Assert.True(capacities.Bumps >= generationCount);
+            Assert.True(capacities.OwnerSegments >= generationCount);
+            Assert.True(quarantineCapacity >= generationCount);
+
+            int[] drainOrder = [0, 4, 1, 5, 2, 3];
+            for (int step = 0; step < drainOrder.Length; step++)
+            {
+                int index = drainOrder[step];
+                allows[index].Set();
+                Assert.Null(await workers[index]);
+                Assert.Equal(generationCount - step - 1, arena.RetiredGenerationCountForTest);
+                Assert.Equal(capacities, arena.CurrentBankCapacitiesForTest);
+                Assert.Equal(quarantineCapacity, arena.QuarantineCapacityForTest);
+            }
+
+            Assert.Equal([1L, 2L, 3L, 4L, 5L, 6L], arena.CurrentSegmentOrdinalsForTest);
+            ArenaLease<int> fresh = arena.Scratch<int>(1);
+            Assert.Equal([1L, 2L, 3L, 4L, 5L, 6L], arena.CurrentSegmentOrdinalsForTest);
+            fresh[0] = 99;
+            Assert.Equal(capacities, arena.CurrentBankCapacitiesForTest);
+        }
+        finally
+        {
+            foreach (ManualResetEventSlim allow in allows)
+            {
+                allow?.Set();
+            }
+
+            foreach (Task<Exception?> worker in workers)
+            {
+                if (worker is not null)
+                {
+                    try
+                    {
+                        _ = await worker;
+                    }
+                    catch
+                    {
+                    }
+                }
+            }
+
+            NativeMemoryTestHooks.Reset();
+            arena.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task ArenaCumulativeQuarantineReservationsCoverEveryRetiredGeneration()
+    {
+        const int generationCount = 6;
+        NativeMemoryTestHooks.Reset();
+        NativeArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        ManualResetEventSlim[] allows = new ManualResetEventSlim[generationCount];
+        ManualResetEventSlim[] entered = new ManualResetEventSlim[generationCount];
+        Task<Exception?>[] workers = new Task<Exception?>[generationCount];
+
+        try
+        {
+            for (int index = 0; index < generationCount; index++)
+            {
+                allows[index] = new();
+                entered[index] = new();
+                int generationIndex = index;
+                workers[index] = Task.Run(() => HoldBusyArenaLease(
+                    arena,
+                    generationIndex + 1,
+                    generationIndex + 1,
+                    allows[generationIndex],
+                    entered[generationIndex]));
+
+                Assert.True(entered[index].Wait(TimeSpan.FromSeconds(10)));
+                arena.ReleaseLeasesToGarbageCollector();
+            }
+
+            (int Slabs, int AvailableSlabs, int Bumps, int OwnerSegments) capacities =
+                arena.CurrentBankCapacitiesForTest;
+            int quarantineCapacity = arena.QuarantineCapacityForTest;
+            Assert.True(quarantineCapacity >= generationCount);
+
+            for (int index = 0; index < generationCount; index++)
+            {
+                NativeMemoryTestHooks.FailAfterCommitBoundary(1);
+                allows[index].Set();
+                NativeAllocationQuarantinedException failure =
+                    Assert.IsType<NativeAllocationQuarantinedException>(await workers[index]);
+                Assert.Equal("clear", failure.Boundary);
+                Assert.Equal(index + 1, arena.QuarantinedGenerationCountForTest);
+                Assert.Equal(index + 1, arena.QuarantinedSegmentCountForTest);
+                Assert.Equal(generationCount - index - 1, arena.RetiredGenerationCountForTest);
+                Assert.Equal(capacities, arena.CurrentBankCapacitiesForTest);
+                Assert.Equal(quarantineCapacity, arena.QuarantineCapacityForTest);
+            }
+
+            ArenaLease<int> fresh = arena.Scratch<int>(1);
+            Assert.Equal([7L], arena.CurrentSegmentOrdinalsForTest);
+            fresh[0] = 99;
+            Assert.Equal(capacities, arena.CurrentBankCapacitiesForTest);
+        }
+        finally
+        {
+            foreach (ManualResetEventSlim allow in allows)
+            {
+                allow?.Set();
+            }
+
+            foreach (Task<Exception?> worker in workers)
+            {
+                if (worker is not null)
+                {
+                    try
+                    {
+                        _ = await worker;
+                    }
+                    catch
+                    {
+                    }
+                }
+            }
+
+            NativeMemoryTestHooks.Reset();
+            arena.Dispose();
+        }
+    }
+
+    [Fact]
     public void TrimUsesLifecycleNoOpsExactPhysicalUnitsAndAllocationOrder()
     {
         NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory, initialCapacity: 4);
@@ -860,13 +1175,42 @@ public sealed class MechanismRegressionTests
         NativePool<int> pool,
         int length,
         int value,
-        ManualResetEventSlim allowCallback)
+        ManualResetEventSlim allowCallback,
+        ManualResetEventSlim? entered = null)
     {
         try
         {
             Pooled<int> lease = pool.Rent(length);
             lease[0] = value;
-            lease.Access(_ => allowCallback.Wait(TimeSpan.FromSeconds(10)));
+            lease.Access(_ =>
+            {
+                entered?.Set();
+                allowCallback.Wait(TimeSpan.FromSeconds(10));
+            });
+            return null;
+        }
+        catch (Exception exception)
+        {
+            return exception;
+        }
+    }
+
+    private static Exception? HoldBusyArenaLease(
+        NativeArena arena,
+        int length,
+        int value,
+        ManualResetEventSlim allowCallback,
+        ManualResetEventSlim? entered = null)
+    {
+        try
+        {
+            ArenaLease<int> lease = arena.Scratch<int>(length);
+            lease[0] = value;
+            lease.Access(_ =>
+            {
+                entered?.Set();
+                allowCallback.Wait(TimeSpan.FromSeconds(10));
+            });
             return null;
         }
         catch (Exception exception)

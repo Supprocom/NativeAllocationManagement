@@ -826,6 +826,14 @@ internal sealed class NativeGenerationOwner
         }
     }
 
+    internal int SegmentListCapacityForTest()
+    {
+        lock (_gate)
+        {
+            return _segments?.Capacity ?? 0;
+        }
+    }
+
     internal void RemoveSegment(NativeSegment segment)
     {
         lock (_gate)
@@ -1107,6 +1115,37 @@ internal sealed class NativeOwnerKernel
         lock (_gate)
         {
             return _quarantinedGenerations.Count;
+        }
+    }
+
+    internal int RetiredGenerationCountForTest()
+    {
+        lock (_gate)
+        {
+            return _retiredGenerations.Count;
+        }
+    }
+
+    internal int QuarantineCapacityForTest()
+    {
+        lock (_gate)
+        {
+            return _quarantinedGenerations.Capacity;
+        }
+    }
+
+    internal (int Slabs, int AvailableSlabs, int Bumps, int OwnerSegments) CurrentBankCapacitiesForTest()
+    {
+        lock (_gate)
+        {
+            NativeGeneration? generation = _current;
+            return generation is null
+                ? (0, 0, 0, 0)
+                : (
+                    generation.Slabs.Capacity,
+                    generation.AvailableSlabs.Capacity,
+                    generation.BumpSegments.Capacity,
+                    generation.Owner.SegmentListCapacityForTest());
         }
     }
 
@@ -2053,11 +2092,14 @@ internal sealed class NativeOwnerKernel
                     retiredBumps,
                     operation,
                     reserveQuarantineSlot: tolerant && current.ActiveOperations != 0);
-                next.Slabs.EnsureCapacity(checked(slabTransferCount + retiredSlabs.Length));
-                next.AvailableSlabs.EnsureCapacity(checked(slabTransferCount + retiredSlabs.Length));
-                next.BumpSegments.EnsureCapacity(checked(bumpTransferCount + retiredBumps.Length));
+                (int rejoinableSlabs, int rejoinableBumps) = CountPotentialRejoinSegmentsLocked(
+                    retiredSlabs,
+                    retiredBumps);
+                next.Slabs.EnsureCapacity(checked(slabTransferCount + rejoinableSlabs));
+                next.AvailableSlabs.EnsureCapacity(checked(slabTransferCount + rejoinableSlabs));
+                next.BumpSegments.EnsureCapacity(checked(bumpTransferCount + rejoinableBumps));
                 next.Owner.PrepareAddSegmentCapacity(
-                    checked(slabTransferCount + bumpTransferCount + retiredSlabs.Length + retiredBumps.Length));
+                    checked(slabTransferCount + bumpTransferCount + rejoinableSlabs + rejoinableBumps));
                 if (current.ActiveOperations != 0)
                 {
                     _retiredGenerations.EnsureCapacity(checked(_retiredGenerations.Count + 1));
@@ -2483,6 +2525,26 @@ internal sealed class NativeOwnerKernel
         return retired;
     }
 
+    private (int Slabs, int Bumps) CountPotentialRejoinSegmentsLocked(
+        NativeSlab[] newlyRetiredSlabs,
+        NativeBumpSegment[] newlyRetiredBumps)
+    {
+        int slabs = newlyRetiredSlabs.Length;
+        int bumps = newlyRetiredBumps.Length;
+        foreach (NativeGeneration retired in _retiredGenerations)
+        {
+            if (retired.MemoryDetached)
+            {
+                continue;
+            }
+
+            slabs = checked(slabs + retired.RetiredSlabs.Length);
+            bumps = checked(bumps + retired.RetiredBumps.Length);
+        }
+
+        return (slabs, bumps);
+    }
+
     private void PrepareRetiredStorageLocked(
         NativeGeneration generation,
         NativeSlab[] retiredSlabs,
@@ -2495,14 +2557,17 @@ internal sealed class NativeOwnerKernel
         PrepareGenerationClearLocked(generation, skipActiveOperations: false);
         generation.Owner.PrepareAddSegmentCapacity(checked(retiredSlabs.Length + retiredBumps.Length));
 
-        if (reserveQuarantineSlot)
+        int outstandingQuarantineReservations = checked(
+            _retiredGenerations.Count + (reserveQuarantineSlot ? 1 : 0));
+        if (outstandingQuarantineReservations != 0)
         {
-            if (NativeMemoryTestHooks.ConsumeQuarantineReservationFailure())
+            if (reserveQuarantineSlot && NativeMemoryTestHooks.ConsumeQuarantineReservationFailure())
             {
                 throw new InvalidOperationException($"Injected quarantine-slot reservation failure during {operation}.");
             }
 
-            _quarantinedGenerations.EnsureCapacity(checked(_quarantinedGenerations.Count + 1));
+            _quarantinedGenerations.EnsureCapacity(
+                checked(_quarantinedGenerations.Count + outstandingQuarantineReservations));
         }
     }
 

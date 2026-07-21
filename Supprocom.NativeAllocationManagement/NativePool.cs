@@ -16,6 +16,13 @@ public sealed class NativePool<T> : IDisposable
 
     internal int QuarantinedGenerationCountForTest => _kernel.QuarantinedGenerationCountForTest();
 
+    internal int RetiredGenerationCountForTest => _kernel.RetiredGenerationCountForTest();
+
+    internal int QuarantineCapacityForTest => _kernel.QuarantineCapacityForTest();
+
+    internal (int Slabs, int AvailableSlabs, int Bumps, int OwnerSegments) CurrentBankCapacitiesForTest =>
+        _kernel.CurrentBankCapacitiesForTest();
+
     internal long CurrentScopeEpochForTest => _kernel.CurrentScopeEpochForTest();
 
     internal long GenerationCounterForTest => _kernel.GenerationCounterForTest();

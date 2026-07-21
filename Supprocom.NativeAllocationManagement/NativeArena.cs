@@ -11,6 +11,17 @@ public sealed class NativeArena : IDisposable
 
     internal int CurrentReferenceRootCountForTest => _kernel.CurrentReferenceRootCountForTest();
 
+    internal int QuarantinedSegmentCountForTest => _kernel.QuarantinedSegmentCountForTest();
+
+    internal int QuarantinedGenerationCountForTest => _kernel.QuarantinedGenerationCountForTest();
+
+    internal int RetiredGenerationCountForTest => _kernel.RetiredGenerationCountForTest();
+
+    internal int QuarantineCapacityForTest => _kernel.QuarantineCapacityForTest();
+
+    internal (int Slabs, int AvailableSlabs, int Bumps, int OwnerSegments) CurrentBankCapacitiesForTest =>
+        _kernel.CurrentBankCapacitiesForTest();
+
     internal (int Ordinary, int Scoped, int SegmentCount) CurrentBumpTraversalForTest => _kernel.CurrentBumpTraversalForTest();
 
     internal long[] CurrentSegmentOrdinalsForTest => _kernel.CurrentSegmentOrdinalsForTest();
