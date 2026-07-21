@@ -100,6 +100,130 @@ public sealed class PackageSmokeTests
     }
 
     [Fact]
+    public async Task PackageReferenceStorageUsesNativeSlotsForReferencesAcrossReuse()
+    {
+        PackageEvidence package = await GetPackageAsync();
+        WriteEvidence(package);
+        string consumerRoot = CreateConsumerRoot();
+        try
+        {
+            WriteConsumerProject(consumerRoot, package, excludeAnalyzer: false, suppressDiagnostics: false, executable: true);
+            File.WriteAllText(
+                Path.Combine(consumerRoot, "Program.cs"),
+                """
+                using Supprocom.NativeAllocationManagement;
+
+                public struct ReferenceCell
+                {
+                    public string? Text { get; set; }
+                    public int Number { get; set; }
+                }
+
+                public static class Consumer
+                {
+                    public static int Main()
+                    {
+                        bool valid = true;
+                        NativePool<string> pool = new(initialCapacity: 2);
+                        Pooled<string> first = pool.Rent(2);
+                        first[0] = "first";
+                        first[1] = "second";
+                        valid &= first[0] == "first" && first[1] == "second";
+
+                        first.Dispose();
+                        Pooled<string> reused = pool.Rent(2);
+                        valid &= reused[0] is null && reused[1] is null;
+
+                        reused.Dispose();
+                        pool.Dispose();
+
+                        using (NativeRegion region = new())
+                        {
+                            Local<ReferenceCell> local = region.Lease<ReferenceCell>(1);
+                            local[0] = new ReferenceCell { Text = "region", Number = 3 };
+                            valid &= local[0].Text == "region" && local[0].Number == 3;
+                        }
+
+                        NativeArena arena = new();
+                        {
+                            ArenaLease<ReferenceCell> firstArena = arena.Scratch<ReferenceCell>(1);
+                            firstArena[0] = new ReferenceCell { Text = "arena", Number = 4 };
+                            valid &= firstArena[0].Text == "arena" && firstArena[0].Number == 4;
+                        }
+
+                        arena.ReleaseLeasesToNativeMemory();
+                        {
+                            ArenaLease<ReferenceCell> reusedArena = arena.Scratch<ReferenceCell>(1);
+                            valid &= reusedArena[0].Text is null && reusedArena[0].Number == 0;
+                        }
+
+                        arena.Dispose();
+                        return valid ? 0 : 15;
+                    }
+                }
+                """);
+
+            string project = Path.Combine(consumerRoot, "Consumer.csproj");
+            CommandResult restore = await RunDotnetAsync(
+                $"restore \"{project}\" --nologo --force --no-cache --packages \"{Path.Combine(consumerRoot, ".packages")}\" --source \"{package.SourceDirectory}\"",
+                consumerRoot);
+            Assert.True(restore.ExitCode == 0, restore.Output);
+
+            CommandResult build = await RunDotnetAsync($"build \"{project}\" --no-restore --nologo", consumerRoot);
+            Assert.True(build.ExitCode == 0, build.Output);
+
+            CommandResult run = await RunDotnetAsync($"run \"{project}\" --no-build --no-restore --nologo", consumerRoot);
+            Assert.True(run.ExitCode == 0, run.Output);
+        }
+        finally
+        {
+            DeleteConsumerRoot(consumerRoot);
+        }
+    }
+
+    [Fact]
+    public async Task PackageAnalyzerRejectsScopedAcquisitionThroughNonExclusiveArenaReceiver()
+    {
+        PackageEvidence package = await GetPackageAsync();
+        WriteEvidence(package);
+        string consumerRoot = CreateConsumerRoot();
+        try
+        {
+            WriteConsumerProject(consumerRoot, package, excludeAnalyzer: false, suppressDiagnostics: false);
+            File.WriteAllText(
+                Path.Combine(consumerRoot, "Consumer.cs"),
+                """
+                using Supprocom.NativeAllocationManagement;
+
+                public static class Consumer
+                {
+                    public static void Run(NativeArena arena)
+                    {
+                        scoped ArenaLease<int> values = arena.ScratchScoped<int>(1);
+                        values[0] = 1;
+                        arena.RecycleScoped();
+                    }
+                }
+                """);
+
+            string project = Path.Combine(consumerRoot, "Consumer.csproj");
+            CommandResult restore = await RunDotnetAsync(
+                $"restore \"{project}\" --nologo --force --no-cache --packages \"{Path.Combine(consumerRoot, ".packages")}\" --source \"{package.SourceDirectory}\"",
+                consumerRoot);
+            Assert.True(restore.ExitCode == 0, restore.Output);
+
+            CommandResult build = await RunDotnetAsync($"build \"{project}\" --no-restore --nologo", consumerRoot);
+            Assert.True(build.ExitCode != 0, build.Output);
+            Assert.Contains("NAM1018", build.Output, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("NAM1007", build.Output, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            DeleteConsumerRoot(consumerRoot);
+        }
+    }
+
+    [Fact]
     public async Task PackageAnalyzerAcceptsExplicitRegionUsingStatementWithDelayedActivation()
     {
         PackageEvidence package = await GetPackageAsync();

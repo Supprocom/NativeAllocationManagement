@@ -49,7 +49,8 @@ internal readonly record struct NativeMemoryTestMetrics(
     long DetachedGenerationCount,
     long OutstandingNativeBytes,
     long DetachedNativeBytes,
-    long RetiredNativeBytes)
+    long RetiredNativeBytes,
+    long BumpTraversalVisitCount)
 {
     internal long RetainedNativeBytes => OutstandingNativeBytes - DetachedNativeBytes;
 }
@@ -63,6 +64,7 @@ internal static class NativeMemoryTestHooks
     private static long _outstandingNativeBytes;
     private static long _detachedNativeBytes;
     private static long _retiredNativeBytes;
+    private static long _bumpTraversalVisitCount;
     private static long _metricsEpoch;
     private static int _forcedFailures;
     private static int _forcedClearFailures;
@@ -70,6 +72,7 @@ internal static class NativeMemoryTestHooks
     private static Action<string>? _beforeOperationEntry;
     private static Action<string, NativeOwnerKernel>? _beforeOperationEntryWithKernel;
     private static Action<string, NativeOwnerKernel, long, long>? _operationEnteredWithAllocation;
+    private static Action<string, NativeGenerationOwner>? _operationEnteredWithGenerationOwner;
 
     internal static void Reset()
     {
@@ -81,12 +84,14 @@ internal static class NativeMemoryTestHooks
         Interlocked.Exchange(ref _outstandingNativeBytes, 0);
         Interlocked.Exchange(ref _detachedNativeBytes, 0);
         Interlocked.Exchange(ref _retiredNativeBytes, 0);
+        Interlocked.Exchange(ref _bumpTraversalVisitCount, 0);
         Interlocked.Exchange(ref _forcedFailures, 0);
         Interlocked.Exchange(ref _forcedClearFailures, 0);
         Volatile.Write(ref _operationEntered, null);
         Volatile.Write(ref _beforeOperationEntry, null);
         Volatile.Write(ref _beforeOperationEntryWithKernel, null);
         Volatile.Write(ref _operationEnteredWithAllocation, null);
+        Volatile.Write(ref _operationEnteredWithGenerationOwner, null);
     }
 
     internal static long CurrentMetricsEpoch => Volatile.Read(ref _metricsEpoch);
@@ -192,7 +197,10 @@ internal static class NativeMemoryTestHooks
         Volatile.Read(ref _detachedGenerationCount),
         Volatile.Read(ref _outstandingNativeBytes),
         Volatile.Read(ref _detachedNativeBytes),
-        Volatile.Read(ref _retiredNativeBytes));
+        Volatile.Read(ref _retiredNativeBytes),
+        Volatile.Read(ref _bumpTraversalVisitCount));
+
+    internal static void RecordBumpTraversalVisit() => Interlocked.Increment(ref _bumpTraversalVisitCount);
 
     internal static void SetOperationEntered(Action<string>? callback) => Volatile.Write(ref _operationEntered, callback);
 
@@ -204,16 +212,25 @@ internal static class NativeMemoryTestHooks
     internal static void SetOperationEnteredWithAllocation(Action<string, NativeOwnerKernel, long, long>? callback) =>
         Volatile.Write(ref _operationEnteredWithAllocation, callback);
 
+    internal static void SetOperationEnteredWithGenerationOwner(Action<string, NativeGenerationOwner>? callback) =>
+        Volatile.Write(ref _operationEnteredWithGenerationOwner, callback);
+
     internal static void NotifyBeforeOperationEntry(string operation, NativeOwnerKernel kernel)
     {
         Volatile.Read(ref _beforeOperationEntry)?.Invoke(operation);
         Volatile.Read(ref _beforeOperationEntryWithKernel)?.Invoke(operation, kernel);
     }
 
-    internal static void NotifyOperationEntered(string operation, NativeOwnerKernel kernel, long generation, long allocationId)
+    internal static void NotifyOperationEntered(
+        string operation,
+        NativeOwnerKernel kernel,
+        NativeGenerationOwner generationOwner,
+        long generation,
+        long allocationId)
     {
         Volatile.Read(ref _operationEntered)?.Invoke(operation);
         Volatile.Read(ref _operationEnteredWithAllocation)?.Invoke(operation, kernel, generation, allocationId);
+        Volatile.Read(ref _operationEnteredWithGenerationOwner)?.Invoke(operation, generationOwner);
     }
 }
 
@@ -304,18 +321,132 @@ internal sealed class NativeSegment
 
 internal sealed class NativeSlab
 {
-    internal NativeSlab(NativeSegment segment, int capacity, Type elementType, bool containsReferences)
+    internal NativeSlab(NativeSegment segment, int capacity, bool containsReferences)
     {
         Segment = segment;
         Capacity = capacity;
-        ManagedValues = containsReferences ? Array.CreateInstance(elementType, capacity) : null;
+        ContainsReferences = containsReferences;
     }
 
     internal NativeSegment Segment { get; }
 
     internal int Capacity { get; }
 
-    internal Array? ManagedValues { get; }
+    internal bool ContainsReferences { get; }
+}
+
+/// <summary>
+/// Owns the managed roots for native pointer-sized handle slots. The native segment
+/// is the slot storage; this table is only the GC root side of that representation.
+/// </summary>
+internal sealed class NativeReferenceRootTable
+{
+    private readonly object _gate = new();
+    private readonly Dictionary<long, object?> _roots = [];
+    private readonly Stack<long> _availableIds = [];
+    private long _nextId;
+
+    internal int Count
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _roots.Count;
+            }
+        }
+    }
+
+    internal void Set<T>(NativeSegment segment, nuint offsetBytes, T value)
+    {
+        lock (_gate)
+        {
+            Clear(segment, offsetBytes);
+
+            long id = _availableIds.Count == 0
+                ? checked(++_nextId)
+                : _availableIds.Pop();
+            _roots.Add(id, value);
+            try
+            {
+                WriteSlot(segment, offsetBytes, checked((nuint)id));
+            }
+            catch
+            {
+                _roots.Remove(id);
+                _availableIds.Push(id);
+                throw;
+            }
+        }
+    }
+
+    internal T Get<T>(NativeSegment segment, nuint offsetBytes)
+    {
+        lock (_gate)
+        {
+            nuint rawId = ReadSlot(segment, offsetBytes);
+            if (rawId == 0)
+            {
+                return default!;
+            }
+
+            long id = checked((long)rawId);
+            if (!_roots.TryGetValue(id, out object? value))
+            {
+                throw new InvalidOperationException("The native reference slot has no owner-held root.");
+            }
+
+            return value is null ? default! : (T)value;
+        }
+    }
+
+    internal void Clear(NativeSegment segment, nuint offsetBytes)
+    {
+        lock (_gate)
+        {
+            nuint rawId = ReadSlot(segment, offsetBytes);
+            if (rawId == 0)
+            {
+                return;
+            }
+
+            WriteSlot(segment, offsetBytes, 0);
+            long id = checked((long)rawId);
+            if (_roots.Remove(id))
+            {
+                _availableIds.Push(id);
+            }
+        }
+    }
+
+    internal void ClearRange(NativeSegment segment, nuint offsetBytes, int slotCount)
+    {
+        lock (_gate)
+        {
+            for (int index = 0; index < slotCount; index++)
+            {
+                Clear(segment, checked(offsetBytes + (nuint)(index * IntPtr.Size)));
+            }
+        }
+    }
+
+    private static nuint ReadSlot(NativeSegment segment, nuint offsetBytes)
+    {
+        unsafe
+        {
+            byte* pointer = (byte*)segment.Pointer + checked((nint)offsetBytes);
+            return Unsafe.Read<nuint>(pointer);
+        }
+    }
+
+    private static void WriteSlot(NativeSegment segment, nuint offsetBytes, nuint value)
+    {
+        unsafe
+        {
+            byte* pointer = (byte*)segment.Pointer + checked((nint)offsetBytes);
+            Unsafe.Write(pointer, value);
+        }
+    }
 }
 
 internal sealed class NativeBumpSegment
@@ -345,7 +476,7 @@ internal sealed class NativeAllocation
         int length,
         int capacity,
         nuint storageBytes,
-        Array? managedValues,
+        NativeReferenceRootTable? referenceRoots,
         bool scoped,
         long scopeEpoch)
     {
@@ -356,7 +487,7 @@ internal sealed class NativeAllocation
         Length = length;
         Capacity = capacity;
         StorageBytes = storageBytes;
-        ManagedValues = managedValues;
+        ReferenceRoots = referenceRoots;
         IsScoped = scoped;
         ScopeEpoch = scopeEpoch;
         Lifecycle = NativeAllocationLifecycle.Active;
@@ -378,7 +509,7 @@ internal sealed class NativeAllocation
 
     internal nuint StorageBytes { get; }
 
-    internal Array? ManagedValues { get; }
+    internal NativeReferenceRootTable? ReferenceRoots { get; }
 
     internal bool IsScoped { get; }
 
@@ -390,9 +521,11 @@ internal sealed class NativeAllocation
 
     internal T GetValue<T>(int index)
     {
-        if (ManagedValues is T[] values)
+        if (ReferenceRoots is not null)
         {
-            return values[index];
+            return ReferenceRoots.Get<T>(
+                Segment ?? throw new InvalidOperationException("A reference allocation has no native segment."),
+                checked(OffsetBytes + (nuint)(index * IntPtr.Size)));
         }
 
         if (Length == 0 || Segment is null)
@@ -409,9 +542,12 @@ internal sealed class NativeAllocation
 
     internal void SetValue<T>(int index, T value)
     {
-        if (ManagedValues is T[] values)
+        if (ReferenceRoots is not null)
         {
-            values[index] = value;
+            ReferenceRoots.Set(
+                Segment ?? throw new InvalidOperationException("A reference allocation has no native segment."),
+                checked(OffsetBytes + (nuint)(index * IntPtr.Size)),
+                value);
             return;
         }
 
@@ -429,9 +565,12 @@ internal sealed class NativeAllocation
 
     internal void ClearValues()
     {
-        if (ManagedValues is not null)
+        if (ReferenceRoots is not null && Segment is not null && StorageBytes != 0)
         {
-            Array.Clear(ManagedValues, 0, ManagedValues.Length);
+            ReferenceRoots.ClearRange(
+                Segment,
+                OffsetBytes,
+                checked((int)(StorageBytes / (nuint)IntPtr.Size)));
         }
 
         if (StorageBytes == 0 || Segment is null)
@@ -583,11 +722,17 @@ internal sealed class NativeGeneration
 
     internal Dictionary<long, NativeAllocation> Allocations { get; } = new();
 
+    internal NativeReferenceRootTable ReferenceRoots { get; } = new();
+
     internal List<NativeSlab> Slabs { get; } = [];
 
     internal List<NativeSlab> AvailableSlabs { get; } = [];
 
     internal List<NativeBumpSegment> BumpSegments { get; } = [];
+
+    internal int OrdinaryBumpTraversalIndex { get; set; }
+
+    internal int ScopedBumpTraversalIndex { get; set; } = -1;
 
     internal int ActiveOperations { get; set; }
 
@@ -672,6 +817,33 @@ internal sealed class NativeOwnerKernel
             {
                 return _lifecycle;
             }
+        }
+    }
+
+    internal int CurrentAllocationRecordCountForTest()
+    {
+        lock (_gate)
+        {
+            return _current?.Allocations.Count ?? 0;
+        }
+    }
+
+    internal int CurrentReferenceRootCountForTest()
+    {
+        lock (_gate)
+        {
+            return _current?.ReferenceRoots.Count ?? 0;
+        }
+    }
+
+    internal (int Ordinary, int Scoped, int SegmentCount) CurrentBumpTraversalForTest()
+    {
+        lock (_gate)
+        {
+            NativeGeneration? generation = _current;
+            return generation is null
+                ? (0, -1, 0)
+                : (generation.OrdinaryBumpTraversalIndex, generation.ScopedBumpTraversalIndex, generation.BumpSegments.Count);
         }
     }
 
@@ -791,6 +963,7 @@ internal sealed class NativeOwnerKernel
                 if (slab is null)
                 {
                     slab = AddPoolSlabLocked(generation, length, "pool growth", _lifecycle);
+                    generation.Slabs.Add(slab);
                 }
             }
 
@@ -804,7 +977,7 @@ internal sealed class NativeOwnerKernel
                 length,
                 slab?.Capacity ?? 0,
                 storageBytes: slab is null ? 0 : checked((nuint)slab.Capacity * (nuint)_storageElementSize),
-                managedValues: slab?.ManagedValues,
+                referenceRoots: _containsReferences ? generation.ReferenceRoots : null,
                 scoped,
                 epoch);
             generation.Allocations.Add(allocationId, allocation);
@@ -846,7 +1019,9 @@ internal sealed class NativeOwnerKernel
                     bumpSegment = FindBumpSpaceLocked(generation, byteLength, alignment, scoped);
                     if (bumpSegment is null)
                     {
-                        nuint segmentBytes = ChooseBumpSegmentBytes(generation, byteLength);
+                        nuint segmentBytes = ChooseBumpSegmentBytes(
+                            generation,
+                            checked(byteLength + alignment - 1));
                         NativeSegment segment = NativeSegment.AllocateZeroed(
                             segmentBytes,
                             _ownerKind,
@@ -855,7 +1030,7 @@ internal sealed class NativeOwnerKernel
                             _lifecycle);
                         createdSegment = new NativeBumpSegment(segment);
                         bumpSegment = createdSegment;
-                        generation.BumpSegments.Add(createdSegment);
+                        AppendBumpSegmentLocked(generation, createdSegment);
                         generation.Owner.AddSegment(segment);
                     }
 
@@ -877,9 +1052,6 @@ internal sealed class NativeOwnerKernel
                 }
 
                 long allocationId = NextAllocationIdLocked();
-                Array? managedValues = ContainsReferences(elementType) && length > 0
-                    ? Array.CreateInstance(elementType, length)
-                    : null;
                 NativeAllocation allocation = new(
                     allocationId,
                     slab: null,
@@ -888,7 +1060,9 @@ internal sealed class NativeOwnerKernel
                     length,
                     length,
                     byteLength,
-                    managedValues,
+                    referenceRoots: ContainsReferences(elementType) && length > 0
+                        ? generation.ReferenceRoots
+                        : null,
                     scoped,
                     epoch);
                 generation.Allocations.Add(allocationId, allocation);
@@ -906,6 +1080,7 @@ internal sealed class NativeOwnerKernel
                     generation.BumpSegments.Remove(createdSegment);
                     generation.Owner.RemoveSegment(createdSegment.Segment);
                     createdSegment.Segment.FreeNow();
+                    ResetBumpTraversal(generation);
                 }
                 else if (bumpSegment is not null && cursorCaptured)
                 {
@@ -942,16 +1117,18 @@ internal sealed class NativeOwnerKernel
     {
         NativeMemoryTestHooks.NotifyBeforeOperationEntry(operation, this);
         NativeOperationToken token;
+        NativeGenerationOwner generationOwner;
         lock (_gate)
         {
             NativeGeneration generation = EnsureActiveLocked(operation, generationNumber, allocationId);
             NativeAllocation allocation = GetActiveAllocationLocked(generationNumber, allocationId, operation, generation);
             generation.ActiveOperations++;
             allocation.ActiveOperations++;
+            generationOwner = generation.Owner;
             token = new NativeOperationToken(this, generation.Owner, allocation, generationNumber, operation);
         }
 
-        NativeMemoryTestHooks.NotifyOperationEntered(operation, this, generationNumber, allocationId);
+        NativeMemoryTestHooks.NotifyOperationEntered(operation, this, generationOwner, generationNumber, allocationId);
         return token;
     }
 
@@ -1025,6 +1202,7 @@ internal sealed class NativeOwnerKernel
 
                 allocation.Lifecycle = NativeAllocationLifecycle.Returned;
                 generation.ScopedPending.Remove(allocation);
+                generation.Allocations.Remove(allocation.Id);
             }
             catch
             {
@@ -1141,6 +1319,7 @@ internal sealed class NativeOwnerKernel
             generation.ScopedPending.Clear();
             generation.ScopedBaseline = null;
             generation.ScopeEpoch = checked(generation.ScopeEpoch + 1);
+            ResetBumpTraversal(generation);
         }
     }
 
@@ -1148,7 +1327,11 @@ internal sealed class NativeOwnerKernel
     {
         lock (_gate)
         {
-            EnsureActiveLocked("TrimRetainedMemory");
+            if (!CanTrimLocked("TrimRetainedMemory"))
+            {
+                return 0;
+            }
+
             return TrimRetainedMemoryLocked(null);
         }
     }
@@ -1162,18 +1345,35 @@ internal sealed class NativeOwnerKernel
 
         lock (_gate)
         {
-            EnsureActiveLocked("TrimRetainedMemoryByBytes");
+            if (!CanTrimLocked("TrimRetainedMemoryByBytes"))
+            {
+                return 0;
+            }
+
             return TrimRetainedMemoryLocked(bytesToRelease);
         }
     }
 
-    internal nuint TrimRetainedMemoryByLeaseSize(int leaseLength, int elementSize, Type elementType)
+    internal nuint TrimRetainedMemoryByLeaseSize(
+        int leaseLength,
+        int elementSize,
+        nuint alignment,
+        Type elementType)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(leaseLength);
-        nuint requested = CalculateByteLength(leaseLength, ContainsReferences(elementType) ? IntPtr.Size : elementSize, "lease-sized trim");
+        ArgumentOutOfRangeException.ThrowIfZero(alignment);
         lock (_gate)
         {
-            EnsureActiveLocked("TrimRetainedMemoryByLeaseSize");
+            if (!CanTrimLocked("TrimRetainedMemoryByLeaseSize"))
+            {
+                return 0;
+            }
+
+            int effectiveElementSize = ContainsReferences(elementType) ? IntPtr.Size : elementSize;
+            nuint byteLength = CalculateByteLength(leaseLength, effectiveElementSize, "lease-sized trim");
+            nuint requested = _kind == NativeOwnerKind.Pool
+                ? byteLength
+                : ChooseBumpSegmentBytes(_current!, checked(byteLength + alignment - 1));
             return TrimRetainedMemoryLocked(requested);
         }
     }
@@ -1244,7 +1444,7 @@ internal sealed class NativeOwnerKernel
         {
             NativeSegment segment = NativeSegment.AllocateZeroed(_initialReservation, _ownerKind, generation.Number, operation, observedLifecycle);
             NativeBumpSegment bump = new(segment);
-            generation.BumpSegments.Add(bump);
+            AppendBumpSegmentLocked(generation, bump);
             generation.Owner.AddSegment(segment);
         }
     }
@@ -1266,7 +1466,7 @@ internal sealed class NativeOwnerKernel
 
         try
         {
-            return new NativeSlab(segment, capacity, _elementType!, _containsReferences);
+            return new NativeSlab(segment, capacity, _containsReferences);
         }
         catch
         {
@@ -1302,11 +1502,20 @@ internal sealed class NativeOwnerKernel
 
     private NativeBumpSegment? FindBumpSpaceLocked(NativeGeneration generation, nuint byteLength, nuint alignment, bool scoped)
     {
-        IEnumerable<NativeBumpSegment> segments = scoped ? generation.BumpSegments.AsEnumerable().Reverse() : generation.BumpSegments;
-        foreach (NativeBumpSegment segment in segments)
+        if (generation.BumpSegments.Count == 0)
         {
-            if (scoped)
+            return null;
+        }
+
+        if (scoped)
+        {
+            int start = Math.Min(
+                Math.Max(generation.ScopedBumpTraversalIndex, 0),
+                generation.BumpSegments.Count - 1);
+            for (int index = start; index >= 0; index--)
             {
+                NativeMemoryTestHooks.RecordBumpTraversalVisit();
+                NativeBumpSegment segment = generation.BumpSegments[index];
                 if (segment.HighCursor < segment.LowCursor || byteLength > segment.HighCursor - segment.LowCursor)
                 {
                     continue;
@@ -1315,20 +1524,58 @@ internal sealed class NativeOwnerKernel
                 nuint candidate = AlignDown(segment.HighCursor - byteLength, alignment);
                 if (candidate >= segment.LowCursor && byteLength <= segment.HighCursor - candidate)
                 {
+                    generation.ScopedBumpTraversalIndex = index;
                     return segment;
                 }
             }
-            else
+        }
+        else
+        {
+            int start = Math.Min(
+                Math.Max(generation.OrdinaryBumpTraversalIndex, 0),
+                generation.BumpSegments.Count - 1);
+            for (int index = start; index < generation.BumpSegments.Count; index++)
             {
+                NativeMemoryTestHooks.RecordBumpTraversalVisit();
+                NativeBumpSegment segment = generation.BumpSegments[index];
                 nuint candidate = AlignUp(segment.LowCursor, alignment);
                 if (candidate <= segment.HighCursor && byteLength <= segment.HighCursor - candidate)
                 {
+                    generation.OrdinaryBumpTraversalIndex = index;
                     return segment;
                 }
             }
         }
 
+        if (scoped)
+        {
+            generation.ScopedBumpTraversalIndex = -1;
+        }
+        else
+        {
+            generation.OrdinaryBumpTraversalIndex = generation.BumpSegments.Count;
+        }
+
         return null;
+    }
+
+    private static void AppendBumpSegmentLocked(NativeGeneration generation, NativeBumpSegment segment)
+    {
+        int previousCount = generation.BumpSegments.Count;
+        generation.BumpSegments.Add(segment);
+        int newIndex = generation.BumpSegments.Count - 1;
+        if (previousCount == 0 || generation.OrdinaryBumpTraversalIndex >= previousCount)
+        {
+            generation.OrdinaryBumpTraversalIndex = newIndex;
+        }
+
+        generation.ScopedBumpTraversalIndex = newIndex;
+    }
+
+    private static void ResetBumpTraversal(NativeGeneration generation)
+    {
+        generation.OrdinaryBumpTraversalIndex = 0;
+        generation.ScopedBumpTraversalIndex = generation.BumpSegments.Count - 1;
     }
 
     private long BeginScopedLocked(NativeGeneration generation)
@@ -1446,6 +1693,8 @@ internal sealed class NativeOwnerKernel
                     }
                 }
 
+                ResetBumpTraversal(next);
+
                 InvalidateGenerationLocked(current);
                 _current = next;
                 _generation = next.Number;
@@ -1480,7 +1729,10 @@ internal sealed class NativeOwnerKernel
         if (generation.MemoryDetached)
         {
             ClearGenerationAllocationsLocked(generation, skipActiveOperations: false);
-            generation.Owner.ReleaseToNative();
+            // A tolerant memory return transferred physical ownership to the
+            // finalizable generation owner. Once the last token drains, roots may
+            // be cleared and the kernel may forget the generation, but freeing the
+            // detached segments here would make cleanup synchronous again.
             return;
         }
 
@@ -1500,7 +1752,6 @@ internal sealed class NativeOwnerKernel
 
         foreach (NativeSlab slab in generation.Slabs)
         {
-            ClearSlabStorage(slab);
             TransferSegmentLocked(generation, current, slab.Segment);
             current.Slabs.Add(slab);
             current.AvailableSlabs.Add(slab);
@@ -1566,6 +1817,22 @@ internal sealed class NativeOwnerKernel
         return _current ?? throw new InvalidOperationException("The active native owner has no generation.");
     }
 
+    private bool CanTrimLocked(string operation)
+    {
+        EnsureNotDisposedLocked(operation, 0);
+        if (_lifecycle is NativeOwnerLifecycle.Unleased or NativeOwnerLifecycle.Returned)
+        {
+            return false;
+        }
+
+        if (_lifecycle is NativeOwnerLifecycle.Returning or NativeOwnerLifecycle.RollingOver)
+        {
+            throw CreateInUseException(operation, _generation, 0, ActiveOperationCountLocked(), "The owner is in a lifecycle transition and cannot be trimmed.");
+        }
+
+        return true;
+    }
+
     private void EnsureNotDisposedLocked(string operation, long allocationId)
     {
         if (_lifecycle == NativeOwnerLifecycle.Disposed)
@@ -1601,10 +1868,6 @@ internal sealed class NativeOwnerKernel
     private void ClearAllocationStorage(NativeAllocation allocation)
     {
         allocation.ClearValues();
-        if (allocation.Slab is not null)
-        {
-            ClearSlabStorage(allocation.Slab);
-        }
     }
 
     private void ClearGenerationAllocationsLocked(NativeGeneration generation, bool skipActiveOperations)
@@ -1617,19 +1880,6 @@ internal sealed class NativeOwnerKernel
             }
 
             ClearAllocationStorage(allocation);
-        }
-    }
-
-    private static void ClearSlabStorage(NativeSlab slab)
-    {
-        if (slab.ManagedValues is not null)
-        {
-            Array.Clear(slab.ManagedValues, 0, slab.ManagedValues.Length);
-        }
-
-        unsafe
-        {
-            NativeMemory.Clear((byte*)slab.Segment.Pointer, slab.Segment.ByteLength);
         }
     }
 
@@ -1650,10 +1900,16 @@ internal sealed class NativeOwnerKernel
         if (_kind == NativeOwnerKind.Pool)
         {
             NativeGeneration current = _current!;
-            while (current.AvailableSlabs.Count > 0 && (requestedBytes is null || released < requestedBytes.Value))
+            for (int index = current.Slabs.Count - 1;
+                index >= 0 && (requestedBytes is null || released < requestedBytes.Value);
+                index--)
             {
-                NativeSlab slab = current.AvailableSlabs[^1];
-                current.AvailableSlabs.RemoveAt(current.AvailableSlabs.Count - 1);
+                NativeSlab slab = current.Slabs[index];
+                if (!current.AvailableSlabs.Remove(slab))
+                {
+                    continue;
+                }
+
                 foreach (NativeAllocation allocation in current.Allocations.Values
                     .Where(allocation => allocation.Lifecycle == NativeAllocationLifecycle.Returned
                         && ReferenceEquals(allocation.Slab, slab))
@@ -1689,6 +1945,7 @@ internal sealed class NativeOwnerKernel
             generation.Owner.RemoveSegment(segment.Segment);
             segment.Segment.FreeNow();
             released = checked(released + segment.Segment.ByteLength);
+            ResetBumpTraversal(generation);
         }
 
         return released;
@@ -1758,7 +2015,7 @@ internal sealed class NativeOwnerKernel
     {
         nuint previous = generation.BumpSegments.Count == 0 ? 0 : generation.BumpSegments[^1].Segment.ByteLength;
         nuint growth = DefaultBumpSegmentBytes;
-        if (previous > growth)
+        if (previous != 0)
         {
             try
             {

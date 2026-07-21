@@ -37,12 +37,70 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
                 analyzer.Complete();
             });
+            startContext.RegisterOperationAction(operationContext =>
+            {
+                if (operationContext.Operation is not IAnonymousFunctionOperation anonymous)
+                {
+                    return;
+                }
+
+                MethodFlowAnalyzer analyzer = new(operationContext);
+                analyzer.AnalyzeOperationBlock(anonymous.Body);
+                analyzer.Complete();
+            }, OperationKind.AnonymousFunction);
         });
+    }
+
+    private interface IFlowAnalysisContext
+    {
+        Compilation Compilation { get; }
+
+        CancellationToken CancellationToken { get; }
+
+        ISymbol? OwningSymbol { get; }
+
+        void ReportDiagnostic(Diagnostic diagnostic);
+    }
+
+    private sealed class OperationBlockContextAdapter : IFlowAnalysisContext
+    {
+        private readonly OperationBlockAnalysisContext _context;
+
+        internal OperationBlockContextAdapter(OperationBlockAnalysisContext context)
+        {
+            _context = context;
+        }
+
+        public Compilation Compilation => _context.Compilation;
+
+        public CancellationToken CancellationToken => _context.CancellationToken;
+
+        public ISymbol? OwningSymbol => _context.OwningSymbol;
+
+        public void ReportDiagnostic(Diagnostic diagnostic) => _context.ReportDiagnostic(diagnostic);
+    }
+
+    private sealed class OperationContextAdapter : IFlowAnalysisContext
+    {
+        private readonly OperationAnalysisContext _context;
+
+        internal OperationContextAdapter(OperationAnalysisContext context)
+        {
+            _context = context;
+        }
+
+        public Compilation Compilation => _context.Compilation;
+
+        public CancellationToken CancellationToken => _context.CancellationToken;
+
+        public ISymbol? OwningSymbol => _context.ContainingSymbol;
+
+        public void ReportDiagnostic(Diagnostic diagnostic) => _context.ReportDiagnostic(diagnostic);
     }
 
     private sealed class MethodFlowAnalyzer : OperationWalker
     {
-        private readonly OperationBlockAnalysisContext _context;
+        private readonly IFlowAnalysisContext _context;
         private readonly Dictionary<ISymbol, OwnerState> _owners = new(SymbolEqualityComparer.Default);
         private readonly Dictionary<ISymbol, HandleState> _handles = new(SymbolEqualityComparer.Default);
         private readonly Dictionary<string, LifecycleEffect> _lifecycleSummaries = new(StringComparer.Ordinal);
@@ -60,15 +118,28 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         private int _finallyDepth;
         private bool _cfgMode;
         private bool _suppressDiagnostics;
+        private SyntaxTree? _analysisRootTree;
+        private TextSpan _analysisRootSpan;
+        private bool _hasAnalysisRoot;
+        private bool _isStandaloneClosureAnalysis;
 
         internal MethodFlowAnalyzer(OperationBlockAnalysisContext context)
         {
-            _context = context;
+            _context = new OperationBlockContextAdapter(context);
+        }
+
+        internal MethodFlowAnalyzer(OperationAnalysisContext context)
+        {
+            _context = new OperationContextAdapter(context);
         }
 
         internal void AnalyzeOperationBlock(IOperation operationBlock)
         {
             _context.CancellationToken.ThrowIfCancellationRequested();
+            _analysisRootTree = operationBlock.Syntax.SyntaxTree;
+            _analysisRootSpan = operationBlock.Syntax.Span;
+            _hasAnalysisRoot = true;
+            _isStandaloneClosureAnalysis = operationBlock.Parent is IAnonymousFunctionOperation;
             ReportRegionParameters();
 
             if (operationBlock is IMethodBodyOperation methodBody)
@@ -162,7 +233,12 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                             owner.DisplayName);
                     }
 
-                    if (owner.IsField || owner.IsUsing || owner.IsRegion || (owner.Returned && !owner.Ambiguous && owner.GenerationRelation != GenerationRelationKind.Unknown) || (owner.Disposed && !owner.Ambiguous && owner.GenerationRelation != GenerationRelationKind.Unknown))
+                    if (owner.IsExternalReceiver
+                        || owner.IsField
+                        || owner.IsUsing
+                        || owner.IsRegion
+                        || (owner.Returned && !owner.Ambiguous && owner.GenerationRelation != GenerationRelationKind.Unknown)
+                        || (owner.Disposed && !owner.Ambiguous && owner.GenerationRelation != GenerationRelationKind.Unknown))
                     {
                         continue;
                     }
@@ -616,6 +692,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     merged.Returned &= owner.Returned;
                     merged.Disposed &= owner.Disposed;
                     merged.Unleased &= owner.Unleased;
+                    merged.ScopedOwnerEligible &= owner.ScopedOwnerEligible;
                     merged.Ambiguous |= owner.Ambiguous;
                     merged.ScopedPending |= owner.ScopedPending;
                     merged.ScopedPendingAmbiguous |= owner.ScopedPendingAmbiguous;
@@ -631,6 +708,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 if (!presentOnEveryPath)
                 {
                     merged.Ambiguous = true;
+                    merged.ScopedOwnerEligible = false;
                 }
 
                 if (paths.Any(path => path.Owners.TryGetValue(symbol, out OwnerState? owner) && owner.Returned != merged.Returned)
@@ -876,6 +954,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     || pair.Value.Returned != other.Returned
                     || pair.Value.Disposed != other.Disposed
                     || pair.Value.Unleased != other.Unleased
+                    || pair.Value.ScopedOwnerEligible != other.ScopedOwnerEligible
                     || pair.Value.Ambiguous != other.Ambiguous
                     || pair.Value.ScopedPending != other.ScopedPending
                     || pair.Value.ScopedPendingAmbiguous != other.ScopedPendingAmbiguous
@@ -1292,7 +1371,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             _closureDepth++;
             try
             {
-                base.VisitAnonymousFunction(operation);
+                Visit(operation.Body);
             }
             finally
             {
@@ -1305,7 +1384,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             _closureDepth++;
             try
             {
-                base.VisitLocalFunction(operation);
+                Visit(operation.Body);
             }
             finally
             {
@@ -1333,6 +1412,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 }
                 else if (_owners.TryGetValue(operation.Local, out OwnerState? owner) && !owner.IsField)
                 {
+                    owner.ScopedOwnerEligible = false;
                     Report(
                         NativeAllocationDiagnosticDescriptors.OwnerAlias,
                         operation.Syntax,
@@ -1460,6 +1540,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 requiresDeterministicReturn,
                 operation.Syntax,
                 regionScope);
+            owner.ScopedOwnerEligible = target.Symbol is ILocalSymbol
+                && (!isRegion || isUsing);
             switch (GetDeclarationActivation(operation))
             {
                 case DeclarationActivation.Unleased:
@@ -1548,12 +1630,16 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             handle.GenerationRelation = owner.GenerationRelation;
             if (scopedAcquisition)
             {
-                if (target.Symbol is not ILocalSymbol || !IsDirectScopedLocalInitialization(operation.Syntax, target.Symbol))
+                if (!owner.ScopedOwnerEligible
+                    || target.Symbol is not ILocalSymbol
+                    || !IsDirectScopedLocalInitialization(operation.Syntax, target.Symbol))
                 {
                     Report(
                         NativeAllocationDiagnosticDescriptors.ScopedAcquisitionEscape,
                         operation.Syntax,
-                        operation.TargetMethod.Name);
+                        owner.ScopedOwnerEligible
+                            ? operation.TargetMethod.Name
+                            : operation.TargetMethod.Name + " (receiver is not an exclusive local owner)");
                 }
                 else
                 {
@@ -1561,7 +1647,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     owner.ScopedPending = true;
                 }
             }
-            else if (IsDirectScopedLocalInitialization(operation.Syntax, target.Symbol)
+            else if (owner.ScopedOwnerEligible
+                && IsDirectScopedLocalInitialization(operation.Syntax, target.Symbol)
                 && operation.TargetMethod.Name is "Rent" or "Lease" or "Scratch")
             {
                 Report(
@@ -1628,6 +1715,19 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             {
                 if (!CheckOwnerActive(owner, syntax, name))
                 {
+                    return;
+                }
+
+                if (!owner.ScopedOwnerEligible)
+                {
+                    ReportWithProvenance(
+                        NativeAllocationDiagnosticDescriptors.GenerationReturnLiveValue,
+                        syntax,
+                        owner.DisplayName + " -> non-exclusive receiver",
+                        owner.DisplayName,
+                        name,
+                        "non-exclusive receiver",
+                        "Scoped recycling requires an analyzer-proven exclusive local owner; a parameter, field, alias, capture, or unknown receiver cannot discharge another frame's pending set.");
                     return;
                 }
 
@@ -1983,6 +2083,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
         private void ReportOwnerTransfer(OwnerState owner, Target target)
         {
+            owner.ScopedOwnerEligible = false;
             Report(
                 NativeAllocationDiagnosticDescriptors.OwnerAlias,
                 target.Syntax,
@@ -2026,7 +2127,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
             foreach (OwnerState owner in _owners.Values)
             {
-                if (!owner.IsField
+                if (!owner.IsExternalReceiver
+                    && !owner.IsField
                     && !owner.IsUsing
                     && !owner.IsRegion
                     && owner.RequiresDeterministicReturn
@@ -2043,31 +2145,70 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
         private OwnerState? GetOwner(IOperation? operation)
         {
-            if (operation is null || !IsOwnerType(operation.Type))
+            if (operation is null)
             {
                 return null;
             }
 
-            ISymbol? symbol = GetSymbol(operation);
+            ISymbol? symbol = GetSymbol(operation) ?? GetSemanticSymbol(operation);
             if (symbol is not null && _owners.TryGetValue(symbol, out OwnerState? existing))
             {
                 return existing;
             }
 
+            SemanticModel model = _context.Compilation.GetSemanticModel(operation.Syntax.SyntaxTree);
+            ITypeSymbol? type = operation.Type
+                ?? (symbol as ILocalSymbol)?.Type
+                ?? model.GetTypeInfo(operation.Syntax, _context.CancellationToken).Type;
+            if (!IsOwnerType(type))
+            {
+                return null;
+            }
+
             OwnerState owner = new(
                 symbol,
-                operation.Type!,
-                IsNativeRegion(operation.Type),
+                type!,
+                IsNativeRegion(type),
                 isUsing: false,
                 symbol is IFieldSymbol,
                 requiresDeterministicReturn: false,
                 operation.Syntax);
             if (symbol is not null)
             {
+                owner.IsExternalReceiver = _context is OperationContextAdapter
+                    || _isStandaloneClosureAnalysis
+                    || operation.Syntax.Ancestors().Any(node => node is AnonymousFunctionExpressionSyntax)
+                    || !IsSymbolDeclaredInsideAnalysisRoot(symbol);
                 _owners[symbol] = owner;
             }
 
             return owner;
+        }
+
+        private bool IsSymbolDeclaredInsideAnalysisRoot(ISymbol symbol)
+        {
+            if (!_hasAnalysisRoot || _analysisRootTree is null)
+            {
+                return false;
+            }
+
+            foreach (SyntaxReference reference in symbol.DeclaringSyntaxReferences)
+            {
+                SyntaxNode declaration = reference.GetSyntax(_context.CancellationToken);
+                if (ReferenceEquals(declaration.SyntaxTree, _analysisRootTree)
+                    && _analysisRootSpan.Contains(declaration.SpanStart))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private ISymbol? GetSemanticSymbol(IOperation operation)
+        {
+            SemanticModel model = _context.Compilation.GetSemanticModel(operation.Syntax.SyntaxTree);
+            return model.GetSymbolInfo(operation.Syntax, _context.CancellationToken).Symbol;
         }
 
         private HandleState? GetHandle(IOperation? operation)
@@ -2931,9 +3072,9 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         private static bool IsHandleCreatingInvocation(IOperation operation)
         {
             return operation is IInvocationOperation invocation
-                && (((invocation.TargetMethod.Name is "Rent" or "LeaseScoped") && IsNativePool(invocation.Instance?.Type))
-                    || ((invocation.TargetMethod.Name is "Lease" or "LeaseScoped") && IsNativeRegion(invocation.Instance?.Type))
-                    || ((invocation.TargetMethod.Name is "Scratch" or "ScratchScoped") && IsNativeArena(invocation.Instance?.Type)));
+                && (((invocation.TargetMethod.Name is "Rent" or "LeaseScoped") && IsNativePool(invocation.TargetMethod.ContainingType))
+                    || ((invocation.TargetMethod.Name is "Lease" or "LeaseScoped") && IsNativeRegion(invocation.TargetMethod.ContainingType))
+                    || ((invocation.TargetMethod.Name is "Scratch" or "ScratchScoped") && IsNativeArena(invocation.TargetMethod.ContainingType)));
         }
 
         private static Target FindTarget(IOperation operation)
@@ -3280,6 +3421,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             internal bool Returned { get; set; }
             internal bool Disposed { get; set; }
             internal bool Unleased { get; set; }
+            internal bool ScopedOwnerEligible { get; set; }
+            internal bool IsExternalReceiver { get; set; }
             internal bool Ambiguous { get; set; }
             internal bool ScopedPending { get; set; }
             internal bool ScopedPendingAmbiguous { get; set; }
@@ -3304,6 +3447,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 copy.Returned = Returned;
                 copy.Disposed = Disposed;
                 copy.Unleased = Unleased;
+                copy.ScopedOwnerEligible = ScopedOwnerEligible;
+                copy.IsExternalReceiver = IsExternalReceiver;
                 copy.Ambiguous = Ambiguous;
                 copy.ScopedPending = ScopedPending;
                 copy.ScopedPendingAmbiguous = ScopedPendingAmbiguous;

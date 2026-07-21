@@ -115,6 +115,16 @@ generation once, and leaves the arena active. Idle segments are reused by the ne
 generation; an entered operation on an old generation keeps its retired segment alive
 until the operation exits.
 
+Typed pools are preferred when repeated element types and lease shapes are known, and a
+region is preferred when heterogeneous values share one braced lexical lifetime. Use an
+arena only for a genuinely heterogeneous reusable bulk lifetime. Its one shared budget
+and operation gate mean that a capacity spike in one type can retain space for every
+type. Interior fragmentation cannot be compacted or combined, and NAM does not infer
+managed reachability, move live values, or provide size classes. The developer remains
+responsible for explicit scratch-recycle, generation-release, trim, growth, and final
+return boundaries; an arena is not a reachability-based replacement for managed
+allocation or a predictable typed pool.
+
 ## Delayed activation
 
 Construction normally publishes an active generation. Passing

@@ -111,9 +111,9 @@ public sealed class ArenaLifecycleTests
                 Assert.Throws<NativeAllocationStateException>(arena.ReleaseLeasesToNativeMemory);
                 Assert.Throws<NativeAllocationStateException>(arena.ReleaseLeasesToGarbageCollector);
                 Assert.Throws<NativeAllocationStateException>(arena.RecycleScoped);
-                Assert.Throws<NativeAllocationStateException>(() => { _ = arena.TrimRetainedMemory(); });
-                Assert.Throws<NativeAllocationStateException>(() => arena.TrimRetainedMemoryByBytes(1));
-                Assert.Throws<NativeAllocationStateException>(() => arena.TrimRetainedMemoryByLeaseSize<int>(1));
+                Assert.Equal((nuint)0, arena.TrimRetainedMemory());
+                Assert.Equal((nuint)0, arena.TrimRetainedMemoryByBytes(1));
+                Assert.Equal((nuint)0, arena.TrimRetainedMemoryByLeaseSize<int>(1));
                 Assert.Equal(before.AllocationCount, NativeMemoryTestHooks.Snapshot().AllocationCount);
 
                 arena.LeaseFromMemory();

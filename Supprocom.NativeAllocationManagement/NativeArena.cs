@@ -7,6 +7,12 @@ public sealed class NativeArena : IDisposable
 
     internal NativeOwnerLifecycle CurrentLifecycle => _kernel.Lifecycle;
 
+    internal int CurrentAllocationRecordCountForTest => _kernel.CurrentAllocationRecordCountForTest();
+
+    internal int CurrentReferenceRootCountForTest => _kernel.CurrentReferenceRootCountForTest();
+
+    internal (int Ordinary, int Scoped, int SegmentCount) CurrentBumpTraversalForTest => _kernel.CurrentBumpTraversalForTest();
+
     /// <summary>Creates an active arena unless the first generation is explicitly deferred.</summary>
     /// <param name="preAllocateBytes">Optional initial byte reservation.</param>
     /// <param name="returnMemoryOnDispose">The physical cleanup policy used by <see cref="Dispose"/>.</param>
@@ -74,7 +80,11 @@ public sealed class NativeArena : IDisposable
 
     /// <summary>Trims by the exact physical footprint requested by a heterogeneous scratch shape.</summary>
     public nuint TrimRetainedMemoryByLeaseSize<T>(int leaseLength = 1) =>
-        _kernel.TrimRetainedMemoryByLeaseSize(leaseLength, NativeTypeLayout.StorageSize<T>(), typeof(T));
+        _kernel.TrimRetainedMemoryByLeaseSize(
+            leaseLength,
+            NativeTypeLayout.StorageSize<T>(),
+            NativeTypeLayout.Alignment<T>(),
+            typeof(T));
 
     /// <summary>Permanently closes the arena and applies its configured memory policy.</summary>
     public void Dispose() => _kernel.Dispose();

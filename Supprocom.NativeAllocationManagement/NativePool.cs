@@ -8,6 +8,10 @@ public sealed class NativePool<T> : IDisposable
 
     internal NativeOwnerLifecycle CurrentLifecycle => _kernel.Lifecycle;
 
+    internal int CurrentAllocationRecordCountForTest => _kernel.CurrentAllocationRecordCountForTest();
+
+    internal int CurrentReferenceRootCountForTest => _kernel.CurrentReferenceRootCountForTest();
+
     /// <summary>Creates a typed pool, active immediately unless declaration leasing is disabled.</summary>
     /// <param name="initialCapacity">Optional number of elements reserved immediately or on activation.</param>
     /// <param name="returnMemoryOnDispose">The physical cleanup policy used by <see cref="Dispose"/>.</param>
@@ -68,7 +72,11 @@ public sealed class NativePool<T> : IDisposable
 
     /// <summary>Trims by the exact physical footprint requested by a typed lease shape.</summary>
     public nuint TrimRetainedMemoryByLeaseSize(int leaseLength = 1) =>
-        _kernel.TrimRetainedMemoryByLeaseSize(leaseLength, NativeTypeLayout.StorageSize<T>(), typeof(T));
+        _kernel.TrimRetainedMemoryByLeaseSize(
+            leaseLength,
+            NativeTypeLayout.StorageSize<T>(),
+            NativeTypeLayout.Alignment<T>(),
+            typeof(T));
 
     /// <summary>Permanently closes the owner and applies its configured memory policy.</summary>
     public void Dispose() => _kernel.Dispose();

@@ -328,4 +328,85 @@ public sealed class ArenaAnalyzerContractTests
         Assert.Equal(DiagnosticSeverity.Error, error.Severity);
         Assert.Equal("pool -> value -> scoped callback", error.Properties["NAM.Provenance"]);
     }
+
+    [Fact]
+    public async Task ScopedRecyclingRequiresTheSameExclusiveOwnerProofAsScopedAcquisition()
+    {
+        ImmutableArray<Diagnostic> parameter = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+            public static class Sample
+            {
+                public static void Run(NativeArena arena)
+                {
+                    scoped ArenaLease<int> value = arena.ScratchScoped<int>(1);
+                    arena.RecycleScoped();
+                }
+            }
+            """);
+        string[] parameterIds = AnalyzerContractTests.NativeDiagnostics(parameter);
+        Assert.Contains("NAM1018", parameterIds);
+        Assert.Contains("NAM1007", parameterIds);
+        Assert.DoesNotContain("NAM1019", parameterIds);
+
+        ImmutableArray<Diagnostic> field = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+            public static class Sample
+            {
+                private static NativeArena Arena = new();
+                public static void Run()
+                {
+                    scoped ArenaLease<int> value = Arena.ScratchScoped<int>(1);
+                    Arena.RecycleScoped();
+                }
+            }
+            """);
+        string[] fieldIds = AnalyzerContractTests.NativeDiagnostics(field);
+        Assert.Contains("NAM1018", fieldIds);
+        Assert.Contains("NAM1007", fieldIds);
+        Assert.DoesNotContain("NAM1019", fieldIds);
+
+        ImmutableArray<Diagnostic> alias = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    NativeArena arena = new();
+                    NativeArena alias = arena;
+                    scoped ArenaLease<int> value = alias.ScratchScoped<int>(1);
+                    alias.RecycleScoped();
+                    arena.Dispose();
+                }
+            }
+            """);
+        string[] aliasIds = AnalyzerContractTests.NativeDiagnostics(alias);
+        Assert.Contains("NAM1018", aliasIds);
+        Assert.Contains("NAM1007", aliasIds);
+
+        ImmutableArray<Diagnostic> capture = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using System;
+            using Supprocom.NativeAllocationManagement;
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    NativeArena arena = new();
+                    Action work = () =>
+                    {
+                        scoped ArenaLease<int> value = arena.ScratchScoped<int>(1);
+                        arena.RecycleScoped();
+                    };
+                    work();
+                    arena.Dispose();
+                }
+            }
+            """);
+        string[] captureIds = AnalyzerContractTests.NativeDiagnostics(capture);
+        Assert.Contains("NAM1018", captureIds);
+        Assert.Contains("NAM1007", captureIds);
+    }
 }

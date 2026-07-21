@@ -54,9 +54,9 @@ public sealed class RuntimeLifecycleTests
                 Assert.Throws<NativeAllocationStateException>(pool.ReleaseLeasesToNativeMemory);
                 Assert.Throws<NativeAllocationStateException>(pool.ReleaseLeasesToGarbageCollector);
                 Assert.Throws<NativeAllocationStateException>(pool.RecycleScoped);
-                Assert.Throws<NativeAllocationStateException>(() => { _ = pool.TrimRetainedMemory(); });
-                Assert.Throws<NativeAllocationStateException>(() => pool.TrimRetainedMemoryByBytes(1));
-                Assert.Throws<NativeAllocationStateException>(() => pool.TrimRetainedMemoryByLeaseSize(1));
+                Assert.Equal((nuint)0, pool.TrimRetainedMemory());
+                Assert.Equal((nuint)0, pool.TrimRetainedMemoryByBytes(1));
+                Assert.Equal((nuint)0, pool.TrimRetainedMemoryByLeaseSize(1));
                 Assert.Equal(before.AllocationCount, NativeMemoryTestHooks.Snapshot().AllocationCount);
 
                 pool.LeaseFromMemory();
@@ -105,9 +105,9 @@ public sealed class RuntimeLifecycleTests
                 Assert.Equal(NativeOwnerLifecycle.Unleased, nativeReturnBeforeActivation.CurrentLifecycle);
                 Assert.Equal(NativeOwnerLifecycle.Unleased, garbageReturnBeforeActivation.CurrentLifecycle);
                 Assert.IsType<NativeAllocationStateException>(CaptureRegionRecycleState(region));
-                Assert.IsType<NativeAllocationStateException>(CaptureRegionTrimState(region, 0));
-                Assert.IsType<NativeAllocationStateException>(CaptureRegionTrimState(region, 1));
-                Assert.IsType<NativeAllocationStateException>(CaptureRegionTrimState(region, 2));
+                Assert.Equal((nuint)0, CaptureRegionTrimState(region, 0));
+                Assert.Equal((nuint)0, CaptureRegionTrimState(region, 1));
+                Assert.Equal((nuint)0, CaptureRegionTrimState(region, 2));
                 Assert.Equal(before.AllocationCount, NativeMemoryTestHooks.Snapshot().AllocationCount);
 
                 region.LeaseFromMemory();
@@ -963,29 +963,14 @@ public sealed class RuntimeLifecycleTests
         throw new Xunit.Sdk.XunitException("Expected an unleased region recycle failure.");
     }
 
-    private static NativeAllocationStateException CaptureRegionTrimState(NativeRegion region, int trimKind)
+    private static nuint CaptureRegionTrimState(NativeRegion region, int trimKind)
     {
-        try
+        return trimKind switch
         {
-            switch (trimKind)
-            {
-                case 0:
-                    _ = region.TrimRetainedMemory();
-                    break;
-                case 1:
-                    _ = region.TrimRetainedMemoryByBytes(1);
-                    break;
-                default:
-                    _ = region.TrimRetainedMemoryByLeaseSize<int>(1);
-                    break;
-            }
-        }
-        catch (NativeAllocationStateException exception)
-        {
-            return exception;
-        }
-
-        throw new Xunit.Sdk.XunitException("Expected an unleased region trim failure.");
+            0 => region.TrimRetainedMemory(),
+            1 => region.TrimRetainedMemoryByBytes(1),
+            _ => region.TrimRetainedMemoryByLeaseSize<int>(1)
+        };
     }
 
     private static NativeAllocationDisposedException CaptureRegionDisposedActivation(NativeRegion region)

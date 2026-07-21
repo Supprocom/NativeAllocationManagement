@@ -18,6 +18,10 @@ public readonly ref struct NativeRegion
 
     internal NativeOwnerLifecycle CurrentLifecycle => _kernel?.Lifecycle ?? NativeOwnerLifecycle.Uninitialized;
 
+    internal int CurrentAllocationRecordCountForTest => _kernel?.CurrentAllocationRecordCountForTest() ?? 0;
+
+    internal int CurrentReferenceRootCountForTest => _kernel?.CurrentReferenceRootCountForTest() ?? 0;
+
     /// <summary>Creates an active region unless the first generation is explicitly deferred.</summary>
     /// <param name="preAllocateBytes">Optional initial byte reservation.</param>
     /// <param name="returnMemoryOnDispose">The physical cleanup policy used by <see cref="Dispose"/>.</param>
@@ -86,6 +90,7 @@ public readonly ref struct NativeRegion
         GetKernel(nameof(TrimRetainedMemoryByLeaseSize)).TrimRetainedMemoryByLeaseSize(
             leaseLength,
             NativeTypeLayout.StorageSize<T>(),
+            NativeTypeLayout.Alignment<T>(),
             typeof(T));
 
     /// <summary>Ends the lexical region using its configured memory policy.</summary>

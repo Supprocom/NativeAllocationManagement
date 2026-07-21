@@ -89,6 +89,16 @@ An arena uses one two-ended segment bank. Ordinary acquisitions grow from the lo
 scoped acquisitions grow from the high end. The shared kernel, generation gate, stale
 handle checks, and reference-root clearing are the same for pools, regions, and arenas.
 
+Choose an arena only when genuinely heterogeneous values share one reusable bulk
+lifetime. Prefer typed pools when the element types and lease shapes are predictable,
+because an arena gives up type-specific capacity planning and can retain a larger shared
+budget after one unusual spike. Prefer a region when all values belong to one explicit
+lexical lifetime. Arena interior holes cannot be compacted or combined, the runtime does
+not infer managed reachability or size classes, and every type shares one allocation
+budget and operation gate. Developers must therefore choose the recycle, release, trim,
+growth, and final-return boundaries explicitly; an arena is not a general replacement
+for pools, regions, or ordinary managed allocation.
+
 ## Delayed activation and scoped recycling
 
 All owners accept `doNotLeaseOnDeclaration: true`. Construction retains the requested
