@@ -168,7 +168,12 @@ public sealed class OwnerWideLifecycleTests
                 Pooled<int> fresh = pool.Rent(1);
                 Assert.Equal([4L], pool.CurrentSegmentOrdinalsForTest);
                 Assert.Equal(0, fresh[0]);
-                freeBeforeDrain = NativeMemoryTestHooks.Snapshot().FreeCount;
+                long freeBeforeStrictReturn = NativeMemoryTestHooks.Snapshot().FreeCount;
+                pool.ReturnMemoryToNativeMemory();
+                Assert.Equal(NativeOwnerLifecycle.Returned, pool.CurrentLifecycle);
+                long freeAfterStrictReturn = NativeMemoryTestHooks.Snapshot().FreeCount;
+                Assert.True(freeAfterStrictReturn > freeBeforeStrictReturn);
+                freeBeforeDrain = freeAfterStrictReturn;
             }
             await ReleaseBusyAsync(busy, [1, 0]);
             Assert.Equal(freeBeforeDrain, NativeMemoryTestHooks.Snapshot().FreeCount);
@@ -207,7 +212,12 @@ public sealed class OwnerWideLifecycleTests
                 ArenaLease<int> fresh = arena.Scratch<int>(1);
                 Assert.Equal([4L], arena.CurrentSegmentOrdinalsForTest);
                 Assert.Equal(0, fresh[0]);
-                freeBeforeDrain = NativeMemoryTestHooks.Snapshot().FreeCount;
+                long freeBeforeStrictReturn = NativeMemoryTestHooks.Snapshot().FreeCount;
+                arena.ReturnMemoryToNativeMemory();
+                Assert.Equal(NativeOwnerLifecycle.Returned, arena.CurrentLifecycle);
+                long freeAfterStrictReturn = NativeMemoryTestHooks.Snapshot().FreeCount;
+                Assert.True(freeAfterStrictReturn > freeBeforeStrictReturn);
+                freeBeforeDrain = freeAfterStrictReturn;
             }
             await ReleaseBusyAsync(busy, [1, 0]);
             Assert.Equal(freeBeforeDrain, NativeMemoryTestHooks.Snapshot().FreeCount);
@@ -224,68 +234,296 @@ public sealed class OwnerWideLifecycleTests
     }
 
     [Fact]
-    public async Task PoolGarbageCollectorDisposalUsesOwnerWideAdmissionAndNeverFreesDetachedStorage()
+    public async Task PoolMultipleDetachedGenerationsDoNotBlockFreshTransitions()
     {
         NativeMemoryTestHooks.Reset();
-        NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToGarbageCollector);
-        BusyGenerationSet busy = StartBusyPoolGenerations(pool, 2);
+        NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        List<NativeGenerationOwner> retainedOwners = [];
+        NativeMemoryTestHooks.SetOperationEnteredWithGenerationOwner((operation, owner) =>
+        {
+            if (operation == nameof(Pooled<int>.Access))
+            {
+                retainedOwners.Add(owner);
+            }
+        });
+        long detachedBytesAfterFinalization = -1;
+
+        BusyGenerationSet first = StartBusyPoolGenerations(pool, 1);
+        ManualResetEventSlim secondAllow = new();
+        ManualResetEventSlim secondEntered = new();
+        Task<Exception?>? secondWorker = null;
 
         try
         {
-            WaitForEntry(busy);
             pool.ReturnMemoryToGarbageCollector();
+            pool.LeaseFromMemory();
+            secondWorker = Task.Run(() => HoldBusyPoolLease(pool, 2, 2, secondAllow, secondEntered));
+            Assert.True(secondEntered.Wait(TimeSpan.FromSeconds(10)));
+            pool.ReleaseLeasesToGarbageCollector();
+            pool.ReturnMemoryToGarbageCollector();
+            Assert.Equal(0, pool.RetiredGenerationCountForTest);
 
-            NativeAllocationInUseException rejection = Assert.Throws<NativeAllocationInUseException>(pool.Dispose);
-            Assert.Equal(2, rejection.ActiveOperationCount);
-            Assert.Equal(2, rejection.OwnerWideBusyGenerationCount);
+            pool.LeaseFromMemory();
+            Assert.Empty(pool.CurrentSegmentOrdinalsForTest);
+            pool.ReturnMemoryToNativeMemory();
             Assert.Equal(NativeOwnerLifecycle.Returned, pool.CurrentLifecycle);
+            long freeBeforeDrain = NativeMemoryTestHooks.Snapshot().FreeCount;
 
-            await ReleaseBusyAsync(busy, [1, 0]);
-            long freeBeforeDispose = NativeMemoryTestHooks.Snapshot().FreeCount;
+            secondAllow.Set();
+            Assert.Null(await secondWorker);
+            await ReleaseBusyAsync(first, [0]);
+            Assert.Equal(freeBeforeDrain, NativeMemoryTestHooks.Snapshot().FreeCount);
+        }
+        finally
+        {
+            secondAllow.Set();
+            await FinishBusyAsync(first);
+            if (secondWorker is not null)
+            {
+                _ = await secondWorker;
+            }
+
+            retainedOwners.Clear();
+            NativeMemoryTestHooks.SetOperationEnteredWithGenerationOwner(null);
             pool.Dispose();
-            Assert.Equal(NativeOwnerLifecycle.Disposed, pool.CurrentLifecycle);
-            Assert.Equal(freeBeforeDispose, NativeMemoryTestHooks.Snapshot().FreeCount);
             ForceFinalizationUntilDetachedStorageIsGone();
-            Assert.Equal(0, NativeMemoryTestHooks.Snapshot().DetachedNativeBytes);
+            detachedBytesAfterFinalization = NativeMemoryTestHooks.Snapshot().DetachedNativeBytes;
+            NativeMemoryTestHooks.Reset();
+        }
+
+        Assert.Equal(0, detachedBytesAfterFinalization);
+    }
+
+    [Fact]
+    public async Task ArenaMultipleDetachedGenerationsDoNotBlockFreshTransitions()
+    {
+        NativeMemoryTestHooks.Reset();
+        NativeArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        List<NativeGenerationOwner> retainedOwners = [];
+        NativeMemoryTestHooks.SetOperationEnteredWithGenerationOwner((operation, owner) =>
+        {
+            if (operation == nameof(ArenaLease<int>.Access))
+            {
+                retainedOwners.Add(owner);
+            }
+        });
+        long detachedBytesAfterFinalization = -1;
+
+        BusyGenerationSet first = StartBusyArenaGenerations(arena, 1);
+        ManualResetEventSlim secondAllow = new();
+        ManualResetEventSlim secondEntered = new();
+        Task<Exception?>? secondWorker = null;
+
+        try
+        {
+            arena.ReturnMemoryToGarbageCollector();
+            arena.LeaseFromMemory();
+            secondWorker = Task.Run(() => HoldBusyArenaLease(arena, 2, 2, secondAllow, secondEntered));
+            Assert.True(secondEntered.Wait(TimeSpan.FromSeconds(10)));
+            arena.ReleaseLeasesToGarbageCollector();
+            arena.ReturnMemoryToGarbageCollector();
+            Assert.Equal(0, arena.RetiredGenerationCountForTest);
+
+            arena.LeaseFromMemory();
+            Assert.Empty(arena.CurrentSegmentOrdinalsForTest);
+            arena.ReturnMemoryToNativeMemory();
+            Assert.Equal(NativeOwnerLifecycle.Returned, arena.CurrentLifecycle);
+            long freeBeforeDrain = NativeMemoryTestHooks.Snapshot().FreeCount;
+
+            secondAllow.Set();
+            Assert.Null(await secondWorker);
+            await ReleaseBusyAsync(first, [0]);
+            Assert.Equal(freeBeforeDrain, NativeMemoryTestHooks.Snapshot().FreeCount);
+        }
+        finally
+        {
+            secondAllow.Set();
+            await FinishBusyAsync(first);
+            if (secondWorker is not null)
+            {
+                _ = await secondWorker;
+            }
+
+            retainedOwners.Clear();
+            NativeMemoryTestHooks.SetOperationEnteredWithGenerationOwner(null);
+            arena.Dispose();
+            ForceFinalizationUntilDetachedStorageIsGone();
+            detachedBytesAfterFinalization = NativeMemoryTestHooks.Snapshot().DetachedNativeBytes;
+            NativeMemoryTestHooks.Reset();
+        }
+
+        Assert.Equal(0, detachedBytesAfterFinalization);
+    }
+
+    [Fact]
+    public async Task DetachedPoolDrainFailureRemainsFinalizableAndOutsideAllocatorOwnership()
+    {
+        NativeMemoryTestHooks.Reset();
+        NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeGenerationOwner? retainedOwner = null;
+        NativeMemoryTestHooks.SetOperationEnteredWithGenerationOwner((operation, owner) =>
+        {
+            if (operation == nameof(Pooled<int>.Access))
+            {
+                retainedOwner = owner;
+            }
+        });
+        BusyGenerationSet busy = StartBusyPoolGenerations(pool, 1);
+        long freeBeforeFreshReturn = -1;
+        long detachedBytesAfterFinalization = -1;
+        long freeAfterFinalization = -1;
+
+        try
+        {
+            pool.ReturnMemoryToGarbageCollector();
+            pool.LeaseFromMemory();
+            Assert.Empty(pool.CurrentSegmentOrdinalsForTest);
+            NativeMemoryTestHooks.FailAfterCommitBoundary(1);
+            busy.Allows[0].Set();
+            NativeAllocationQuarantinedException failure =
+                Assert.IsType<NativeAllocationQuarantinedException>(await busy.Workers[0]);
+            Assert.Equal("clear", failure.Boundary);
+            Assert.Equal(0, pool.RetiredGenerationCountForTest);
+            Assert.Equal(0, pool.QuarantinedGenerationCountForTest);
+
+            freeBeforeFreshReturn = NativeMemoryTestHooks.Snapshot().FreeCount;
+            pool.ReturnMemoryToNativeMemory();
+            Assert.Equal(freeBeforeFreshReturn, NativeMemoryTestHooks.Snapshot().FreeCount);
+            Assert.Equal(NativeOwnerLifecycle.Returned, pool.CurrentLifecycle);
         }
         finally
         {
             await FinishBusyAsync(busy);
-            NativeMemoryTestHooks.Reset();
+            retainedOwner = null;
+            NativeMemoryTestHooks.SetOperationEnteredWithGenerationOwner(null);
             pool.Dispose();
+            ForceFinalizationUntilDetachedStorageIsGone();
+            detachedBytesAfterFinalization = NativeMemoryTestHooks.Snapshot().DetachedNativeBytes;
+            freeAfterFinalization = NativeMemoryTestHooks.Snapshot().FreeCount;
+            NativeMemoryTestHooks.Reset();
+        }
+
+        Assert.Equal(0, detachedBytesAfterFinalization);
+        Assert.True(freeAfterFinalization > freeBeforeFreshReturn);
+    }
+
+    [Fact]
+    public async Task DetachedArenaDrainFailureRemainsFinalizableAndOutsideAllocatorOwnership()
+    {
+        NativeMemoryTestHooks.Reset();
+        NativeArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeGenerationOwner? retainedOwner = null;
+        NativeMemoryTestHooks.SetOperationEnteredWithGenerationOwner((operation, owner) =>
+        {
+            if (operation == nameof(ArenaLease<int>.Access))
+            {
+                retainedOwner = owner;
+            }
+        });
+        BusyGenerationSet busy = StartBusyArenaGenerations(arena, 1);
+        long freeBeforeFreshReturn = -1;
+        long detachedBytesAfterFinalization = -1;
+        long freeAfterFinalization = -1;
+
+        try
+        {
+            arena.ReturnMemoryToGarbageCollector();
+            arena.LeaseFromMemory();
+            Assert.Empty(arena.CurrentSegmentOrdinalsForTest);
+            NativeMemoryTestHooks.FailAfterCommitBoundary(1);
+            busy.Allows[0].Set();
+            NativeAllocationQuarantinedException failure =
+                Assert.IsType<NativeAllocationQuarantinedException>(await busy.Workers[0]);
+            Assert.Equal("clear", failure.Boundary);
+            Assert.Equal(0, arena.RetiredGenerationCountForTest);
+            Assert.Equal(0, arena.QuarantinedGenerationCountForTest);
+
+            freeBeforeFreshReturn = NativeMemoryTestHooks.Snapshot().FreeCount;
+            arena.ReturnMemoryToNativeMemory();
+            Assert.Equal(freeBeforeFreshReturn, NativeMemoryTestHooks.Snapshot().FreeCount);
+            Assert.Equal(NativeOwnerLifecycle.Returned, arena.CurrentLifecycle);
+        }
+        finally
+        {
+            await FinishBusyAsync(busy);
+            retainedOwner = null;
+            NativeMemoryTestHooks.SetOperationEnteredWithGenerationOwner(null);
+            arena.Dispose();
+            ForceFinalizationUntilDetachedStorageIsGone();
+            detachedBytesAfterFinalization = NativeMemoryTestHooks.Snapshot().DetachedNativeBytes;
+            freeAfterFinalization = NativeMemoryTestHooks.Snapshot().FreeCount;
+            NativeMemoryTestHooks.Reset();
+        }
+
+        Assert.Equal(0, detachedBytesAfterFinalization);
+        Assert.True(freeAfterFinalization > freeBeforeFreshReturn);
+    }
+
+    [Fact]
+    public async Task PoolDisposalPoliciesIgnoreDetachedOperationsAndNeverFreeDetachedStorage()
+    {
+        foreach (NativeMemoryReturn policy in Enum.GetValues<NativeMemoryReturn>())
+        {
+            NativeMemoryTestHooks.Reset();
+            NativePool<int> pool = new(returnMemoryOnDispose: policy);
+            BusyGenerationSet busy = StartBusyPoolGenerations(pool, 2);
+
+            try
+            {
+                WaitForEntry(busy);
+                pool.ReturnMemoryToGarbageCollector();
+                Assert.Equal(NativeOwnerLifecycle.Returned, pool.CurrentLifecycle);
+
+                long freeBeforeDispose = NativeMemoryTestHooks.Snapshot().FreeCount;
+                pool.Dispose();
+                Assert.Equal(NativeOwnerLifecycle.Disposed, pool.CurrentLifecycle);
+                Assert.Equal(freeBeforeDispose, NativeMemoryTestHooks.Snapshot().FreeCount);
+
+                await ReleaseBusyAsync(busy, [1, 0]);
+                Assert.Equal(freeBeforeDispose, NativeMemoryTestHooks.Snapshot().FreeCount);
+                ForceFinalizationUntilDetachedStorageIsGone();
+                Assert.Equal(0, NativeMemoryTestHooks.Snapshot().DetachedNativeBytes);
+            }
+            finally
+            {
+                await FinishBusyAsync(busy);
+                NativeMemoryTestHooks.Reset();
+                pool.Dispose();
+            }
         }
     }
 
     [Fact]
-    public async Task ArenaGarbageCollectorDisposalUsesOwnerWideAdmissionAndNeverFreesDetachedStorage()
+    public async Task ArenaDisposalPoliciesIgnoreDetachedOperationsAndNeverFreeDetachedStorage()
     {
-        NativeMemoryTestHooks.Reset();
-        NativeArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToGarbageCollector);
-        BusyGenerationSet busy = StartBusyArenaGenerations(arena, 2);
-
-        try
+        foreach (NativeMemoryReturn policy in Enum.GetValues<NativeMemoryReturn>())
         {
-            WaitForEntry(busy);
-            arena.ReturnMemoryToGarbageCollector();
-
-            NativeAllocationInUseException rejection = Assert.Throws<NativeAllocationInUseException>(arena.Dispose);
-            Assert.Equal(2, rejection.ActiveOperationCount);
-            Assert.Equal(2, rejection.OwnerWideBusyGenerationCount);
-            Assert.Equal(NativeOwnerLifecycle.Returned, arena.CurrentLifecycle);
-
-            await ReleaseBusyAsync(busy, [1, 0]);
-            long freeBeforeDispose = NativeMemoryTestHooks.Snapshot().FreeCount;
-            arena.Dispose();
-            Assert.Equal(NativeOwnerLifecycle.Disposed, arena.CurrentLifecycle);
-            Assert.Equal(freeBeforeDispose, NativeMemoryTestHooks.Snapshot().FreeCount);
-            ForceFinalizationUntilDetachedStorageIsGone();
-            Assert.Equal(0, NativeMemoryTestHooks.Snapshot().DetachedNativeBytes);
-        }
-        finally
-        {
-            await FinishBusyAsync(busy);
             NativeMemoryTestHooks.Reset();
-            arena.Dispose();
+            NativeArena arena = new(returnMemoryOnDispose: policy);
+            BusyGenerationSet busy = StartBusyArenaGenerations(arena, 2);
+
+            try
+            {
+                WaitForEntry(busy);
+                arena.ReturnMemoryToGarbageCollector();
+                Assert.Equal(NativeOwnerLifecycle.Returned, arena.CurrentLifecycle);
+
+                long freeBeforeDispose = NativeMemoryTestHooks.Snapshot().FreeCount;
+                arena.Dispose();
+                Assert.Equal(NativeOwnerLifecycle.Disposed, arena.CurrentLifecycle);
+                Assert.Equal(freeBeforeDispose, NativeMemoryTestHooks.Snapshot().FreeCount);
+
+                await ReleaseBusyAsync(busy, [1, 0]);
+                Assert.Equal(freeBeforeDispose, NativeMemoryTestHooks.Snapshot().FreeCount);
+                ForceFinalizationUntilDetachedStorageIsGone();
+                Assert.Equal(0, NativeMemoryTestHooks.Snapshot().DetachedNativeBytes);
+            }
+            finally
+            {
+                await FinishBusyAsync(busy);
+                NativeMemoryTestHooks.Reset();
+                arena.Dispose();
+            }
         }
     }
 
@@ -319,13 +557,14 @@ public sealed class OwnerWideLifecycleTests
                 {
                     pool.ReturnMemoryToGarbageCollector();
                     Assert.Equal(freeBeforeReturn, NativeMemoryTestHooks.Snapshot().FreeCount);
-                    pool.LeaseFromMemory();
-                    Pooled<int> fresh = pool.Rent(1);
-                    Assert.Equal([2L], pool.CurrentSegmentOrdinalsForTest);
-                    fresh.Dispose();
-                    pool.Dispose();
-                    Assert.Equal(freeBeforeReturn, NativeMemoryTestHooks.Snapshot().FreeCount);
+                    Assert.Equal(0, pool.QuarantinedGenerationCountForTest);
                     ForceFinalizationUntilDetachedStorageIsGone();
+                    Assert.Equal(0, NativeMemoryTestHooks.Snapshot().DetachedNativeBytes);
+                    long freeAfterDetachedFinalization = NativeMemoryTestHooks.Snapshot().FreeCount;
+                    pool.LeaseFromMemory();
+                    Assert.Empty(pool.CurrentSegmentOrdinalsForTest);
+                    pool.ReturnMemoryToNativeMemory();
+                    Assert.Equal(freeAfterDetachedFinalization, NativeMemoryTestHooks.Snapshot().FreeCount);
                 }
             }
             finally
@@ -367,13 +606,15 @@ public sealed class OwnerWideLifecycleTests
                 {
                     arena.ReturnMemoryToGarbageCollector();
                     Assert.Equal(freeBeforeReturn, NativeMemoryTestHooks.Snapshot().FreeCount);
-                    arena.LeaseFromMemory();
-                    ArenaLease<int> fresh = arena.Scratch<int>(1);
-                    Assert.Equal([2L], arena.CurrentSegmentOrdinalsForTest);
-                    Assert.Equal(0, fresh[0]);
-                    arena.Dispose();
-                    Assert.Equal(freeBeforeReturn, NativeMemoryTestHooks.Snapshot().FreeCount);
+                    Assert.Equal(0, arena.QuarantinedGenerationCountForTest);
                     ForceFinalizationUntilDetachedStorageIsGone();
+                    Assert.Equal(0, NativeMemoryTestHooks.Snapshot().DetachedNativeBytes);
+                    long freeAfterDetachedFinalization = NativeMemoryTestHooks.Snapshot().FreeCount;
+                    arena.LeaseFromMemory();
+                    Assert.Empty(arena.CurrentSegmentOrdinalsForTest);
+                    arena.ReturnMemoryToNativeMemory();
+                    arena.Dispose();
+                    Assert.Equal(freeAfterDetachedFinalization, NativeMemoryTestHooks.Snapshot().FreeCount);
                 }
             }
             finally
@@ -382,6 +623,83 @@ public sealed class OwnerWideLifecycleTests
                 NativeMemoryTestHooks.Reset();
                 arena.Dispose();
             }
+        }
+    }
+
+    [Fact]
+    public async Task PoolDetachedQuarantineIsNotFreedAgainByNativePolicyDispose()
+    {
+        NativeMemoryTestHooks.Reset();
+        NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        BusyGenerationSet busy = StartBusyPoolGenerations(pool, 1);
+
+        try
+        {
+            WaitForEntry(busy);
+            NativeMemoryTestHooks.FailAfterCommitBoundary(1);
+            busy.Allows[0].Set();
+            _ = Assert.IsType<NativeAllocationQuarantinedException>(await busy.Workers[0]);
+            long freeBeforeHandoff = NativeMemoryTestHooks.Snapshot().FreeCount;
+
+            pool.ReturnMemoryToGarbageCollector();
+            Assert.Equal(0, pool.QuarantinedGenerationCountForTest);
+            ForceFinalizationUntilDetachedStorageIsGone();
+            long freeAfterDetachedFinalization = NativeMemoryTestHooks.Snapshot().FreeCount;
+            Assert.True(freeAfterDetachedFinalization > freeBeforeHandoff);
+
+            pool.LeaseFromMemory();
+            {
+                Pooled<int> fresh = pool.Rent(1);
+                Assert.Equal([2L], pool.CurrentSegmentOrdinalsForTest);
+                fresh.Dispose();
+                long freeBeforeDispose = NativeMemoryTestHooks.Snapshot().FreeCount;
+                pool.Dispose();
+                Assert.Equal(freeBeforeDispose + 1, NativeMemoryTestHooks.Snapshot().FreeCount);
+            }
+        }
+        finally
+        {
+            await FinishBusyAsync(busy);
+            NativeMemoryTestHooks.Reset();
+            pool.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task ArenaDetachedQuarantineIsNotFreedAgainByNativePolicyDispose()
+    {
+        NativeMemoryTestHooks.Reset();
+        NativeArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        BusyGenerationSet busy = StartBusyArenaGenerations(arena, 1);
+
+        try
+        {
+            WaitForEntry(busy);
+            NativeMemoryTestHooks.FailAfterCommitBoundary(1);
+            busy.Allows[0].Set();
+            _ = Assert.IsType<NativeAllocationQuarantinedException>(await busy.Workers[0]);
+            long freeBeforeHandoff = NativeMemoryTestHooks.Snapshot().FreeCount;
+
+            arena.ReturnMemoryToGarbageCollector();
+            Assert.Equal(0, arena.QuarantinedGenerationCountForTest);
+            ForceFinalizationUntilDetachedStorageIsGone();
+            long freeAfterDetachedFinalization = NativeMemoryTestHooks.Snapshot().FreeCount;
+            Assert.True(freeAfterDetachedFinalization > freeBeforeHandoff);
+
+            arena.LeaseFromMemory();
+            {
+                ArenaLease<int> fresh = arena.Scratch<int>(1);
+                Assert.Equal([2L], arena.CurrentSegmentOrdinalsForTest);
+                Assert.Equal(0, fresh[0]);
+                arena.Dispose();
+                Assert.Equal(freeAfterDetachedFinalization + 1, NativeMemoryTestHooks.Snapshot().FreeCount);
+            }
+        }
+        finally
+        {
+            await FinishBusyAsync(busy);
+            NativeMemoryTestHooks.Reset();
+            arena.Dispose();
         }
     }
 

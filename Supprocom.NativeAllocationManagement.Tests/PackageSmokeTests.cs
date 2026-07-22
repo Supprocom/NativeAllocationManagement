@@ -972,8 +972,14 @@ public sealed class PackageSmokeTests
                         {
                             gcPool.ReleaseLeasesToGarbageCollector();
                             gcPool.ReturnMemoryToGarbageCollector();
+                            gcPool.LeaseFromMemory();
+                            Pooled<int> freshInsideCallback = gcPool.Rent(1);
+                            bool freshWasZeroed = freshInsideCallback[0] == 0;
+                            freshInsideCallback.Dispose();
+                            gcPool.ReturnMemoryToNativeMemory();
+                            gcPool.Dispose();
                             span[0] = 19;
-                            detachedOperationWasValid = span[0] == 19;
+                            detachedOperationWasValid = freshWasZeroed && span[0] == 19;
                         });
 
                         if (!detachedOperationWasValid)
@@ -981,15 +987,6 @@ public sealed class PackageSmokeTests
                             return 2;
                         }
 
-                        gcPool.LeaseFromMemory();
-                        Pooled<int> fresh = gcPool.Rent(1);
-                        if (fresh[0] != 0)
-                        {
-                            return 3;
-                        }
-
-                        fresh.Dispose();
-                        gcPool.Dispose();
                         return 0;
                     }
                 }

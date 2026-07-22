@@ -999,22 +999,21 @@ internal sealed class NativeGeneration
 internal ref struct NativeOperationToken
 {
     private NativeOwnerKernel? _kernel;
+    private readonly NativeGeneration _generationState;
     private readonly NativeGenerationOwner _generationOwner;
     private readonly NativeAllocation _allocation;
-    private readonly long _generation;
     private readonly string _operation;
 
     internal NativeOperationToken(
         NativeOwnerKernel kernel,
-        NativeGenerationOwner generationOwner,
+        NativeGeneration generation,
         NativeAllocation allocation,
-        long generation,
         string operation)
     {
         _kernel = kernel;
-        _generationOwner = generationOwner;
+        _generationState = generation;
+        _generationOwner = generation.Owner;
         _allocation = allocation;
-        _generation = generation;
         _operation = operation;
     }
 
@@ -1033,7 +1032,7 @@ internal ref struct NativeOperationToken
         }
 
         _kernel = null;
-        kernel.ExitOperation(_generation, _allocation, _operation);
+        kernel.ExitOperation(_generationState, _allocation, _operation);
         GC.KeepAlive(_generationOwner);
     }
 }
@@ -1481,23 +1480,17 @@ internal sealed class NativeOwnerKernel
             generation.ActiveOperations++;
             allocation.ActiveOperations++;
             generationOwner = generation.Owner;
-            token = new NativeOperationToken(this, generation.Owner, allocation, generationNumber, operation);
+            token = new NativeOperationToken(this, generation, allocation, operation);
         }
 
         NativeMemoryTestHooks.NotifyOperationEntered(operation, this, generationOwner, generationNumber, allocationId);
         return token;
     }
 
-    internal void ExitOperation(long generationNumber, NativeAllocation allocation, string operation)
+    internal void ExitOperation(NativeGeneration generation, NativeAllocation allocation, string operation)
     {
         lock (_gate)
         {
-            NativeGeneration? generation = FindGenerationLocked(generationNumber);
-            if (generation is null)
-            {
-                return;
-            }
-
             if (allocation.ActiveOperations > 0)
             {
                 allocation.ActiveOperations--;
@@ -1508,7 +1501,19 @@ internal sealed class NativeOwnerKernel
                 generation.ActiveOperations--;
             }
 
-            if (generation != _current && generation.ActiveOperations == 0)
+            if (generation.MemoryDetached)
+            {
+                if (generation.ActiveOperations == 0)
+                {
+                    DrainDetachedGenerationLocked(generation);
+                }
+
+                return;
+            }
+
+            if (generation != _current
+                && generation.ActiveOperations == 0
+                && _retiredGenerations.Contains(generation))
             {
                 DrainRetiredGenerationLocked(generation);
             }
@@ -2082,12 +2087,6 @@ internal sealed class NativeOwnerKernel
             DetachOwnerWideStorageLocked();
             _current = null;
             _generation = nextGenerationNumber;
-            if (generation.ActiveOperations != 0)
-            {
-                _retiredGenerations.EnsureCapacity(checked(_retiredGenerations.Count + 1));
-                _retiredGenerations.Add(generation);
-            }
-
             _lifecycle = NativeOwnerLifecycle.Returned;
         }
     }
@@ -2231,6 +2230,12 @@ internal sealed class NativeOwnerKernel
 
     private void DrainRetiredGenerationLocked(NativeGeneration generation)
     {
+        if (generation.MemoryDetached)
+        {
+            DrainDetachedGenerationLocked(generation);
+            return;
+        }
+
         NativeSlab[] slabs = generation.RetiredSlabs;
         NativeBumpSegment[] bumps = generation.RetiredBumps;
         NativeGeneration? current = _current;
@@ -2256,21 +2261,6 @@ internal sealed class NativeOwnerKernel
                 failedBoundary = "clear";
                 ClearAllocationStorageReserved(allocation);
                 NativeMemoryTestHooks.CheckPostCommitBoundary(operation, "clear");
-            }
-
-            if (generation.MemoryDetached)
-            {
-                _retiredGenerations.Remove(generation);
-                if (generation.RetiredNativeBytes != 0)
-                {
-                    NativeMemoryTestHooks.RecordRetiredBytes(
-                        (nuint)generation.RetiredNativeBytes,
-                        add: false,
-                        metricsEpoch: generation.Owner.MetricsEpoch);
-                    generation.RetiredNativeBytes = 0;
-                }
-
-                return;
             }
 
             if (!canRejoin)
@@ -2342,22 +2332,54 @@ internal sealed class NativeOwnerKernel
         }
     }
 
-    private NativeGeneration? FindGenerationLocked(long generationNumber)
+    private void DrainDetachedGenerationLocked(NativeGeneration generation)
     {
-        if (_current?.Number == generationNumber)
-        {
-            return _current;
-        }
+        const string operation = "DrainDetachedGeneration";
+        long failedAllocationId = 0;
+        long failedSegmentOrdinal = 0;
+        string failedBoundary = "detached clear";
 
-        foreach (NativeGeneration generation in _retiredGenerations)
+        try
         {
-            if (generation.Number == generationNumber)
+            PreflightCommitBoundaries(
+                operation,
+                CountClearableAllocations(generation, skipActiveOperations: false),
+                slabTransferCount: 0,
+                bumpTransferCount: 0);
+            NativeMemoryTestHooks.BeginPostCommitSequence();
+
+            foreach (NativeAllocation allocation in generation.Allocations.Values)
             {
-                return generation;
+                failedAllocationId = allocation.Id;
+                failedSegmentOrdinal = GetSegmentOrdinal(allocation);
+                failedBoundary = "clear";
+                ClearAllocationStorageReserved(allocation);
+                allocation.Lifecycle = NativeAllocationLifecycle.Returned;
+                NativeMemoryTestHooks.CheckPostCommitBoundary(operation, "clear");
+            }
+
+            generation.Allocations.Clear();
+            generation.ScopedPending.Clear();
+            generation.ScopedBaseline = null;
+            if (generation.RetiredNativeBytes != 0)
+            {
+                NativeMemoryTestHooks.RecordRetiredBytes(
+                    (nuint)generation.RetiredNativeBytes,
+                    add: false,
+                    metricsEpoch: generation.Owner.MetricsEpoch);
+                generation.RetiredNativeBytes = 0;
             }
         }
-
-        return null;
+        catch (Exception exception)
+        {
+            throw CreateDetachedCleanupException(
+                operation,
+                generation,
+                failedAllocationId,
+                failedSegmentOrdinal,
+                failedBoundary,
+                exception);
+        }
     }
 
     private void TransferSegmentLocked(NativeGeneration source, NativeGeneration destination, NativeSegment segment)
@@ -2416,6 +2438,26 @@ internal sealed class NativeOwnerKernel
             _generation,
             operation,
             ActiveOperationCountLocked(),
+            allocationId,
+            segmentOrdinal,
+            boundary,
+            _lifecycle,
+            innerException);
+
+    private NativeAllocationQuarantinedException CreateDetachedCleanupException(
+        string operation,
+        NativeGeneration generation,
+        long allocationId,
+        long segmentOrdinal,
+        string boundary,
+        Exception innerException) =>
+        new(
+            $"{_ownerKind}.{operation} could not clear detached generation {generation.Number} at {boundary}. The storage remains detached and finalizable; it is no longer owned by the allocator and will not be synchronously released or reused (lifecycle {_lifecycle}).",
+            _ownerKind,
+            generation.Number,
+            _generation,
+            operation,
+            activeOperationCount: 0,
             allocationId,
             segmentOrdinal,
             boundary,
@@ -2721,18 +2763,28 @@ internal sealed class NativeOwnerKernel
     private int CountOwnerWideClearableAllocationsLocked(bool skipActiveOperations)
     {
         int count = 0;
-        if (_current is not null)
+        if (_current is not null && !_current.MemoryDetached)
         {
             count = checked(count + CountClearableAllocations(_current, skipActiveOperations));
         }
 
         foreach (NativeGeneration generation in _retiredGenerations)
         {
+            if (generation.MemoryDetached)
+            {
+                continue;
+            }
+
             count = checked(count + CountClearableAllocations(generation, skipActiveOperations));
         }
 
         foreach (NativeGeneration generation in _quarantinedGenerations)
         {
+            if (generation.MemoryDetached)
+            {
+                continue;
+            }
+
             count = checked(count + CountClearableAllocations(generation, skipActiveOperations));
         }
 
@@ -2741,72 +2793,112 @@ internal sealed class NativeOwnerKernel
 
     private void PrepareOwnerWideClearLocked(bool skipActiveOperations)
     {
-        if (_current is not null)
+        if (_current is not null && !_current.MemoryDetached)
         {
             PrepareGenerationClearLocked(_current, skipActiveOperations);
         }
 
         foreach (NativeGeneration generation in _retiredGenerations)
         {
+            if (generation.MemoryDetached)
+            {
+                continue;
+            }
+
             PrepareGenerationClearLocked(generation, skipActiveOperations);
         }
 
         foreach (NativeGeneration generation in _quarantinedGenerations)
         {
+            if (generation.MemoryDetached)
+            {
+                continue;
+            }
+
             PrepareGenerationClearLocked(generation, skipActiveOperations);
         }
     }
 
     private void ClearOwnerWideAllocationsLocked(bool skipActiveOperations)
     {
-        if (_current is not null)
+        if (_current is not null && !_current.MemoryDetached)
         {
             ClearGenerationAllocationsLocked(_current, skipActiveOperations);
         }
 
         foreach (NativeGeneration generation in _retiredGenerations)
         {
+            if (generation.MemoryDetached)
+            {
+                continue;
+            }
+
             ClearGenerationAllocationsLocked(generation, skipActiveOperations);
         }
 
         foreach (NativeGeneration generation in _quarantinedGenerations)
         {
+            if (generation.MemoryDetached)
+            {
+                continue;
+            }
+
             ClearGenerationAllocationsLocked(generation, skipActiveOperations);
         }
     }
 
     private void InvalidateOwnerWideGenerationsLocked()
     {
-        if (_current is not null)
+        if (_current is not null && !_current.MemoryDetached)
         {
             InvalidateGenerationLocked(_current);
         }
 
         foreach (NativeGeneration generation in _retiredGenerations)
         {
+            if (generation.MemoryDetached)
+            {
+                continue;
+            }
+
             InvalidateGenerationLocked(generation);
         }
 
         foreach (NativeGeneration generation in _quarantinedGenerations)
         {
+            if (generation.MemoryDetached)
+            {
+                continue;
+            }
+
             InvalidateGenerationLocked(generation);
         }
     }
 
     private void ReleaseOwnerWideStorageLocked()
     {
-        if (_current is not null)
+        if (_current is not null && !_current.MemoryDetached)
         {
             ReleaseGenerationStorageLocked(_current);
         }
 
         foreach (NativeGeneration generation in _retiredGenerations)
         {
+            if (generation.MemoryDetached)
+            {
+                continue;
+            }
+
             ReleaseGenerationStorageLocked(generation);
         }
 
         foreach (NativeGeneration generation in _quarantinedGenerations)
         {
+            if (generation.MemoryDetached)
+            {
+                continue;
+            }
+
             ReleaseGenerationStorageLocked(generation);
         }
     }
@@ -2849,8 +2941,20 @@ internal sealed class NativeOwnerKernel
 
         foreach (NativeGeneration generation in _quarantinedGenerations)
         {
+            generation.MemoryDetached = true;
             generation.Owner.Detach();
+            if (generation.ActiveOperations == 0 && generation.RetiredNativeBytes != 0)
+            {
+                NativeMemoryTestHooks.RecordRetiredBytes(
+                    (nuint)generation.RetiredNativeBytes,
+                    add: false,
+                    metricsEpoch: generation.Owner.MetricsEpoch);
+                generation.RetiredNativeBytes = 0;
+            }
         }
+
+        _retiredGenerations.Clear();
+        _quarantinedGenerations.Clear();
     }
 
     private void EnsureNoInjectedClearFailureLocked(string operation, bool afterStateChange = false)
@@ -3063,13 +3167,18 @@ internal sealed class NativeOwnerKernel
         long firstBusyGeneration = 0;
 
         AccumulateOwnerWideActivity(
-            _current,
+            _current is { MemoryDetached: false } ? _current : null,
             ref activeOperations,
             ref leaseReturnsInProgress,
             ref busyGenerationCount,
             ref firstBusyGeneration);
         foreach (NativeGeneration generation in _retiredGenerations)
         {
+            if (generation.MemoryDetached)
+            {
+                continue;
+            }
+
             AccumulateOwnerWideActivity(
                 generation,
                 ref activeOperations,
@@ -3080,6 +3189,11 @@ internal sealed class NativeOwnerKernel
 
         foreach (NativeGeneration generation in _quarantinedGenerations)
         {
+            if (generation.MemoryDetached)
+            {
+                continue;
+            }
+
             AccumulateOwnerWideActivity(
                 generation,
                 ref activeOperations,
@@ -3216,15 +3330,25 @@ internal sealed class NativeOwnerKernel
 
         try
         {
-            generation?.Owner.ReleaseToNative();
+            if (generation is not null && !generation.MemoryDetached)
+            {
+                generation.Owner.ReleaseToNative();
+            }
+
             foreach (NativeGeneration retired in _retiredGenerations)
             {
-                retired.Owner.ReleaseToNative();
+                if (!retired.MemoryDetached)
+                {
+                    retired.Owner.ReleaseToNative();
+                }
             }
 
             foreach (NativeGeneration quarantined in _quarantinedGenerations)
             {
-                quarantined.Owner.ReleaseToNative();
+                if (!quarantined.MemoryDetached)
+                {
+                    quarantined.Owner.ReleaseToNative();
+                }
             }
         }
         catch
