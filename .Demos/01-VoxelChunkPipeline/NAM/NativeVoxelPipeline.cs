@@ -1,4 +1,3 @@
-using System.Runtime.CompilerServices;
 using System.Diagnostics;
 using Supprocom.NativeAllocationManagement;
 using Supprocom.NativeAllocationManagement.Demos.VoxelChunkPipeline.SharedContract;
@@ -22,7 +21,8 @@ internal static class NativeVoxelPipeline
         int TransparentMaskCount,
         int TransparentMaskWords,
         int DominantTransparentSections,
-        int ResidualTransparentSections)
+        int ResidualTransparentSections,
+        OutputFixture? MaterializedOutput)
     {
         internal int VisibleFaces => OpaqueFaces + TransparentFaces;
         internal int Vertices => VisibleFaces * VoxelMath.VerticesPerFace;
@@ -35,6 +35,8 @@ internal static class NativeVoxelPipeline
         internal long Digest;
         internal int OpaqueFaces;
         internal int TransparentFaces;
+        internal int OpaqueRecords;
+        internal int TransparentRecords;
         internal int EmptySections;
         internal int UniformSections;
         internal int ExpandedSections;
@@ -47,6 +49,7 @@ internal static class NativeVoxelPipeline
         internal int OpaqueStagedBytes;
         internal int TransparentStagedBytes;
         internal int EnabledStageBytes;
+        internal OutputFixture? MaterializedOutput;
     }
 
     private sealed class WorkerContext
@@ -65,26 +68,29 @@ internal static class NativeVoxelPipeline
             _baseline = baseline;
             FaceAction = ProcessFaces;
             MaskAction = ProcessMasks;
-            OpaquePackAction = PackOpaque;
-            TransparentPackAction = PackTransparent;
+            OpaqueMeshAction = PackOpaque;
+            TransparentMeshAction = PackTransparent;
         }
 
         internal NativeLeaseTripleAction<VoxelCell, NativeFaceOutput, NativeFaceOutput> FaceAction { get; }
 
         internal NativeLeasePooledArenaAction<VoxelCell, ulong> MaskAction { get; }
 
-        internal NativeLeaseFunc<NativeFaceOutput, int> OpaquePackAction { get; }
+        internal NativeLeaseMeshAction<NativeFaceOutput, Vertex, int, PayloadSlice, byte> OpaqueMeshAction { get; }
 
-        internal NativeLeaseFunc<NativeFaceOutput, int> TransparentPackAction { get; }
+        internal NativeLeaseMeshAction<NativeFaceOutput, Vertex, int, PayloadSlice, byte> TransparentMeshAction { get; }
 
-        internal void BeginChunk(int chunk, long digest)
-        {
-            _chunk = chunk;
-            _work = new Work { Digest = digest };
-            _peakCoordinateStageBytes = 0;
-            _peakFaceStageBytes = 0;
-            _peakPackingStageBytes = 0;
-        }
+        internal int OpaqueFaceCount => _work.OpaqueFaces;
+
+        internal int TransparentFaceCount => _work.TransparentFaces;
+
+        internal int OpaqueRecordCount => _work.OpaqueRecords;
+
+        internal int TransparentRecordCount => _work.TransparentRecords;
+
+        internal int OpaqueStageBytes => _work.OpaqueStagedBytes;
+
+        internal int TransparentStageBytes => _work.TransparentStagedBytes;
 
         internal int TransparentMaskCountForTest => _work.TransparentMaskCount;
 
@@ -94,12 +100,13 @@ internal static class NativeVoxelPipeline
 
         internal long PeakPackingStageBytes => _peakPackingStageBytes;
 
-        internal void SetTransparentMaskWords(int words) => _work.TransparentMaskWords = words;
-
-        internal void AddStagedBytes(int opaqueBytes, int transparentBytes)
+        internal void BeginChunk(int chunk, long digest)
         {
-            _work.OpaqueStagedBytes = checked(_work.OpaqueStagedBytes + opaqueBytes);
-            _work.TransparentStagedBytes = checked(_work.TransparentStagedBytes + transparentBytes);
+            _chunk = chunk;
+            _work = new Work { Digest = digest };
+            _peakCoordinateStageBytes = 0;
+            _peakFaceStageBytes = 0;
+            _peakPackingStageBytes = 0;
         }
 
         internal ChunkResult FinishChunk()
@@ -128,7 +135,8 @@ internal static class NativeVoxelPipeline
                 _work.TransparentMaskCount,
                 _work.TransparentMaskWords,
                 _work.DominantTransparentSections,
-                _work.ResidualTransparentSections);
+                _work.ResidualTransparentSections,
+                _work.MaterializedOutput);
         }
 
         internal (long PeakNativeBytes, long PeakRetainedBytes) ObserveNative(long peakNative, long peakRetained)
@@ -144,8 +152,8 @@ internal static class NativeVoxelPipeline
             scoped NativeLeaseView<NativeFaceOutput> opaqueOutput,
             scoped NativeLeaseView<NativeFaceOutput> transparentOutput)
         {
-            long cellBytes = checked((long)cells.Capacity * Unsafe.SizeOf<VoxelCell>());
-            long faceBytes = checked((long)opaqueOutput.Capacity * Unsafe.SizeOf<NativeFaceOutput>());
+            long cellBytes = checked((long)cells.Capacity * VoxelMath.VoxelCellBytes);
+            long faceBytes = checked((long)opaqueOutput.Capacity * VoxelMath.NativeFaceOutputBytes);
             _peakCoordinateStageBytes = Math.Max(_peakCoordinateStageBytes, cellBytes);
             _peakFaceStageBytes = Math.Max(_peakFaceStageBytes, checked(cellBytes + faceBytes * 2));
             Span<VoxelCell> cellSpan = cells.AsSpan();
@@ -153,6 +161,8 @@ internal static class NativeVoxelPipeline
             Span<NativeFaceOutput> transparentSpan = transparentOutput.AsSpan();
             int opaqueCount = 0;
             int transparentCount = 0;
+            int opaqueRecordCount = 0;
+            int transparentRecordCount = 0;
             for (int cell = 0; cell < cellSpan.Length; cell++)
             {
                 int x = cell % VoxelMath.ChunkDimension;
@@ -181,31 +191,58 @@ internal static class NativeVoxelPipeline
                 cellSpan[cell].OpaqueMask = VoxelMath.IsOpaque(blockId) ? mask : 0;
                 cellSpan[cell].TransparentMask = VoxelMath.IsTransparent(blockId) ? mask : 0;
                 _work.Digest = VoxelMath.DigestStep(_work.Digest, mask);
+
+                if (mask == 0)
+                {
+                    continue;
+                }
+
+                NativeFaceOutput output = new() { CellIndex = cell, BlockId = blockId, FaceMask = mask };
                 if (VoxelMath.IsOpaque(blockId))
                 {
-                    for (int face = 0; face < VoxelMath.FacesPerCell; face++)
-                    {
-                        if ((mask & (1 << face)) != 0)
-                        {
-                            opaqueSpan[opaqueCount++] = new NativeFaceOutput { CellIndex = cell, BlockId = blockId, Face = face };
-                        }
-                    }
+                    opaqueSpan[opaqueRecordCount++] = output;
                 }
                 else if (VoxelMath.IsTransparent(blockId))
                 {
-                    for (int face = 0; face < VoxelMath.FacesPerCell; face++)
-                    {
-                        if ((mask & (1 << face)) != 0)
-                        {
-                            transparentSpan[transparentCount++] = new NativeFaceOutput { CellIndex = cell, BlockId = blockId, Face = face };
-                        }
-                    }
+                    transparentSpan[transparentRecordCount++] = output;
                 }
             }
 
+            (opaqueCount, int opaqueBytes) = MeasureOutput(opaqueSpan, opaqueRecordCount);
+            (transparentCount, int transparentBytes) = MeasureOutput(transparentSpan, transparentRecordCount);
             _work.OpaqueFaces = opaqueCount;
             _work.TransparentFaces = transparentCount;
+            _work.OpaqueRecords = opaqueRecordCount;
+            _work.TransparentRecords = transparentRecordCount;
+            _work.OpaqueStagedBytes = opaqueBytes;
+            _work.TransparentStagedBytes = transparentBytes;
             ProcessSections(cellSpan);
+        }
+
+        private static (int FaceCount, int StagedBytes) MeasureOutput(
+            ReadOnlySpan<NativeFaceOutput> records,
+            int recordCount)
+        {
+            int faceCount = 0;
+            int stagedBytes = 0;
+            for (int recordIndex = 0; recordIndex < recordCount; recordIndex++)
+            {
+                NativeFaceOutput record = records[recordIndex];
+                BlockTypeDescriptor type = VoxelMath.BlockTypeForId(record.BlockId);
+                for (int face = 0; face < VoxelMath.FacesPerCell; face++)
+                {
+                    if ((record.FaceMask & (1 << face)) == 0)
+                    {
+                        continue;
+                    }
+
+                    faceCount++;
+                    stagedBytes = VoxelMath.AlignUp(stagedBytes, type.Alignment);
+                    stagedBytes = checked(stagedBytes + VoxelMath.StageBytesForType(type));
+                }
+            }
+
+            return (faceCount, stagedBytes);
         }
 
         private void ProcessSections(ReadOnlySpan<VoxelCell> cellSpan)
@@ -226,7 +263,6 @@ internal static class NativeVoxelPipeline
                 if (summary.HasDominantTransparentId) _work.DominantTransparentSections++;
                 if (summary.HasResidualTransparentIds) _work.ResidualTransparentSections++;
             }
-
         }
 
         private void ProcessMasks(
@@ -258,62 +294,177 @@ internal static class NativeVoxelPipeline
 
                 maskOffset += words;
             }
+
+            _work.TransparentMaskWords = maskOffset;
         }
 
-        private int PackOpaque(scoped NativeLeaseView<NativeFaceOutput> view) => Pack(view, _work.OpaqueFaces);
+        private void PackOpaque(
+            scoped NativeLeaseView<NativeFaceOutput> faces,
+            scoped NativeLeaseView<Vertex> vertices,
+            scoped NativeLeaseView<int> indices,
+            scoped NativeLeaseView<PayloadSlice> slices,
+            scoped NativeLeaseView<byte> upload) =>
+            Pack(true, _work.OpaqueRecords, faces, vertices, indices, slices, upload);
 
-        private int PackTransparent(scoped NativeLeaseView<NativeFaceOutput> view) => Pack(view, _work.TransparentFaces);
+        private void PackTransparent(
+            scoped NativeLeaseView<NativeFaceOutput> faces,
+            scoped NativeLeaseView<Vertex> vertices,
+            scoped NativeLeaseView<int> indices,
+            scoped NativeLeaseView<PayloadSlice> slices,
+            scoped NativeLeaseView<byte> upload) =>
+            Pack(false, _work.TransparentRecords, faces, vertices, indices, slices, upload);
 
-        private int Pack(scoped NativeLeaseView<NativeFaceOutput> view, int faceCount)
+        private void Pack(
+            bool opaque,
+            int recordCount,
+            scoped NativeLeaseView<NativeFaceOutput> faces,
+            scoped NativeLeaseView<Vertex> vertices,
+            scoped NativeLeaseView<int> indices,
+            scoped NativeLeaseView<PayloadSlice> slices,
+            scoped NativeLeaseView<byte> upload)
         {
+            int expectedBytes = opaque ? _work.OpaqueStagedBytes : _work.TransparentStagedBytes;
             _peakPackingStageBytes = Math.Max(
                 _peakPackingStageBytes,
-                checked((long)view.Capacity * Unsafe.SizeOf<NativeFaceOutput>() * 2));
-            ReadOnlySpan<NativeFaceOutput> outputs = view.AsSpan();
-            Span<byte> staging = stackalloc byte[256];
-            int totalBytes = 0;
-            int enabled = 0;
-            for (int faceIndex = 0; faceIndex < faceCount; faceIndex++)
+                checked((long)faces.Capacity * VoxelMath.NativeFaceOutputBytes
+                    + (long)vertices.Capacity * VoxelMath.VertexBytes
+                    + (long)indices.Capacity * VoxelMath.IndexBytes
+                    + (long)slices.Capacity * VoxelMath.PayloadSliceBytes
+                    + upload.Capacity));
+            Span<NativeFaceOutput> faceSpan = faces.AsSpan();
+            Span<Vertex> vertexSpan = vertices.AsSpan();
+            Span<int> indexSpan = indices.AsSpan();
+            Span<PayloadSlice> sliceSpan = slices.AsSpan();
+            Span<byte> uploadSpan = upload.AsSpan();
+            int vertexCount = 0;
+            int indexCount = 0;
+            int sliceCount = 0;
+            int offset = 0;
+            int enabledStageBytes = 0;
+            for (int recordIndex = 0; recordIndex < recordCount; recordIndex++)
             {
-                NativeFaceOutput output = outputs[faceIndex];
-                BlockTypeDescriptor type = VoxelMath.BlockTypeForId(output.BlockId);
-                int alignedBytes = VoxelMath.AlignUp(totalBytes, type.Alignment);
-                _work.Digest = VoxelMath.DigestZeroBytes(_work.Digest, alignedBytes - totalBytes);
-                totalBytes = alignedBytes;
-                staging.Clear();
-                int cursor = 0;
-                for (int slot = 0; slot < type.PayloadBytes; slot++)
+                NativeFaceOutput record = faceSpan[recordIndex];
+                for (int face = 0; face < VoxelMath.FacesPerCell; face++)
                 {
-                    bool stageEnabled = (type.StageMask & (1 << (slot % 4))) != 0;
-                    staging[cursor++] = stageEnabled
-                        ? checked((byte)VoxelMath.PayloadByte(_options.Seed, output.CellIndex, output.BlockId, slot))
-                        : (byte)0;
-                    if (stageEnabled) enabled++;
-                }
+                    if ((record.FaceMask & (1 << face)) == 0)
+                    {
+                        continue;
+                    }
 
-                for (int vertex = 0; vertex < VoxelMath.VerticesPerFace; vertex++)
-                {
-                    WriteInt(staging, ref cursor, VoxelMath.VertexValue(output.CellIndex, output.Face, vertex, 0, output.BlockId));
-                    WriteInt(staging, ref cursor, VoxelMath.VertexValue(output.CellIndex, output.Face, vertex, 1, output.BlockId));
-                    WriteInt(staging, ref cursor, VoxelMath.VertexValue(output.CellIndex, output.Face, vertex, 2, output.BlockId));
-                    WriteInt(staging, ref cursor, output.Face);
-                    WriteInt(staging, ref cursor, vertex);
-                    WriteInt(staging, ref cursor, output.BlockId);
-                }
+                    BlockTypeDescriptor type = VoxelMath.BlockTypeForId(record.BlockId);
+                    int alignedOffset = VoxelMath.AlignUp(offset, type.Alignment);
+                    uploadSpan.Slice(offset, alignedOffset - offset).Clear();
+                    offset = alignedOffset;
+                    int cursor = offset;
+                    for (int slot = 0; slot < type.PayloadBytes; slot++)
+                    {
+                        bool enabled = (type.StageMask & (1 << (slot % 4))) != 0;
+                        uploadSpan[cursor++] = enabled
+                            ? checked((byte)VoxelMath.PayloadByte(_options.Seed, record.CellIndex, record.BlockId, slot))
+                            : (byte)0;
+                        if (enabled) enabledStageBytes++;
+                    }
 
-                int vertexOffset = faceIndex * VoxelMath.VerticesPerFace;
-                for (int index = 0; index < VoxelMath.IndicesPerFace; index++)
-                {
-                    WriteInt(staging, ref cursor, VoxelMath.IndexValue(vertexOffset, index));
-                }
+                    int vertexOffset = vertexCount;
+                    for (int vertex = 0; vertex < VoxelMath.VerticesPerFace; vertex++)
+                    {
+                        Vertex value = new(
+                            VoxelMath.VertexValue(record.CellIndex, face, vertex, 0, record.BlockId),
+                            VoxelMath.VertexValue(record.CellIndex, face, vertex, 1, record.BlockId),
+                            VoxelMath.VertexValue(record.CellIndex, face, vertex, 2, record.BlockId),
+                            face,
+                            vertex,
+                            record.BlockId);
+                        vertexSpan[vertexCount++] = value;
+                        WriteInt(uploadSpan, ref cursor, value.X);
+                        WriteInt(uploadSpan, ref cursor, value.Y);
+                        WriteInt(uploadSpan, ref cursor, value.Z);
+                        WriteInt(uploadSpan, ref cursor, value.Face);
+                        WriteInt(uploadSpan, ref cursor, value.Corner);
+                        WriteInt(uploadSpan, ref cursor, value.BlockId);
+                    }
 
-                int faceBytes = VoxelMath.StageBytesForFace(output.BlockId);
-                _work.Digest = VoxelMath.DigestBytes(_work.Digest, staging.Slice(0, faceBytes));
-                totalBytes = checked(totalBytes + faceBytes);
+                    for (int index = 0; index < VoxelMath.IndicesPerFace; index++)
+                    {
+                        int value = VoxelMath.IndexValue(vertexOffset, index);
+                        indexSpan[indexCount++] = value;
+                        WriteInt(uploadSpan, ref cursor, value);
+                    }
+
+                    int faceBytes = VoxelMath.StageBytesForType(type);
+                    int end = checked(offset + faceBytes);
+                    while (cursor < end)
+                    {
+                        uploadSpan[cursor++] = 0;
+                    }
+
+                    sliceSpan[sliceCount++] = new PayloadSlice(
+                        offset,
+                        faceBytes,
+                        type.Alignment,
+                        type.StageMask,
+                        record.BlockId,
+                        record.CellIndex);
+                    offset = end;
+                }
             }
 
-            _work.EnabledStageBytes += enabled;
-            return totalBytes;
+            if (offset != expectedBytes)
+            {
+                throw new InvalidDataException("Native materialized output length disagrees with face classification.");
+            }
+
+            _work.EnabledStageBytes += enabledStageBytes;
+            _work.Digest = VoxelMath.DigestMaterializedOutput(
+                _work.Digest,
+                vertexSpan.Slice(0, vertexCount),
+                indexSpan.Slice(0, indexCount),
+                sliceSpan.Slice(0, sliceCount),
+                uploadSpan.Slice(0, offset));
+            if (_chunk == 0)
+            {
+                CaptureFixture(
+                    opaque,
+                    vertexSpan,
+                    vertexCount,
+                    indexSpan,
+                    indexCount,
+                    sliceSpan,
+                    sliceCount,
+                    uploadSpan,
+                    offset);
+            }
+        }
+
+        private void CaptureFixture(
+            bool opaque,
+            ReadOnlySpan<Vertex> vertices,
+            int vertexCount,
+            ReadOnlySpan<int> indices,
+            int indexCount,
+            ReadOnlySpan<PayloadSlice> slices,
+            int sliceCount,
+            ReadOnlySpan<byte> upload,
+            int uploadLength)
+        {
+            OutputFixture empty = new([], [], [], [], [], [], [], []);
+            OutputFixture current = _work.MaterializedOutput ?? empty;
+            OutputFixture update = opaque
+                ? current with
+                {
+                    OpaqueVertices = vertices.Slice(0, Math.Min(vertexCount, VoxelMath.OutputFixtureElementLimit * VoxelMath.VerticesPerFace)).ToArray(),
+                    OpaqueIndices = indices.Slice(0, Math.Min(indexCount, VoxelMath.OutputFixtureElementLimit * VoxelMath.IndicesPerFace)).ToArray(),
+                    OpaqueSlices = slices.Slice(0, Math.Min(sliceCount, VoxelMath.OutputFixtureElementLimit)).ToArray(),
+                    OpaqueUpload = upload.Slice(0, Math.Min(uploadLength, VoxelMath.OutputFixtureByteLimit)).ToArray()
+                }
+                : current with
+                {
+                    TransparentVertices = vertices.Slice(0, Math.Min(vertexCount, VoxelMath.OutputFixtureElementLimit * VoxelMath.VerticesPerFace)).ToArray(),
+                    TransparentIndices = indices.Slice(0, Math.Min(indexCount, VoxelMath.OutputFixtureElementLimit * VoxelMath.IndicesPerFace)).ToArray(),
+                    TransparentSlices = slices.Slice(0, Math.Min(sliceCount, VoxelMath.OutputFixtureElementLimit)).ToArray(),
+                    TransparentUpload = upload.Slice(0, Math.Min(uploadLength, VoxelMath.OutputFixtureByteLimit)).ToArray()
+                };
+            _work.MaterializedOutput = update;
         }
 
         private static void WriteInt(Span<byte> destination, ref int offset, int value)
@@ -385,6 +536,7 @@ internal static class NativeVoxelPipeline
         long opaqueStaged = 0;
         long transparentStaged = 0;
         long enabledStageBytes = 0;
+        OutputFixture? materializedOutput = null;
         for (int worker = 0; worker < workers.Length; worker++)
         {
             PipelineResult result = workers[worker].Result;
@@ -417,6 +569,7 @@ internal static class NativeVoxelPipeline
             opaqueStaged += result.OpaqueStagedBytes;
             transparentStaged += result.TransparentStagedBytes;
             enabledStageBytes += result.EnabledStageBytes;
+            materializedOutput ??= result.MaterializedOutput;
         }
 
         return new PipelineResult(
@@ -463,7 +616,8 @@ internal static class NativeVoxelPipeline
             GC.GetTotalAllocatedBytes(precise: true) - allocationBefore,
             GC.CollectionCount(0) - gen0Before,
             GC.CollectionCount(1) - gen1Before,
-            GC.CollectionCount(2) - gen2Before);
+            GC.CollectionCount(2) - gen2Before,
+            materializedOutput);
     }
 
     private static WorkerResult RunWorker(
@@ -476,12 +630,13 @@ internal static class NativeVoxelPipeline
         using NativePool<VoxelCell> cellPool = new(
             initialCapacity: VoxelMath.CellsPerChunk,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        using NativePool<NativeFaceOutput> opaquePool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        using NativePool<NativeFaceOutput> transparentPool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativePool<NativeFaceOutput> facePool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativePool<Vertex> vertexPool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> indexPool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         using NativeArena heterogeneousArena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         WorkerContext context = new(options, baseline);
         int totalChunks = checked(options.ChunkCount * options.Iterations);
-        int passes = VoxelWorkloadOptions.WarmupChunksPerWorker + 1;
+        int passes = 2;
         long measuredChunks = 0;
         long digest = 17;
         long visibleFaces = 0;
@@ -511,6 +666,7 @@ internal static class NativeVoxelPipeline
         long recycles = 0;
         long reusedLeases = 0;
         long cleared = 0;
+        OutputFixture? materializedOutput = null;
         for (int pass = 0; pass < passes; pass++)
         {
             int count = pass == 0
@@ -524,103 +680,136 @@ internal static class NativeVoxelPipeline
                     ? checked(totalChunks + workerId + iteration)
                     : checked(workerId + iteration * options.WorkerCount);
                 context.BeginChunk(chunk, pass == 0 ? 17 : digest);
-                // The fixed deterministic registry workload stays below one output
-                // record per cell in each stream. Keep this native bound equal to
-                // the expert baseline's rented FaceRecord capacity; the bounded span
-                // still guards any workload-contract change that would exceed it.
                 int faceCapacity = VoxelMath.CellsPerChunk;
                 try
                 {
+                    scoped Pooled<NativeFaceOutput> opaque = facePool.LeaseScoped(faceCapacity);
+                    rents++;
+                    if (pass != 0) reusedLeases++;
                     {
-                        scoped Pooled<NativeFaceOutput> opaque = opaquePool.LeaseScoped(faceCapacity);
+                        scoped Pooled<NativeFaceOutput> transparent = facePool.LeaseScoped(faceCapacity);
                         rents++;
                         if (pass != 0) reusedLeases++;
-                        try
-                        {
-                            {
-                                scoped Pooled<NativeFaceOutput> transparent = transparentPool.LeaseScoped(faceCapacity);
-                                rents++;
-                                if (pass != 0) reusedLeases++;
-                                try
-                                {
+                                    try
                                     {
-                                        scoped Pooled<VoxelCell> cells = cellPool.LeaseScoped(VoxelMath.CellsPerChunk);
-                                        rents++;
-                                        if (pass != 0) reusedLeases++;
-                                        NativeLeaseOperations.Access(cells, opaque, transparent, context.FaceAction);
-                                        int maskLength = checked(Math.Max(1, contextMaskCount(context) * VoxelMath.TransparentMaskWordsPerId));
-                                        context.SetTransparentMaskWords(contextMaskCount(context) * VoxelMath.TransparentMaskWordsPerId);
-                                        try
-                                        {
+                                            scoped Pooled<VoxelCell> cells = cellPool.LeaseScoped(VoxelMath.CellsPerChunk);
+                                            rents++;
+                                            if (pass != 0) reusedLeases++;
+                                            NativeLeaseOperations.Access(cells, opaque, transparent, context.FaceAction);
+                                            int maskLength = checked(Math.Max(
+                                                1,
+                                                context.TransparentMaskCountForTest * VoxelMath.TransparentMaskWordsPerId));
+                                            try
                                             {
-                                                scoped ArenaLease<ulong> nativeMasks = heterogeneousArena.ScratchScoped<ulong>(maskLength);
-                                                rents++;
-                                                if (pass != 0) reusedLeases++;
-                                                NativeLeaseOperations.Access(cells, nativeMasks, context.MaskAction);
+                                                {
+                                                    scoped ArenaLease<ulong> nativeMasks = heterogeneousArena.ScratchScoped<ulong>(maskLength);
+                                                    rents++;
+                                                    if (pass != 0) reusedLeases++;
+                                                    NativeLeaseOperations.Access(cells, nativeMasks, context.MaskAction);
+                                                }
+                                            }
+                                            finally
+                                            {
+                                                heterogeneousArena.RecycleScoped();
+                                                recycles++;
+                                                cleared += checked((long)maskLength * sizeof(ulong));
                                             }
                                         }
-                                        finally
+                                    finally
+                                    {
+                                        cellPool.RecycleScoped();
+                                        recycles++;
+                                        cleared += checked((long)VoxelMath.CellsPerChunk * VoxelMath.VoxelCellBytes);
+                                    }
+
+                                    int opaqueVertexLength = Math.Max(1, checked(context.OpaqueFaceCount * VoxelMath.VerticesPerFace));
+                                    int transparentVertexLength = Math.Max(1, checked(context.TransparentFaceCount * VoxelMath.VerticesPerFace));
+                                    int opaqueIndexLength = Math.Max(1, checked(context.OpaqueFaceCount * VoxelMath.IndicesPerFace));
+                                    int transparentIndexLength = Math.Max(1, checked(context.TransparentFaceCount * VoxelMath.IndicesPerFace));
+                                    try
+                                    {
                                         {
-                                            heterogeneousArena.RecycleScoped();
-                                            recycles++;
+                                            scoped Pooled<Vertex> opaqueVertices = vertexPool.LeaseScoped(opaqueVertexLength);
+                                            scoped Pooled<int> opaqueIndices = indexPool.LeaseScoped(opaqueIndexLength);
+                                            scoped ArenaLease<PayloadSlice> opaqueSlices = heterogeneousArena.ScratchScoped<PayloadSlice>(Math.Max(1, context.OpaqueFaceCount));
+                                            scoped ArenaLease<byte> opaqueUpload = heterogeneousArena.ScratchScoped<byte>(Math.Max(1, context.OpaqueStageBytes));
+                                            scoped Pooled<Vertex> transparentVertices = vertexPool.LeaseScoped(transparentVertexLength);
+                                            scoped Pooled<int> transparentIndices = indexPool.LeaseScoped(transparentIndexLength);
+                                            scoped ArenaLease<PayloadSlice> transparentSlices = heterogeneousArena.ScratchScoped<PayloadSlice>(Math.Max(1, context.TransparentFaceCount));
+                                            scoped ArenaLease<byte> transparentUpload = heterogeneousArena.ScratchScoped<byte>(Math.Max(1, context.TransparentStageBytes));
+                                            rents += 8;
+                                            if (pass != 0) reusedLeases += 8;
+                                            NativeLeaseOperations.Access(
+                                                opaque,
+                                                opaqueVertices,
+                                                opaqueIndices,
+                                                opaqueSlices,
+                                                opaqueUpload,
+                                                context.OpaqueMeshAction);
+                                            NativeLeaseOperations.Access(
+                                                transparent,
+                                                transparentVertices,
+                                                transparentIndices,
+                                                transparentSlices,
+                                                transparentUpload,
+                                                context.TransparentMeshAction);
                                         }
                                     }
-                                }
-                                finally
-                                {
-                                    cellPool.RecycleScoped();
-                                    recycles++;
-                                    cleared += checked((long)VoxelMath.CellsPerChunk * 24);
-                                }
+                                    finally
+                                    {
+                                        heterogeneousArena.RecycleScoped();
+                                        recycles++;
+                                        cleared += checked((long)Math.Max(1, context.OpaqueFaceCount) * VoxelMath.PayloadSliceBytes);
+                                        cleared += checked((long)Math.Max(1, context.TransparentFaceCount) * VoxelMath.PayloadSliceBytes);
+                                        cleared += Math.Max(1, context.OpaqueStageBytes);
+                                        cleared += Math.Max(1, context.TransparentStageBytes);
+                                        vertexPool.RecycleScoped();
+                                        indexPool.RecycleScoped();
+                                        recycles += 2;
+                                        cleared += checked((long)opaqueVertexLength * VoxelMath.VertexBytes);
+                                        cleared += checked((long)transparentVertexLength * VoxelMath.VertexBytes);
+                                        cleared += checked((long)opaqueIndexLength * VoxelMath.IndexBytes);
+                                        cleared += checked((long)transparentIndexLength * VoxelMath.IndexBytes);
+                                    }
 
-                                int opaqueBytes = opaque.Read(context.OpaquePackAction);
-                                int transparentBytes = transparent.Read(context.TransparentPackAction);
-                                context.AddStagedBytes(opaqueBytes, transparentBytes);
-                                ChunkResult result = context.FinishChunk();
-                    (long observedNative, long observedRetained) = context.ObserveNative(peakNative, peakRetained);
-                    peakNative = observedNative;
-                    peakRetained = observedRetained;
-                    peakCoordinateStage = Math.Max(peakCoordinateStage, context.PeakCoordinateStageBytes);
-                    peakFaceStage = Math.Max(peakFaceStage, context.PeakFaceStageBytes);
-                    peakPackingStage = Math.Max(peakPackingStage, context.PeakPackingStageBytes);
-                                if (pass != 0)
-                                {
-                                    digest = result.Digest;
-                                    measuredChunks++;
-                                    visibleFaces += result.VisibleFaces;
-                                    vertices += result.Vertices;
-                                    indices += result.Indices;
-                                    stagedBytes += result.StagedBytes;
-                                    empty += result.EmptySections;
-                                    uniform += result.UniformSections;
-                                    expanded += result.ExpandedSections;
-                                    packed += result.PackedSections;
-                                    multiPacked += result.MultiPackedSections;
-                                    masks += result.TransparentMaskCount;
-                                    maskWords += result.TransparentMaskWords;
-                                    dominant += result.DominantTransparentSections;
-                                    residual += result.ResidualTransparentSections;
-                                    opaqueFaces += result.OpaqueFaces;
-                                    transparentFaces += result.TransparentFaces;
-                                    opaqueStaged += opaqueBytes;
-                                    transparentStaged += transparentBytes;
-                                    enabledStageBytes += result.EnabledStageBytes;
-                                }
-                            }
+                                    ChunkResult result = context.FinishChunk();
+                                    (long observedNative, long observedRetained) = context.ObserveNative(peakNative, peakRetained);
+                                    peakNative = observedNative;
+                                    peakRetained = observedRetained;
+                                    peakCoordinateStage = Math.Max(peakCoordinateStage, context.PeakCoordinateStageBytes);
+                                    peakFaceStage = Math.Max(peakFaceStage, context.PeakFaceStageBytes);
+                                    peakPackingStage = Math.Max(peakPackingStage, context.PeakPackingStageBytes);
+                                    if (pass != 0)
+                                    {
+                                        digest = result.Digest;
+                                        measuredChunks++;
+                                        visibleFaces += result.VisibleFaces;
+                                        vertices += result.Vertices;
+                                        indices += result.Indices;
+                                        stagedBytes += result.StagedBytes;
+                                        empty += result.EmptySections;
+                                        uniform += result.UniformSections;
+                                        expanded += result.ExpandedSections;
+                                        packed += result.PackedSections;
+                                        multiPacked += result.MultiPackedSections;
+                                        masks += result.TransparentMaskCount;
+                                        maskWords += result.TransparentMaskWords;
+                                        dominant += result.DominantTransparentSections;
+                                        residual += result.ResidualTransparentSections;
+                                        opaqueFaces += result.OpaqueFaces;
+                                        transparentFaces += result.TransparentFaces;
+                                        opaqueStaged += result.OpaqueStagedBytes;
+                                        transparentStaged += result.TransparentStagedBytes;
+                                        enabledStageBytes += result.EnabledStageBytes;
+                                        materializedOutput ??= result.MaterializedOutput;
+                                    }
                         }
-                        finally
-                        {
-                            transparentPool.RecycleScoped();
-                            recycles++;
-                            cleared += checked((long)faceCapacity * 32);
-                        }
-                    }
                 }
                 finally
                 {
-                    opaquePool.RecycleScoped();
+                    facePool.RecycleScoped();
                     recycles++;
-                    cleared += checked((long)faceCapacity * 32);
+                    cleared += checked((long)faceCapacity * VoxelMath.NativeFaceOutputBytes * 2);
                 }
             }
 
@@ -640,7 +829,6 @@ internal static class NativeVoxelPipeline
             }
         }
 
-        NativeMemoryStatistics final = NativeMemoryDiagnostics.Snapshot();
         return new WorkerResult(new PipelineResult(
             "NAM",
             digest,
@@ -653,7 +841,7 @@ internal static class NativeVoxelPipeline
             0,
             peakNative,
             peakRetained,
-            final.OutstandingNativeBytes - baseline.OutstandingNativeBytes,
+            0,
             peakCoordinateStage,
             peakFaceStage,
             peakPackingStage,
@@ -680,8 +868,8 @@ internal static class NativeVoxelPipeline
             0,
             maskWords,
             reusedLeases,
-            0));
+            0,
+            MaterializedOutput: materializedOutput));
     }
 
-    private static int contextMaskCount(WorkerContext context) => context.TransparentMaskCountForTest;
 }

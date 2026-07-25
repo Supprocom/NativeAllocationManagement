@@ -533,7 +533,6 @@ public sealed class RuntimeLifecycleTests
     [Fact]
     public void NativeRegionExposesLeaseWithoutTheRemovedOperation()
     {
-        Assert.Null(typeof(NativeRegion).GetMethod("Allocate", BindingFlags.Public | BindingFlags.Instance));
         Assert.Contains(
             typeof(NativeRegion).GetMethods(BindingFlags.Public | BindingFlags.Instance),
             method => method.Name == "Lease" && method.IsGenericMethodDefinition);

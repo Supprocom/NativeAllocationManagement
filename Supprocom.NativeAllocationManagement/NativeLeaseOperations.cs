@@ -16,6 +16,14 @@ public delegate void NativeLeasePooledArenaAction<TPooled, TArena>(
     scoped NativeLeaseView<TPooled> pooled,
     scoped NativeLeaseView<TArena> arena);
 
+/// <summary>Runs one bounded operation over three pooled views and two arena views.</summary>
+public delegate void NativeLeaseMeshAction<TFace, TVertex, TIndex, TSlice, TByte>(
+    scoped NativeLeaseView<TFace> faces,
+    scoped NativeLeaseView<TVertex> vertices,
+    scoped NativeLeaseView<TIndex> indices,
+    scoped NativeLeaseView<TSlice> slices,
+    scoped NativeLeaseView<TByte> upload);
+
 /// <summary>Provides bounded multi-buffer operations without managed mirror copies.</summary>
 public static class NativeLeaseOperations
 {
@@ -138,6 +146,83 @@ public static class NativeLeaseOperations
         finally
         {
             pooledToken.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Enters the complete native mesh output set for one bounded callback. The face,
+    /// vertex, and index buffers are typed pool leases; heterogeneous slice descriptors
+    /// and upload bytes are arena leases. Every view is direct native storage.
+    /// </summary>
+    public static void Access<TFace, TVertex, TIndex, TSlice, TByte>(
+        scoped Pooled<TFace> faces,
+        scoped Pooled<TVertex> vertices,
+        scoped Pooled<TIndex> indices,
+        scoped ArenaLease<TSlice> slices,
+        scoped ArenaLease<TByte> upload,
+        NativeLeaseMeshAction<TFace, TVertex, TIndex, TSlice, TByte> action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        NativeOperationToken faceToken = faces.KernelForComposite.EnterOperation(
+            faces.GenerationForComposite,
+            faces.AllocationIdForComposite,
+            nameof(Access));
+        try
+        {
+            NativeOperationToken vertexToken = vertices.KernelForComposite.EnterOperation(
+                vertices.GenerationForComposite,
+                vertices.AllocationIdForComposite,
+                nameof(Access));
+            try
+            {
+                NativeOperationToken indexToken = indices.KernelForComposite.EnterOperation(
+                    indices.GenerationForComposite,
+                    indices.AllocationIdForComposite,
+                    nameof(Access));
+                try
+                {
+                    NativeOperationToken sliceToken = slices.KernelForComposite.EnterOperation(
+                        slices.GenerationForComposite,
+                        slices.AllocationIdForComposite,
+                        nameof(Access));
+                    try
+                    {
+                        NativeOperationToken uploadToken = upload.KernelForComposite.EnterOperation(
+                            upload.GenerationForComposite,
+                            upload.AllocationIdForComposite,
+                            nameof(Access));
+                        try
+                        {
+                            action(
+                                faceToken.GetView<TFace>(),
+                                vertexToken.GetView<TVertex>(),
+                                indexToken.GetView<TIndex>(),
+                                sliceToken.GetView<TSlice>(),
+                                uploadToken.GetView<TByte>());
+                        }
+                        finally
+                        {
+                            uploadToken.Dispose();
+                        }
+                    }
+                    finally
+                    {
+                        sliceToken.Dispose();
+                    }
+                }
+                finally
+                {
+                    indexToken.Dispose();
+                }
+            }
+            finally
+            {
+                vertexToken.Dispose();
+            }
+        }
+        finally
+        {
+            faceToken.Dispose();
         }
     }
 }

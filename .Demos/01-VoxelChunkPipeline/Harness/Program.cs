@@ -59,7 +59,8 @@ internal static class Program
             || nam.Result.PeakNativeBackingBytes <= 0
             || nam.Result.PeakManagedBackingBytes != 0
             || nam.Result.ReusedLeaseCount <= 0
-            || nam.Result.ScopedRecycleCount <= 0)
+            || nam.Result.ScopedRecycleCount <= 0
+            || nam.Result.MaterializedOutput is null)
         {
             throw new InvalidDataException("NAM did not report direct native backing, scoped reuse, and a zero final native baseline.");
         }
@@ -136,6 +137,10 @@ internal static class Program
         double upperConfidence = speedupMean + confidenceHalfWidth;
         double safeManaged = Mean(samples.Select(sample => (double)sample.Safe.ManagedAllocatedBytes));
         double namManaged = Mean(samples.Select(sample => (double)sample.Nam.ManagedAllocatedBytes));
+        double safeColdManaged = Mean(samples.Select(sample => (double)sample.Safe.ColdManagedAllocatedBytes));
+        double namColdManaged = Mean(samples.Select(sample => (double)sample.Nam.ColdManagedAllocatedBytes));
+        double safeColdBacking = Mean(samples.Select(sample => (double)sample.Safe.Result.ColdManagedBackingBytes));
+        double namColdBacking = Mean(samples.Select(sample => (double)sample.Nam.Result.ColdManagedBackingBytes));
         bool correctness = samples.All(sample =>
             SameWork(sample.Safe.Result, sample.Nam.Result)
             && sample.Nam.Result.FinalNativeBackingBytes == 0
@@ -143,7 +148,9 @@ internal static class Program
             && sample.Nam.Result.PeakManagedBackingBytes == 0
             && sample.Nam.Result.ReusedLeaseCount > 0
             && sample.Nam.Result.ScopedRecycleCount > 0);
-        bool materiallyLessManaged = namManaged <= safeManaged * 0.90;
+        bool warmManagedAllocationReduction = namManaged <= safeManaged * 0.90;
+        bool materiallyLessManaged = namColdManaged <= safeColdManaged * 0.90
+            && namColdBacking <= safeColdBacking * 0.90;
         bool throughputGate = namMeanThroughput >= safeMeanThroughput * 1.05;
         bool confidenceGate = lowerConfidence > 1.00;
         bool gate = correctness && throughputGate && confidenceGate && materiallyLessManaged;
@@ -163,7 +170,12 @@ internal static class Program
             upperConfidence,
             safeManaged,
             namManaged,
+            safeColdManaged,
+            namColdManaged,
+            safeColdBacking,
+            namColdBacking,
             materiallyLessManaged,
+            warmManagedAllocationReduction,
             throughputGate,
             confidenceGate,
             Percentile(safeLatency, 0.50),
@@ -235,14 +247,17 @@ internal static class Program
         start.ArgumentList.Add("--iterations");
         start.ArgumentList.Add(options.Iterations.ToString(CultureInfo.InvariantCulture));
         using Process process = Process.Start(start) ?? throw new InvalidOperationException("Could not start child process.");
+        Task<string> stdoutTask = process.StandardOutput.ReadToEndAsync();
+        Task<string> stderrTask = process.StandardError.ReadToEndAsync();
         if (!process.WaitForExit(180_000))
         {
             try { process.Kill(entireProcessTree: true); } catch { }
             throw new TimeoutException($"{implementation} child exceeded the 180 second bound.");
         }
 
-        string stdout = process.StandardOutput.ReadToEnd();
-        string stderr = process.StandardError.ReadToEnd();
+        Task.WaitAll(stdoutTask, stderrTask);
+        string stdout = stdoutTask.Result;
+        string stderr = stderrTask.Result;
         if (process.ExitCode != 0)
         {
             throw new InvalidOperationException($"{implementation} child failed with exit {process.ExitCode}: {stderr}");
@@ -341,7 +356,27 @@ internal static class Program
         && left.TransparentIndices == right.TransparentIndices
         && left.OpaqueStagedBytes == right.OpaqueStagedBytes
         && left.TransparentStagedBytes == right.TransparentStagedBytes
-        && left.EnabledStageBytes == right.EnabledStageBytes;
+        && left.EnabledStageBytes == right.EnabledStageBytes
+        && OutputFixturesEqual(left.MaterializedOutput, right.MaterializedOutput);
+
+    private static bool OutputFixturesEqual(OutputFixture? left, OutputFixture? right)
+    {
+        if (left is null || right is null)
+        {
+            return left is null && right is null;
+        }
+
+        OutputFixture first = left.Value;
+        OutputFixture second = right.Value;
+        return first.OpaqueVertices.AsSpan().SequenceEqual(second.OpaqueVertices)
+            && first.OpaqueIndices.AsSpan().SequenceEqual(second.OpaqueIndices)
+            && first.OpaqueSlices.AsSpan().SequenceEqual(second.OpaqueSlices)
+            && first.OpaqueUpload.AsSpan().SequenceEqual(second.OpaqueUpload)
+            && first.TransparentVertices.AsSpan().SequenceEqual(second.TransparentVertices)
+            && first.TransparentIndices.AsSpan().SequenceEqual(second.TransparentIndices)
+            && first.TransparentSlices.AsSpan().SequenceEqual(second.TransparentSlices)
+            && first.TransparentUpload.AsSpan().SequenceEqual(second.TransparentUpload);
+    }
 
     private static string FindRepositoryRoot()
     {
@@ -511,7 +546,12 @@ internal static class Program
         double PairedSpeedupConfidenceUpper95,
         double SafeMeanManagedAllocatedBytes,
         double NamMeanManagedAllocatedBytes,
+        double SafeMeanColdManagedAllocatedBytes,
+        double NamMeanColdManagedAllocatedBytes,
+        double SafeMeanColdManagedBackingBytes,
+        double NamMeanColdManagedBackingBytes,
         bool MaterialManagedAllocationReduction,
+        bool WarmManagedAllocationReduction,
         bool ThroughputGate,
         bool ConfidenceGate,
         double SafeP50Milliseconds,

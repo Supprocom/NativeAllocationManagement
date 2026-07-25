@@ -116,6 +116,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         private int _closureDepth;
         private int _finallyProtectionDepth;
         private int _finallyDepth;
+        private bool _replayingFinallyCleanup;
         private bool _cfgMode;
         private bool _suppressDiagnostics;
         private SyntaxTree? _analysisRootTree;
@@ -550,7 +551,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         {
             foreach (ControlFlowRegion tryAndFinally in graph.Root.NestedRegions
                 .SelectMany(FlattenRegions)
-                .Where(region => region.Kind == ControlFlowRegionKind.TryAndFinally))
+                .Where(region => region.Kind == ControlFlowRegionKind.TryAndFinally)
+                .OrderBy(region => region.LastBlockOrdinal - region.FirstBlockOrdinal))
             {
                 ControlFlowRegion? tryRegion = tryAndFinally.NestedRegions
                     .FirstOrDefault(region => region.Kind == ControlFlowRegionKind.Try);
@@ -564,11 +566,20 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 }
 
                 RestoreSnapshot(state);
-                foreach (BasicBlock cleanupBlock in graph.Blocks
-                    .Where(block => ContainsBlock(finallyRegion, block.Ordinal))
-                    .OrderBy(block => block.Ordinal))
+                bool previousFinallyReplay = _replayingFinallyCleanup;
+                _replayingFinallyCleanup = true;
+                try
                 {
-                    VisitBlock(cleanupBlock);
+                    foreach (BasicBlock cleanupBlock in graph.Blocks
+                        .Where(block => ContainsBlock(finallyRegion, block.Ordinal))
+                        .OrderBy(block => block.Ordinal))
+                    {
+                        VisitBlock(cleanupBlock);
+                    }
+                }
+                finally
+                {
+                    _replayingFinallyCleanup = previousFinallyReplay;
                 }
 
                 state = CaptureSnapshot();
@@ -1902,7 +1913,10 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             foreach (HandleState handle in _handles.Values
                 .Where(handle => ReferenceEquals(handle.Owner, owner)
                     && !IsHandleEnded(handle)
-                    && (atSyntax is null || !handle.IsScoped || IsScopedHandleLiveAt(handle, atSyntax))
+                    && (!_replayingFinallyCleanup || !handle.IsScoped)
+                    && (atSyntax is null
+                        || !handle.IsScoped
+                        || IsScopedHandleLiveAt(handle, atSyntax))
                     && IsCurrentGeneration(handle, owner))
                 .OrderBy(handle => handle.Syntax.SpanStart))
             {

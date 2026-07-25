@@ -9,7 +9,6 @@ public sealed class PublicSurfaceTests
     public void PublicSurfaceUsesTheGenerationLifecycleVocabularyOnly()
     {
         Assembly assembly = typeof(NativePool<int>).Assembly;
-        Assert.Null(typeof(NativeRegion).GetMethod("Allocate"));
         Assert.Null(typeof(NativeArena).GetMethod("Lease"));
         Assert.Null(typeof(NativeArena).GetMethod("LeaseScoped"));
         Assert.Null(typeof(NativeRegion).GetMethod("ReleaseLeasesToNativeMemory"));
@@ -24,6 +23,10 @@ public sealed class PublicSurfaceTests
         Assert.NotNull(typeof(NativePool<int>).GetMethod("ReleaseLeasesToGarbageCollector"));
         Assert.NotNull(typeof(NativeArena).GetMethod("Scratch"));
         Assert.NotNull(typeof(NativeArena).GetMethod("ScratchScoped"));
+        Assert.NotNull(typeof(NativeRegion).GetMethod("Lease"));
+        Assert.Contains(
+            typeof(NativeLeaseOperations).GetMethods(),
+            method => method.Name == "Access" && method.GetGenericArguments().Length == 5);
         Assert.NotNull(typeof(NativeArena).GetMethod("RecycleScoped"));
         Assert.NotNull(typeof(NativePool<int>).GetMethod("RecycleScoped"));
         Assert.NotNull(typeof(NativeRegion).GetMethod("RecycleScoped"));

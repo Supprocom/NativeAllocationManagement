@@ -25,18 +25,23 @@ voxel work: worker-local reuse, `ArrayPool<T>` where it remains the right fit,
 pre-sized value storage, stack-based section counters and masks, and zero
 per-cell object creation. The safe baseline clears returned arrays so its reuse
 boundary has the same zeroing requirement as NAM's scoped recycle. The NAM path
-owns cell data and opaque and transparent face output in typed `NativePool<T>`
-leases, then uses a worker-local `NativeArena` for the variable transparent-mask
-range. `NativeLeaseOperations.Access` exposes direct bounded views to useful
-processing callbacks; NAM does not copy a managed mirror into native storage and
-back. Small bounded masks remain `stackalloc` in both implementations.
+owns cell data, opaque and transparent face records, vertices, and indices in
+typed `NativePool<T>` leases. It uses a worker-local `NativeArena` for the
+variable transparent masks, slice descriptors, and exact upload-byte staging
+that have heterogeneous runtime-defined shapes. `NativeLeaseOperations.Access`
+exposes direct bounded views to useful processing callbacks; NAM does not copy a
+managed mirror into native storage and back. Small bounded masks remain
+`stackalloc` in both implementations.
 
 The stage boundaries are explicit. Cell coordinates, density, material IDs,
 face masks, section classification, and transparent masks end before packing.
 Opaque and transparent face output ends after vertex, index, and upload packing.
 Each stage uses a lexical scoped lease followed by one analyzer-proven
 `RecycleScoped` completion, so a stale scoped handle cannot be used after the
-boundary. Worker-local owners remain alive across measured chunks, and terminal
+boundary. The completed opaque and transparent vertices, indices, descriptors,
+and upload bytes are materialized in both paths; the harness compares a small
+fixture of exact elements and bytes in addition to the full-work digest and
+counters. Worker-local owners remain alive across measured chunks, and terminal
 owner disposal requires the physical NAM native-byte delta to return to zero.
 
 Build the four C# projects with these commands.
@@ -60,8 +65,11 @@ Safe/NAM speedups.
 
 The optional `--enforce` switch returns failure unless all correctness counters
 match, NAM mean throughput is at least five percent higher, the paired confidence
-interval is entirely above 1.00, managed allocation is materially lower, and
-final physical native bytes are zero. A failed gate is reported honestly; the
-benchmark does not shorten the safe workload or treat a logical capacity
-estimate as physical native memory. The demo is local verification only and
-does not publish or version-bump a NuGet or GitHub package.
+interval is entirely above 1.00, cold managed allocation and backing creation are
+materially lower, and final physical native bytes are zero. Each child reports
+warm steady-state allocation separately from cold allocation and backing creation
+during the in-process warmup; warm allocation is a separate diagnostic rather
+than part of the cold-pressure result. A failed gate is reported honestly. The
+benchmark does not shorten the safe workload or treat a logical capacity estimate
+as physical native memory. The demo is local verification only and does not
+publish or version-bump a NuGet or GitHub package.

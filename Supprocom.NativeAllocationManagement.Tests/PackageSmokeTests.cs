@@ -64,6 +64,27 @@ public sealed class PackageSmokeTests
                         using NativeArena arena = new(doNotLeaseOnDeclaration: true);
                         arena.LeaseFromMemory();
                         {
+                            using Pooled<int> faces = pool.Rent(1);
+                            using Pooled<int> vertices = pool.Rent(1);
+                            using Pooled<int> indices = pool.Rent(1);
+                            ArenaLease<int> slices = arena.Scratch<int>(1);
+                            ArenaLease<byte> upload = arena.Scratch<byte>(1);
+                            NativeLeaseOperations.Access(
+                                faces,
+                                vertices,
+                                indices,
+                                slices,
+                                upload,
+                                static (faceView, vertexView, indexView, sliceView, uploadView) =>
+                                {
+                                    faceView[0] = 1;
+                                    vertexView[0] = faceView[0];
+                                    indexView[0] = vertexView[0];
+                                    sliceView[0] = indexView[0];
+                                    uploadView[0] = 1;
+                                });
+                        }
+                        {
                             ArenaLease<string> labels = arena.Scratch<string>(1);
                             labels[0] = "package";
                         }
@@ -428,7 +449,7 @@ public sealed class PackageSmokeTests
     }
 
     [Fact]
-    public async Task PackageRegionRequiresLeaseOperation()
+    public async Task PackageArenaRequiresScratchOperation()
     {
         PackageEvidence package = await GetPackageAsync();
         WriteEvidence(package);
@@ -445,10 +466,8 @@ public sealed class PackageSmokeTests
                 {
                     public static void Run()
                     {
-                        using (NativeRegion region = new())
-                        {
-                            _ = region.Allocate<int>(1);
-                        }
+                        using NativeArena arena = new();
+                        _ = arena.Lease<int>(1);
                     }
                 }
                 """);

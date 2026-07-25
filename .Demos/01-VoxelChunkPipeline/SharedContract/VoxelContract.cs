@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 
 namespace Supprocom.NativeAllocationManagement.Demos.VoxelChunkPipeline.SharedContract;
@@ -14,7 +15,7 @@ public readonly record struct VoxelWorkloadOptions(
     public const int DefaultChunkCount = 4;
     public const int DefaultWorkerCount = 2;
     public const int DefaultIterations = 1;
-    public const int WarmupChunksPerWorker = 1;
+    public const int WarmupChunksPerWorker = 2;
 
     public static VoxelWorkloadOptions Default => new(
         DefaultSeed,
@@ -85,8 +86,18 @@ public struct NativeFaceOutput
 {
     public int CellIndex;
     public int BlockId;
-    public int Face;
+    public int FaceMask;
 }
+
+public readonly record struct OutputFixture(
+    Vertex[] OpaqueVertices,
+    int[] OpaqueIndices,
+    PayloadSlice[] OpaqueSlices,
+    byte[] OpaqueUpload,
+    Vertex[] TransparentVertices,
+    int[] TransparentIndices,
+    PayloadSlice[] TransparentSlices,
+    byte[] TransparentUpload);
 
 public enum SectionRepresentationKind
 {
@@ -147,7 +158,9 @@ public readonly record struct PipelineResult(
     long MeasuredManagedAllocatedBytes = 0,
     int MeasuredGen0Collections = 0,
     int MeasuredGen1Collections = 0,
-    int MeasuredGen2Collections = 0);
+    int MeasuredGen2Collections = 0,
+    OutputFixture? MaterializedOutput = null,
+    long ColdManagedBackingBytes = 0);
 
 public readonly record struct ChildRunResult(
     string Implementation,
@@ -159,7 +172,8 @@ public readonly record struct ChildRunResult(
     int Gen2Collections,
     long HeapBytesAfterRun,
     long PeakWorkingSetBytes,
-    long LargeObjectHeapBytesAfterRun = 0)
+    long LargeObjectHeapBytesAfterRun = 0,
+    long ColdManagedAllocatedBytes = 0)
 {
     public string ToJson() => JsonSerializer.Serialize(this, VoxelJson.Options);
 
@@ -183,12 +197,20 @@ public static class VoxelMath
     public const int FacesPerCell = 6;
     public const int VerticesPerFace = 4;
     public const int IndicesPerFace = 6;
-    public const int VertexBytes = 24;
-    public const int IndexBytes = 4;
+    public static readonly int VoxelCellBytes = Unsafe.SizeOf<VoxelCell>();
+    public static readonly int FaceRecordBytes = Unsafe.SizeOf<FaceRecord>();
+    public static readonly int NativeFaceOutputBytes = Unsafe.SizeOf<NativeFaceOutput>();
+    public static readonly int VertexBytes = Unsafe.SizeOf<Vertex>();
+    public static readonly int IndexBytes = Unsafe.SizeOf<int>();
+    public static readonly int PayloadSliceBytes = Unsafe.SizeOf<PayloadSlice>();
     public const int TransparentMaskWordsPerId = 64;
     public const int DigestModulus = 1_000_000_007;
     public const int DigestMultiplier = 1_000_003;
     public const int AirBlockId = 0;
+    public const int OutputFixtureElementLimit = 2;
+    public const int OutputFixtureByteLimit = 512;
+
+    public static int SizeOf<T>() where T : unmanaged => Unsafe.SizeOf<T>();
 
     // These are setup-time value LUTs. The measured cells carry only ushort IDs,
     // matching VoxelEngine's runtime BlockType registry contract.
@@ -298,7 +320,11 @@ public static class VoxelMath
 
     public static int StageBytesForFace(int blockId)
     {
-        BlockTypeDescriptor type = BlockTypeForId(blockId);
+        return StageBytesForType(BlockTypeForId(blockId));
+    }
+
+    public static int StageBytesForType(BlockTypeDescriptor type)
+    {
         return AlignUp(
             checked(type.PayloadBytes + VerticesPerFace * VertexBytes + IndicesPerFace * IndexBytes),
             type.Alignment);
@@ -333,6 +359,43 @@ public static class VoxelMath
         }
 
         return state;
+    }
+
+    public static long DigestMaterializedOutput(
+        long state,
+        ReadOnlySpan<Vertex> vertices,
+        ReadOnlySpan<int> indices,
+        ReadOnlySpan<PayloadSlice> slices,
+        ReadOnlySpan<byte> upload)
+    {
+        for (int index = 0; index < vertices.Length; index++)
+        {
+            Vertex value = vertices[index];
+            state = DigestStep(state, value.X);
+            state = DigestStep(state, value.Y);
+            state = DigestStep(state, value.Z);
+            state = DigestStep(state, value.Face);
+            state = DigestStep(state, value.Corner);
+            state = DigestStep(state, value.BlockId);
+        }
+
+        for (int index = 0; index < indices.Length; index++)
+        {
+            state = DigestStep(state, indices[index]);
+        }
+
+        for (int index = 0; index < slices.Length; index++)
+        {
+            PayloadSlice value = slices[index];
+            state = DigestStep(state, value.Offset);
+            state = DigestStep(state, value.Length);
+            state = DigestStep(state, value.Alignment);
+            state = DigestStep(state, value.StageMask);
+            state = DigestStep(state, value.BlockId);
+            state = DigestStep(state, value.CellIndex);
+        }
+
+        return DigestBytes(state, upload);
     }
 
     public static int FaceCount(int mask) => BitOperations.PopCount((uint)mask);
@@ -658,23 +721,27 @@ public static class VoxelMath
 
     public static void ValidateBoundaryFixture()
     {
-        int opaque = 256;
-        int water = 257;
-        int foliage = 258;
-        if (FaceVisible(AirBlockId, opaque)
-            || !FaceVisible(opaque, AirBlockId)
-            || !FaceVisible(opaque, water)
-            || FaceVisible(opaque, 259)
-            || !FaceVisible(water, AirBlockId)
-            || !FaceVisible(water, opaque)
-            || !FaceVisible(water, foliage)
-            || FaceVisible(water, water))
+        int[] opaque = [256, 259, 260];
+        int[] transparent = [257, 258, 261];
+        int[] materials = [AirBlockId, .. opaque, .. transparent];
+        foreach (int current in materials)
         {
-            throw new InvalidDataException("The independent opaque/transparent boundary fixture failed.");
+            foreach (int neighbor in materials)
+            {
+                bool expected = !IsAir(current)
+                    && (IsOpaque(current)
+                        ? IsAir(neighbor) || IsTransparent(neighbor)
+                        : IsAir(neighbor) || IsOpaque(neighbor) || neighbor != current);
+                if (FaceVisible(current, neighbor) != expected)
+                {
+                    throw new InvalidDataException(
+                        $"The independent opaque/transparent boundary fixture failed for {current}/{neighbor}.");
+                }
+            }
         }
 
-        int first = VertexValue(CellIndex(1, 2, 3), 5, 0, 0, water);
-        int second = VertexValue(CellIndex(1, 2, 3), 5, 1, 0, water);
+        int first = VertexValue(CellIndex(1, 2, 3), 5, 0, 0, transparent[0]);
+        int second = VertexValue(CellIndex(1, 2, 3), 5, 1, 0, transparent[0]);
         if (first == second)
         {
             throw new InvalidDataException("Face-corner fixture did not distinguish vertex work.");

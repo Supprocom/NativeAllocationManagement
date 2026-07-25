@@ -31,8 +31,10 @@ internal static class Program
     private static ChildRunResult RunMeasured(VoxelWorkloadOptions options)
     {
         GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+        long coldAllocationBefore = GC.GetTotalAllocatedBytes(precise: true);
         using WorkingSetSampler sampler = new();
         PipelineResult result = NativeVoxelPipeline.Run(options);
+        long coldManagedAllocatedBytes = GC.GetTotalAllocatedBytes(precise: true) - coldAllocationBefore;
         sampler.Stop();
         GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
         GC.WaitForPendingFinalizers();
@@ -48,7 +50,8 @@ internal static class Program
             result.MeasuredGen2Collections,
             memory.HeapSizeBytes,
             sampler.PeakWorkingSetBytes,
-            GetLargeObjectHeapBytes(memory));
+            GetLargeObjectHeapBytes(memory),
+            coldManagedAllocatedBytes);
     }
 
     private static long GetLargeObjectHeapBytes(GCMemoryInfo memory) =>
