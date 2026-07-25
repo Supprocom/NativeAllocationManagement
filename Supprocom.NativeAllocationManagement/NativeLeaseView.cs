@@ -19,6 +19,15 @@ public readonly ref struct NativeLeaseView<T>
     /// <summary>Gets the physical capacity represented by this view.</summary>
     public int Capacity => _allocation.Capacity;
 
+    /// <summary>
+    /// Gets a direct bounded span over native value storage while this callback is executing.
+    /// The span cannot be retained past the callback and is unavailable for reference-containing types.
+    /// </summary>
+    public Span<T> AsSpan()
+    {
+        return _allocation.AsSpan<T>();
+    }
+
     /// <summary>Reads or writes one element inside the bounded logical range.</summary>
     public T this[int index]
     {

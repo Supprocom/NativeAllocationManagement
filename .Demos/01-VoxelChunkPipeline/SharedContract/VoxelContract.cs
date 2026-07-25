@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Numerics;
 using System.Text.Json;
 
 namespace Supprocom.NativeAllocationManagement.Demos.VoxelChunkPipeline.SharedContract;
@@ -10,9 +11,10 @@ public readonly record struct VoxelWorkloadOptions(
     int Iterations)
 {
     public const int DefaultSeed = 1_706_251;
-    public const int DefaultChunkCount = 2;
+    public const int DefaultChunkCount = 4;
     public const int DefaultWorkerCount = 2;
     public const int DefaultIterations = 1;
+    public const int WarmupChunksPerWorker = 1;
 
     public static VoxelWorkloadOptions Default => new(
         DefaultSeed,
@@ -65,9 +67,26 @@ public readonly record struct CellCoordinate(int X, int Y, int Z);
 
 public readonly record struct FaceRecord(int CellIndex, int BlockId, int Mask);
 
-public readonly record struct Vertex(int X, int Y, int Z, int Face, int BlockId);
+public readonly record struct Vertex(int X, int Y, int Z, int Face, int Corner, int BlockId);
 
 public readonly record struct PayloadSlice(int Offset, int Length, int Alignment, int StageMask, int BlockId, int CellIndex);
+
+public struct VoxelCell
+{
+    public ushort BlockId;
+    public short Density;
+    public int FaceMask;
+    public int OpaqueMask;
+    public int TransparentMask;
+    public int Section;
+}
+
+public struct NativeFaceOutput
+{
+    public int CellIndex;
+    public int BlockId;
+    public int Face;
+}
 
 public enum SectionRepresentationKind
 {
@@ -110,7 +129,25 @@ public readonly record struct PipelineResult(
     long MultiPackedSections = 0,
     long TransparentMaskCount = 0,
     long DominantTransparentSections = 0,
-    long ResidualTransparentSections = 0);
+    long ResidualTransparentSections = 0,
+    long OpaqueVisibleFaces = 0,
+    long TransparentVisibleFaces = 0,
+    long OpaqueVertices = 0,
+    long TransparentVertices = 0,
+    long OpaqueIndices = 0,
+    long TransparentIndices = 0,
+    long OpaqueStagedBytes = 0,
+    long TransparentStagedBytes = 0,
+    long EnabledStageBytes = 0,
+    long ManagedContainerBytes = 0,
+    long TransparentMaskWords = 0,
+    long ReusedLeaseCount = 0,
+    long ReusedNativeSegmentCount = 0,
+    double MeasuredMilliseconds = 0,
+    long MeasuredManagedAllocatedBytes = 0,
+    int MeasuredGen0Collections = 0,
+    int MeasuredGen1Collections = 0,
+    int MeasuredGen2Collections = 0);
 
 public readonly record struct ChildRunResult(
     string Implementation,
@@ -122,8 +159,7 @@ public readonly record struct ChildRunResult(
     int Gen2Collections,
     long HeapBytesAfterRun,
     long PeakWorkingSetBytes,
-    long LargeObjectHeapBytesAfterRun = 0,
-    long GcPauseMilliseconds = 0)
+    long LargeObjectHeapBytesAfterRun = 0)
 {
     public string ToJson() => JsonSerializer.Serialize(this, VoxelJson.Options);
 
@@ -147,102 +183,115 @@ public static class VoxelMath
     public const int FacesPerCell = 6;
     public const int VerticesPerFace = 4;
     public const int IndicesPerFace = 6;
-    public const int VertexBytes = 20;
+    public const int VertexBytes = 24;
     public const int IndexBytes = 4;
     public const int TransparentMaskWordsPerId = 64;
     public const int DigestModulus = 1_000_000_007;
     public const int DigestMultiplier = 1_000_003;
+    public const int AirBlockId = 0;
 
+    // These are setup-time value LUTs. The measured cells carry only ushort IDs,
+    // matching VoxelEngine's runtime BlockType registry contract.
     public static readonly BlockTypeDescriptor[] BlockTypes =
     [
-        new(256, "stone", 8, 4, 0, -18, 0b0011, 40),
-        new(257, "water", 24, 8, 16, -28, 0b0101, 18),
-        new(258, "foliage", 40, 16, -12, -8, 0b1001, 9),
-        new(259, "metal", 56, 32, 8, -4, 0b0110, 5),
-        new(260, "crystal", 72, 16, 24, 2, 0b1110, 2)
+        new(AirBlockId, "air", 0, 1, -128, -32768, 0, 100),
+        new(256, "stone", 8, 4, 0, 32, 0b0011, 40),
+        new(257, "water", 24, 8, 16, -32768, 0b0101, 18),
+        new(258, "foliage", 40, 16, -12, -32768, 0b1001, 9),
+        new(259, "metal", 56, 32, 8, 24, 0b0110, 5),
+        new(260, "crystal", 72, 16, 24, 18, 0b1110, 2),
+        new(261, "moss", 16, 8, -4, -32768, 0b0010, 7)
     ];
 
     private static readonly ushort[] BlockTypeIndexById = CreateBlockTypeIndex();
 
-    public const int TotalFrequencyWeight = 74;
+    public const int TotalFrequencyWeight = 181;
 
     public static int CellIndex(int x, int y, int z) =>
         checked((z * ChunkDimension + y) * ChunkDimension + x);
 
     public static int BlockIdForCell(int seed, int chunkIndex, int x, int y, int z)
     {
-        int section = SectionIndex(x, y, z);
-        int sectionPattern = section % 5;
+        int sectionPattern = SectionIndex(x, y, z) % 6;
         if (sectionPattern == 0)
         {
-            return BlockTypes[1].Id;
+            return AirBlockId;
         }
 
         if (sectionPattern == 1)
         {
-            return BlockTypes[0].Id;
+            return 256;
         }
 
         if (sectionPattern == 2)
         {
-            return ((x + y + z + seed + chunkIndex) & 7) == 0 ? BlockTypes[3].Id : BlockTypes[0].Id;
+            return 257;
         }
 
-        if (sectionPattern == 3)
+        int hash = Hash(seed, chunkIndex, x, y, z);
+        return sectionPattern switch
         {
-            int selected = (x + y * 3 + z * 5 + seed + chunkIndex) % 3;
-            if (selected < 0)
+            3 => (hash & 31) == 0 ? 259 : 256,
+            4 => (hash % 11) switch
             {
-                selected += 3;
-            }
-
-            return BlockTypes[selected].Id;
-        }
-
-        int selector =
-            (seed + chunkIndex * 97 + x * 17 + y * 31 + z * 47 + (x * y) * 3 + (y * z) * 5) %
-            TotalFrequencyWeight;
-        int cumulative = 0;
-        for (int index = 0; index < BlockTypes.Length; index++)
-        {
-            cumulative += BlockTypes[index].FrequencyWeight;
-            if (selector < cumulative)
+                0 or 1 or 2 or 3 or 4 => 257,
+                5 or 6 or 7 => 258,
+                8 => 261,
+                _ => AirBlockId
+            },
+            _ => (hash % 13) switch
             {
-                return BlockTypes[index].Id;
+                0 or 1 => AirBlockId,
+                2 or 3 or 4 => 257,
+                5 or 6 => 258,
+                7 or 8 => 259,
+                9 or 10 => 260,
+                _ => 261
             }
-        }
-
-        return BlockTypes[^1].Id;
+        };
     }
 
     public static short DensityForCell(int seed, int chunkIndex, int x, int y, int z, int blockId)
     {
-        int sectionPattern = SectionIndex(x, y, z) % 5;
-        if (sectionPattern == 0)
+        if (IsAir(blockId))
         {
-            return -100;
+            return short.MinValue;
         }
 
-        if (sectionPattern == 1)
-        {
-            return 64;
-        }
-
-        int value = seed + chunkIndex * 113 + x * 13 + y * 29 + z * 43 + x * z * 7;
-        value %= 257;
-        if (value < 0)
-        {
-            value += 257;
-        }
-
-        return checked((short)(value - 128 + BlockTypeForId(blockId).DensityBias));
+        int value = Hash(seed, chunkIndex, x, y, z) % 241 - 120;
+        return checked((short)(value + BlockTypeForId(blockId).DensityBias));
     }
 
-    public static bool IsSolid(short density, int blockId) =>
-        density >= BlockTypeForId(blockId).SolidThreshold;
+    public static bool IsAir(int blockId) => blockId == AirBlockId;
+
+    public static bool IsOccupied(int blockId) => !IsAir(blockId);
+
+    public static bool IsTransparent(int blockId) => IsOccupied(blockId) && BlockTypeForId(blockId).SolidThreshold < 0;
+
+    public static bool IsOpaque(int blockId) => IsOccupied(blockId) && !IsTransparent(blockId);
+
+    public static bool IsSolid(short density, int blockId) => IsOccupied(blockId);
+
+    public static bool FaceVisible(int currentBlockId, int neighborBlockId)
+    {
+        if (IsAir(currentBlockId))
+        {
+            return false;
+        }
+
+        if (IsOpaque(currentBlockId))
+        {
+            return IsAir(neighborBlockId) || IsTransparent(neighborBlockId);
+        }
+
+        return IsAir(neighborBlockId)
+            || IsOpaque(neighborBlockId)
+            || neighborBlockId != currentBlockId;
+    }
 
     public static int AlignUp(int value, int alignment)
     {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(alignment);
         int remainder = value % alignment;
         return remainder == 0 ? value : checked(value + alignment - remainder);
     }
@@ -276,18 +325,17 @@ public static class VoxelMath
         return state;
     }
 
-    public static int FaceCount(int mask)
+    public static long DigestZeroBytes(long state, int count)
     {
-        int count = 0;
-        int remaining = mask;
-        while (remaining != 0)
+        for (int index = 0; index < count; index++)
         {
-            count += remaining & 1;
-            remaining >>= 1;
+            state = DigestStep(state, 0);
         }
 
-        return count;
+        return state;
     }
+
+    public static int FaceCount(int mask) => BitOperations.PopCount((uint)mask);
 
     public static int NeighborIndex(int cellIndex, int face)
     {
@@ -308,24 +356,21 @@ public static class VoxelMath
             default: throw new ArgumentOutOfRangeException(nameof(face));
         }
 
-        return nx < 0 || nx >= ChunkDimension || ny < 0 || ny >= ChunkDimension || nz < 0 || nz >= ChunkDimension
+        return (uint)nx >= ChunkDimension || (uint)ny >= ChunkDimension || (uint)nz >= ChunkDimension
             ? -1
             : CellIndex(nx, ny, nz);
     }
 
     public static int FaceMaskFromManaged(int cellIndex, ReadOnlySpan<short> densities, ReadOnlySpan<ushort> materials)
     {
-        int blockId = materials[cellIndex];
-        if (!IsSolid(densities[cellIndex], blockId))
-        {
-            return 0;
-        }
-
+        _ = densities;
+        int current = materials[cellIndex];
         int mask = 0;
         for (int face = 0; face < FacesPerCell; face++)
         {
             int neighbor = NeighborIndex(cellIndex, face);
-            if (neighbor < 0 || !IsSolid(densities[neighbor], materials[neighbor]))
+            int neighborBlock = neighbor < 0 ? AirBlockId : materials[neighbor];
+            if (FaceVisible(current, neighborBlock))
             {
                 mask |= 1 << face;
             }
@@ -334,12 +379,32 @@ public static class VoxelMath
         return mask;
     }
 
-    public static int PayloadByte(int seed, int cellIndex, int blockId, int slot) =>
-        (seed + cellIndex * 11 + blockId * 37 + slot * 17 + BlockTypeForId(blockId).StageMask * 13) & 0xFF;
+    public static int FaceMaskFromCells(int cellIndex, ReadOnlySpan<VoxelCell> cells)
+    {
+        int current = cells[cellIndex].BlockId;
+        int mask = 0;
+        for (int face = 0; face < FacesPerCell; face++)
+        {
+            int neighbor = NeighborIndex(cellIndex, face);
+            int neighborBlock = neighbor < 0 ? AirBlockId : cells[neighbor].BlockId;
+            if (FaceVisible(current, neighborBlock))
+            {
+                mask |= 1 << face;
+            }
+        }
+
+        return mask;
+    }
+
+    public static int PayloadByte(int seed, int cellIndex, int blockId, int slot)
+    {
+        BlockTypeDescriptor type = BlockTypeForId(blockId);
+        return (seed + cellIndex * 11 + blockId * 37 + slot * 17 + type.StageMask * 13) & 0xFF;
+    }
 
     public static BlockTypeDescriptor BlockTypeForId(int blockId)
     {
-        if ((uint)blockId >= BlockTypeIndexById.Length)
+        if ((uint)blockId > ushort.MaxValue)
         {
             throw new ArgumentOutOfRangeException(nameof(blockId));
         }
@@ -353,14 +418,32 @@ public static class VoxelMath
         return BlockTypes[index];
     }
 
+    public static int BlockTypeIndexForId(int blockId)
+    {
+        if ((uint)blockId > ushort.MaxValue)
+        {
+            throw new ArgumentOutOfRangeException(nameof(blockId));
+        }
+
+        ushort index = BlockTypeIndexById[blockId];
+        if (index >= BlockTypes.Length || BlockTypes[index].Id != blockId)
+        {
+            throw new ArgumentOutOfRangeException(nameof(blockId));
+        }
+
+        return index;
+    }
+
     public static int SectionIndex(int x, int y, int z) =>
         checked(((z / 16) * 4 + (y / 16)) * 4 + (x / 16));
 
     public static SectionSummary ClassifySection(ReadOnlySpan<ushort> materials, ReadOnlySpan<short> densities, int sectionIndex)
     {
+        _ = densities;
         Span<int> counts = stackalloc int[BlockTypes.Length];
         Span<int> transparentCounts = stackalloc int[BlockTypes.Length];
-        int solidCount = 0;
+        int distinct = 0;
+        int transparentIds = 0;
         int startX = (sectionIndex % 4) * 16;
         int startY = ((sectionIndex / 4) % 4) * 16;
         int startZ = (sectionIndex / 16) * 16;
@@ -371,53 +454,93 @@ public static class VoxelMath
                 int row = (z * ChunkDimension + y) * ChunkDimension;
                 for (int x = startX; x < startX + 16; x++)
                 {
-                    int cell = row + x;
-                    int index = BlockTypeIndexById[materials[cell]];
-                    counts[index]++;
-                    if (IsSolid(densities[cell], materials[cell]))
+                    int blockId = materials[row + x];
+                    int index = BlockTypeIndexById[blockId];
+                    if (counts[index]++ == 0)
                     {
-                        solidCount++;
+                        distinct++;
                     }
-                    else
+
+                    if (IsTransparent(blockId) && transparentCounts[index]++ == 0)
                     {
-                        transparentCounts[index]++;
+                        transparentIds++;
                     }
                 }
             }
         }
 
-        int unique = 0;
-        int transparentIds = 0;
-        int dominantTransparentCount = 0;
-        int transparentCount = 0;
-        for (int index = 0; index < counts.Length; index++)
-        {
-            if (counts[index] == 0)
-            {
-                continue;
-            }
+        SectionRepresentationKind kind = distinct == 1 && counts[0] == 4096
+            ? SectionRepresentationKind.Empty
+            : distinct == 1
+                ? SectionRepresentationKind.Uniform
+                : distinct <= 2
+                    ? SectionRepresentationKind.Packed
+                    : distinct <= 4
+                        ? SectionRepresentationKind.Expanded
+                        : SectionRepresentationKind.MultiPacked;
 
-            unique++;
-            if (transparentCounts[index] != 0)
+        int largest = 0;
+        int totalTransparent = 0;
+        for (int index = 0; index < transparentCounts.Length; index++)
+        {
+            largest = Math.Max(largest, transparentCounts[index]);
+            totalTransparent += transparentCounts[index];
+        }
+
+        bool dominant = transparentIds > 0 && largest * 2 >= totalTransparent;
+        return new SectionSummary(kind, transparentIds, dominant, transparentIds > 1 && !dominant);
+    }
+
+    public static SectionSummary ClassifySection(ReadOnlySpan<VoxelCell> cells, int sectionIndex)
+    {
+        Span<int> counts = stackalloc int[BlockTypes.Length];
+        Span<int> transparentCounts = stackalloc int[BlockTypes.Length];
+        int distinct = 0;
+        int transparentIds = 0;
+        int startX = (sectionIndex % 4) * 16;
+        int startY = ((sectionIndex / 4) % 4) * 16;
+        int startZ = (sectionIndex / 16) * 16;
+        for (int z = startZ; z < startZ + 16; z++)
+        {
+            for (int y = startY; y < startY + 16; y++)
             {
-                transparentIds++;
-                transparentCount += transparentCounts[index];
-                dominantTransparentCount = Math.Max(dominantTransparentCount, transparentCounts[index]);
+                int row = (z * ChunkDimension + y) * ChunkDimension;
+                for (int x = startX; x < startX + 16; x++)
+                {
+                    int blockId = cells[row + x].BlockId;
+                    int index = BlockTypeIndexById[blockId];
+                    if (counts[index]++ == 0)
+                    {
+                        distinct++;
+                    }
+
+                    if (IsTransparent(blockId) && transparentCounts[index]++ == 0)
+                    {
+                        transparentIds++;
+                    }
+                }
             }
         }
 
-        SectionRepresentationKind kind = solidCount == 0
+        SectionRepresentationKind kind = distinct == 1 && counts[0] == 4096
             ? SectionRepresentationKind.Empty
-            : unique == 1
+            : distinct == 1
                 ? SectionRepresentationKind.Uniform
-                : unique == 2
+                : distinct <= 2
                     ? SectionRepresentationKind.Packed
-                    : unique == 3
+                    : distinct <= 4
                         ? SectionRepresentationKind.Expanded
                         : SectionRepresentationKind.MultiPacked;
-        bool dominant = transparentIds > 0 && dominantTransparentCount * 2 >= transparentCount;
-        bool residual = transparentIds > 1 && !dominant;
-        return new SectionSummary(kind, transparentIds, dominant, residual);
+        int largest = 0;
+        int totalTransparent = 0;
+        for (int index = 0; index < transparentCounts.Length; index++)
+        {
+            largest = Math.Max(largest, transparentCounts[index]);
+            totalTransparent += transparentCounts[index];
+        }
+
+        bool dominant = transparentIds > 0 && largest * 2 >= totalTransparent;
+        return new SectionSummary(kind, transparentIds, dominant, transparentIds > 1 && !dominant);
     }
 
     public static int BuildTransparentMasks(
@@ -426,12 +549,13 @@ public static class VoxelMath
         int sectionIndex,
         Span<ulong> destination)
     {
+        _ = densities;
         Span<int> maskSlots = stackalloc int[BlockTypes.Length];
         maskSlots.Fill(-1);
+        int transparentIds = 0;
         int startX = (sectionIndex % 4) * 16;
         int startY = ((sectionIndex / 4) % 4) * 16;
         int startZ = (sectionIndex / 16) * 16;
-        int transparentIds = 0;
         for (int z = startZ; z < startZ + 16; z++)
         {
             for (int y = startY; y < startY + 16; y++)
@@ -440,34 +564,133 @@ public static class VoxelMath
                 for (int x = startX; x < startX + 16; x++)
                 {
                     int cell = row + x;
-                    if (IsSolid(densities[cell], materials[cell]))
+                    int blockId = materials[cell];
+                    if (!IsTransparent(blockId))
                     {
                         continue;
                     }
 
-                    int typeIndex = BlockTypeIndexById[materials[cell]];
-                    int slot = maskSlots[typeIndex];
-                    if (slot < 0)
+                    int typeIndex = BlockTypeIndexById[blockId];
+                    int maskIndex = maskSlots[typeIndex];
+                    if (maskIndex < 0)
                     {
-                        slot = maskSlots[typeIndex] = transparentIds++;
-                        int requiredWords = checked((slot + 1) * TransparentMaskWordsPerId);
-                        if (requiredWords > destination.Length)
-                        {
-                            throw new ArgumentException("The destination does not contain enough transparent-mask words.", nameof(destination));
-                        }
+                        maskIndex = maskSlots[typeIndex] = transparentIds++;
                     }
 
-                    int localX = x - startX;
-                    int localY = y - startY;
-                    int localZ = z - startZ;
-                    int localCell = (localZ * 16 + localY) * 16 + localX;
-                    int word = checked(slot * TransparentMaskWordsPerId + (localCell >> 6));
-                    destination[word] |= 1UL << (localCell & 63);
+                    int local = ((z - startZ) * 16 + (y - startY)) * 16 + x - startX;
+                    destination[maskIndex * TransparentMaskWordsPerId + (local >> 6)] |= 1UL << (local & 63);
                 }
             }
         }
 
         return transparentIds;
+    }
+
+    public static int BuildTransparentMasks(ReadOnlySpan<VoxelCell> cells, int sectionIndex, Span<ulong> destination)
+    {
+        Span<int> maskSlots = stackalloc int[BlockTypes.Length];
+        maskSlots.Fill(-1);
+        int transparentIds = 0;
+        int startX = (sectionIndex % 4) * 16;
+        int startY = ((sectionIndex / 4) % 4) * 16;
+        int startZ = (sectionIndex / 16) * 16;
+        for (int z = startZ; z < startZ + 16; z++)
+        {
+            for (int y = startY; y < startY + 16; y++)
+            {
+                int row = (z * ChunkDimension + y) * ChunkDimension;
+                for (int x = startX; x < startX + 16; x++)
+                {
+                    int cell = row + x;
+                    int blockId = cells[cell].BlockId;
+                    if (!IsTransparent(blockId))
+                    {
+                        continue;
+                    }
+
+                    int typeIndex = BlockTypeIndexById[blockId];
+                    int maskIndex = maskSlots[typeIndex];
+                    if (maskIndex < 0)
+                    {
+                        maskIndex = maskSlots[typeIndex] = transparentIds++;
+                    }
+
+                    int local = ((z - startZ) * 16 + (y - startY)) * 16 + x - startX;
+                    destination[maskIndex * TransparentMaskWordsPerId + (local >> 6)] |= 1UL << (local & 63);
+                }
+            }
+        }
+
+        return transparentIds;
+    }
+
+    public static int VertexValue(int cellIndex, int face, int vertex, int field, int blockId)
+    {
+        int x = cellIndex % ChunkDimension;
+        int y = (cellIndex / ChunkDimension) % ChunkDimension;
+        int z = cellIndex / (ChunkDimension * ChunkDimension);
+        int corner = vertex & 3;
+        int xOffset = face switch { 0 => 0, 1 => 1, _ => (corner & 1) },
+            yOffset = face switch { 2 => 0, 3 => 1, _ => ((corner >> 1) & 1) },
+            zOffset = face switch { 4 => 0, 5 => 1, _ => (corner ^ (corner >> 1)) & 1 };
+        return field switch
+        {
+            0 => x + xOffset,
+            1 => y + yOffset,
+            2 => z + zOffset,
+            3 => face,
+            4 => corner,
+            5 => blockId,
+            _ => throw new ArgumentOutOfRangeException(nameof(field))
+        };
+    }
+
+    public static int IndexValue(int vertexOffset, int indexOffset) =>
+        vertexOffset + ((indexOffset % IndicesPerFace) switch
+        {
+            0 => 0,
+            1 => 1,
+            2 => 2,
+            3 => 2,
+            4 => 3,
+            _ => 0
+        });
+
+    public static void ValidateBoundaryFixture()
+    {
+        int opaque = 256;
+        int water = 257;
+        int foliage = 258;
+        if (FaceVisible(AirBlockId, opaque)
+            || !FaceVisible(opaque, AirBlockId)
+            || !FaceVisible(opaque, water)
+            || FaceVisible(opaque, 259)
+            || !FaceVisible(water, AirBlockId)
+            || !FaceVisible(water, opaque)
+            || !FaceVisible(water, foliage)
+            || FaceVisible(water, water))
+        {
+            throw new InvalidDataException("The independent opaque/transparent boundary fixture failed.");
+        }
+
+        int first = VertexValue(CellIndex(1, 2, 3), 5, 0, 0, water);
+        int second = VertexValue(CellIndex(1, 2, 3), 5, 1, 0, water);
+        if (first == second)
+        {
+            throw new InvalidDataException("Face-corner fixture did not distinguish vertex work.");
+        }
+    }
+
+    private static int Hash(int seed, int chunkIndex, int x, int y, int z)
+    {
+        unchecked
+        {
+            uint value = (uint)(seed * 31 + chunkIndex * 113 + x * 13 + y * 29 + z * 43 + x * z * 7);
+            value ^= value >> 16;
+            value *= 0x7feb352d;
+            value ^= value >> 15;
+            return (int)(value & 0x7fffffff);
+        }
     }
 
     private static ushort[] CreateBlockTypeIndex()
@@ -480,29 +703,4 @@ public static class VoxelMath
 
         return lookup;
     }
-
-    public static int VertexValue(int cellIndex, int face, int vertex, int field, int blockId)
-    {
-        int value = field switch
-        {
-            0 => cellIndex % ChunkDimension,
-            1 => (cellIndex / ChunkDimension) % ChunkDimension,
-            2 => cellIndex / (ChunkDimension * ChunkDimension),
-            3 => face,
-            4 => blockId,
-            _ => throw new ArgumentOutOfRangeException(nameof(field))
-        };
-        return value + vertex * (field + 3);
-    }
-
-    public static int IndexValue(int vertexOffset, int indexOffset) =>
-        vertexOffset + ((indexOffset % VerticesPerFace) switch
-        {
-            0 => 0,
-            1 => 1,
-            2 => 2,
-            3 => 2,
-            4 => 3,
-            _ => 0
-        });
 }

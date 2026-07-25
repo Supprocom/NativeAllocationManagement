@@ -3,6 +3,7 @@
     <TargetFramework>net10.0</TargetFramework>
     <RootNamespace>Supprocom.NativeAllocationManagement.Demos.VoxelChunkPipeline.SharedContract</RootNamespace>
     <AssemblyName>VoxelChunkPipeline.SharedContract</AssemblyName>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
     <IsPackable>false</IsPackable>
     <NoWarn>$(NoWarn);1591</NoWarn>
   </PropertyGroup>

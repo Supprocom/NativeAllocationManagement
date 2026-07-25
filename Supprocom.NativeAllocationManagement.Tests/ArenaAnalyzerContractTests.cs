@@ -116,6 +116,37 @@ public sealed class ArenaAnalyzerContractTests
     }
 
     [Fact]
+    public async Task BalancedScopedLoopRecyclingAcceptsZeroOneAndManyIterations()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+            public static class Sample
+            {
+                public static void Run(int count)
+                {
+                    NativePool<int> pool = new();
+                    for (int index = 0; index < count; index++)
+                    {
+                        try
+                        {
+                            { scoped Pooled<int> first = pool.LeaseScoped(2); first[0] = index; }
+                            { scoped Pooled<int> second = pool.LeaseScoped(2); second[0] = index + 1; }
+                        }
+                        finally
+                        {
+                            pool.RecycleScoped();
+                        }
+                    }
+                    pool.Dispose();
+                }
+            }
+            """);
+
+        Assert.Empty(AnalyzerContractTests.NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
     public async Task RegionRequiresTheExplicitBracedUsingStatement()
     {
         ImmutableArray<Diagnostic> valid = await AnalyzerContractTests.AnalyzeAsync(

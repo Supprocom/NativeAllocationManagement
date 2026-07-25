@@ -32,42 +32,28 @@ internal static class Program
     {
         GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
         using WorkingSetSampler sampler = new();
-        long allocatedBefore = GC.GetTotalAllocatedBytes(precise: true);
-        int gen0Before = GC.CollectionCount(0);
-        int gen1Before = GC.CollectionCount(1);
-        int gen2Before = GC.CollectionCount(2);
-        Stopwatch clock = Stopwatch.StartNew();
         PipelineResult result = SafeVoxelPipeline.Run(options);
-        clock.Stop();
         sampler.Stop();
+        GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+        GC.WaitForPendingFinalizers();
+        GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
         GCMemoryInfo memory = GC.GetGCMemoryInfo();
         return new ChildRunResult(
             "SafeCSharp",
             result,
-            clock.Elapsed.TotalMilliseconds,
-            GC.GetTotalAllocatedBytes(precise: true) - allocatedBefore,
-            GC.CollectionCount(0) - gen0Before,
-            GC.CollectionCount(1) - gen1Before,
-            GC.CollectionCount(2) - gen2Before,
+            result.MeasuredMilliseconds,
+            result.MeasuredManagedAllocatedBytes,
+            result.MeasuredGen0Collections,
+            result.MeasuredGen1Collections,
+            result.MeasuredGen2Collections,
             memory.HeapSizeBytes,
             sampler.PeakWorkingSetBytes,
-            GetLargeObjectHeapBytes(memory),
-            GetPauseMilliseconds(memory));
+            GetLargeObjectHeapBytes(memory));
     }
 
     private static long GetLargeObjectHeapBytes(GCMemoryInfo memory) =>
         memory.GenerationInfo.Length > 3 ? memory.GenerationInfo[3].SizeAfterBytes : 0;
 
-    private static long GetPauseMilliseconds(GCMemoryInfo memory)
-    {
-        double total = 0;
-        foreach (TimeSpan duration in memory.PauseDurations)
-        {
-            total += duration.TotalMilliseconds;
-        }
-
-        return checked((long)total);
-    }
 
     private sealed class WorkingSetSampler : IDisposable
     {

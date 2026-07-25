@@ -381,6 +381,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             bool emitDiagnostics)
         {
             FlowSnapshot result = CloneSnapshot(state);
+            bool enteringFinally = IsEnteringFinally(graph, source, destination);
             HashSet<ISymbol> exitingSymbols = new(SymbolEqualityComparer.Default);
             exitingSymbols.UnionWith(_localLifetimeRegions
                 .Where(pair => ContainsBlock(pair.Value, source.Ordinal)
@@ -395,6 +396,12 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 .Where(handle => handle.Symbol is not null && exitingSymbols.Contains(handle.Symbol))
                 .ToArray())
             {
+                if (enteringFinally && handle.IsScoped && handle.Owner.Symbol is not null
+                    && !exitingSymbols.Contains(handle.Owner.Symbol))
+                {
+                    continue;
+                }
+
                 if (!IsHandleEndedAtScopeExit(handle, source, destination) && emitDiagnostics)
                 {
                     if (handle.IsScoped
@@ -445,6 +452,15 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
             foreach (ISymbol symbol in exitingSymbols)
             {
+                if (enteringFinally
+                    && result.Handles.TryGetValue(symbol, out HandleState? handle)
+                    && handle.IsScoped
+                    && handle.Owner.Symbol is not null
+                    && !exitingSymbols.Contains(handle.Owner.Symbol))
+                {
+                    continue;
+                }
+
                 result.Handles.Remove(symbol);
                 result.Owners.Remove(symbol);
             }
@@ -489,6 +505,28 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             return _localLifetimeRegions.TryGetValue(symbol, out ControlFlowRegion? region)
                 && ContainsBlock(region, source.Ordinal)
                 && !ContainsBlock(region, destination.Ordinal);
+        }
+
+        private static bool IsEnteringFinally(ControlFlowGraph graph, BasicBlock source, BasicBlock destination)
+        {
+            foreach (ControlFlowRegion tryAndFinally in graph.Root.NestedRegions
+                .SelectMany(FlattenRegions)
+                .Where(region => region.Kind == ControlFlowRegionKind.TryAndFinally))
+            {
+                ControlFlowRegion? tryRegion = tryAndFinally.NestedRegions
+                    .FirstOrDefault(region => region.Kind == ControlFlowRegionKind.Try);
+                ControlFlowRegion? finallyRegion = tryAndFinally.NestedRegions
+                    .FirstOrDefault(region => region.Kind == ControlFlowRegionKind.Finally);
+                if (tryRegion is not null
+                    && finallyRegion is not null
+                    && ContainsBlock(tryRegion, source.Ordinal)
+                    && ContainsBlock(finallyRegion, destination.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private void VisitBlock(BasicBlock block)
@@ -773,7 +811,20 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
                 if (!presentOnEveryPath)
                 {
-                    mergedHandle.Ambiguous = true;
+                    bool allPresentPathsEnded = paths
+                        .Where(path => path.Handles.ContainsKey(symbol))
+                        .Select(path => path.Handles[symbol])
+                        .All(handle => handle.IsScoped && IsHandleEnded(handle));
+                    if (allPresentPathsEnded)
+                    {
+                        mergedHandle.Returned = true;
+                        mergedHandle.Ambiguous = false;
+                        mergedHandle.GenerationRelation = GenerationRelationKind.Current;
+                    }
+                    else
+                    {
+                        mergedHandle.Ambiguous = true;
+                    }
                 }
 
                 if (paths.Any(path => path.Handles.TryGetValue(symbol, out HandleState? handle) && handle.Returned != mergedHandle.Returned))
@@ -782,6 +833,12 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 }
 
                 mergedHandle.GenerationRelation = MergeHandleGenerationRelation(paths, symbol, first, mergedHandle);
+                if (!presentOnEveryPath
+                    && !mergedHandle.Ambiguous
+                    && mergedHandle.Returned)
+                {
+                    mergedHandle.GenerationRelation = GenerationRelationKind.Current;
+                }
                 if (mergedHandle.GenerationRelation == GenerationRelationKind.Unknown)
                 {
                     mergedHandle.Generation = paths
@@ -1286,6 +1343,13 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             IOperation? value = Unwrap(operation.Value);
             if (value is not null && value is not IObjectCreationOperation)
             {
+                if (operation.Parent is IInvocationOperation composite
+                    && IsNonRetainingCompositeLeaseOperation(composite))
+                {
+                    base.VisitArgument(operation);
+                    return;
+                }
+
                 if (IsHandleType(value.Type) && GetHandle(value) is HandleState handle)
                 {
                     string callName = operation.Parent is IInvocationOperation invocation
@@ -1731,7 +1795,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     return;
                 }
 
-                GenerationReturnLiveness[] pending = FindGenerationReturnLiveness(owner)
+                GenerationReturnLiveness[] pending = FindGenerationReturnLiveness(owner, syntax)
                     .Where(finding => finding.IsScoped)
                     .ToArray();
                 if (pending.Length != 0)
@@ -1754,6 +1818,18 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 }
 
                 owner.ScopedPending = false;
+                owner.ScopedPendingAmbiguous = false;
+                foreach (HandleState handle in _handles.Values)
+                {
+                    if (ReferenceEquals(handle.Owner, owner)
+                        && handle.IsScoped
+                        && !handle.Returned)
+                    {
+                        handle.Returned = true;
+                        handle.Ambiguous = false;
+                        handle.GenerationRelation = GenerationRelationKind.Current;
+                    }
+                }
                 return;
             }
 
@@ -1818,7 +1894,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             }
         }
 
-        private GenerationReturnLiveness[] FindGenerationReturnLiveness(OwnerState owner)
+        private GenerationReturnLiveness[] FindGenerationReturnLiveness(OwnerState owner, SyntaxNode? atSyntax = null)
         {
             List<GenerationReturnLiveness> findings = [];
             HashSet<string> paths = new(StringComparer.Ordinal);
@@ -1826,6 +1902,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             foreach (HandleState handle in _handles.Values
                 .Where(handle => ReferenceEquals(handle.Owner, owner)
                     && !IsHandleEnded(handle)
+                    && (atSyntax is null || !handle.IsScoped || IsScopedHandleLiveAt(handle, atSyntax))
                     && IsCurrentGeneration(handle, owner))
                 .OrderBy(handle => handle.Syntax.SpanStart))
             {
@@ -1852,6 +1929,18 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             }
 
             return findings.ToArray();
+        }
+
+        private static bool IsScopedHandleLiveAt(HandleState handle, SyntaxNode operationSyntax)
+        {
+            if (!handle.IsScoped)
+            {
+                return true;
+            }
+
+            SyntaxNode? lexicalScope = handle.Syntax.AncestorsAndSelf()
+                .FirstOrDefault(node => node is BlockSyntax or SwitchSectionSyntax);
+            return lexicalScope is null || lexicalScope.Span.Contains(operationSyntax.SpanStart);
         }
 
         private static bool IsCurrentGeneration(HandleState handle, OwnerState owner)
@@ -3076,6 +3165,10 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     || ((invocation.TargetMethod.Name is "Lease" or "LeaseScoped") && IsNativeRegion(invocation.TargetMethod.ContainingType))
                     || ((invocation.TargetMethod.Name is "Scratch" or "ScratchScoped") && IsNativeArena(invocation.TargetMethod.ContainingType)));
         }
+
+        private static bool IsNonRetainingCompositeLeaseOperation(IInvocationOperation operation) =>
+            operation.TargetMethod.Name == "Access"
+            && operation.TargetMethod.ContainingType.ToDisplayString() == "Supprocom.NativeAllocationManagement.NativeLeaseOperations";
 
         private static Target FindTarget(IOperation operation)
         {

@@ -1,9 +1,0 @@
-<Project Sdk="PACSharp.NET.Sdk/0.1.0">
-  <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
-    <Configuration>Release</Configuration>
-    <OutputType>Exe</OutputType>
-    <AssemblyName>VoxelChunkPipeline.PACSharp</AssemblyName>
-    <Deterministic>true</Deterministic>
-  </PropertyGroup>
-</Project>

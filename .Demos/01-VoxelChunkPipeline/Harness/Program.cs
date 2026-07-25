@@ -7,7 +7,7 @@ namespace Supprocom.NativeAllocationManagement.Demos.VoxelChunkPipeline.Harness;
 
 internal static class Program
 {
-    private const int DefaultPairs = 30;
+    private const int MinimumPairs = 30;
 
     private static int Main(string[] args)
     {
@@ -55,9 +55,13 @@ internal static class Program
             throw new InvalidDataException("SafeCSharp and NAM correctness outputs differ.");
         }
 
-        if (nam.Result.FinalNativeBackingBytes != 0)
+        if (nam.Result.FinalNativeBackingBytes != 0
+            || nam.Result.PeakNativeBackingBytes <= 0
+            || nam.Result.PeakManagedBackingBytes != 0
+            || nam.Result.ReusedLeaseCount <= 0
+            || nam.Result.ScopedRecycleCount <= 0)
         {
-            throw new InvalidDataException("NAM did not return final native backing to zero.");
+            throw new InvalidDataException("NAM did not report direct native backing, scoped reuse, and a zero final native baseline.");
         }
 
         return new CorrectnessReport(
@@ -69,12 +73,6 @@ internal static class Program
 
     private static BenchmarkReport RunBenchmark(string root, HarnessArguments parsed)
     {
-        for (int warmup = 0; warmup < 2; warmup++)
-        {
-            _ = RunChild(root, "SafeCSharp", parsed.Workload, "--run");
-            _ = RunChild(root, "NAM", parsed.Workload, "--run");
-        }
-
         List<PairedSample> samples = new(parsed.Pairs);
         for (int pair = 0; pair < parsed.Pairs; pair++)
         {
@@ -96,6 +94,11 @@ internal static class Program
                 throw new InvalidDataException($"Correctness parity failed in measured pair {pair}.");
             }
 
+            if (nam.Result.FinalNativeBackingBytes != 0)
+            {
+                throw new InvalidDataException($"NAM retained native bytes after measured pair {pair}.");
+            }
+
             samples.Add(new PairedSample(pair, safe, nam));
         }
 
@@ -104,37 +107,42 @@ internal static class Program
             DateTime.UtcNow,
             parsed.Workload,
             parsed.Pairs,
+            VoxelWorkloadOptions.WarmupChunksPerWorker,
+            "paired Student-t 95% interval over per-pair Safe/NAM speedup samples",
             summary.CorrectnessPassed,
             samples,
             summary);
     }
 
-    private static BenchmarkSummary Summarize(VoxelWorkloadOptions options, IReadOnlyList<PairedSample> samples)
+    private static BenchmarkSummary Summarize(
+        VoxelWorkloadOptions options,
+        IReadOnlyList<PairedSample> samples)
     {
         double work = checked((double)options.ChunkCount * options.Iterations);
-        double safeMeanMs = Mean(samples.Select(sample => sample.Safe.ElapsedMilliseconds));
-        double namMeanMs = Mean(samples.Select(sample => sample.Nam.ElapsedMilliseconds));
+        double[] safeLatency = samples.Select(sample => sample.Safe.ElapsedMilliseconds).ToArray();
+        double[] namLatency = samples.Select(sample => sample.Nam.ElapsedMilliseconds).ToArray();
+        double safeMeanMs = safeLatency.Average();
+        double namMeanMs = namLatency.Average();
         double safeMeanThroughput = work / (safeMeanMs / 1000.0);
         double namMeanThroughput = work / (namMeanMs / 1000.0);
-        double[] speedups = samples.Select(sample =>
-            sample.Safe.ElapsedMilliseconds / sample.Nam.ElapsedMilliseconds).OrderBy(value => value).ToArray();
+        double[] speedups = samples
+            .Select(sample => sample.Safe.ElapsedMilliseconds / sample.Nam.ElapsedMilliseconds)
+            .ToArray();
         double speedupMean = speedups.Average();
         double speedupStdDev = StandardDeviation(speedups);
-        double confidenceHalfWidth = 1.96 * speedupStdDev / Math.Sqrt(speedups.Length);
+        double tCritical = StudentT95Critical(speedups.Length - 1);
+        double confidenceHalfWidth = tCritical * speedupStdDev / Math.Sqrt(speedups.Length);
         double lowerConfidence = speedupMean - confidenceHalfWidth;
+        double upperConfidence = speedupMean + confidenceHalfWidth;
         double safeManaged = Mean(samples.Select(sample => (double)sample.Safe.ManagedAllocatedBytes));
         double namManaged = Mean(samples.Select(sample => (double)sample.Nam.ManagedAllocatedBytes));
-        double safeHeap = Mean(samples.Select(sample => (double)sample.Safe.HeapBytesAfterRun));
-        double namHeap = Mean(samples.Select(sample => (double)sample.Nam.HeapBytesAfterRun));
-        double safeLoh = Mean(samples.Select(sample => (double)sample.Safe.LargeObjectHeapBytesAfterRun));
-        double namLoh = Mean(samples.Select(sample => (double)sample.Nam.LargeObjectHeapBytesAfterRun));
-        double safeWorkingSet = Mean(samples.Select(sample => (double)sample.Safe.PeakWorkingSetBytes));
-        double namWorkingSet = Mean(samples.Select(sample => (double)sample.Nam.PeakWorkingSetBytes));
-        double safePause = Mean(samples.Select(sample => (double)sample.Safe.GcPauseMilliseconds));
-        double namPause = Mean(samples.Select(sample => (double)sample.Nam.GcPauseMilliseconds));
         bool correctness = samples.All(sample =>
-            SameWork(sample.Safe.Result, sample.Nam.Result) &&
-            sample.Nam.Result.FinalNativeBackingBytes == 0);
+            SameWork(sample.Safe.Result, sample.Nam.Result)
+            && sample.Nam.Result.FinalNativeBackingBytes == 0
+            && sample.Nam.Result.PeakNativeBackingBytes > 0
+            && sample.Nam.Result.PeakManagedBackingBytes == 0
+            && sample.Nam.Result.ReusedLeaseCount > 0
+            && sample.Nam.Result.ScopedRecycleCount > 0);
         bool materiallyLessManaged = namManaged <= safeManaged * 0.90;
         bool throughputGate = namMeanThroughput >= safeMeanThroughput * 1.05;
         bool confidenceGate = lowerConfidence > 1.00;
@@ -144,23 +152,38 @@ internal static class Program
             gate,
             safeMeanMs,
             namMeanMs,
+            StandardDeviation(safeLatency),
+            StandardDeviation(namLatency),
             safeMeanThroughput,
             namMeanThroughput,
             speedupMean,
             speedupStdDev,
+            tCritical,
             lowerConfidence,
-            speedupMean + confidenceHalfWidth,
+            upperConfidence,
             safeManaged,
             namManaged,
             materiallyLessManaged,
             throughputGate,
             confidenceGate,
-            Percentile(samples.Select(sample => sample.Safe.ElapsedMilliseconds), 0.50),
-            Percentile(samples.Select(sample => sample.Safe.ElapsedMilliseconds), 0.95),
-            Percentile(samples.Select(sample => sample.Safe.ElapsedMilliseconds), 0.99),
-            Percentile(samples.Select(sample => sample.Nam.ElapsedMilliseconds), 0.50),
-            Percentile(samples.Select(sample => sample.Nam.ElapsedMilliseconds), 0.95),
-            Percentile(samples.Select(sample => sample.Nam.ElapsedMilliseconds), 0.99),
+            Percentile(safeLatency, 0.50),
+            Percentile(safeLatency, 0.95),
+            Percentile(safeLatency, 0.99),
+            Percentile(namLatency, 0.50),
+            Percentile(namLatency, 0.95),
+            Percentile(namLatency, 0.99),
+            Mean(samples.Select(sample => (double)sample.Safe.Gen0Collections)),
+            Mean(samples.Select(sample => (double)sample.Safe.Gen1Collections)),
+            Mean(samples.Select(sample => (double)sample.Safe.Gen2Collections)),
+            Mean(samples.Select(sample => (double)sample.Nam.Gen0Collections)),
+            Mean(samples.Select(sample => (double)sample.Nam.Gen1Collections)),
+            Mean(samples.Select(sample => (double)sample.Nam.Gen2Collections)),
+            Mean(samples.Select(sample => (double)sample.Safe.HeapBytesAfterRun)),
+            Mean(samples.Select(sample => (double)sample.Nam.HeapBytesAfterRun)),
+            Mean(samples.Select(sample => (double)sample.Safe.LargeObjectHeapBytesAfterRun)),
+            Mean(samples.Select(sample => (double)sample.Nam.LargeObjectHeapBytesAfterRun)),
+            Mean(samples.Select(sample => (double)sample.Safe.PeakWorkingSetBytes)),
+            Mean(samples.Select(sample => (double)sample.Nam.PeakWorkingSetBytes)),
             Mean(samples.Select(sample => (double)sample.Safe.Result.PeakManagedBackingBytes)),
             Mean(samples.Select(sample => (double)sample.Nam.Result.PeakManagedBackingBytes)),
             Mean(samples.Select(sample => (double)sample.Nam.Result.PeakNativeBackingBytes)),
@@ -172,22 +195,16 @@ internal static class Program
             Mean(samples.Select(sample => (double)sample.Nam.Result.PeakCoordinateStageBytes)),
             Mean(samples.Select(sample => (double)sample.Nam.Result.PeakFaceStageBytes)),
             Mean(samples.Select(sample => (double)sample.Nam.Result.PeakPackingStageBytes)),
-            samples.Sum(sample => sample.Nam.Result.RentCount) / (double)samples.Count,
-            samples.Sum(sample => sample.Nam.Result.ScopedRecycleCount) / (double)samples.Count,
-            samples.Sum(sample => sample.Nam.Result.ClearedBytes) / (double)samples.Count)
-        {
-            SafeMeanHeapBytes = safeHeap,
-            NamMeanHeapBytes = namHeap,
-            SafeMeanLargeObjectHeapBytes = safeLoh,
-            NamMeanLargeObjectHeapBytes = namLoh,
-            SafeMeanPeakWorkingSetBytes = safeWorkingSet,
-            NamMeanPeakWorkingSetBytes = namWorkingSet,
-            SafeMeanGcPauseMilliseconds = safePause,
-            NamMeanGcPauseMilliseconds = namPause
-        };
+            Mean(samples.Select(sample => (double)sample.Nam.Result.RentCount)),
+            Mean(samples.Select(sample => (double)sample.Nam.Result.ScopedRecycleCount)),
+            Mean(samples.Select(sample => (double)sample.Nam.Result.ClearedBytes)));
     }
 
-    private static ChildRunResult RunChild(string root, string implementation, VoxelWorkloadOptions options, string mode)
+    private static ChildRunResult RunChild(
+        string root,
+        string implementation,
+        VoxelWorkloadOptions options,
+        string mode)
     {
         string projectDirectory = Path.Combine(root, ".Demos", "01-VoxelChunkPipeline", implementation);
         string assemblyName = implementation == "SafeCSharp"
@@ -243,38 +260,57 @@ internal static class Program
     private static void RunSafetyScan(string root)
     {
         string demoRoot = Path.Combine(root, ".Demos", "01-VoxelChunkPipeline");
-        string safeProject = File.ReadAllText(Path.Combine(demoRoot, "SafeCSharp", "SafeCSharp.csproj"));
+        string sharedProjectPath = Path.Combine(demoRoot, "SharedContract", "SharedContract.csproj");
+        string safeProjectPath = Path.Combine(demoRoot, "SafeCSharp", "SafeCSharp.csproj");
         string namProject = File.ReadAllText(Path.Combine(demoRoot, "NAM", "NAM.csproj"));
-        string contractSource = File.ReadAllText(Path.Combine(demoRoot, "SharedContract", "VoxelContract.cs"));
-        string namSource = File.ReadAllText(Path.Combine(demoRoot, "NAM", "NativeVoxelPipeline.cs"));
-        if (!safeProject.Contains("<AllowUnsafeBlocks>false</AllowUnsafeBlocks>", StringComparison.Ordinal)
-            || !namProject.Contains("<AllowUnsafeBlocks>false</AllowUnsafeBlocks>", StringComparison.Ordinal))
+        foreach (string projectPath in new[] { sharedProjectPath, safeProjectPath })
         {
-            throw new InvalidDataException("SafeCSharp and NAM must compile with unsafe blocks disabled.");
+            string project = File.ReadAllText(projectPath);
+            if (!project.Contains("<AllowUnsafeBlocks>false</AllowUnsafeBlocks>", StringComparison.Ordinal))
+            {
+                throw new InvalidDataException($"The safe baseline project must explicitly disable unsafe blocks: {projectPath}");
+            }
         }
 
+        string contractSource = File.ReadAllText(Path.Combine(demoRoot, "SharedContract", "VoxelContract.cs"));
         if (!contractSource.Contains("stackalloc", StringComparison.Ordinal))
         {
-            throw new InvalidDataException("The bounded section classifier must retain its stack-based masks and counters.");
+            throw new InvalidDataException("The bounded section classifier must retain stack-based masks and counters.");
         }
 
+        string namSource = File.ReadAllText(Path.Combine(demoRoot, "NAM", "NativeVoxelPipeline.cs"));
         if (!namProject.Contains("OutputItemType=\"Analyzer\"", StringComparison.Ordinal)
             || !namSource.Contains("LeaseScoped", StringComparison.Ordinal)
             || !namSource.Contains("ScratchScoped", StringComparison.Ordinal)
-            || !namSource.Contains("RecycleScoped", StringComparison.Ordinal))
+            || !namSource.Contains("RecycleScoped", StringComparison.Ordinal)
+            || !namSource.Contains("NativeLeaseOperations.Access", StringComparison.Ordinal))
         {
-            throw new InvalidDataException("NAM must compile with its bundled analyzer and use typed/scoped stage ownership.");
+            throw new InvalidDataException("NAM must use its bundled analyzer and direct bounded/scoped native stage ownership.");
         }
 
-        string[] forbidden = ["unsafe", "NativeMemory", "Marshal.Alloc", "DllImport", "VirtualAlloc", "AllocHGlobal", "UnmanagedCallersOnly"];
-        foreach (string sourcePath in Directory.EnumerateFiles(Path.Combine(demoRoot, "SafeCSharp"), "*.cs"))
+        string[] forbidden =
+        [
+            "unsafe",
+            "NativeMemory",
+            "Marshal.Alloc",
+            "DllImport",
+            "VirtualAlloc",
+            "AllocHGlobal",
+            "UnmanagedCallersOnly",
+            "NativePool",
+            "NativeRegion",
+            "NativeArena",
+            "NativeLease"
+        ];
+        foreach (string sourcePath in Directory.EnumerateFiles(Path.Combine(demoRoot, "SharedContract"), "*.cs")
+            .Concat(Directory.EnumerateFiles(Path.Combine(demoRoot, "SafeCSharp"), "*.cs")))
         {
             string source = File.ReadAllText(sourcePath);
             foreach (string token in forbidden)
             {
                 if (source.Contains(token, StringComparison.Ordinal))
                 {
-                    throw new InvalidDataException($"SafeCSharp source contains forbidden token '{token}': {sourcePath}");
+                    throw new InvalidDataException($"Safe baseline source contains forbidden token '{token}': {sourcePath}");
                 }
             }
         }
@@ -294,8 +330,18 @@ internal static class Program
         && left.PackedSections == right.PackedSections
         && left.MultiPackedSections == right.MultiPackedSections
         && left.TransparentMaskCount == right.TransparentMaskCount
+        && left.TransparentMaskWords == right.TransparentMaskWords
         && left.DominantTransparentSections == right.DominantTransparentSections
-        && left.ResidualTransparentSections == right.ResidualTransparentSections;
+        && left.ResidualTransparentSections == right.ResidualTransparentSections
+        && left.OpaqueVisibleFaces == right.OpaqueVisibleFaces
+        && left.TransparentVisibleFaces == right.TransparentVisibleFaces
+        && left.OpaqueVertices == right.OpaqueVertices
+        && left.TransparentVertices == right.TransparentVertices
+        && left.OpaqueIndices == right.OpaqueIndices
+        && left.TransparentIndices == right.TransparentIndices
+        && left.OpaqueStagedBytes == right.OpaqueStagedBytes
+        && left.TransparentStagedBytes == right.TransparentStagedBytes
+        && left.EnabledStageBytes == right.EnabledStageBytes;
 
     private static string FindRepositoryRoot()
     {
@@ -337,7 +383,7 @@ internal static class Program
         return Math.Sqrt(sum / (values.Count - 1));
     }
 
-    private static double Percentile(IEnumerable<double> values, double percentile)
+    private static double Percentile(IReadOnlyList<double> values, double percentile)
     {
         double[] sorted = values.OrderBy(value => value).ToArray();
         if (sorted.Length == 0)
@@ -353,6 +399,35 @@ internal static class Program
             : sorted[lower] + (sorted[upper] - sorted[lower]) * (position - lower);
     }
 
+    private static double StudentT95Critical(int degreesOfFreedom)
+    {
+        double[] table =
+        [
+            12.706, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365, 2.306, 2.262, 2.228,
+            2.201, 2.179, 2.160, 2.145, 2.131, 2.120, 2.110, 2.101, 2.093, 2.086,
+            2.080, 2.074, 2.069, 2.064, 2.060, 2.056, 2.052, 2.048, 2.04523, 2.04227
+        ];
+        if (degreesOfFreedom <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(degreesOfFreedom));
+        }
+
+        if (degreesOfFreedom <= table.Length)
+        {
+            return table[degreesOfFreedom - 1];
+        }
+
+        return degreesOfFreedom switch
+        {
+            <= 40 => 2.02108,
+            <= 60 => 2.00030,
+            <= 80 => 1.99006,
+            <= 100 => 1.98397,
+            <= 120 => 1.97993,
+            _ => 1.96
+        };
+    }
+
     private readonly record struct HarnessArguments(
         VoxelWorkloadOptions Workload,
         int Pairs,
@@ -363,7 +438,7 @@ internal static class Program
         internal static HarnessArguments Parse(string[] args)
         {
             List<string> workloadArgs = [];
-            int pairs = DefaultPairs;
+            int pairs = MinimumPairs;
             bool correctnessOnly = false;
             bool enforce = false;
             string? output = null;
@@ -393,9 +468,9 @@ internal static class Program
                 }
             }
 
-            if (pairs < DefaultPairs)
+            if (pairs < MinimumPairs)
             {
-                throw new ArgumentOutOfRangeException(nameof(args), $"At least {DefaultPairs} paired measurements are required.");
+                throw new ArgumentOutOfRangeException(nameof(args), $"At least {MinimumPairs} paired measurements are required.");
             }
 
             return new HarnessArguments(VoxelWorkloadOptions.Parse(workloadArgs), pairs, correctnessOnly, enforce, output);
@@ -414,6 +489,8 @@ internal static class Program
         DateTime UtcStarted,
         VoxelWorkloadOptions Workload,
         int PairedRuns,
+        int WarmupChunksPerWorker,
+        string ConfidenceMethod,
         bool CorrectnessPassed,
         IReadOnlyList<PairedSample> Samples,
         BenchmarkSummary Summary);
@@ -423,10 +500,13 @@ internal static class Program
         bool GatePassed,
         double SafeMeanMilliseconds,
         double NamMeanMilliseconds,
+        double SafeLatencyStandardDeviation,
+        double NamLatencyStandardDeviation,
         double SafeMeanThroughput,
         double NamMeanThroughput,
         double MeanPairedSpeedup,
         double PairedSpeedupStandardDeviation,
+        double StudentT95Critical,
         double PairedSpeedupConfidenceLower95,
         double PairedSpeedupConfidenceUpper95,
         double SafeMeanManagedAllocatedBytes,
@@ -440,6 +520,18 @@ internal static class Program
         double NamP50Milliseconds,
         double NamP95Milliseconds,
         double NamP99Milliseconds,
+        double SafeMeanGen0Collections,
+        double SafeMeanGen1Collections,
+        double SafeMeanGen2Collections,
+        double NamMeanGen0Collections,
+        double NamMeanGen1Collections,
+        double NamMeanGen2Collections,
+        double SafeMeanHeapBytesAfterRun,
+        double NamMeanHeapBytesAfterRun,
+        double SafeMeanLargeObjectHeapBytesAfterRun,
+        double NamMeanLargeObjectHeapBytesAfterRun,
+        double SafeMeanPeakWorkingSetBytes,
+        double NamMeanPeakWorkingSetBytes,
         double SafeMeanPeakManagedBackingBytes,
         double NamMeanPeakManagedBackingBytes,
         double NamMeanPeakNativeBackingBytes,
@@ -453,15 +545,5 @@ internal static class Program
         double NamMeanPackingStageBytes,
         double NamMeanLeaseCount,
         double NamMeanScopedRecycleCount,
-        double NamMeanClearedBytes)
-    {
-        public double SafeMeanHeapBytes { get; init; }
-        public double NamMeanHeapBytes { get; init; }
-        public double SafeMeanLargeObjectHeapBytes { get; init; }
-        public double NamMeanLargeObjectHeapBytes { get; init; }
-        public double SafeMeanPeakWorkingSetBytes { get; init; }
-        public double NamMeanPeakWorkingSetBytes { get; init; }
-        public double SafeMeanGcPauseMilliseconds { get; init; }
-        public double NamMeanGcPauseMilliseconds { get; init; }
-    }
+        double NamMeanClearedBytes);
 }

@@ -48,7 +48,7 @@ internal static class NativeAllocationDiagnosticDescriptors
     internal static readonly DiagnosticDescriptor NestedRegion = Create(
         "NAM1010",
         "Nested NativeRegion is not permitted",
-        "NativeRegion '{0}' overlaps active region '{1}'. PAC# regions are unnamed, non-nesting lexical owners.");
+        "NativeRegion '{0}' overlaps active region '{1}'. NativeRegion ownership is explicit, braced, and non-nesting.");
 
     internal static readonly DiagnosticDescriptor AcrossAsync = Create(
         "NAM1011",

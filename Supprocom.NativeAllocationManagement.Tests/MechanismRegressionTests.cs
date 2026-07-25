@@ -104,6 +104,46 @@ public sealed class MechanismRegressionTests
     }
 
     [Fact]
+    public void SeveralScopedLeasesAreCompletedByOneRecycleAndTheRetainedSlabIsReused()
+    {
+        NativeMemoryTestHooks.Reset();
+        NativePool<int> pool = new(initialCapacity: 4, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        try
+        {
+            Pooled<int> staleFirst = pool.LeaseScoped(4);
+            Pooled<int> staleSecond = pool.LeaseScoped(4);
+            staleFirst[0] = 17;
+            staleSecond[0] = 23;
+            long[] ordinalsBeforeRecycle = pool.CurrentSegmentOrdinalsForTest;
+
+            Assert.Equal(2, pool.CurrentAllocationRecordCountForTest);
+            pool.RecycleScoped();
+            Assert.Equal(0, pool.CurrentAllocationRecordCountForTest);
+            Assert.Equal(0, pool.CurrentReferenceRootCountForTest);
+
+            try
+            {
+                _ = staleFirst[0];
+                Assert.Fail("A scoped handle must be stale after RecycleScoped.");
+            }
+            catch (NativeAllocationException)
+            {
+            }
+
+            Pooled<int> reused = pool.Rent(4);
+            Assert.Equal(ordinalsBeforeRecycle, pool.CurrentSegmentOrdinalsForTest);
+            Assert.Equal(0, reused[0]);
+            reused.Dispose();
+            Assert.Equal(0, pool.CurrentAllocationRecordCountForTest);
+            _ = staleSecond;
+        }
+        finally
+        {
+            pool.Dispose();
+        }
+    }
+
+    [Fact]
     public void IndividualPoolReturnsRetireRecordsForLongAndZeroLengthCycles()
     {
         NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);

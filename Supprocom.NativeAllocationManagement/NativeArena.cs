@@ -120,6 +120,12 @@ public readonly ref struct ArenaLease<T>
         _ = capacity;
     }
 
+    internal NativeOwnerKernel KernelForComposite => GetKernel("NativeLeaseOperations.Access");
+
+    internal long GenerationForComposite => _generation;
+
+    internal long AllocationIdForComposite => _allocationId;
+
     /// <summary>Gets the logical element count.</summary>
     public int Length => GetMetadata(nameof(Length)).Length;
 
