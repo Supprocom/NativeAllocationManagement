@@ -6,7 +6,7 @@ namespace Supprocom.NativeAllocationManagement.Tests;
 public sealed class NativeLeaseOperationsAnalyzerTests
 {
     [Fact]
-    public async Task MeshCompositeAccessAcceptsAllDirectViewsWithOwnerCleanup()
+    public async Task QuintupleCompositeAccessAcceptsAllDirectViewsWithOwnerCleanup()
     {
         ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
             """
@@ -177,9 +177,9 @@ public sealed class NativeLeaseOperationsAnalyzerTests
                 public static void Run(bool condition)
                 {
                     using NativePool<int> pool = new();
-                    scoped Pooled<int> value = pool.LeaseScoped(1);
                     try
                     {
+                        scoped Pooled<int> value = pool.LeaseScoped(1);
                         NativeLeaseOperations.Access(value, value, static (_, _) => { });
                         if (condition)
                         {
@@ -323,6 +323,166 @@ public sealed class NativeLeaseOperationsAnalyzerTests
             """);
 
         Assert.Contains("NAM1020", AnalyzerContractTests.NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task FinallyRecycleCannotDischargeAnOuterScopedRoot()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    using NativePool<int> pool = new();
+                    scoped Pooled<int> outer = pool.LeaseScoped(1);
+                    try
+                    {
+                        {
+                            scoped Pooled<int> inner = pool.LeaseScoped(1);
+                        }
+                    }
+                    finally
+                    {
+                        pool.RecycleScoped();
+                    }
+                }
+            }
+            """);
+
+        Assert.True(
+            diagnostics.Any(item => item.Id == "NAM1007"),
+            string.Join(Environment.NewLine, diagnostics.Select(item => item.ToString())));
+        Diagnostic diagnostic = diagnostics.First(item => item.Id == "NAM1007");
+        Assert.Contains("outer", diagnostic.GetMessage(), StringComparison.Ordinal);
+        Assert.Contains("RecycleScoped", diagnostic.GetMessage(), StringComparison.Ordinal);
+        Assert.Equal(16, diagnostic.Location.GetLineSpan().StartLinePosition.Line);
+    }
+
+    [Fact]
+    public async Task FinallyRecycleMustRunOnEveryCleanupPath()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run(bool condition)
+                {
+                    using NativePool<int> pool = new();
+                    try
+                    {
+                        scoped Pooled<int> value = pool.LeaseScoped(1);
+                    }
+                    finally
+                    {
+                        if (condition)
+                        {
+                            pool.RecycleScoped();
+                        }
+                    }
+                }
+            }
+            """);
+
+        Assert.True(
+            diagnostics.Count(item => item.Id == "NAM1020") == 1,
+            string.Join(Environment.NewLine, diagnostics.Select(item => item.ToString())));
+        Diagnostic diagnostic = diagnostics.First(item => item.Id == "NAM1020");
+        Assert.Contains("pool", diagnostic.GetMessage(), StringComparison.Ordinal);
+        Assert.DoesNotContain(diagnostics, item => item.Id == "NAM1007");
+    }
+
+    [Fact]
+    public async Task FinallyCleanupReportsEachEarlyExitIndependently()
+    {
+        string[] bodies =
+        [
+            "if (condition) { return; }",
+            "if (condition) { throw new System.InvalidOperationException(); }",
+            "while (condition) { scoped Pooled<int> inner = pool.LeaseScoped(1); break; }",
+            "while (condition) { scoped Pooled<int> inner = pool.LeaseScoped(1); continue; }",
+            "if (condition) { goto Exit; }"
+        ];
+
+        foreach (string body in bodies)
+        {
+            ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
+                $$"""
+                using Supprocom.NativeAllocationManagement;
+
+                public static class Sample
+                {
+                    public static void Run(bool condition)
+                    {
+                        using NativePool<int> pool = new();
+                        scoped Pooled<int> value = pool.LeaseScoped(1);
+                        {{body}}
+                        pool.RecycleScoped();
+                    Exit:
+                        _ = pool;
+                    }
+                }
+                """);
+
+            Diagnostic[] missing = diagnostics.Where(item => item.Id == "NAM1020").ToArray();
+            Assert.True(missing.Length == 1, string.Join(Environment.NewLine, diagnostics));
+            Assert.Contains("pool", missing[0].GetMessage(), StringComparison.Ordinal);
+            Assert.Equal("NAM1020", missing[0].Properties["NAM.DiagnosticId"]);
+            Assert.Equal("Scoped native storage is not recycled on every exit", missing[0].Properties["NAM.Operation"]);
+            Assert.Contains("pool", missing[0].Properties["NAM.Provenance"]!);
+            Assert.Contains("pool.LeaseScoped", missing[0].Location.SourceTree!.GetText().ToString(missing[0].Location.SourceSpan));
+        }
+    }
+
+    [Fact]
+    public async Task NestedFinallyRequiresCleanupOnEveryNestedExit()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run(bool condition)
+                {
+                    using NativePool<int> pool = new();
+                    try
+                    {
+                        scoped Pooled<int> value = pool.LeaseScoped(1);
+                        try
+                        {
+                            if (condition)
+                            {
+                                throw new System.InvalidOperationException();
+                            }
+                        }
+                        finally
+                        {
+                            if (condition)
+                            {
+                                pool.RecycleScoped();
+                            }
+                        }
+                    }
+                    finally
+                    {
+                        pool.RecycleScoped();
+                    }
+                }
+            }
+            """);
+
+        Diagnostic[] liveRoot = diagnostics.Where(item => item.Id == "NAM1007").ToArray();
+        Assert.True(liveRoot.Length == 1, string.Join(Environment.NewLine, diagnostics));
+        Assert.Contains("value", liveRoot[0].GetMessage(), StringComparison.Ordinal);
+        Assert.Equal("NAM1007", liveRoot[0].Properties["NAM.DiagnosticId"]);
+        Assert.Equal("Native return has live generation state", liveRoot[0].Properties["NAM.Operation"]);
+        Assert.Contains("value", liveRoot[0].Properties["NAM.Provenance"]!);
+        Assert.Contains("pool.RecycleScoped", liveRoot[0].Location.SourceTree!.GetText().ToString(liveRoot[0].Location.SourceSpan));
     }
 
 }

@@ -73,3 +73,12 @@ than part of the cold-pressure result. A failed gate is reported honestly. The
 benchmark does not shorten the safe workload or treat a logical capacity estimate
 as physical native memory. The demo is local verification only and does not
 publish or version-bump a NuGet or GitHub package.
+
+The backing-byte scopes are explicit. SafeCSharp reports the sum of its concurrent
+worker peak and cold backing values, while NAM reports process-global physical
+native bytes from `NativeMemoryDiagnostics` and a separate process-global managed
+backing value. The values are therefore compared at aggregate process scope rather
+than comparing one safe worker with both NAM workers. The independent fixture is a
+hand-authored complete expected byte range for both opaque and transparent output;
+the ordinary workload fixture remains a small captured parity sample, while the
+full workload digest covers every materialized output buffer.

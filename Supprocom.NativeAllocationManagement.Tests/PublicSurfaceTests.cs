@@ -24,9 +24,18 @@ public sealed class PublicSurfaceTests
         Assert.NotNull(typeof(NativeArena).GetMethod("Scratch"));
         Assert.NotNull(typeof(NativeArena).GetMethod("ScratchScoped"));
         Assert.NotNull(typeof(NativeRegion).GetMethod("Lease"));
+        Assert.DoesNotContain(
+            typeof(NativeRegion).GetMethods(BindingFlags.Public | BindingFlags.Instance),
+            method => method.Name == "Allocate");
         Assert.Contains(
             typeof(NativeLeaseOperations).GetMethods(),
             method => method.Name == "Access" && method.GetGenericArguments().Length == 5);
+        Assert.Contains(
+            assembly.GetTypes(),
+            type => type.Name == "NativeLeaseQuintupleAction`5");
+        Assert.DoesNotContain(
+            assembly.GetTypes(),
+            type => type.Name.Contains("Mesh", StringComparison.OrdinalIgnoreCase));
         Assert.NotNull(typeof(NativeArena).GetMethod("RecycleScoped"));
         Assert.NotNull(typeof(NativePool<int>).GetMethod("RecycleScoped"));
         Assert.NotNull(typeof(NativeRegion).GetMethod("RecycleScoped"));

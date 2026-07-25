@@ -85,6 +85,7 @@ internal static class SafeVoxelPipeline
     public static PipelineResult Run(VoxelWorkloadOptions options)
     {
         VoxelMath.ValidateBoundaryFixture();
+        OutputFixture independentFixture = CreateIndependentFixture();
         WorkerResult[] workers = new WorkerResult[options.WorkerCount];
         Task[] tasks = new Task[options.WorkerCount];
         using CountdownEvent ready = new(options.WorkerCount);
@@ -147,8 +148,8 @@ internal static class SafeVoxelPipeline
             vertices += result.Vertices;
             indices += result.Indices;
             stagedBytes += result.StagedBytes;
-            peakManaged = Math.Max(peakManaged, result.PeakManagedBackingBytes);
-            coldPeakManaged = Math.Max(coldPeakManaged, result.ColdManagedBackingBytes);
+            peakManaged += result.PeakManagedBackingBytes;
+            coldPeakManaged += result.ColdManagedBackingBytes;
             peakCoordinates = Math.Max(peakCoordinates, result.PeakCoordinateStageBytes);
             peakFaces = Math.Max(peakFaces, result.PeakFaceStageBytes);
             peakPacking = Math.Max(peakPacking, result.PeakPackingStageBytes);
@@ -214,7 +215,7 @@ internal static class SafeVoxelPipeline
             enabledStageBytes,
             peakManaged,
              transparentMaskWords,
-             0,
+             rents,
              0,
              stopwatch.Elapsed.TotalMilliseconds,
              GC.GetTotalAllocatedBytes(precise: true) - allocationBefore,
@@ -222,7 +223,66 @@ internal static class SafeVoxelPipeline
             GC.CollectionCount(1) - gen1Before,
             GC.CollectionCount(2) - gen2Before,
             materializedOutput,
-            coldPeakManaged);
+            coldPeakManaged,
+            independentFixture);
+    }
+
+    private static OutputFixture CreateIndependentFixture()
+    {
+        VoxelWorkloadOptions fixtureOptions = new(
+            VoxelMath.IndependentFixtureSeed,
+            ChunkCount: 1,
+            WorkerCount: 1,
+            Iterations: 1);
+        Metrics metrics = default;
+        long digest = 17;
+        Vertex[] opaqueVertices = [];
+        int[] opaqueIndices = [];
+        PayloadSlice[] opaqueSlices = [];
+        byte[] opaqueUpload = [];
+        Vertex[] transparentVertices = [];
+        int[] transparentIndices = [];
+        PayloadSlice[] transparentSlices = [];
+        byte[] transparentUpload = [];
+        try
+        {
+            StreamResult opaque = PackStream(
+                fixtureOptions,
+                VoxelMath.IndependentOpaqueRecords,
+                VoxelMath.IndependentOpaqueRecords.Length,
+                ref metrics,
+                Stage.Packing,
+                ref digest,
+                out opaqueVertices,
+                out opaqueIndices,
+                out opaqueSlices,
+                out opaqueUpload);
+            StreamResult transparent = PackStream(
+                fixtureOptions,
+                VoxelMath.IndependentTransparentRecords,
+                VoxelMath.IndependentTransparentRecords.Length,
+                ref metrics,
+                Stage.Packing,
+                ref digest,
+                out transparentVertices,
+                out transparentIndices,
+                out transparentSlices,
+                out transparentUpload);
+            return new OutputFixture(
+                opaqueVertices.AsSpan(0, opaque.VertexCount).ToArray(),
+                opaqueIndices.AsSpan(0, opaque.IndexCount).ToArray(),
+                opaqueSlices.AsSpan(0, opaque.FaceCount).ToArray(),
+                opaqueUpload.AsSpan(0, opaque.StagedBytes).ToArray(),
+                transparentVertices.AsSpan(0, transparent.VertexCount).ToArray(),
+                transparentIndices.AsSpan(0, transparent.IndexCount).ToArray(),
+                transparentSlices.AsSpan(0, transparent.FaceCount).ToArray(),
+                transparentUpload.AsSpan(0, transparent.StagedBytes).ToArray());
+        }
+        finally
+        {
+            ReleaseStream(opaqueVertices, opaqueIndices, opaqueSlices, opaqueUpload, ref metrics);
+            ReleaseStream(transparentVertices, transparentIndices, transparentSlices, transparentUpload, ref metrics);
+        }
     }
 
     private static WorkerResult RunWorker(
@@ -333,9 +393,10 @@ internal static class SafeVoxelPipeline
             opaqueStaged,
             transparentStaged,
             enabledStageBytes,
-            metrics.PeakBackingBytes,
-            transparentMaskWords,
-            MaterializedOutput: materializedOutput,
+             metrics.PeakBackingBytes,
+             transparentMaskWords,
+             MeasuredLeaseCount: metrics.Rents,
+             MaterializedOutput: materializedOutput,
             ColdManagedBackingBytes: coldPeakManaged));
     }
 

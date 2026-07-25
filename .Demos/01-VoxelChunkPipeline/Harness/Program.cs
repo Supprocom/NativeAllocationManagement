@@ -55,14 +55,17 @@ internal static class Program
             throw new InvalidDataException("SafeCSharp and NAM correctness outputs differ.");
         }
 
+        AssertIndependentFixture(safe.Result, "SafeCSharp");
+        AssertIndependentFixture(nam.Result, "NAM");
+
         if (nam.Result.FinalNativeBackingBytes != 0
             || nam.Result.PeakNativeBackingBytes <= 0
             || nam.Result.PeakManagedBackingBytes != 0
-            || nam.Result.ReusedLeaseCount <= 0
+            || nam.Result.ReusedNativeSegmentCount <= 0
             || nam.Result.ScopedRecycleCount <= 0
             || nam.Result.MaterializedOutput is null)
         {
-            throw new InvalidDataException("NAM did not report direct native backing, scoped reuse, and a zero final native baseline.");
+            throw new InvalidDataException("NAM did not report direct native backing, physical retained-segment reuse, scoped reuse, and a zero final native baseline.");
         }
 
         return new CorrectnessReport(
@@ -94,6 +97,9 @@ internal static class Program
             {
                 throw new InvalidDataException($"Correctness parity failed in measured pair {pair}.");
             }
+
+            AssertIndependentFixture(safe.Result, "SafeCSharp");
+            AssertIndependentFixture(nam.Result, "NAM");
 
             if (nam.Result.FinalNativeBackingBytes != 0)
             {
@@ -141,12 +147,14 @@ internal static class Program
         double namColdManaged = Mean(samples.Select(sample => (double)sample.Nam.ColdManagedAllocatedBytes));
         double safeColdBacking = Mean(samples.Select(sample => (double)sample.Safe.Result.ColdManagedBackingBytes));
         double namColdBacking = Mean(samples.Select(sample => (double)sample.Nam.Result.ColdManagedBackingBytes));
+        double namMeasuredLeases = Mean(samples.Select(sample => (double)sample.Nam.Result.MeasuredLeaseCount));
+        double namReusedNativeSegments = Mean(samples.Select(sample => (double)sample.Nam.Result.ReusedNativeSegmentCount));
         bool correctness = samples.All(sample =>
             SameWork(sample.Safe.Result, sample.Nam.Result)
             && sample.Nam.Result.FinalNativeBackingBytes == 0
             && sample.Nam.Result.PeakNativeBackingBytes > 0
             && sample.Nam.Result.PeakManagedBackingBytes == 0
-            && sample.Nam.Result.ReusedLeaseCount > 0
+            && sample.Nam.Result.ReusedNativeSegmentCount > 0
             && sample.Nam.Result.ScopedRecycleCount > 0);
         bool warmManagedAllocationReduction = namManaged <= safeManaged * 0.90;
         bool materiallyLessManaged = namColdManaged <= safeColdManaged * 0.90
@@ -207,9 +215,10 @@ internal static class Program
             Mean(samples.Select(sample => (double)sample.Nam.Result.PeakCoordinateStageBytes)),
             Mean(samples.Select(sample => (double)sample.Nam.Result.PeakFaceStageBytes)),
             Mean(samples.Select(sample => (double)sample.Nam.Result.PeakPackingStageBytes)),
-            Mean(samples.Select(sample => (double)sample.Nam.Result.RentCount)),
-            Mean(samples.Select(sample => (double)sample.Nam.Result.ScopedRecycleCount)),
-            Mean(samples.Select(sample => (double)sample.Nam.Result.ClearedBytes)));
+             namMeasuredLeases,
+             Mean(samples.Select(sample => (double)sample.Nam.Result.ScopedRecycleCount)),
+             Mean(samples.Select(sample => (double)sample.Nam.Result.ClearedBytes)),
+             namReusedNativeSegments);
     }
 
     private static ChildRunResult RunChild(
@@ -357,7 +366,17 @@ internal static class Program
         && left.OpaqueStagedBytes == right.OpaqueStagedBytes
         && left.TransparentStagedBytes == right.TransparentStagedBytes
         && left.EnabledStageBytes == right.EnabledStageBytes
-        && OutputFixturesEqual(left.MaterializedOutput, right.MaterializedOutput);
+        && OutputFixturesEqual(left.MaterializedOutput, right.MaterializedOutput)
+        && OutputFixturesEqual(left.IndependentFixture, right.IndependentFixture);
+
+    private static void AssertIndependentFixture(PipelineResult result, string implementation)
+    {
+        if (!OutputFixturesEqual(result.IndependentFixture, VoxelMath.ExpectedIndependentFixture))
+        {
+            throw new InvalidDataException(
+                $"{implementation} did not match the hand-authored complete output fixture.");
+        }
+    }
 
     private static bool OutputFixturesEqual(OutputFixture? left, OutputFixture? right)
     {
@@ -583,7 +602,8 @@ internal static class Program
         double NamMeanCoordinateStageBytes,
         double NamMeanFaceStageBytes,
         double NamMeanPackingStageBytes,
-        double NamMeanLeaseCount,
-        double NamMeanScopedRecycleCount,
-        double NamMeanClearedBytes);
+         double NamMeanLeaseCount,
+         double NamMeanScopedRecycleCount,
+         double NamMeanClearedBytes,
+         double NamMeanReusedNativeSegmentCount);
 }

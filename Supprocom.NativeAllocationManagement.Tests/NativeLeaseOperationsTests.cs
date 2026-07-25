@@ -96,6 +96,135 @@ public sealed class NativeLeaseOperationsTests
     }
 
     [Fact]
+    public void EveryCompositeOverloadReleasesEarlierTokensAfterLateEntryFailure()
+    {
+        NativeMemoryTestHooks.Reset();
+        using NativePool<int> tripleFirstPool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> tripleSecondPool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        Pooled<int> tripleFirst = tripleFirstPool.Rent(1);
+        Pooled<int> tripleStale = tripleSecondPool.Rent(1);
+        Pooled<int> tripleThird = tripleSecondPool.Rent(1);
+        tripleSecondPool.ReturnMemoryToNativeMemory();
+        NativeAllocationException? tripleFailure = null;
+        try
+        {
+            NativeLeaseOperations.Access(tripleFirst, tripleStale, tripleThird, static (_, _, _) => { });
+        }
+        catch (NativeAllocationException exception)
+        {
+            tripleFailure = exception;
+        }
+        Assert.NotNull(tripleFailure);
+        tripleFirst[0] = 11;
+        Assert.Equal(11, tripleFirst[0]);
+
+        using NativePool<int> pooledFirstPool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeArena staleArena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        Pooled<int> pooledFirst = pooledFirstPool.Rent(1);
+        ArenaLease<int> staleArenaLease = staleArena.Scratch<int>(1);
+        staleArena.ReturnMemoryToNativeMemory();
+        NativeAllocationException? pooledArenaFailure = null;
+        try
+        {
+            NativeLeaseOperations.Access(pooledFirst, staleArenaLease, static (_, _) => { });
+        }
+        catch (NativeAllocationException exception)
+        {
+            pooledArenaFailure = exception;
+        }
+        Assert.NotNull(pooledArenaFailure);
+        pooledFirst[0] = 12;
+        Assert.Equal(12, pooledFirst[0]);
+
+        using NativePool<int> quintuplePool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeArena goodArena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeArena lateArena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        Pooled<int> first = quintuplePool.Rent(1);
+        Pooled<int> second = quintuplePool.Rent(1);
+        Pooled<int> third = quintuplePool.Rent(1);
+        ArenaLease<int> fourth = goodArena.Scratch<int>(1);
+        ArenaLease<int> fifth = lateArena.Scratch<int>(1);
+        lateArena.ReturnMemoryToNativeMemory();
+        NativeAllocationException? quintupleFailure = null;
+        try
+        {
+            NativeLeaseOperations.Access(first, second, third, fourth, fifth, static (_, _, _, _, _) => { });
+        }
+        catch (NativeAllocationException exception)
+        {
+            quintupleFailure = exception;
+        }
+        Assert.NotNull(quintupleFailure);
+        first[0] = 13;
+        second[0] = 14;
+        third[0] = 15;
+        fourth[0] = 16;
+        Assert.Equal(13, first[0]);
+        Assert.Equal(14, second[0]);
+        Assert.Equal(15, third[0]);
+        Assert.Equal(16, fourth[0]);
+    }
+
+    [Fact]
+    public void EveryCompositeOverloadCleansUpAllTokensWhenTheCallbackThrows()
+    {
+        NativeMemoryTestHooks.Reset();
+        using NativePool<int> firstPool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> secondPool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        Pooled<int> first = firstPool.Rent(1);
+        Pooled<int> second = firstPool.Rent(1);
+        Pooled<int> third = secondPool.Rent(1);
+        ArenaLease<int> fourth = arena.Scratch<int>(1);
+        ArenaLease<int> fifth = arena.Scratch<int>(1);
+
+        bool tripleThrown = false;
+        try
+        {
+            NativeLeaseOperations.Access(first, second, third, static (_, _, _) => throw new InvalidOperationException());
+        }
+        catch (InvalidOperationException)
+        {
+            tripleThrown = true;
+        }
+
+        bool pooledArenaThrown = false;
+        try
+        {
+            NativeLeaseOperations.Access(first, fourth, static (_, _) => throw new InvalidOperationException());
+        }
+        catch (InvalidOperationException)
+        {
+            pooledArenaThrown = true;
+        }
+
+        bool quintupleThrown = false;
+        try
+        {
+            NativeLeaseOperations.Access(first, second, third, fourth, fifth, static (_, _, _, _, _) => throw new InvalidOperationException());
+        }
+        catch (InvalidOperationException)
+        {
+            quintupleThrown = true;
+        }
+
+        Assert.True(tripleThrown);
+        Assert.True(pooledArenaThrown);
+        Assert.True(quintupleThrown);
+
+        first[0] = 21;
+        second[0] = 22;
+        third[0] = 23;
+        fourth[0] = 24;
+        fifth[0] = 25;
+        Assert.Equal(21, first[0]);
+        Assert.Equal(22, second[0]);
+        Assert.Equal(23, third[0]);
+        Assert.Equal(24, fourth[0]);
+        Assert.Equal(25, fifth[0]);
+    }
+
+    [Fact]
     public void SameOwnerAliasAndLifecycleTransitionsAreSafeAroundCompositeEntry()
     {
         NativeMemoryTestHooks.Reset();

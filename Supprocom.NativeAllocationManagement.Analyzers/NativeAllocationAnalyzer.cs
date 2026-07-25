@@ -112,6 +112,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         private readonly HashSet<ISymbol> _usingResourceSymbols = new(SymbolEqualityComparer.Default);
         private readonly List<FlowSnapshot> _exitSnapshots = [];
         private readonly HashSet<string> _reported = new(StringComparer.Ordinal);
+        private readonly HashSet<ISymbol> _reportedScopedCompletions = new(SymbolEqualityComparer.Default);
         private readonly HashSet<ISymbol> _reportedRegionParameters = new(SymbolEqualityComparer.Default);
         private int _closureDepth;
         private int _finallyProtectionDepth;
@@ -209,10 +210,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
                     if (handle.IsScoped)
                     {
-                        Report(
-                            NativeAllocationDiagnosticDescriptors.MissingScopedCompletion,
-                            handle.Syntax,
-                            handle.Owner.DisplayName);
+                        ReportMissingScopedCompletion(handle.Owner, handle.Syntax);
                         continue;
                     }
 
@@ -228,10 +226,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     if ((owner.ScopedPending || owner.ScopedPendingAmbiguous)
                         && !exit.Handles.Values.Any(handle => ReferenceEquals(handle.Owner, owner) && handle.IsScoped && !IsHandleEnded(handle)))
                     {
-                        Report(
-                            NativeAllocationDiagnosticDescriptors.MissingScopedCompletion,
-                            owner.Syntax,
-                            owner.DisplayName);
+                        ReportMissingScopedCompletion(owner, owner.Syntax);
                     }
 
                     if (owner.IsExternalReceiver
@@ -416,12 +411,17 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     }
                     else
                     {
-                        Report(
-                            handle.IsScoped
-                                ? NativeAllocationDiagnosticDescriptors.MissingScopedCompletion
-                                : NativeAllocationDiagnosticDescriptors.LifetimeEscape,
-                            handle.Syntax,
-                            handle.IsScoped ? handle.Owner.DisplayName : handle.DisplayName);
+                        if (handle.IsScoped)
+                        {
+                            ReportMissingScopedCompletion(handle.Owner, handle.Syntax);
+                        }
+                        else
+                        {
+                            Report(
+                                NativeAllocationDiagnosticDescriptors.LifetimeEscape,
+                                handle.Syntax,
+                                handle.DisplayName);
+                        }
                     }
                 }
             }
@@ -444,10 +444,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
                 if (owner.ScopedPending && emitDiagnostics)
                 {
-                    Report(
-                        NativeAllocationDiagnosticDescriptors.MissingScopedCompletion,
-                        owner.Syntax,
-                        owner.DisplayName);
+                    ReportMissingScopedCompletion(owner, owner.Syntax);
                 }
             }
 
@@ -565,27 +562,100 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     continue;
                 }
 
-                RestoreSnapshot(state);
-                bool previousFinallyReplay = _replayingFinallyCleanup;
-                _replayingFinallyCleanup = true;
-                try
-                {
-                    foreach (BasicBlock cleanupBlock in graph.Blocks
-                        .Where(block => ContainsBlock(finallyRegion, block.Ordinal))
-                        .OrderBy(block => block.Ordinal))
-                    {
-                        VisitBlock(cleanupBlock);
-                    }
-                }
-                finally
-                {
-                    _replayingFinallyCleanup = previousFinallyReplay;
-                }
-
-                state = CaptureSnapshot();
+                state = AnalyzeFinallyRegion(graph, finallyRegion, state);
             }
 
             return state;
+        }
+
+        private FlowSnapshot AnalyzeFinallyRegion(
+            ControlFlowGraph graph,
+            ControlFlowRegion finallyRegion,
+            FlowSnapshot input)
+        {
+            BasicBlock[] blocks = graph.Blocks
+                .Where(block => ContainsBlock(finallyRegion, block.Ordinal))
+                .ToArray();
+            if (blocks.Length == 0)
+            {
+                return input;
+            }
+
+            HashSet<BasicBlock> members = [.. blocks];
+            BasicBlock[] entries = blocks
+                .Where(block => block.Predecessors.Any(branch =>
+                    branch.Source is null || !members.Contains(branch.Source)))
+                .ToArray();
+            if (entries.Length == 0)
+            {
+                entries = [blocks.OrderBy(block => block.Ordinal).First()];
+            }
+
+            Dictionary<BasicBlock, FlowSnapshot> entryStates = new();
+            Dictionary<BasicBlock, FlowSnapshot> exitStates = new();
+            Queue<BasicBlock> work = new();
+            foreach (BasicBlock entry in entries)
+            {
+                entryStates[entry] = CloneSnapshot(input);
+                work.Enqueue(entry);
+            }
+
+            bool previousFinallyReplay = _replayingFinallyCleanup;
+            _replayingFinallyCleanup = true;
+            try
+            {
+                while (work.Count != 0)
+                {
+                    _context.CancellationToken.ThrowIfCancellationRequested();
+                    BasicBlock block = work.Dequeue();
+                    if (!entryStates.TryGetValue(block, out FlowSnapshot? incoming))
+                    {
+                        continue;
+                    }
+
+                    RestoreSnapshot(incoming);
+                    VisitBlock(block);
+                    FlowSnapshot outgoing = CaptureSnapshot();
+                    bool changed = !exitStates.TryGetValue(block, out FlowSnapshot? oldExit)
+                        || !SnapshotEquivalent(oldExit, outgoing);
+                    exitStates[block] = outgoing;
+                    if (!changed)
+                    {
+                        continue;
+                    }
+
+                    foreach (BasicBlock successor in GraphSuccessors(graph, block)
+                        .Where(members.Contains))
+                    {
+                        FlowSnapshot candidate = outgoing;
+                        if (entryStates.TryGetValue(successor, out FlowSnapshot? oldEntry))
+                        {
+                            candidate = MergeSnapshotsForResult(oldEntry, outgoing);
+                        }
+
+                        if (!entryStates.TryGetValue(successor, out oldEntry)
+                            || !SnapshotEquivalent(oldEntry, candidate))
+                        {
+                            entryStates[successor] = CloneSnapshot(candidate);
+                            work.Enqueue(successor);
+                        }
+                    }
+                }
+            }
+            finally
+            {
+                _replayingFinallyCleanup = previousFinallyReplay;
+            }
+
+            FlowSnapshot[] exits = blocks
+                .Where(block => exitStates.ContainsKey(block)
+                    && (!GraphSuccessors(graph, block).Any()
+                        || GraphSuccessors(graph, block).Any(successor => !members.Contains(successor))))
+                .Select(block => exitStates[block])
+                .ToArray();
+            return exits.Length == 0
+                ? input
+                : MergeSnapshotsForResult(exits);
         }
 
         private static IEnumerable<ControlFlowRegion> FlattenRegions(ControlFlowRegion region)
@@ -1913,7 +1983,10 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             foreach (HandleState handle in _handles.Values
                 .Where(handle => ReferenceEquals(handle.Owner, owner)
                     && !IsHandleEnded(handle)
-                    && (!_replayingFinallyCleanup || !handle.IsScoped)
+                    && !(_replayingFinallyCleanup
+                        && handle.IsScoped
+                        && atSyntax is not null
+                        && !IsScopedHandleLiveAt(handle, atSyntax))
                     && (atSyntax is null
                         || !handle.IsScoped
                         || IsScopedHandleLiveAt(handle, atSyntax))
@@ -1945,7 +2018,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             return findings.ToArray();
         }
 
-        private static bool IsScopedHandleLiveAt(HandleState handle, SyntaxNode operationSyntax)
+        private bool IsScopedHandleLiveAt(HandleState handle, SyntaxNode operationSyntax)
         {
             if (!handle.IsScoped)
             {
@@ -1981,16 +2054,29 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 ? NativeAllocationDiagnosticDescriptors.GenerationReturnLiveValue
                 : NativeAllocationDiagnosticDescriptors.DeferredReturnLiveValue;
 
-            foreach (GenerationReturnLiveness finding in findings)
+            bool previousSuppression = _suppressDiagnostics;
+            if (_replayingFinallyCleanup && operation == "RecycleScoped")
             {
-                ReportWithProvenance(
-                    descriptor,
-                    syntax,
-                    owner.DisplayName + " -> " + finding.Path,
-                    owner.DisplayName,
-                    operation,
-                    finding.Path,
-                    DescribeGenerationLiveness(finding.Kind, operation));
+                _suppressDiagnostics = false;
+            }
+
+            try
+            {
+                foreach (GenerationReturnLiveness finding in findings)
+                {
+                    ReportWithProvenance(
+                        descriptor,
+                        syntax,
+                        owner.DisplayName + " -> " + finding.Path,
+                        owner.DisplayName,
+                        operation,
+                        finding.Path,
+                        DescribeGenerationLiveness(finding.Kind, operation));
+                }
+            }
+            finally
+            {
+                _suppressDiagnostics = previousSuppression;
             }
         }
 
@@ -3382,6 +3468,19 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 variable.Initializer?.Value is SyntaxNode initializer
                 && initializer.Span.Contains(syntax.Span)
                 && (symbol is null || variable.Identifier.ValueText == symbol.Name));
+        }
+
+        private void ReportMissingScopedCompletion(OwnerState owner, SyntaxNode syntax)
+        {
+            if (owner.Symbol is not null && !_reportedScopedCompletions.Add(owner.Symbol))
+            {
+                return;
+            }
+
+            Report(
+                NativeAllocationDiagnosticDescriptors.MissingScopedCompletion,
+                syntax,
+                owner.DisplayName);
         }
 
         private void Report(DiagnosticDescriptor descriptor, SyntaxNode syntax, params object[] arguments)

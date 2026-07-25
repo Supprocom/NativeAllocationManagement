@@ -50,7 +50,8 @@ internal readonly record struct NativeMemoryTestMetrics(
     long OutstandingNativeBytes,
     long DetachedNativeBytes,
     long RetiredNativeBytes,
-    long BumpTraversalVisitCount)
+    long BumpTraversalVisitCount,
+    long ReusedNativeSegmentCount)
 {
     internal long RetainedNativeBytes => OutstandingNativeBytes - DetachedNativeBytes;
 }
@@ -60,7 +61,8 @@ public readonly record struct NativeMemoryStatistics(
     long OutstandingNativeBytes,
     long PeakOutstandingNativeBytes,
     long DetachedNativeBytes,
-    long RetiredNativeBytes)
+    long RetiredNativeBytes,
+    long ReusedNativeSegmentCount)
 {
     /// <summary>Gets storage still owned by active or retained allocator generations.</summary>
     public long RetainedNativeBytes => OutstandingNativeBytes - DetachedNativeBytes;
@@ -84,6 +86,7 @@ internal static class NativeMemoryTestHooks
     private static long _detachedNativeBytes;
     private static long _retiredNativeBytes;
     private static long _bumpTraversalVisitCount;
+    private static long _reusedNativeSegmentCount;
     private static long _metricsEpoch;
     private static int _forcedFailures;
     private static int _forcedClearFailures;
@@ -111,6 +114,7 @@ internal static class NativeMemoryTestHooks
         Interlocked.Exchange(ref _detachedNativeBytes, 0);
         Interlocked.Exchange(ref _retiredNativeBytes, 0);
         Interlocked.Exchange(ref _bumpTraversalVisitCount, 0);
+        Interlocked.Exchange(ref _reusedNativeSegmentCount, 0);
         Interlocked.Exchange(ref _forcedFailures, 0);
         Interlocked.Exchange(ref _forcedClearFailures, 0);
         Interlocked.Exchange(ref _forcedCommitBoundary, 0);
@@ -303,15 +307,19 @@ internal static class NativeMemoryTestHooks
         Volatile.Read(ref _outstandingNativeBytes),
         Volatile.Read(ref _detachedNativeBytes),
         Volatile.Read(ref _retiredNativeBytes),
-        Volatile.Read(ref _bumpTraversalVisitCount));
+        Volatile.Read(ref _bumpTraversalVisitCount),
+        Volatile.Read(ref _reusedNativeSegmentCount));
 
     internal static NativeMemoryStatistics SnapshotPublic() => new(
         Volatile.Read(ref _outstandingNativeBytes),
         Volatile.Read(ref _peakOutstandingNativeBytes),
         Volatile.Read(ref _detachedNativeBytes),
-        Volatile.Read(ref _retiredNativeBytes));
+        Volatile.Read(ref _retiredNativeBytes),
+        Volatile.Read(ref _reusedNativeSegmentCount));
 
     internal static void RecordBumpTraversalVisit() => Interlocked.Increment(ref _bumpTraversalVisitCount);
+
+    internal static void RecordReusedNativeSegment() => Interlocked.Increment(ref _reusedNativeSegmentCount);
 
     internal static void SetOperationEntered(Action<string>? callback) => Volatile.Write(ref _operationEntered, callback);
 
@@ -447,6 +455,8 @@ internal sealed class NativeSlab
     internal bool ContainsReferences { get; }
 
     internal long AllocationOrdinal { get; }
+
+    internal bool HasBeenUsed { get; set; }
 }
 
 /// <summary>
@@ -655,6 +665,8 @@ internal sealed class NativeBumpSegment
     internal nuint HighCursor { get; set; }
 
     internal long AllocationOrdinal { get; }
+
+    internal bool HasBeenUsed { get; set; }
 
     internal bool IsCompletelyIdle => LowCursor == 0 && HighCursor == Segment.ByteLength;
 }
@@ -1413,6 +1425,16 @@ internal sealed class NativeOwnerKernel
                 scoped,
                 epoch);
             generation.Allocations.Add(allocationId, allocation);
+            if (slab is not null)
+            {
+                if (slab.HasBeenUsed)
+                {
+                    NativeMemoryTestHooks.RecordReusedNativeSegment();
+                }
+
+                slab.HasBeenUsed = true;
+            }
+
             if (scoped)
             {
                 generation.ScopedPending.Add(allocation);
@@ -1501,6 +1523,16 @@ internal sealed class NativeOwnerKernel
                     scoped,
                     epoch);
                 generation.Allocations.Add(allocationId, allocation);
+                if (bumpSegment is not null)
+                {
+                    if (bumpSegment.HasBeenUsed)
+                    {
+                        NativeMemoryTestHooks.RecordReusedNativeSegment();
+                    }
+
+                    bumpSegment.HasBeenUsed = true;
+                }
+
                 if (scoped)
                 {
                     generation.ScopedPending.Add(allocation);

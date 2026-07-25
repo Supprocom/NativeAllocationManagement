@@ -16,13 +16,13 @@ public delegate void NativeLeasePooledArenaAction<TPooled, TArena>(
     scoped NativeLeaseView<TPooled> pooled,
     scoped NativeLeaseView<TArena> arena);
 
-/// <summary>Runs one bounded operation over three pooled views and two arena views.</summary>
-public delegate void NativeLeaseMeshAction<TFace, TVertex, TIndex, TSlice, TByte>(
-    scoped NativeLeaseView<TFace> faces,
-    scoped NativeLeaseView<TVertex> vertices,
-    scoped NativeLeaseView<TIndex> indices,
-    scoped NativeLeaseView<TSlice> slices,
-    scoped NativeLeaseView<TByte> upload);
+/// <summary>Runs one bounded operation over five direct native views.</summary>
+public delegate void NativeLeaseQuintupleAction<TFirst, TSecond, TThird, TFourth, TFifth>(
+    scoped NativeLeaseView<TFirst> first,
+    scoped NativeLeaseView<TSecond> second,
+    scoped NativeLeaseView<TThird> third,
+    scoped NativeLeaseView<TFourth> fourth,
+    scoped NativeLeaseView<TFifth> fifth);
 
 /// <summary>Provides bounded multi-buffer operations without managed mirror copies.</summary>
 public static class NativeLeaseOperations
@@ -150,79 +150,80 @@ public static class NativeLeaseOperations
     }
 
     /// <summary>
-    /// Enters the complete native mesh output set for one bounded callback. The face,
-    /// vertex, and index buffers are typed pool leases; heterogeneous slice descriptors
-    /// and upload bytes are arena leases. Every view is direct native storage.
+    /// Enters five leases for one bounded callback. The callback receives only direct
+    /// native views, so it can compose heterogeneous typed storage without managed
+    /// mirror copies or a retained handle. Each lease may be backed by a typed pool or
+    /// an arena, and all operation tokens are released in reverse entry order.
     /// </summary>
-    public static void Access<TFace, TVertex, TIndex, TSlice, TByte>(
-        scoped Pooled<TFace> faces,
-        scoped Pooled<TVertex> vertices,
-        scoped Pooled<TIndex> indices,
-        scoped ArenaLease<TSlice> slices,
-        scoped ArenaLease<TByte> upload,
-        NativeLeaseMeshAction<TFace, TVertex, TIndex, TSlice, TByte> action)
+    public static void Access<TFirst, TSecond, TThird, TFourth, TFifth>(
+        scoped Pooled<TFirst> first,
+        scoped Pooled<TSecond> second,
+        scoped Pooled<TThird> third,
+        scoped ArenaLease<TFourth> fourth,
+        scoped ArenaLease<TFifth> fifth,
+        NativeLeaseQuintupleAction<TFirst, TSecond, TThird, TFourth, TFifth> action)
     {
         ArgumentNullException.ThrowIfNull(action);
-        NativeOperationToken faceToken = faces.KernelForComposite.EnterOperation(
-            faces.GenerationForComposite,
-            faces.AllocationIdForComposite,
+        NativeOperationToken firstToken = first.KernelForComposite.EnterOperation(
+            first.GenerationForComposite,
+            first.AllocationIdForComposite,
             nameof(Access));
         try
         {
-            NativeOperationToken vertexToken = vertices.KernelForComposite.EnterOperation(
-                vertices.GenerationForComposite,
-                vertices.AllocationIdForComposite,
+            NativeOperationToken secondToken = second.KernelForComposite.EnterOperation(
+                second.GenerationForComposite,
+                second.AllocationIdForComposite,
                 nameof(Access));
             try
             {
-                NativeOperationToken indexToken = indices.KernelForComposite.EnterOperation(
-                    indices.GenerationForComposite,
-                    indices.AllocationIdForComposite,
+                NativeOperationToken thirdToken = third.KernelForComposite.EnterOperation(
+                    third.GenerationForComposite,
+                    third.AllocationIdForComposite,
                     nameof(Access));
                 try
                 {
-                    NativeOperationToken sliceToken = slices.KernelForComposite.EnterOperation(
-                        slices.GenerationForComposite,
-                        slices.AllocationIdForComposite,
+                    NativeOperationToken fourthToken = fourth.KernelForComposite.EnterOperation(
+                        fourth.GenerationForComposite,
+                        fourth.AllocationIdForComposite,
                         nameof(Access));
                     try
                     {
-                        NativeOperationToken uploadToken = upload.KernelForComposite.EnterOperation(
-                            upload.GenerationForComposite,
-                            upload.AllocationIdForComposite,
+                        NativeOperationToken fifthToken = fifth.KernelForComposite.EnterOperation(
+                            fifth.GenerationForComposite,
+                            fifth.AllocationIdForComposite,
                             nameof(Access));
                         try
                         {
                             action(
-                                faceToken.GetView<TFace>(),
-                                vertexToken.GetView<TVertex>(),
-                                indexToken.GetView<TIndex>(),
-                                sliceToken.GetView<TSlice>(),
-                                uploadToken.GetView<TByte>());
+                                firstToken.GetView<TFirst>(),
+                                secondToken.GetView<TSecond>(),
+                                thirdToken.GetView<TThird>(),
+                                fourthToken.GetView<TFourth>(),
+                                fifthToken.GetView<TFifth>());
                         }
                         finally
                         {
-                            uploadToken.Dispose();
+                            fifthToken.Dispose();
                         }
                     }
                     finally
                     {
-                        sliceToken.Dispose();
+                        fourthToken.Dispose();
                     }
                 }
                 finally
                 {
-                    indexToken.Dispose();
+                    thirdToken.Dispose();
                 }
             }
             finally
             {
-                vertexToken.Dispose();
+                secondToken.Dispose();
             }
         }
         finally
         {
-            faceToken.Dispose();
+            firstToken.Dispose();
         }
     }
 }

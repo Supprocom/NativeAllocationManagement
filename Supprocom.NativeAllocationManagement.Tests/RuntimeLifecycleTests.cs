@@ -28,6 +28,7 @@ public sealed class RuntimeLifecycleTests
         Assert.Equal(1, metrics.AllocationCount);
         Assert.Equal(1, metrics.ZeroedAllocationCount);
         Assert.Equal(1, metrics.FreeCount);
+        Assert.Equal(0, metrics.ReusedNativeSegmentCount);
     }
 
     [Fact]
@@ -223,6 +224,7 @@ public sealed class RuntimeLifecycleTests
         Assert.Equal(4, reused.Capacity);
         Assert.Equal(0, reused.Read(static span => span[0]));
         reused.Dispose();
+        Assert.True(NativeMemoryDiagnostics.Snapshot().ReusedNativeSegmentCount > 0);
         pool.Dispose();
     }
 
@@ -533,11 +535,11 @@ public sealed class RuntimeLifecycleTests
     [Fact]
     public void NativeRegionExposesLeaseWithoutTheRemovedOperation()
     {
+        MethodInfo[] methods = typeof(NativeRegion).GetMethods(BindingFlags.Public | BindingFlags.Instance);
+        Assert.Contains(methods, method => method.Name == "Lease" && method.IsGenericMethodDefinition);
+        Assert.DoesNotContain(methods, method => method.Name == "Allocate");
         Assert.Contains(
-            typeof(NativeRegion).GetMethods(BindingFlags.Public | BindingFlags.Instance),
-            method => method.Name == "Lease" && method.IsGenericMethodDefinition);
-        Assert.Contains(
-            typeof(NativeRegion).GetMethods(BindingFlags.Public | BindingFlags.Instance),
+            methods,
             method => method.Name == "LeaseFromMemory" && method.GetParameters().Length == 0);
     }
 

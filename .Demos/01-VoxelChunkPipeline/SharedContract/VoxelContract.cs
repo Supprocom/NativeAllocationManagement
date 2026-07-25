@@ -152,7 +152,7 @@ public readonly record struct PipelineResult(
     long EnabledStageBytes = 0,
     long ManagedContainerBytes = 0,
     long TransparentMaskWords = 0,
-    long ReusedLeaseCount = 0,
+    long MeasuredLeaseCount = 0,
     long ReusedNativeSegmentCount = 0,
     double MeasuredMilliseconds = 0,
     long MeasuredManagedAllocatedBytes = 0,
@@ -160,7 +160,8 @@ public readonly record struct PipelineResult(
     int MeasuredGen1Collections = 0,
     int MeasuredGen2Collections = 0,
     OutputFixture? MaterializedOutput = null,
-    long ColdManagedBackingBytes = 0);
+    long ColdManagedBackingBytes = 0,
+    OutputFixture? IndependentFixture = null);
 
 public readonly record struct ChildRunResult(
     string Implementation,
@@ -207,8 +208,71 @@ public static class VoxelMath
     public const int DigestModulus = 1_000_000_007;
     public const int DigestMultiplier = 1_000_003;
     public const int AirBlockId = 0;
+    public const int IndependentFixtureSeed = 0x13579;
     public const int OutputFixtureElementLimit = 2;
     public const int OutputFixtureByteLimit = 512;
+
+    public static readonly FaceRecord[] IndependentOpaqueRecords =
+    [
+        new(CellIndex(1, 2, 3), 259, 0b100101),
+        new(CellIndex(7, 4, 2), 256, 0b001010)
+    ];
+
+    public static readonly FaceRecord[] IndependentTransparentRecords =
+    [
+        new(CellIndex(4, 6, 1), 258, 0b010001),
+        new(CellIndex(12, 1, 5), 261, 0b100100)
+    ];
+
+    // This is a hand-authored expected output, not a second implementation of the
+    // packer. It exercises opaque and transparent streams, four runtime block types,
+    // padding, all four corners, all six indices, slices, and the complete upload
+    // byte ranges. The two implementations must match these values exactly.
+    public static readonly OutputFixture ExpectedIndependentFixture = new(
+        [
+            new(1, 2, 3, 0, 0, 259), new(1, 2, 4, 0, 1, 259),
+            new(1, 3, 4, 0, 2, 259), new(1, 3, 3, 0, 3, 259),
+            new(1, 2, 3, 2, 0, 259), new(2, 2, 4, 2, 1, 259),
+            new(1, 2, 4, 2, 2, 259), new(2, 2, 3, 2, 3, 259),
+            new(1, 2, 4, 5, 0, 259), new(2, 2, 4, 5, 1, 259),
+            new(1, 3, 4, 5, 2, 259), new(2, 3, 4, 5, 3, 259),
+            new(8, 4, 2, 1, 0, 256), new(8, 4, 3, 1, 1, 256),
+            new(8, 5, 3, 1, 2, 256), new(8, 5, 2, 1, 3, 256),
+            new(7, 5, 2, 3, 0, 256), new(8, 5, 3, 3, 1, 256),
+            new(7, 5, 3, 3, 2, 256), new(8, 5, 2, 3, 3, 256)
+        ],
+        [0, 1, 2, 2, 3, 0, 4, 5, 6, 6, 7, 4, 8, 9, 10, 10, 11, 8,
+            12, 13, 14, 14, 15, 12, 16, 17, 18, 18, 19, 16],
+        [
+            new(0, 192, 32, 6, 259, 12417),
+            new(192, 192, 32, 6, 259, 12417),
+            new(384, 192, 32, 6, 259, 12417),
+            new(576, 128, 4, 3, 256, 8455),
+            new(704, 128, 4, 3, 256, 8455)
+        ],
+        Convert.FromBase64String(
+            "ANLjAAAWJwAAWmsAAJ6vAADi8wAAJjcAAGp7AACuvwAA8gMAADZHAAB6iwAAvs8AAAITAABGVwABAAAAAgAAAAMAAAAAAAAAAAAAAAMBAAABAAAAAgAAAAQAAAAAAAAAAQAAAAMBAAABAAAAAwAAAAQAAAAAAAAAAgAAAAMBAAABAAAAAwAAAAMAAAAAAAAAAwAAAAMBAAAAAAAAAQAAAAIAAAACAAAAAwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAANLjAAAWJwAAWmsAAJ6vAADi8wAAJjcAAGp7AACuvwAA8gMAADZHAAB6iwAAvs8AAAITAABGVwABAAAAAgAAAAMAAAACAAAAAAAAAAMBAAACAAAAAgAAAAQAAAACAAAAAQAAAAMBAAABAAAAAgAAAAQAAAACAAAAAgAAAAMBAAACAAAAAgAAAAMAAAACAAAAAwAAAAMBAAAEAAAABQAAAAYAAAAGAAAABwAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAANLjAAAWJwAAWmsAAJ6vAADi8wAAJjcAAGp7AACuvwAA8gMAADZHAAB6iwAAvs8AAAITAABGVwABAAAAAgAAAAQAAAAFAAAAAAAAAAMBAAACAAAAAgAAAAQAAAAFAAAAAQAAAAMBAAABAAAAAwAAAAQAAAAFAAAAAgAAAAMBAAACAAAAAwAAAAQAAAAFAAAAAwAAAAMBAAAIAAAACQAAAAoAAAAKAAAACwAAAAgAAAAAAAAAAAAAAAAAAAAAAAAA7f4AADFCAAAIAAAABAAAAAIAAAABAAAAAAAAAAABAAAIAAAABAAAAAMAAAABAAAAAQAAAAABAAAIAAAABQAAAAMAAAABAAAAAgAAAAABAAAIAAAABQAAAAIAAAABAAAAAwAAAAABAAAMAAAADQAAAA4AAAAOAAAADwAAAAwAAADt/gAAMUIAAAcAAAAFAAAAAgAAAAMAAAAAAAAAAAEAAAgAAAAFAAAAAwAAAAMAAAABAAAAAAEAAAcAAAAFAAAAAwAAAAMAAAACAAAAAAEAAAgAAAAFAAAAAgAAAAMAAAADAAAAAAEAABAAAAARAAAAEgAAABIAAAATAAAAEAAAAA=="),
+        [
+            new(4, 6, 1, 0, 0, 258), new(4, 6, 2, 0, 1, 258),
+            new(4, 7, 2, 0, 2, 258), new(4, 7, 1, 0, 3, 258),
+            new(4, 6, 1, 4, 0, 258), new(5, 6, 1, 4, 1, 258),
+            new(4, 7, 1, 4, 2, 258), new(5, 7, 1, 4, 3, 258),
+            new(12, 1, 5, 2, 0, 261), new(13, 1, 6, 2, 1, 261),
+            new(12, 1, 6, 2, 2, 261), new(13, 1, 5, 2, 3, 261),
+            new(12, 1, 6, 5, 0, 261), new(13, 1, 6, 5, 1, 261),
+            new(12, 2, 6, 5, 2, 261), new(13, 2, 6, 5, 3, 261)
+        ],
+        [0, 1, 2, 2, 3, 0, 4, 5, 6, 6, 7, 4, 8, 9, 10, 10, 11, 8,
+            12, 13, 14, 14, 15, 12],
+        [
+            new(0, 160, 16, 9, 258, 4484),
+            new(160, 160, 16, 9, 258, 4484),
+            new(320, 136, 8, 2, 261, 20556),
+            new(456, 136, 8, 2, 261, 20556)
+        ],
+        Convert.FromBase64String(
+            "5AAAFygAAFtsAACfsAAA4/QAACc4AABrfAAAr8AAAPMEAAA3SAAAewQAAAAGAAAAAQAAAAAAAAAAAAAAAgEAAAQAAAAGAAAAAgAAAAAAAAABAAAAAgEAAAQAAAAHAAAAAgAAAAAAAAACAAAAAgEAAAQAAAAHAAAAAQAAAAAAAAADAAAAAgEAAAAAAAABAAAAAgAAAAIAAAADAAAAAAAAAOQAABcoAABbbAAAn7AAAOP0AAAnOAAAa3wAAK/AAADzBAAAN0gAAHsEAAAABgAAAAEAAAAEAAAAAAAAAAIBAAAFAAAABgAAAAEAAAAEAAAAAQAAAAIBAAAEAAAABwAAAAEAAAAEAAAAAgAAAAIBAAAFAAAABwAAAAEAAAAEAAAAAwAAAAIBAAAEAAAABQAAAAYAAAAGAAAABwAAAAQAAAAAoQAAAOUAAAApAAAAbQAADAAAAAEAAAAFAAAAAgAAAAAAAAAFAQAADQAAAAEAAAAGAAAAAgAAAAEAAAAFAQAADAAAAAEAAAAGAAAAAgAAAAIAAAAFAQAADQAAAAEAAAAFAAAAAgAAAAMAAAAFAQAACAAAAAkAAAAKAAAACgAAAAsAAAAIAAAAAKEAAADlAAAAKQAAAG0AAAwAAAABAAAABgAAAAUAAAAAAAAABQEAAA0AAAABAAAABgAAAAUAAAABAAAABQEAAAwAAAACAAAABgAAAAUAAAACAAAABQEAAA0AAAACAAAABgAAAAUAAAADAAAABQEAAAwAAAANAAAADgAAAA4AAAAPAAAADAAAAA==")
+    );
 
     public static int SizeOf<T>() where T : unmanaged => Unsafe.SizeOf<T>();
 
