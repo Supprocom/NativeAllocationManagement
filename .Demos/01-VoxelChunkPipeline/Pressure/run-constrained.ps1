@@ -130,7 +130,7 @@ function Get-LastJsonObject {
     $lines = @($Text -split "`r?`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
     for ($index = $lines.Count - 1; $index -ge 0; $index--) {
         try {
-            return $lines[$index] | ConvertFrom-Json -Depth 100
+            return $lines[$index] | ConvertFrom-Json
         } catch {
         }
     }
