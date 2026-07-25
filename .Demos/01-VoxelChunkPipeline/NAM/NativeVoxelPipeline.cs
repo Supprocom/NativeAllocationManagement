@@ -710,10 +710,18 @@ internal static class NativeVoxelPipeline
             transparentFaces,
             transparentBytes);
 
-        using NativePool<FaceRecord> facePool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        using NativePool<Vertex> vertexPool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        using NativePool<int> indexPool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        using NativeArena heterogeneousArena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativePool<FaceRecord> facePool = new(
+            initialCapacity: VoxelMath.CellsPerChunk,
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativePool<Vertex> vertexPool = new(
+            initialCapacity: checked(VoxelMath.CellsPerChunk * 6),
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> indexPool = new(
+            initialCapacity: checked(VoxelMath.CellsPerChunk * 9),
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeArena heterogeneousArena = new(
+            preAllocateBytes: (nuint)(64 * 1024 * 1024),
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         int totalRecords = checked(VoxelMath.IndependentOpaqueRecords.Length
             + VoxelMath.IndependentTransparentRecords.Length);
         int totalVertices = checked((opaqueFaces + transparentFaces) * VoxelMath.VerticesPerFace);
@@ -1037,10 +1045,18 @@ internal static class NativeVoxelPipeline
         using NativePool<VoxelCell> cellPool = new(
             initialCapacity: VoxelMath.CellsPerChunk,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        using NativePool<FaceRecord> facePool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        using NativePool<Vertex> vertexPool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        using NativePool<int> indexPool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        using NativeArena heterogeneousArena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativePool<FaceRecord> facePool = new(
+            initialCapacity: VoxelMath.CellsPerChunk,
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativePool<Vertex> vertexPool = new(
+            initialCapacity: checked(VoxelMath.CellsPerChunk * 6),
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> indexPool = new(
+            initialCapacity: checked(VoxelMath.CellsPerChunk * 9),
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeArena heterogeneousArena = new(
+            preAllocateBytes: (nuint)(64 * 1024 * 1024),
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         OwnerAccumulator[] ownerAccumulators =
         [
             new($"worker-{workerId}:cells", cellPool.GetStatistics()),
