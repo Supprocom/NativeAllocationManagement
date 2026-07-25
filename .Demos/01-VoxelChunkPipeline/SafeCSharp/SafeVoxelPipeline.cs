@@ -23,6 +23,16 @@ internal static class SafeVoxelPipeline
         internal long Rents;
         internal long Recycles;
         internal long ClearedBytes;
+        internal bool MeasureTimings;
+        internal long GenerationTicks;
+        internal long FaceDerivationTicks;
+        internal long TransparentMaskTicks;
+        internal long OpaquePackingTicks;
+        internal long TransparentPackingTicks;
+        internal long CoordinateRecycleTicks;
+        internal long FaceRecycleTicks;
+        internal long MaskRecycleTicks;
+        internal long PackingRecycleTicks;
 
         internal void Enter(long bytes, Stage stage)
         {
@@ -38,10 +48,36 @@ internal static class SafeVoxelPipeline
 
         internal void Leave(long bytes) => CurrentBackingBytes -= bytes;
 
-        internal void Boundary(long bytes)
+        internal void Boundary(long bytes, long elapsedTicks = 0, Stage stage = Stage.Coordinates)
         {
             Recycles++;
             ClearedBytes += bytes;
+            if (!MeasureTimings)
+            {
+                return;
+            }
+
+            switch (stage)
+            {
+                case Stage.Coordinates: CoordinateRecycleTicks += elapsedTicks; break;
+                case Stage.Faces: FaceRecycleTicks += elapsedTicks; break;
+                case Stage.Packing: PackingRecycleTicks += elapsedTicks; break;
+            }
+        }
+
+        internal void AddMaskRecycleTicks(long elapsedTicks)
+        {
+            if (MeasureTimings)
+            {
+                MaskRecycleTicks += elapsedTicks;
+            }
+        }
+
+        internal void MaskBoundary(long bytes, long elapsedTicks)
+        {
+            Recycles++;
+            ClearedBytes += bytes;
+            AddMaskRecycleTicks(elapsedTicks);
         }
     }
 
@@ -67,7 +103,16 @@ internal static class SafeVoxelPipeline
         int TransparentMaskWords,
         int DominantTransparentSections,
         int ResidualTransparentSections,
-        OutputFixture? MaterializedOutput)
+        OutputFixture? MaterializedOutput,
+        double GenerationMilliseconds = 0,
+        double FaceDerivationMilliseconds = 0,
+        double TransparentMaskMilliseconds = 0,
+        double OpaquePackingMilliseconds = 0,
+        double TransparentPackingMilliseconds = 0,
+        double CoordinateRecycleMilliseconds = 0,
+        double FaceRecycleMilliseconds = 0,
+        double MaskRecycleMilliseconds = 0,
+        double PackingRecycleMilliseconds = 0)
     {
         internal int VisibleFaces => OpaqueFaces + TransparentFaces;
         internal int Vertices => OpaqueVertices + TransparentVertices;
@@ -138,6 +183,15 @@ internal static class SafeVoxelPipeline
         long opaqueStaged = 0;
         long transparentStaged = 0;
         long enabledStageBytes = 0;
+        double generationMilliseconds = 0;
+        double faceDerivationMilliseconds = 0;
+        double transparentMaskMilliseconds = 0;
+        double opaquePackingMilliseconds = 0;
+        double transparentPackingMilliseconds = 0;
+        double coordinateRecycleMilliseconds = 0;
+        double faceRecycleMilliseconds = 0;
+        double maskRecycleMilliseconds = 0;
+        double packingRecycleMilliseconds = 0;
         OutputFixture? materializedOutput = null;
         for (int worker = 0; worker < workers.Length; worker++)
         {
@@ -174,6 +228,15 @@ internal static class SafeVoxelPipeline
             opaqueStaged += result.OpaqueStagedBytes;
             transparentStaged += result.TransparentStagedBytes;
             enabledStageBytes += result.EnabledStageBytes;
+            generationMilliseconds += result.GenerationMilliseconds;
+            faceDerivationMilliseconds += result.FaceDerivationMilliseconds;
+            transparentMaskMilliseconds += result.TransparentMaskMilliseconds;
+            opaquePackingMilliseconds += result.OpaquePackingMilliseconds;
+            transparentPackingMilliseconds += result.TransparentPackingMilliseconds;
+            coordinateRecycleMilliseconds += result.CoordinateRecycleMilliseconds;
+            faceRecycleMilliseconds += result.FaceRecycleMilliseconds;
+            maskRecycleMilliseconds += result.MaskRecycleMilliseconds;
+            packingRecycleMilliseconds += result.PackingRecycleMilliseconds;
             materializedOutput ??= result.MaterializedOutput;
         }
 
@@ -224,7 +287,16 @@ internal static class SafeVoxelPipeline
             GC.CollectionCount(2) - gen2Before,
             materializedOutput,
             coldPeakManaged,
-            independentFixture);
+            independentFixture,
+            GenerationMilliseconds: generationMilliseconds,
+            FaceDerivationMilliseconds: faceDerivationMilliseconds,
+            TransparentMaskMilliseconds: transparentMaskMilliseconds,
+            OpaquePackingMilliseconds: opaquePackingMilliseconds,
+            TransparentPackingMilliseconds: transparentPackingMilliseconds,
+            CoordinateRecycleMilliseconds: coordinateRecycleMilliseconds,
+            FaceRecycleMilliseconds: faceRecycleMilliseconds,
+            MaskRecycleMilliseconds: maskRecycleMilliseconds,
+            PackingRecycleMilliseconds: packingRecycleMilliseconds);
     }
 
     private static OutputFixture CreateIndependentFixture()
@@ -300,6 +372,7 @@ internal static class SafeVoxelPipeline
 
         long coldPeakManaged = metrics.PeakBackingBytes;
         metrics = default;
+        metrics.MeasureTimings = true;
         ready.Signal();
         start.Wait();
         long digest = 17;
@@ -326,6 +399,15 @@ internal static class SafeVoxelPipeline
         long opaqueStaged = 0;
         long transparentStaged = 0;
         long enabledStageBytes = 0;
+        double generationMilliseconds = 0;
+        double faceDerivationMilliseconds = 0;
+        double transparentMaskMilliseconds = 0;
+        double opaquePackingMilliseconds = 0;
+        double transparentPackingMilliseconds = 0;
+        double coordinateRecycleMilliseconds = 0;
+        double faceRecycleMilliseconds = 0;
+        double maskRecycleMilliseconds = 0;
+        double packingRecycleMilliseconds = 0;
         OutputFixture? materializedOutput = null;
         for (int chunk = workerId; chunk < totalChunks; chunk += options.WorkerCount)
         {
@@ -354,6 +436,15 @@ internal static class SafeVoxelPipeline
             opaqueStaged += result.OpaqueStagedBytes;
             transparentStaged += result.TransparentStagedBytes;
             enabledStageBytes += result.EnabledStageBytes;
+            generationMilliseconds += result.GenerationMilliseconds;
+            faceDerivationMilliseconds += result.FaceDerivationMilliseconds;
+            transparentMaskMilliseconds += result.TransparentMaskMilliseconds;
+            opaquePackingMilliseconds += result.OpaquePackingMilliseconds;
+            transparentPackingMilliseconds += result.TransparentPackingMilliseconds;
+            coordinateRecycleMilliseconds += result.CoordinateRecycleMilliseconds;
+            faceRecycleMilliseconds += result.FaceRecycleMilliseconds;
+            maskRecycleMilliseconds += result.MaskRecycleMilliseconds;
+            packingRecycleMilliseconds += result.PackingRecycleMilliseconds;
             materializedOutput ??= result.MaterializedOutput;
         }
 
@@ -397,7 +488,16 @@ internal static class SafeVoxelPipeline
              transparentMaskWords,
              MeasuredLeaseCount: metrics.Rents,
              MaterializedOutput: materializedOutput,
-            ColdManagedBackingBytes: coldPeakManaged));
+            ColdManagedBackingBytes: coldPeakManaged,
+            GenerationMilliseconds: generationMilliseconds,
+            FaceDerivationMilliseconds: faceDerivationMilliseconds,
+            TransparentMaskMilliseconds: transparentMaskMilliseconds,
+            OpaquePackingMilliseconds: opaquePackingMilliseconds,
+            TransparentPackingMilliseconds: transparentPackingMilliseconds,
+            CoordinateRecycleMilliseconds: coordinateRecycleMilliseconds,
+            FaceRecycleMilliseconds: faceRecycleMilliseconds,
+            MaskRecycleMilliseconds: maskRecycleMilliseconds,
+            PackingRecycleMilliseconds: packingRecycleMilliseconds));
     }
 
     private static ChunkResult ProcessChunk(
@@ -406,10 +506,21 @@ internal static class SafeVoxelPipeline
         ref Metrics metrics,
         long digest)
     {
+        long generationTicksBefore = metrics.GenerationTicks;
+        long faceTicksBefore = metrics.FaceDerivationTicks;
+        long maskTicksBefore = metrics.TransparentMaskTicks;
+        long opaquePackingTicksBefore = metrics.OpaquePackingTicks;
+        long transparentPackingTicksBefore = metrics.TransparentPackingTicks;
+        long coordinateRecycleTicksBefore = metrics.CoordinateRecycleTicks;
+        long faceRecycleTicksBefore = metrics.FaceRecycleTicks;
+        long maskRecycleTicksBefore = metrics.MaskRecycleTicks;
+        long packingRecycleTicksBefore = metrics.PackingRecycleTicks;
+        ChunkResult completed = default;
         int cellCount = VoxelMath.CellsPerChunk;
         VoxelCell[] cells = Rent<VoxelCell>(cellCount, ref metrics, Stage.Coordinates);
         try
         {
+            long generationStart = metrics.MeasureTimings ? Stopwatch.GetTimestamp() : 0;
             for (int cell = 0; cell < cellCount; cell++)
             {
                 int x = cell % VoxelMath.ChunkDimension;
@@ -425,10 +536,16 @@ internal static class SafeVoxelPipeline
                 digest = VoxelMath.DigestStep(digest, blockId);
             }
 
+            if (metrics.MeasureTimings)
+            {
+                metrics.GenerationTicks += Stopwatch.GetTimestamp() - generationStart;
+            }
+
             FaceRecord[] opaqueFaces = Rent<FaceRecord>(cellCount, ref metrics, Stage.Faces);
             FaceRecord[] transparentFaces = Rent<FaceRecord>(cellCount, ref metrics, Stage.Faces);
             int opaqueFaceCells = 0;
             int transparentFaceCells = 0;
+            long faceStart = metrics.MeasureTimings ? Stopwatch.GetTimestamp() : 0;
             for (int cell = 0; cell < cellCount; cell++)
             {
                 int mask = VoxelMath.FaceMaskFromCells(cell, cells.AsSpan(0, cellCount));
@@ -450,6 +567,11 @@ internal static class SafeVoxelPipeline
                 {
                     opaqueFaces[opaqueFaceCells++] = new FaceRecord(cell, blockId, mask);
                 }
+            }
+
+            if (metrics.MeasureTimings)
+            {
+                metrics.FaceDerivationTicks += Stopwatch.GetTimestamp() - faceStart;
             }
 
             int empty = 0;
@@ -481,6 +603,7 @@ internal static class SafeVoxelPipeline
             ulong[]? masks = null;
             try
             {
+                long maskStart = metrics.MeasureTimings ? Stopwatch.GetTimestamp() : 0;
                 if (transparentMaskCount != 0)
                 {
                     transparentMaskWords = checked(transparentMaskCount * VoxelMath.TransparentMaskWordsPerId);
@@ -509,11 +632,21 @@ internal static class SafeVoxelPipeline
                     }
                 }
 
+                if (metrics.MeasureTimings)
+                {
+                    metrics.TransparentMaskTicks += Stopwatch.GetTimestamp() - maskStart;
+                }
+
                 metrics.Leave(ArrayBytes(cells));
+                long coordinateRecycleStart = metrics.MeasureTimings ? Stopwatch.GetTimestamp() : 0;
                 Return(cells);
                 cells = Array.Empty<VoxelCell>();
-                metrics.Boundary(checked((long)cellCount * ElementSize<VoxelCell>()));
+                metrics.Boundary(
+                    checked((long)cellCount * ElementSize<VoxelCell>()),
+                    metrics.MeasureTimings ? Stopwatch.GetTimestamp() - coordinateRecycleStart : 0,
+                    Stage.Coordinates);
 
+                long opaquePackingStart = metrics.MeasureTimings ? Stopwatch.GetTimestamp() : 0;
                 StreamResult opaque = PackStream(
                     options,
                     opaqueFaces,
@@ -525,8 +658,13 @@ internal static class SafeVoxelPipeline
                     out int[] opaqueIndices,
                     out PayloadSlice[] opaqueSlices,
                     out byte[] opaqueUpload);
+                if (metrics.MeasureTimings)
+                {
+                    metrics.OpaquePackingTicks += Stopwatch.GetTimestamp() - opaquePackingStart;
+                }
                 try
                 {
+                    long transparentPackingStart = metrics.MeasureTimings ? Stopwatch.GetTimestamp() : 0;
                     StreamResult transparent = PackStream(
                         options,
                         transparentFaces,
@@ -538,6 +676,10 @@ internal static class SafeVoxelPipeline
                         out int[] transparentIndices,
                         out PayloadSlice[] transparentSlices,
                         out byte[] transparentUpload);
+                    if (metrics.MeasureTimings)
+                    {
+                        metrics.TransparentPackingTicks += Stopwatch.GetTimestamp() - transparentPackingStart;
+                    }
                     try
                     {
                         digest = VoxelMath.DigestStep(digest, opaque.FaceCount);
@@ -568,7 +710,7 @@ internal static class SafeVoxelPipeline
                                 transparentUpload,
                                 transparent.StagedBytes)
                             : null;
-                        return new ChunkResult(
+                        completed = new ChunkResult(
                             digest,
                             opaque.FaceCount,
                             transparent.FaceCount,
@@ -592,13 +734,28 @@ internal static class SafeVoxelPipeline
                     }
                     finally
                     {
+                        long transparentRecycleStart = metrics.MeasureTimings ? Stopwatch.GetTimestamp() : 0;
                         ReleaseStream(transparentVertices, transparentIndices, transparentSlices, transparentUpload, ref metrics);
+                        metrics.Boundary(
+                            checked((long)transparentVertices.Length * ElementSize<Vertex>()
+                                + (long)transparentIndices.Length * ElementSize<int>()
+                                + (long)transparentSlices.Length * ElementSize<PayloadSlice>()
+                                + transparentUpload.Length),
+                            metrics.MeasureTimings ? Stopwatch.GetTimestamp() - transparentRecycleStart : 0,
+                            Stage.Packing);
                     }
                 }
                 finally
                 {
+                    long opaqueRecycleStart = metrics.MeasureTimings ? Stopwatch.GetTimestamp() : 0;
                     ReleaseStream(opaqueVertices, opaqueIndices, opaqueSlices, opaqueUpload, ref metrics);
-                    metrics.Boundary(opaque.StagedBytes);
+                    metrics.Boundary(
+                        checked((long)opaqueVertices.Length * ElementSize<Vertex>()
+                            + (long)opaqueIndices.Length * ElementSize<int>()
+                            + (long)opaqueSlices.Length * ElementSize<PayloadSlice>()
+                            + opaqueUpload.Length),
+                        metrics.MeasureTimings ? Stopwatch.GetTimestamp() - opaqueRecycleStart : 0,
+                        Stage.Packing);
                 }
             }
             finally
@@ -606,14 +763,22 @@ internal static class SafeVoxelPipeline
                 if (masks is not null)
                 {
                     metrics.Leave(ArrayBytes(masks));
+                    long maskRecycleStart = metrics.MeasureTimings ? Stopwatch.GetTimestamp() : 0;
                     Return(masks);
+                    metrics.MaskBoundary(
+                        ArrayBytes(masks),
+                        metrics.MeasureTimings ? Stopwatch.GetTimestamp() - maskRecycleStart : 0);
                 }
 
                 metrics.Leave(ArrayBytes(opaqueFaces));
                 metrics.Leave(ArrayBytes(transparentFaces));
+                long faceRecycleStart = metrics.MeasureTimings ? Stopwatch.GetTimestamp() : 0;
                 Return(opaqueFaces);
                 Return(transparentFaces);
-                metrics.Boundary(checked((long)(opaqueFaces.Length + transparentFaces.Length) * ElementSize<FaceRecord>()));
+                metrics.Boundary(
+                    checked((long)(opaqueFaces.Length + transparentFaces.Length) * ElementSize<FaceRecord>()),
+                    metrics.MeasureTimings ? Stopwatch.GetTimestamp() - faceRecycleStart : 0,
+                    Stage.Faces);
             }
         }
         finally
@@ -624,6 +789,19 @@ internal static class SafeVoxelPipeline
                 Return(cells);
             }
         }
+
+        return completed with
+        {
+            GenerationMilliseconds = ToMilliseconds(metrics.GenerationTicks - generationTicksBefore),
+            FaceDerivationMilliseconds = ToMilliseconds(metrics.FaceDerivationTicks - faceTicksBefore),
+            TransparentMaskMilliseconds = ToMilliseconds(metrics.TransparentMaskTicks - maskTicksBefore),
+            OpaquePackingMilliseconds = ToMilliseconds(metrics.OpaquePackingTicks - opaquePackingTicksBefore),
+            TransparentPackingMilliseconds = ToMilliseconds(metrics.TransparentPackingTicks - transparentPackingTicksBefore),
+            CoordinateRecycleMilliseconds = ToMilliseconds(metrics.CoordinateRecycleTicks - coordinateRecycleTicksBefore),
+            FaceRecycleMilliseconds = ToMilliseconds(metrics.FaceRecycleTicks - faceRecycleTicksBefore),
+            MaskRecycleMilliseconds = ToMilliseconds(metrics.MaskRecycleTicks - maskRecycleTicksBefore),
+            PackingRecycleMilliseconds = ToMilliseconds(metrics.PackingRecycleTicks - packingRecycleTicksBefore)
+        };
     }
 
     private static StreamResult PackStream(
@@ -797,6 +975,8 @@ internal static class SafeVoxelPipeline
     }
 
     private static void Return<T>(T[] values) => ArrayPool<T>.Shared.Return(values, clearArray: true);
+
+    private static double ToMilliseconds(long ticks) => ticks * 1000.0 / Stopwatch.Frequency;
 
     private static long ElementSize<T>() =>
         typeof(T) == typeof(VoxelCell) ? VoxelMath.VoxelCellBytes :

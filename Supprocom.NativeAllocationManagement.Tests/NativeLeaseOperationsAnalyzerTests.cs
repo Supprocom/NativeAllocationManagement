@@ -6,6 +6,27 @@ namespace Supprocom.NativeAllocationManagement.Tests;
 public sealed class NativeLeaseOperationsAnalyzerTests
 {
     [Fact]
+    public async Task UnaryCompositeAccessAcceptsDirectPooledViewWithOwnerCleanup()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    using NativePool<int> pool = new();
+                    using Pooled<int> value = pool.Rent(1);
+                    NativeLeaseOperations.Access(value, static view => view[0] = 1);
+                }
+            }
+            """);
+
+        Assert.Empty(AnalyzerContractTests.NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
     public async Task QuintupleCompositeAccessAcceptsAllDirectViewsWithOwnerCleanup()
     {
         ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
@@ -483,6 +504,178 @@ public sealed class NativeLeaseOperationsAnalyzerTests
         Assert.Equal("Native return has live generation state", liveRoot[0].Properties["NAM.Operation"]);
         Assert.Contains("value", liveRoot[0].Properties["NAM.Provenance"]!);
         Assert.Contains("pool.RecycleScoped", liveRoot[0].Location.SourceTree!.GetText().ToString(liveRoot[0].Location.SourceSpan));
+    }
+
+    [Fact]
+    public async Task RoslynFinallyEdgesCoverCatchFiltersAndNestedFinallyWithoutFalseMissingCleanup()
+    {
+        ImmutableArray<Diagnostic> catchFilter = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void CatchFilter(bool condition)
+                {
+                    using NativePool<int> pool = new();
+                    try
+                    {
+                        scoped Pooled<int> value = pool.LeaseScoped(1);
+                        if (condition)
+                        {
+                            throw new System.InvalidOperationException();
+                        }
+                    }
+                    catch (System.InvalidOperationException) when (condition)
+                    {
+                    }
+                    finally
+                    {
+                        pool.RecycleScoped();
+                    }
+                }
+            }
+            """);
+
+        Assert.Empty(AnalyzerContractTests.NativeDiagnostics(catchFilter));
+
+        ImmutableArray<Diagnostic> nested = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Nested(bool condition)
+                {
+                    using NativePool<int> pool = new();
+                    try
+                    {
+                        scoped Pooled<int> value = pool.LeaseScoped(1);
+                        try
+                        {
+                            if (condition)
+                            {
+                                throw new System.InvalidOperationException();
+                            }
+                        }
+                        finally
+                        {
+                        }
+                    }
+                    finally
+                    {
+                        pool.RecycleScoped();
+                    }
+                }
+            }
+            """);
+
+        Assert.Empty(AnalyzerContractTests.NativeDiagnostics(nested));
+    }
+
+    [Fact]
+    public async Task RoslynFinallyEdgesRejectUncleanCatchFilterAndNestedFinallyExits()
+    {
+        ImmutableArray<Diagnostic> catchFilter = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void CatchFilter(bool condition)
+                {
+                    using NativePool<int> pool = new();
+                    try
+                    {
+                        scoped Pooled<int> value = pool.LeaseScoped(1);
+                        throw new System.InvalidOperationException();
+                    }
+                    catch (System.InvalidOperationException) when (condition)
+                    {
+                        pool.RecycleScoped();
+                    }
+                }
+            }
+            """);
+
+        Diagnostic[] catchMissing = catchFilter.Where(item => item.Id == "NAM1020").ToArray();
+        Assert.Single(catchMissing);
+        Assert.Contains("pool", catchMissing[0].Properties["NAM.Provenance"]!, StringComparison.OrdinalIgnoreCase);
+
+        ImmutableArray<Diagnostic> nestedFinally = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void NestedFinally(bool condition)
+                {
+                    using NativePool<int> pool = new();
+                    try
+                    {
+                        scoped Pooled<int> value = pool.LeaseScoped(1);
+                    }
+                    finally
+                    {
+                        try
+                        {
+                            if (condition)
+                            {
+                                pool.RecycleScoped();
+                            }
+                        }
+                        finally
+                        {
+                        }
+                    }
+                }
+            }
+            """);
+
+        Diagnostic[] nestedMissing = nestedFinally.Where(item => item.Id == "NAM1020").ToArray();
+        Assert.Single(nestedMissing);
+        Assert.Contains("pool", nestedMissing[0].Properties["NAM.Provenance"]!);
+    }
+
+    [Fact]
+    public async Task FinallyLoopFixedPointReportsOneStableMissingCompletion()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run(bool condition)
+                {
+                    using NativePool<int> pool = new();
+                    try
+                    {
+                        scoped Pooled<int> value = pool.LeaseScoped(1);
+                    }
+                    finally
+                    {
+                        for (int index = 0; index < 2; index++)
+                        {
+                            if (condition && index == 1)
+                            {
+                                pool.RecycleScoped();
+                            }
+                        }
+                    }
+                }
+            }
+            """);
+
+        Diagnostic[] missing = diagnostics.Where(item => item.Id == "NAM1020").ToArray();
+        Assert.Single(missing);
+        Assert.Equal("NAM1020", missing[0].Properties["NAM.DiagnosticId"]);
+        Assert.Equal("Scoped native storage is not recycled on every exit", missing[0].Properties["NAM.Operation"]);
+        Assert.Contains("pool", missing[0].Properties["NAM.Provenance"]!);
+        Diagnostic[] ambiguous = diagnostics.Where(item => item.Id == "NAM1007").ToArray();
+        Assert.Single(ambiguous);
+        Assert.Equal("NAM1007", ambiguous[0].Properties["NAM.DiagnosticId"]);
+        Assert.Contains("ambiguous scoped allocation", ambiguous[0].Properties["NAM.Provenance"]!);
     }
 
 }

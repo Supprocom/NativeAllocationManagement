@@ -87,6 +87,10 @@ public struct NativeFaceOutput
     public int CellIndex;
     public int BlockId;
     public int FaceMask;
+    public int PayloadBytes;
+    public int Alignment;
+    public int StageMask;
+    public int StageBytes;
 }
 
 public readonly record struct OutputFixture(
@@ -161,7 +165,18 @@ public readonly record struct PipelineResult(
     int MeasuredGen2Collections = 0,
     OutputFixture? MaterializedOutput = null,
     long ColdManagedBackingBytes = 0,
-    OutputFixture? IndependentFixture = null);
+    OutputFixture? IndependentFixture = null,
+    long ReclaimedRangeReuseCount = 0,
+    long ReclaimedRangeReuseBytes = 0,
+    double GenerationMilliseconds = 0,
+    double FaceDerivationMilliseconds = 0,
+    double TransparentMaskMilliseconds = 0,
+    double OpaquePackingMilliseconds = 0,
+    double TransparentPackingMilliseconds = 0,
+    double CoordinateRecycleMilliseconds = 0,
+    double FaceRecycleMilliseconds = 0,
+    double MaskRecycleMilliseconds = 0,
+    double PackingRecycleMilliseconds = 0);
 
 public readonly record struct ChildRunResult(
     string Implementation,

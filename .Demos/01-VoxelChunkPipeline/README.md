@@ -44,6 +44,15 @@ fixture of exact elements and bytes in addition to the full-work digest and
 counters. Worker-local owners remain alive across measured chunks, and terminal
 owner disposal requires the physical NAM native-byte delta to return to zero.
 
+The raw benchmark records generation and face derivation separately from
+transparent-mask, opaque-packing, and transparent-packing time, and records
+coordinate, face, mask, and packing recycle boundaries with their clearing
+work. Typed-pool slab reuse is reported separately from arena reclaimed-range
+reuse. Only the latter proves that `RecycleScoped` made an arena byte range
+available and that a later scoped acquisition overlapped that reclaimed range;
+the demo never treats a second allocation in an untouched bump segment as
+recycling evidence.
+
 Build the four C# projects with these commands.
 
 ```text

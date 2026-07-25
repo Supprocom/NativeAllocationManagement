@@ -117,7 +117,6 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         private int _closureDepth;
         private int _finallyProtectionDepth;
         private int _finallyDepth;
-        private bool _replayingFinallyCleanup;
         private bool _cfgMode;
         private bool _suppressDiagnostics;
         private SyntaxTree? _analysisRootTree;
@@ -257,7 +256,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             BasicBlock entry = graph.Blocks.First(block => block.Kind == BasicBlockKind.Entry);
             Dictionary<BasicBlock, FlowSnapshot> entryStates = new();
             Dictionary<BasicBlock, FlowSnapshot> exitStates = new();
-            Queue<BasicBlock> work = new([entry]);
+            Queue<BasicBlock> work = new(graph.Blocks);
 
             _cfgMode = true;
             _suppressDiagnostics = true;
@@ -272,13 +271,14 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 }
                 else
                 {
-                    FlowSnapshot[] predecessorStates = block.Predecessors
-                        .Where(branch => branch.Source is not null && exitStates.ContainsKey(branch.Source))
-                        .Select(branch => ApplyLexicalScopeExit(
+                    FlowSnapshot[] predecessorStates = GraphPredecessors(graph, block)
+                        .Where(branch => branch.Source is not null
+                            && !IsFinallyBlock(graph, branch.Source)
+                            && exitStates.Keys.Any(candidate => candidate.Ordinal == branch.Source.Ordinal))
+                        .Select(branch => ApplyBranchTransfer(
                             graph,
-                            branch.Source!,
-                            block,
-                            ApplyFinallyOnEdge(graph, branch.Source!, block, exitStates[branch.Source!]),
+                            branch,
+                            exitStates.First(pair => pair.Key.Ordinal == branch.Source!.Ordinal).Value,
                             emitDiagnostics: false))
                         .ToArray();
                     if (predecessorStates.Length == 0)
@@ -358,13 +358,14 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         {
             foreach (KeyValuePair<BasicBlock, FlowSnapshot> pair in exitStates)
             {
-                foreach (BasicBlock destination in GraphSuccessors(graph, pair.Key))
+                if (IsFinallyBlock(graph, pair.Key))
                 {
-                    bool previousSuppression = _suppressDiagnostics;
-                    _suppressDiagnostics = true;
-                    FlowSnapshot state = ApplyFinallyOnEdge(graph, pair.Key, destination, pair.Value);
-                    _suppressDiagnostics = previousSuppression;
-                    ApplyLexicalScopeExit(graph, pair.Key, destination, state, emitDiagnostics: true);
+                    continue;
+                }
+
+                foreach (ControlFlowBranch branch in GraphBranches(graph, pair.Key))
+                {
+                    _ = ApplyBranchTransfer(graph, branch, pair.Value, emitDiagnostics: true);
                 }
             }
         }
@@ -372,16 +373,16 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         private FlowSnapshot ApplyLexicalScopeExit(
             ControlFlowGraph graph,
             BasicBlock source,
-            BasicBlock destination,
+            BasicBlock? destination,
             FlowSnapshot state,
-            bool emitDiagnostics)
+            bool emitDiagnostics,
+            bool enteringFinally)
         {
             FlowSnapshot result = CloneSnapshot(state);
-            bool enteringFinally = IsEnteringFinally(graph, source, destination);
             HashSet<ISymbol> exitingSymbols = new(SymbolEqualityComparer.Default);
             exitingSymbols.UnionWith(_localLifetimeRegions
                 .Where(pair => ContainsBlock(pair.Value, source.Ordinal)
-                    && !ContainsBlock(pair.Value, destination.Ordinal))
+                    && (destination is null || !ContainsBlock(pair.Value, destination.Ordinal)))
                 .Select(pair => pair.Key));
             if (exitingSymbols.Count == 0)
             {
@@ -466,7 +467,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             return result;
         }
 
-        private bool IsHandleEndedAtScopeExit(HandleState handle, BasicBlock source, BasicBlock destination)
+        private bool IsHandleEndedAtScopeExit(HandleState handle, BasicBlock source, BasicBlock? destination)
         {
             if (handle.IsScoped)
             {
@@ -498,33 +499,11 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 && owner.GenerationRelation != GenerationRelationKind.Unknown;
         }
 
-        private bool IsLifetimeLeaving(ISymbol symbol, BasicBlock source, BasicBlock destination)
+        private bool IsLifetimeLeaving(ISymbol symbol, BasicBlock source, BasicBlock? destination)
         {
             return _localLifetimeRegions.TryGetValue(symbol, out ControlFlowRegion? region)
                 && ContainsBlock(region, source.Ordinal)
-                && !ContainsBlock(region, destination.Ordinal);
-        }
-
-        private static bool IsEnteringFinally(ControlFlowGraph graph, BasicBlock source, BasicBlock destination)
-        {
-            foreach (ControlFlowRegion tryAndFinally in graph.Root.NestedRegions
-                .SelectMany(FlattenRegions)
-                .Where(region => region.Kind == ControlFlowRegionKind.TryAndFinally))
-            {
-                ControlFlowRegion? tryRegion = tryAndFinally.NestedRegions
-                    .FirstOrDefault(region => region.Kind == ControlFlowRegionKind.Try);
-                ControlFlowRegion? finallyRegion = tryAndFinally.NestedRegions
-                    .FirstOrDefault(region => region.Kind == ControlFlowRegionKind.Finally);
-                if (tryRegion is not null
-                    && finallyRegion is not null
-                    && ContainsBlock(tryRegion, source.Ordinal)
-                    && ContainsBlock(finallyRegion, destination.Ordinal))
-                {
-                    return true;
-                }
-            }
-
-            return false;
+                && (destination is null || !ContainsBlock(region, destination.Ordinal));
         }
 
         private void VisitBlock(BasicBlock block)
@@ -540,39 +519,74 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             }
         }
 
-        private FlowSnapshot ApplyFinallyOnEdge(
+        private FlowSnapshot ApplyBranchTransfer(
             ControlFlowGraph graph,
-            BasicBlock source,
-            BasicBlock destination,
-            FlowSnapshot state)
+            ControlFlowBranch branch,
+            FlowSnapshot state,
+            bool emitDiagnostics)
         {
-            foreach (ControlFlowRegion tryAndFinally in graph.Root.NestedRegions
-                .SelectMany(FlattenRegions)
-                .Where(region => region.Kind == ControlFlowRegionKind.TryAndFinally)
-                .OrderBy(region => region.LastBlockOrdinal - region.FirstBlockOrdinal))
+            FlowSnapshot result = CloneSnapshot(state);
+            ControlFlowRegion[] finallyRegions = GetFinallyRegionsForBranch(graph, branch);
+            for (int index = 0; index < finallyRegions.Length; index++)
             {
-                ControlFlowRegion? tryRegion = tryAndFinally.NestedRegions
-                    .FirstOrDefault(region => region.Kind == ControlFlowRegionKind.Try);
-                ControlFlowRegion? finallyRegion = tryAndFinally.NestedRegions
-                    .FirstOrDefault(region => region.Kind == ControlFlowRegionKind.Finally);
-                if (tryRegion is null || finallyRegion is null
-                    || !ContainsBlock(tryRegion, source.Ordinal)
-                    || ContainsBlock(tryAndFinally, destination.Ordinal))
-                {
-                    continue;
-                }
-
-                state = AnalyzeFinallyRegion(graph, finallyRegion, state);
+                result = AnalyzeFinallyRegion(
+                    graph,
+                    finallyRegions[index],
+                    result,
+                    emitDiagnostics);
             }
 
-            return state;
+            return branch.Source is null
+                ? result
+                : ApplyLexicalScopeExit(
+                    graph,
+                    branch.Source,
+                    branch.Destination,
+                    result,
+                    emitDiagnostics,
+                    enteringFinally: finallyRegions.Length != 0);
+        }
+
+        private static ControlFlowRegion[] GetFinallyRegionsForBranch(
+            ControlFlowGraph graph,
+            ControlFlowBranch branch)
+        {
+            if (!branch.FinallyRegions.IsDefaultOrEmpty)
+            {
+                return branch.FinallyRegions.ToArray();
+            }
+
+            if (branch.Destination is null
+                && branch.Source is not null
+                && branch.Semantics is (ControlFlowBranchSemantics.Throw or ControlFlowBranchSemantics.StructuredExceptionHandling))
+            {
+                return FlattenRegions(graph.Root)
+                .Where(region => region.Kind == ControlFlowRegionKind.TryAndFinally)
+                .Where(region => region.NestedRegions.Any(nested =>
+                    nested.Kind == ControlFlowRegionKind.Try
+                    && ContainsBlock(nested, branch.Source.Ordinal)))
+                .OrderBy(region => region.LastBlockOrdinal - region.FirstBlockOrdinal)
+                .SelectMany(region => region.NestedRegions
+                    .Where(nested => nested.Kind == ControlFlowRegionKind.Finally))
+                .ToArray();
+            }
+
+            return [];
         }
 
         private FlowSnapshot AnalyzeFinallyRegion(
             ControlFlowGraph graph,
             ControlFlowRegion finallyRegion,
-            FlowSnapshot input)
+            FlowSnapshot input,
+            bool emitDiagnostics)
         {
+            if (finallyRegion.Kind == ControlFlowRegionKind.TryAndFinally)
+            {
+                finallyRegion = finallyRegion.NestedRegions
+                    .FirstOrDefault(region => region.Kind == ControlFlowRegionKind.Finally)
+                    ?? finallyRegion;
+            }
+
             BasicBlock[] blocks = graph.Blocks
                 .Where(block => ContainsBlock(finallyRegion, block.Ordinal))
                 .ToArray();
@@ -581,10 +595,10 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 return input;
             }
 
-            HashSet<BasicBlock> members = [.. blocks];
+            HashSet<int> memberOrdinals = [.. blocks.Select(block => block.Ordinal)];
             BasicBlock[] entries = blocks
-                .Where(block => block.Predecessors.Any(branch =>
-                    branch.Source is null || !members.Contains(branch.Source)))
+                .Where(block => GraphPredecessors(graph, block, includeFinallySources: true).Any(branch =>
+                    branch.Source is null || !memberOrdinals.Contains(branch.Source.Ordinal)))
                 .ToArray();
             if (entries.Length == 0)
             {
@@ -600,62 +614,202 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 work.Enqueue(entry);
             }
 
-            bool previousFinallyReplay = _replayingFinallyCleanup;
-            _replayingFinallyCleanup = true;
-            try
+            while (work.Count != 0)
             {
-                while (work.Count != 0)
+                _context.CancellationToken.ThrowIfCancellationRequested();
+                BasicBlock block = work.Dequeue();
+                if (!entryStates.TryGetValue(block, out FlowSnapshot? incoming))
                 {
-                    _context.CancellationToken.ThrowIfCancellationRequested();
-                    BasicBlock block = work.Dequeue();
-                    if (!entryStates.TryGetValue(block, out FlowSnapshot? incoming))
+                    continue;
+                }
+
+                RestoreSnapshot(incoming);
+                VisitBlock(block);
+                FlowSnapshot outgoing = CaptureSnapshot();
+                bool changed = !exitStates.TryGetValue(block, out FlowSnapshot? oldExit)
+                    || !SnapshotEquivalent(oldExit, outgoing);
+                exitStates[block] = outgoing;
+                if (!changed)
+                {
+                    continue;
+                }
+
+                foreach (ControlFlowBranch branch in GraphBranches(graph, block)
+                    .Where(branch => branch.Destination is not null && memberOrdinals.Contains(branch.Destination.Ordinal)))
+                {
+                    BasicBlock successor = blocks.First(candidate => candidate.Ordinal == branch.Destination!.Ordinal);
+                    FlowSnapshot candidate = ApplyBranchTransfer(
+                        graph,
+                        branch,
+                        outgoing,
+                        emitDiagnostics: false);
+                    if (entryStates.TryGetValue(successor, out FlowSnapshot? oldEntry))
                     {
-                        continue;
+                        candidate = MergeSnapshotsForResult(oldEntry, candidate);
                     }
 
-                    RestoreSnapshot(incoming);
-                    VisitBlock(block);
-                    FlowSnapshot outgoing = CaptureSnapshot();
-                    bool changed = !exitStates.TryGetValue(block, out FlowSnapshot? oldExit)
-                        || !SnapshotEquivalent(oldExit, outgoing);
-                    exitStates[block] = outgoing;
-                    if (!changed)
+                    if (!entryStates.TryGetValue(successor, out oldEntry)
+                        || !SnapshotEquivalent(oldEntry, candidate))
                     {
-                        continue;
-                    }
-
-                    foreach (BasicBlock successor in GraphSuccessors(graph, block)
-                        .Where(members.Contains))
-                    {
-                        FlowSnapshot candidate = outgoing;
-                        if (entryStates.TryGetValue(successor, out FlowSnapshot? oldEntry))
-                        {
-                            candidate = MergeSnapshotsForResult(oldEntry, outgoing);
-                        }
-
-                        if (!entryStates.TryGetValue(successor, out oldEntry)
-                            || !SnapshotEquivalent(oldEntry, candidate))
-                        {
-                            entryStates[successor] = CloneSnapshot(candidate);
-                            work.Enqueue(successor);
-                        }
+                        entryStates[successor] = CloneSnapshot(candidate);
+                        work.Enqueue(successor);
                     }
                 }
             }
-            finally
+
+            if (emitDiagnostics)
             {
-                _replayingFinallyCleanup = previousFinallyReplay;
+                bool previousSuppression = _suppressDiagnostics;
+                try
+                {
+                    foreach (BasicBlock block in blocks.OrderBy(block => block.Ordinal))
+                    {
+                        if (!entryStates.TryGetValue(block, out FlowSnapshot? stableEntry))
+                        {
+                            continue;
+                        }
+
+                        RestoreSnapshot(stableEntry);
+                        bool stateSuppression = _suppressDiagnostics;
+                        _suppressDiagnostics = true;
+                        VisitBlock(block);
+                        FlowSnapshot stableOutgoing = CaptureSnapshot();
+                        _suppressDiagnostics = stateSuppression;
+                        RestoreSnapshot(stableEntry);
+                        ReportStableFinallyDiagnostics(block);
+                        RestoreSnapshot(stableOutgoing);
+                        foreach (ControlFlowBranch branch in GraphBranches(graph, block)
+                            .Where(branch => branch.Destination is null || !memberOrdinals.Contains(branch.Destination.Ordinal)))
+                        {
+                            _ = ApplyFinallyRegionExit(
+                                graph,
+                                branch,
+                                stableOutgoing,
+                                emitDiagnostics: true,
+                                applyExitLexical: false);
+                        }
+                    }
+                }
+                finally
+                {
+                    _suppressDiagnostics = previousSuppression;
+                }
             }
 
-            FlowSnapshot[] exits = blocks
-                .Where(block => exitStates.ContainsKey(block)
-                    && (!GraphSuccessors(graph, block).Any()
-                        || GraphSuccessors(graph, block).Any(successor => !members.Contains(successor))))
-                .Select(block => exitStates[block])
-                .ToArray();
-            return exits.Length == 0
+            List<FlowSnapshot> exits = [];
+            foreach (BasicBlock block in blocks)
+            {
+                if (!exitStates.TryGetValue(block, out FlowSnapshot? stableOutgoing))
+                {
+                    continue;
+                }
+
+                ControlFlowBranch[] outgoingBranches = GraphBranches(graph, block)
+                    .Where(branch => branch.Destination is null || !memberOrdinals.Contains(branch.Destination.Ordinal))
+                    .ToArray();
+                foreach (ControlFlowBranch branch in outgoingBranches)
+                {
+                    exits.Add(ApplyFinallyRegionExit(
+                        graph,
+                        branch,
+                        stableOutgoing,
+                        emitDiagnostics: false,
+                        applyExitLexical: false));
+                }
+
+                if (outgoingBranches.Length == 0
+                    && !GraphBranches(graph, block).Any(branch => branch.Destination is not null && memberOrdinals.Contains(branch.Destination.Ordinal)))
+                {
+                    exits.Add(stableOutgoing);
+                }
+            }
+
+            return exits.Count == 0
                 ? input
-                : MergeSnapshotsForResult(exits);
+                : MergeSnapshotsForResult(exits.ToArray());
+        }
+
+        private FlowSnapshot ApplyFinallyRegionExit(
+            ControlFlowGraph graph,
+            ControlFlowBranch branch,
+            FlowSnapshot state,
+            bool emitDiagnostics,
+            bool applyExitLexical)
+        {
+            FlowSnapshot result = ApplyFinallyRegions(graph, branch, state, emitDiagnostics);
+            if (!applyExitLexical || branch.Source is null)
+            {
+                return result;
+            }
+
+            return ApplyLexicalScopeExit(
+                graph,
+                branch.Source,
+                branch.Destination,
+                result,
+                emitDiagnostics,
+                enteringFinally: GetFinallyRegionsForBranch(graph, branch).Length != 0);
+        }
+
+        private FlowSnapshot ApplyFinallyRegions(
+            ControlFlowGraph graph,
+            ControlFlowBranch branch,
+            FlowSnapshot state,
+            bool emitDiagnostics)
+        {
+            FlowSnapshot result = CloneSnapshot(state);
+            ControlFlowRegion[] finallyRegions = GetFinallyRegionsForBranch(graph, branch);
+            for (int index = 0; index < finallyRegions.Length; index++)
+            {
+                result = AnalyzeFinallyRegion(
+                    graph,
+                    finallyRegions[index],
+                    result,
+                    emitDiagnostics);
+            }
+
+            return result;
+        }
+
+        private void ReportStableFinallyDiagnostics(BasicBlock block)
+        {
+            IEnumerable<IOperation> roots = block.Operations;
+            if (block.BranchValue is not null)
+            {
+                roots = roots.Append(block.BranchValue);
+            }
+
+            foreach (IInvocationOperation invocation in roots
+                .SelectMany(operation => operation.DescendantsAndSelf().OfType<IInvocationOperation>())
+                .Where(invocation => invocation.TargetMethod.Name == "RecycleScoped"
+                    && !invocation.Syntax.Ancestors().Any(node =>
+                        node is AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax)))
+            {
+                OwnerState? owner = GetOwner(Unwrap(invocation.Instance));
+                if (owner is null || !owner.ScopedOwnerEligible)
+                {
+                    continue;
+                }
+
+                GenerationReturnLiveness[] pending = FindGenerationReturnLiveness(owner, invocation.Syntax)
+                    .Where(finding => finding.IsScoped)
+                    .ToArray();
+                if (pending.Length != 0)
+                {
+                    ReportGenerationReturnLiveness(owner, "RecycleScoped", invocation.Syntax, pending);
+                }
+                else if (owner.ScopedPendingAmbiguous)
+                {
+                    ReportWithProvenance(
+                        NativeAllocationDiagnosticDescriptors.GenerationReturnLiveValue,
+                        invocation.Syntax,
+                        owner.DisplayName + " -> ambiguous scoped allocation",
+                        owner.DisplayName,
+                        "RecycleScoped",
+                        "ambiguous scoped allocation",
+                        "The scoped pending set is ambiguous across control-flow paths; prove the complete set is dead before recycling.");
+                }
+            }
         }
 
         private static IEnumerable<ControlFlowRegion> FlattenRegions(ControlFlowRegion region)
@@ -675,31 +829,106 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             return ordinal >= region.FirstBlockOrdinal && ordinal <= region.LastBlockOrdinal;
         }
 
-        private static IEnumerable<BasicBlock> GraphSuccessors(ControlFlowGraph graph, BasicBlock block)
+        private static IEnumerable<ControlFlowBranch> GraphBranches(ControlFlowGraph graph, BasicBlock block)
         {
-            HashSet<BasicBlock> successors = [];
-            if (block.ConditionalSuccessor?.Destination is BasicBlock conditional)
+            HashSet<ControlFlowBranch> branches = [];
+            if (block.ConditionalSuccessor is ControlFlowBranch conditional)
             {
-                successors.Add(conditional);
+                branches.Add(conditional);
             }
 
-            if (block.FallThroughSuccessor?.Destination is BasicBlock fallThrough)
+            if (block.FallThroughSuccessor is ControlFlowBranch fallThrough)
             {
-                successors.Add(fallThrough);
+                branches.Add(fallThrough);
             }
 
             foreach (BasicBlock candidate in graph.Blocks)
             {
-                if (candidate.Predecessors.Any(branch => ReferenceEquals(branch.Source, block)))
+                foreach (ControlFlowBranch branch in candidate.Predecessors
+                    .Where(branch => branch.Source is not null && branch.Source.Ordinal == block.Ordinal))
                 {
-                    successors.Add(candidate);
+                    branches.Add(branch);
                 }
             }
 
-            foreach (BasicBlock successor in successors)
+            foreach (ControlFlowBranch branch in branches)
             {
-                yield return successor;
+                yield return branch;
             }
+        }
+
+        private static IEnumerable<BasicBlock> GraphSuccessors(ControlFlowGraph graph, BasicBlock block)
+        {
+            HashSet<int> destinationOrdinals = [];
+            if (block.ConditionalSuccessor?.Destination is BasicBlock conditional)
+            {
+                destinationOrdinals.Add(conditional.Ordinal);
+            }
+
+            if (block.FallThroughSuccessor?.Destination is BasicBlock fallThrough)
+            {
+                destinationOrdinals.Add(fallThrough.Ordinal);
+            }
+
+            foreach (BasicBlock candidate in graph.Blocks)
+            {
+                foreach (ControlFlowBranch branch in candidate.Predecessors)
+                {
+                    if (branch.Source is not null
+                        && branch.Source.Ordinal == block.Ordinal
+                        && branch.Destination is not null)
+                    {
+                        destinationOrdinals.Add(branch.Destination.Ordinal);
+                    }
+                }
+            }
+
+            return graph.Blocks
+                .Where(candidate => destinationOrdinals.Contains(candidate.Ordinal)
+                    && !IsFinallyBlock(graph, candidate));
+        }
+
+        private static IEnumerable<ControlFlowBranch> GraphPredecessors(
+            ControlFlowGraph graph,
+            BasicBlock destination,
+            bool includeFinallySources = false)
+        {
+            HashSet<ControlFlowBranch> branches = [];
+            foreach (ControlFlowBranch branch in destination.Predecessors)
+            {
+                if (includeFinallySources
+                    || branch.Source is null
+                    || !IsFinallyBlock(graph, branch.Source))
+                {
+                    branches.Add(branch);
+                }
+            }
+
+            foreach (BasicBlock candidate in graph.Blocks)
+            {
+                foreach (ControlFlowBranch branch in GraphBranches(graph, candidate)
+                    .Where(branch => branch.Destination is not null
+                        && branch.Destination.Ordinal == destination.Ordinal
+                        && (includeFinallySources
+                            || branch.Source is null
+                            || !IsFinallyBlock(graph, branch.Source))))
+                {
+                    branches.Add(branch);
+                }
+            }
+
+            foreach (ControlFlowBranch branch in branches)
+            {
+                yield return branch;
+            }
+        }
+
+        private static bool IsFinallyBlock(ControlFlowGraph graph, BasicBlock block)
+        {
+            return graph.Root.NestedRegions
+                .SelectMany(FlattenRegions)
+                .Where(region => region.Kind == ControlFlowRegionKind.Finally)
+                .Any(region => ContainsBlock(region, block.Ordinal));
         }
 
         private static FlowSnapshot EmptySnapshot()
@@ -1391,7 +1620,9 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 {
                     ReportHandleTransfer(handle, target);
                 }
-                else if (IsOwnerType(value.Type) && GetOwner(value) is OwnerState owner)
+                else if (IsOwnerType(value.Type)
+                    && GetOwner(value) is OwnerState owner
+                    && !SymbolEqualityComparer.Default.Equals(owner.Symbol, target.Symbol))
                 {
                     ReportOwnerTransfer(owner, target);
                 }
@@ -1410,7 +1641,9 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 {
                     ReportHandleTransfer(handle, target);
                 }
-                else if (IsOwnerType(value.Type) && GetOwner(value) is OwnerState owner)
+                else if (IsOwnerType(value.Type)
+                    && GetOwner(value) is OwnerState owner
+                    && !SymbolEqualityComparer.Default.Equals(owner.Symbol, target.Symbol))
                 {
                     ReportOwnerTransfer(owner, target);
                 }
@@ -1572,6 +1805,15 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         public override void VisitConversion(IConversionOperation operation)
         {
             IOperation? operand = Unwrap(operation.Operand);
+            if (operand is not null
+                && IsOwnerType(operand.Type)
+                && operation.IsImplicit
+                && IsDirectUsingResourceConversion(operation.Syntax))
+            {
+                base.VisitConversion(operation);
+                return;
+            }
+
             if (operand is not null && IsHandleType(operand.Type) && !IsHandleType(operation.Type))
             {
                 if (GetHandle(operand) is HandleState handle)
@@ -1598,6 +1840,19 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             }
 
             base.VisitConversion(operation);
+        }
+
+        private static bool IsDirectUsingResourceConversion(SyntaxNode syntax)
+        {
+            return syntax.AncestorsAndSelf()
+                .OfType<UsingStatementSyntax>()
+                .Any(statement =>
+                    statement.Declaration?.Span.Contains(syntax.Span) == true
+                    || statement.Expression?.Span.Contains(syntax.Span) == true)
+                || syntax.AncestorsAndSelf()
+                    .OfType<LocalDeclarationStatementSyntax>()
+                    .Any(statement => statement.UsingKeyword.IsKind(SyntaxKind.UsingKeyword)
+                        && statement.Declaration.Span.Contains(syntax.Span));
         }
 
         public override void VisitTuple(ITupleOperation operation)
@@ -1983,10 +2238,6 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             foreach (HandleState handle in _handles.Values
                 .Where(handle => ReferenceEquals(handle.Owner, owner)
                     && !IsHandleEnded(handle)
-                    && !(_replayingFinallyCleanup
-                        && handle.IsScoped
-                        && atSyntax is not null
-                        && !IsScopedHandleLiveAt(handle, atSyntax))
                     && (atSyntax is null
                         || !handle.IsScoped
                         || IsScopedHandleLiveAt(handle, atSyntax))
@@ -2054,29 +2305,16 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 ? NativeAllocationDiagnosticDescriptors.GenerationReturnLiveValue
                 : NativeAllocationDiagnosticDescriptors.DeferredReturnLiveValue;
 
-            bool previousSuppression = _suppressDiagnostics;
-            if (_replayingFinallyCleanup && operation == "RecycleScoped")
+            foreach (GenerationReturnLiveness finding in findings)
             {
-                _suppressDiagnostics = false;
-            }
-
-            try
-            {
-                foreach (GenerationReturnLiveness finding in findings)
-                {
-                    ReportWithProvenance(
-                        descriptor,
-                        syntax,
-                        owner.DisplayName + " -> " + finding.Path,
-                        owner.DisplayName,
-                        operation,
-                        finding.Path,
-                        DescribeGenerationLiveness(finding.Kind, operation));
-                }
-            }
-            finally
-            {
-                _suppressDiagnostics = previousSuppression;
+                ReportWithProvenance(
+                    descriptor,
+                    syntax,
+                    owner.DisplayName + " -> " + finding.Path,
+                    owner.DisplayName,
+                    operation,
+                    finding.Path,
+                    DescribeGenerationLiveness(finding.Kind, operation));
             }
         }
 

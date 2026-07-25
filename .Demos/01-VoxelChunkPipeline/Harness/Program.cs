@@ -62,10 +62,12 @@ internal static class Program
             || nam.Result.PeakNativeBackingBytes <= 0
             || nam.Result.PeakManagedBackingBytes != 0
             || nam.Result.ReusedNativeSegmentCount <= 0
+            || nam.Result.ReclaimedRangeReuseCount <= 0
+            || nam.Result.ReclaimedRangeReuseBytes <= 0
             || nam.Result.ScopedRecycleCount <= 0
             || nam.Result.MaterializedOutput is null)
         {
-            throw new InvalidDataException("NAM did not report direct native backing, physical retained-segment reuse, scoped reuse, and a zero final native baseline.");
+            throw new InvalidDataException("NAM did not report direct native backing, typed-slab reuse, arena reclaimed-range reuse, scoped reuse, and a zero final native baseline.");
         }
 
         return new CorrectnessReport(
@@ -149,12 +151,16 @@ internal static class Program
         double namColdBacking = Mean(samples.Select(sample => (double)sample.Nam.Result.ColdManagedBackingBytes));
         double namMeasuredLeases = Mean(samples.Select(sample => (double)sample.Nam.Result.MeasuredLeaseCount));
         double namReusedNativeSegments = Mean(samples.Select(sample => (double)sample.Nam.Result.ReusedNativeSegmentCount));
+        double namReclaimedRangeReuseCount = Mean(samples.Select(sample => (double)sample.Nam.Result.ReclaimedRangeReuseCount));
+        double namReclaimedRangeReuseBytes = Mean(samples.Select(sample => (double)sample.Nam.Result.ReclaimedRangeReuseBytes));
         bool correctness = samples.All(sample =>
             SameWork(sample.Safe.Result, sample.Nam.Result)
             && sample.Nam.Result.FinalNativeBackingBytes == 0
             && sample.Nam.Result.PeakNativeBackingBytes > 0
             && sample.Nam.Result.PeakManagedBackingBytes == 0
             && sample.Nam.Result.ReusedNativeSegmentCount > 0
+            && sample.Nam.Result.ReclaimedRangeReuseCount > 0
+            && sample.Nam.Result.ReclaimedRangeReuseBytes > 0
             && sample.Nam.Result.ScopedRecycleCount > 0);
         bool warmManagedAllocationReduction = namManaged <= safeManaged * 0.90;
         bool materiallyLessManaged = namColdManaged <= safeColdManaged * 0.90
@@ -218,7 +224,27 @@ internal static class Program
              namMeasuredLeases,
              Mean(samples.Select(sample => (double)sample.Nam.Result.ScopedRecycleCount)),
              Mean(samples.Select(sample => (double)sample.Nam.Result.ClearedBytes)),
-             namReusedNativeSegments);
+             namReusedNativeSegments,
+             namReclaimedRangeReuseCount,
+             namReclaimedRangeReuseBytes,
+             Mean(samples.Select(sample => sample.Nam.Result.GenerationMilliseconds)),
+             Mean(samples.Select(sample => sample.Nam.Result.FaceDerivationMilliseconds)),
+             Mean(samples.Select(sample => sample.Nam.Result.TransparentMaskMilliseconds)),
+             Mean(samples.Select(sample => sample.Nam.Result.OpaquePackingMilliseconds)),
+             Mean(samples.Select(sample => sample.Nam.Result.TransparentPackingMilliseconds)),
+             Mean(samples.Select(sample => sample.Nam.Result.CoordinateRecycleMilliseconds)),
+             Mean(samples.Select(sample => sample.Nam.Result.FaceRecycleMilliseconds)),
+             Mean(samples.Select(sample => sample.Nam.Result.MaskRecycleMilliseconds)),
+             Mean(samples.Select(sample => sample.Nam.Result.PackingRecycleMilliseconds)),
+             Mean(samples.Select(sample => sample.Safe.Result.GenerationMilliseconds)),
+             Mean(samples.Select(sample => sample.Safe.Result.FaceDerivationMilliseconds)),
+             Mean(samples.Select(sample => sample.Safe.Result.TransparentMaskMilliseconds)),
+             Mean(samples.Select(sample => sample.Safe.Result.OpaquePackingMilliseconds)),
+             Mean(samples.Select(sample => sample.Safe.Result.TransparentPackingMilliseconds)),
+             Mean(samples.Select(sample => sample.Safe.Result.CoordinateRecycleMilliseconds)),
+             Mean(samples.Select(sample => sample.Safe.Result.FaceRecycleMilliseconds)),
+             Mean(samples.Select(sample => sample.Safe.Result.MaskRecycleMilliseconds)),
+             Mean(samples.Select(sample => sample.Safe.Result.PackingRecycleMilliseconds)));
     }
 
     private static ChildRunResult RunChild(
@@ -605,5 +631,25 @@ internal static class Program
          double NamMeanLeaseCount,
          double NamMeanScopedRecycleCount,
          double NamMeanClearedBytes,
-         double NamMeanReusedNativeSegmentCount);
+         double NamMeanReusedNativeSegmentCount,
+         double NamMeanReclaimedRangeReuseCount,
+         double NamMeanReclaimedRangeReuseBytes,
+         double NamMeanGenerationMilliseconds,
+         double NamMeanFaceDerivationMilliseconds,
+         double NamMeanTransparentMaskMilliseconds,
+         double NamMeanOpaquePackingMilliseconds,
+         double NamMeanTransparentPackingMilliseconds,
+         double NamMeanCoordinateRecycleMilliseconds,
+         double NamMeanFaceRecycleMilliseconds,
+         double NamMeanMaskRecycleMilliseconds,
+         double NamMeanPackingRecycleMilliseconds,
+         double SafeMeanGenerationMilliseconds = 0,
+         double SafeMeanFaceDerivationMilliseconds = 0,
+         double SafeMeanTransparentMaskMilliseconds = 0,
+         double SafeMeanOpaquePackingMilliseconds = 0,
+         double SafeMeanTransparentPackingMilliseconds = 0,
+         double SafeMeanCoordinateRecycleMilliseconds = 0,
+         double SafeMeanFaceRecycleMilliseconds = 0,
+         double SafeMeanMaskRecycleMilliseconds = 0,
+         double SafeMeanPackingRecycleMilliseconds = 0);
 }

@@ -35,6 +35,41 @@ public sealed class ArenaLifecycleTests
     }
 
     [Fact]
+    public void ReclaimedArenaRangeReuseIsCountedOnlyAfterScopedRecycle()
+    {
+        NativeMemoryTestHooks.Reset();
+        NativeArena arena = new(
+            preAllocateBytes: 256,
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+
+        {
+            ArenaLease<byte> first = arena.ScratchScoped<byte>(32);
+            first[0] = 17;
+            ArenaLease<byte> second = arena.ScratchScoped<byte>(32);
+            second[0] = 18;
+        }
+
+        NativeMemoryStatistics beforeRecycle = NativeMemoryDiagnostics.Snapshot();
+        Assert.Equal(0, beforeRecycle.ReclaimedRangeReuseCount);
+
+        arena.RecycleScoped();
+
+        NativeMemoryStatistics afterRecycle = NativeMemoryDiagnostics.Snapshot();
+        Assert.Equal(0, afterRecycle.ReclaimedRangeReuseCount);
+
+        {
+            ArenaLease<byte> reused = arena.ScratchScoped<byte>(32);
+            reused[0] = 23;
+        }
+
+        arena.RecycleScoped();
+        NativeMemoryStatistics afterReuse = NativeMemoryDiagnostics.Snapshot();
+        Assert.Equal(1, afterReuse.ReclaimedRangeReuseCount);
+        Assert.True(afterReuse.ReclaimedRangeReuseBytes >= 32);
+        arena.Dispose();
+    }
+
+    [Fact]
     public void DelayedActivationIsAllocationFreeAndFailureAtomicForAllOwners()
     {
         NativeMemoryTestHooks.Reset();

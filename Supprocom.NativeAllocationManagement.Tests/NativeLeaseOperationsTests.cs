@@ -18,6 +18,7 @@ public sealed class NativeLeaseOperationsTests
         ArenaLease<int> arenaFirst = arena.Scratch<int>(2);
         ArenaLease<int> arenaSecond = arena.Scratch<int>(2);
 
+        NativeLeaseOperations.Access(first, value => value[0] = 10);
         NativeLeaseOperations.Access(first, second, (left, right) =>
         {
             left[0] = 11;
@@ -63,6 +64,20 @@ public sealed class NativeLeaseOperationsTests
         Pooled<int> good = goodPool.Rent(1);
         Pooled<int> stale = stalePool.Rent(1);
         stalePool.ReturnMemoryToNativeMemory();
+
+        NativeAllocationException? unaryEntryFailure = null;
+        try
+        {
+            NativeLeaseOperations.Access(stale, static _ => { });
+        }
+        catch (NativeAllocationException exception)
+        {
+            unaryEntryFailure = exception;
+        }
+
+        Assert.NotNull(unaryEntryFailure);
+        good[0] = 40;
+        Assert.Equal(40, good[0]);
 
         NativeAllocationException? entryFailure = null;
         try
@@ -179,6 +194,16 @@ public sealed class NativeLeaseOperationsTests
         ArenaLease<int> fifth = arena.Scratch<int>(1);
 
         bool tripleThrown = false;
+        bool unaryThrown = false;
+        try
+        {
+            NativeLeaseOperations.Access(first, static _ => throw new InvalidOperationException());
+        }
+        catch (InvalidOperationException)
+        {
+            unaryThrown = true;
+        }
+
         try
         {
             NativeLeaseOperations.Access(first, second, third, static (_, _, _) => throw new InvalidOperationException());
@@ -208,6 +233,7 @@ public sealed class NativeLeaseOperationsTests
             quintupleThrown = true;
         }
 
+        Assert.True(unaryThrown);
         Assert.True(tripleThrown);
         Assert.True(pooledArenaThrown);
         Assert.True(quintupleThrown);

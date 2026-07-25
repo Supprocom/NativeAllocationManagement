@@ -51,7 +51,9 @@ internal readonly record struct NativeMemoryTestMetrics(
     long DetachedNativeBytes,
     long RetiredNativeBytes,
     long BumpTraversalVisitCount,
-    long ReusedNativeSegmentCount)
+    long ReusedNativeSegmentCount,
+    long ReclaimedRangeReuseCount = 0,
+    long ReclaimedRangeReuseBytes = 0)
 {
     internal long RetainedNativeBytes => OutstandingNativeBytes - DetachedNativeBytes;
 }
@@ -62,7 +64,9 @@ public readonly record struct NativeMemoryStatistics(
     long PeakOutstandingNativeBytes,
     long DetachedNativeBytes,
     long RetiredNativeBytes,
-    long ReusedNativeSegmentCount)
+    long ReusedNativeSegmentCount,
+    long ReclaimedRangeReuseCount = 0,
+    long ReclaimedRangeReuseBytes = 0)
 {
     /// <summary>Gets storage still owned by active or retained allocator generations.</summary>
     public long RetainedNativeBytes => OutstandingNativeBytes - DetachedNativeBytes;
@@ -87,6 +91,8 @@ internal static class NativeMemoryTestHooks
     private static long _retiredNativeBytes;
     private static long _bumpTraversalVisitCount;
     private static long _reusedNativeSegmentCount;
+    private static long _reclaimedRangeReuseCount;
+    private static long _reclaimedRangeReuseBytes;
     private static long _metricsEpoch;
     private static int _forcedFailures;
     private static int _forcedClearFailures;
@@ -115,6 +121,8 @@ internal static class NativeMemoryTestHooks
         Interlocked.Exchange(ref _retiredNativeBytes, 0);
         Interlocked.Exchange(ref _bumpTraversalVisitCount, 0);
         Interlocked.Exchange(ref _reusedNativeSegmentCount, 0);
+        Interlocked.Exchange(ref _reclaimedRangeReuseCount, 0);
+        Interlocked.Exchange(ref _reclaimedRangeReuseBytes, 0);
         Interlocked.Exchange(ref _forcedFailures, 0);
         Interlocked.Exchange(ref _forcedClearFailures, 0);
         Interlocked.Exchange(ref _forcedCommitBoundary, 0);
@@ -306,20 +314,30 @@ internal static class NativeMemoryTestHooks
         Volatile.Read(ref _detachedGenerationCount),
         Volatile.Read(ref _outstandingNativeBytes),
         Volatile.Read(ref _detachedNativeBytes),
-        Volatile.Read(ref _retiredNativeBytes),
-        Volatile.Read(ref _bumpTraversalVisitCount),
-        Volatile.Read(ref _reusedNativeSegmentCount));
+         Volatile.Read(ref _retiredNativeBytes),
+         Volatile.Read(ref _bumpTraversalVisitCount),
+         Volatile.Read(ref _reusedNativeSegmentCount),
+         Volatile.Read(ref _reclaimedRangeReuseCount),
+         Volatile.Read(ref _reclaimedRangeReuseBytes));
 
     internal static NativeMemoryStatistics SnapshotPublic() => new(
         Volatile.Read(ref _outstandingNativeBytes),
         Volatile.Read(ref _peakOutstandingNativeBytes),
-        Volatile.Read(ref _detachedNativeBytes),
-        Volatile.Read(ref _retiredNativeBytes),
-        Volatile.Read(ref _reusedNativeSegmentCount));
+         Volatile.Read(ref _detachedNativeBytes),
+         Volatile.Read(ref _retiredNativeBytes),
+         Volatile.Read(ref _reusedNativeSegmentCount),
+         Volatile.Read(ref _reclaimedRangeReuseCount),
+         Volatile.Read(ref _reclaimedRangeReuseBytes));
 
     internal static void RecordBumpTraversalVisit() => Interlocked.Increment(ref _bumpTraversalVisitCount);
 
     internal static void RecordReusedNativeSegment() => Interlocked.Increment(ref _reusedNativeSegmentCount);
+
+    internal static void RecordReclaimedRangeReuse(nuint byteLength)
+    {
+        Interlocked.Increment(ref _reclaimedRangeReuseCount);
+        Interlocked.Add(ref _reclaimedRangeReuseBytes, checked((long)byteLength));
+    }
 
     internal static void SetOperationEntered(Action<string>? callback) => Volatile.Write(ref _operationEntered, callback);
 
@@ -666,9 +684,38 @@ internal sealed class NativeBumpSegment
 
     internal long AllocationOrdinal { get; }
 
-    internal bool HasBeenUsed { get; set; }
+    internal long ReclaimedScopeEpoch { get; set; }
+
+    internal nuint ReclaimedRangeStart { get; set; }
+
+    internal nuint ReclaimedRangeEnd { get; set; }
 
     internal bool IsCompletelyIdle => LowCursor == 0 && HighCursor == Segment.ByteLength;
+
+    internal void MarkReclaimedRange(long scopeEpoch, nuint start, nuint end)
+    {
+        if (end <= start)
+        {
+            return;
+        }
+
+        ReclaimedScopeEpoch = scopeEpoch;
+        ReclaimedRangeStart = start;
+        ReclaimedRangeEnd = end;
+    }
+
+    internal nuint ReclaimedOverlap(nuint offset, nuint length, long scopeEpoch)
+    {
+        if (scopeEpoch != ReclaimedScopeEpoch || length == 0)
+        {
+            return 0;
+        }
+
+        nuint end = checked(offset + length);
+        nuint start = offset > ReclaimedRangeStart ? offset : ReclaimedRangeStart;
+        nuint overlapEnd = end < ReclaimedRangeEnd ? end : ReclaimedRangeEnd;
+        return overlapEnd > start ? overlapEnd - start : 0;
+    }
 }
 
 internal sealed class NativeAllocation
@@ -1523,19 +1570,22 @@ internal sealed class NativeOwnerKernel
                     scoped,
                     epoch);
                 generation.Allocations.Add(allocationId, allocation);
-                if (bumpSegment is not null)
-                {
-                    if (bumpSegment.HasBeenUsed)
-                    {
-                        NativeMemoryTestHooks.RecordReusedNativeSegment();
-                    }
-
-                    bumpSegment.HasBeenUsed = true;
-                }
 
                 if (scoped)
                 {
                     generation.ScopedPending.Add(allocation);
+                }
+
+                if (scoped && bumpSegment is not null)
+                {
+                    nuint reclaimedBytes = bumpSegment.ReclaimedOverlap(
+                        offset,
+                        byteLength,
+                        generation.ScopeEpoch);
+                    if (reclaimedBytes != 0)
+                    {
+                        NativeMemoryTestHooks.RecordReclaimedRangeReuse(reclaimedBytes);
+                    }
                 }
 
                 return new NativeRegionAllocation(generation.Number, allocationId, length, length);
@@ -1790,6 +1840,30 @@ internal sealed class NativeOwnerKernel
                 if (allocation.Slab is not null && allocation.Length > 0 && !generation.AvailableSlabs.Contains(allocation.Slab))
                 {
                     generation.AddAvailableSlabOrdered(allocation.Slab);
+                }
+            }
+
+            foreach (NativeBumpSegment segment in generation.BumpSegments)
+            {
+                nuint minimum = segment.Segment.ByteLength;
+                nuint maximum = 0;
+                bool hasScopedRange = false;
+                foreach (NativeAllocation allocation in generation.ScopedPending)
+                {
+                    if (allocation.BumpSegment != segment || allocation.Lifecycle != NativeAllocationLifecycle.Returned)
+                    {
+                        continue;
+                    }
+
+                    nuint end = checked(allocation.OffsetBytes + allocation.StorageBytes);
+                    minimum = minimum < allocation.OffsetBytes ? minimum : allocation.OffsetBytes;
+                    maximum = maximum > end ? maximum : end;
+                    hasScopedRange = true;
+                }
+
+                if (hasScopedRange)
+                {
+                    segment.MarkReclaimedRange(nextScopeEpoch, minimum, maximum);
                 }
             }
 
