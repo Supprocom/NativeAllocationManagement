@@ -508,8 +508,8 @@ function Invoke-Profile {
 }
 
 $calibrationRuns = @(
-    Invoke-DockerChild "calibration-1GiB" 1GB "SafeCSharp" 0 "calibration" $CalibrationChunks $CalibrationWorkers $CalibrationIterations $Warmup,
-    Invoke-DockerChild "calibration-1GiB" 1GB "NAM" 0 "calibration" $CalibrationChunks $CalibrationWorkers $CalibrationIterations $Warmup)
+    (Invoke-DockerChild "calibration-1GiB" 1GB "SafeCSharp" 0 "calibration" $CalibrationChunks $CalibrationWorkers $CalibrationIterations $Warmup),
+    (Invoke-DockerChild "calibration-1GiB" 1GB "NAM" 0 "calibration" $CalibrationChunks $CalibrationWorkers $CalibrationIterations $Warmup))
 $calibrationSummary = Summarize-Runs "calibration-1GiB" 1GB $calibrationRuns 1 $false
 
 $control = $null
