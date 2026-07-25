@@ -364,7 +364,7 @@ function Summarize-Runs {
     $namLatency = @($pairs | ForEach-Object { [double]$_.NamMilliseconds })
     $meanSpeedup = Get-Mean $speedups
     $speedupStdDev = Get-StdDev $speedups
-    $critical = if ($speedups.Count -gt 0) { Get-TCritical95 ($speedups.Count - 1) } else { 0 }
+    $critical = if ($speedups.Count -gt 1) { Get-TCritical95 ($speedups.Count - 1) } else { 0 }
     $half = if ($speedups.Count -gt 1) { $critical * $speedupStdDev / [math]::Sqrt($speedups.Count) } else { 0 }
     $safeMean = Get-Mean $safeLatency
     $namMean = Get-Mean $namLatency
