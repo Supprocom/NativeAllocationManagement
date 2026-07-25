@@ -614,54 +614,64 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 work.Enqueue(entry);
             }
 
-            while (work.Count != 0)
+            bool previousConvergenceSuppression = _suppressDiagnostics;
+            try
             {
-                _context.CancellationToken.ThrowIfCancellationRequested();
-                BasicBlock block = work.Dequeue();
-                if (!entryStates.TryGetValue(block, out FlowSnapshot? incoming))
+                _suppressDiagnostics = true;
+                while (work.Count != 0)
                 {
-                    continue;
-                }
-
-                RestoreSnapshot(incoming);
-                VisitBlock(block);
-                FlowSnapshot outgoing = CaptureSnapshot();
-                bool changed = !exitStates.TryGetValue(block, out FlowSnapshot? oldExit)
-                    || !SnapshotEquivalent(oldExit, outgoing);
-                exitStates[block] = outgoing;
-                if (!changed)
-                {
-                    continue;
-                }
-
-                foreach (ControlFlowBranch branch in GraphBranches(graph, block)
-                    .Where(branch => branch.Destination is not null && memberOrdinals.Contains(branch.Destination.Ordinal)))
-                {
-                    BasicBlock successor = blocks.First(candidate => candidate.Ordinal == branch.Destination!.Ordinal);
-                    FlowSnapshot candidate = ApplyBranchTransfer(
-                        graph,
-                        branch,
-                        outgoing,
-                        emitDiagnostics: false);
-                    if (entryStates.TryGetValue(successor, out FlowSnapshot? oldEntry))
+                    _context.CancellationToken.ThrowIfCancellationRequested();
+                    BasicBlock block = work.Dequeue();
+                    if (!entryStates.TryGetValue(block, out FlowSnapshot? incoming))
                     {
-                        candidate = MergeSnapshotsForResult(oldEntry, candidate);
+                        continue;
                     }
 
-                    if (!entryStates.TryGetValue(successor, out oldEntry)
-                        || !SnapshotEquivalent(oldEntry, candidate))
+                    RestoreSnapshot(incoming);
+                    VisitBlock(block);
+                    FlowSnapshot outgoing = CaptureSnapshot();
+                    bool changed = !exitStates.TryGetValue(block, out FlowSnapshot? oldExit)
+                        || !SnapshotEquivalent(oldExit, outgoing);
+                    exitStates[block] = outgoing;
+                    if (!changed)
                     {
-                        entryStates[successor] = CloneSnapshot(candidate);
-                        work.Enqueue(successor);
+                        continue;
+                    }
+
+                    foreach (ControlFlowBranch branch in GraphBranches(graph, block)
+                        .Where(branch => branch.Destination is not null && memberOrdinals.Contains(branch.Destination.Ordinal)))
+                    {
+                        BasicBlock successor = blocks.First(candidate => candidate.Ordinal == branch.Destination!.Ordinal);
+                        FlowSnapshot candidate = ApplyBranchTransfer(
+                            graph,
+                            branch,
+                            outgoing,
+                            emitDiagnostics: false);
+                        if (entryStates.TryGetValue(successor, out FlowSnapshot? oldEntry))
+                        {
+                            candidate = MergeSnapshotsForResult(oldEntry, candidate);
+                        }
+
+                        if (!entryStates.TryGetValue(successor, out oldEntry)
+                            || !SnapshotEquivalent(oldEntry, candidate))
+                        {
+                            entryStates[successor] = CloneSnapshot(candidate);
+                            work.Enqueue(successor);
+                        }
                     }
                 }
+            }
+            finally
+            {
+                _suppressDiagnostics = previousConvergenceSuppression;
             }
 
             if (emitDiagnostics)
             {
-                bool previousSuppression = _suppressDiagnostics;
+                bool previousReportingSuppression = _suppressDiagnostics;
                 try
                 {
+                    _suppressDiagnostics = false;
                     foreach (BasicBlock block in blocks.OrderBy(block => block.Ordinal))
                     {
                         if (!entryStates.TryGetValue(block, out FlowSnapshot? stableEntry))
@@ -670,14 +680,13 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                         }
 
                         RestoreSnapshot(stableEntry);
-                        bool stateSuppression = _suppressDiagnostics;
-                        _suppressDiagnostics = true;
                         VisitBlock(block);
-                        FlowSnapshot stableOutgoing = CaptureSnapshot();
-                        _suppressDiagnostics = stateSuppression;
                         RestoreSnapshot(stableEntry);
-                        ReportStableFinallyDiagnostics(block);
-                        RestoreSnapshot(stableOutgoing);
+                        if (!exitStates.TryGetValue(block, out FlowSnapshot? stableOutgoing))
+                        {
+                            continue;
+                        }
+
                         foreach (ControlFlowBranch branch in GraphBranches(graph, block)
                             .Where(branch => branch.Destination is null || !memberOrdinals.Contains(branch.Destination.Ordinal)))
                         {
@@ -692,7 +701,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 }
                 finally
                 {
-                    _suppressDiagnostics = previousSuppression;
+                    _suppressDiagnostics = previousReportingSuppression;
                 }
             }
 
@@ -769,47 +778,6 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             }
 
             return result;
-        }
-
-        private void ReportStableFinallyDiagnostics(BasicBlock block)
-        {
-            IEnumerable<IOperation> roots = block.Operations;
-            if (block.BranchValue is not null)
-            {
-                roots = roots.Append(block.BranchValue);
-            }
-
-            foreach (IInvocationOperation invocation in roots
-                .SelectMany(operation => operation.DescendantsAndSelf().OfType<IInvocationOperation>())
-                .Where(invocation => invocation.TargetMethod.Name == "RecycleScoped"
-                    && !invocation.Syntax.Ancestors().Any(node =>
-                        node is AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax)))
-            {
-                OwnerState? owner = GetOwner(Unwrap(invocation.Instance));
-                if (owner is null || !owner.ScopedOwnerEligible)
-                {
-                    continue;
-                }
-
-                GenerationReturnLiveness[] pending = FindGenerationReturnLiveness(owner, invocation.Syntax)
-                    .Where(finding => finding.IsScoped)
-                    .ToArray();
-                if (pending.Length != 0)
-                {
-                    ReportGenerationReturnLiveness(owner, "RecycleScoped", invocation.Syntax, pending);
-                }
-                else if (owner.ScopedPendingAmbiguous)
-                {
-                    ReportWithProvenance(
-                        NativeAllocationDiagnosticDescriptors.GenerationReturnLiveValue,
-                        invocation.Syntax,
-                        owner.DisplayName + " -> ambiguous scoped allocation",
-                        owner.DisplayName,
-                        "RecycleScoped",
-                        "ambiguous scoped allocation",
-                        "The scoped pending set is ambiguous across control-flow paths; prove the complete set is dead before recycling.");
-                }
-            }
         }
 
         private static IEnumerable<ControlFlowRegion> FlattenRegions(ControlFlowRegion region)

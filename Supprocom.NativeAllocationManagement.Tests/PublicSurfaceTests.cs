@@ -30,9 +30,15 @@ public sealed class PublicSurfaceTests
         Assert.Contains(
             typeof(NativeLeaseOperations).GetMethods(),
             method => method.Name == "Access" && method.GetGenericArguments().Length == 5);
+        Assert.DoesNotContain(
+            typeof(NativeLeaseOperations).GetMethods(),
+            method => method.Name == "Access" && method.GetGenericArguments().Length == 1);
         Assert.Contains(
             assembly.GetTypes(),
             type => type.Name == "NativeLeaseQuintupleAction`5");
+        Assert.DoesNotContain(
+            assembly.GetTypes(),
+            type => type.Name == "NativeLeaseUnaryAction`1");
         Assert.DoesNotContain(
             assembly.GetTypes(),
             type => type.Name.Contains("Mesh", StringComparison.OrdinalIgnoreCase));

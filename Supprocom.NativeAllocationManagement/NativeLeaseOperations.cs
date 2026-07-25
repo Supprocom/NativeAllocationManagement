@@ -24,35 +24,9 @@ public delegate void NativeLeaseQuintupleAction<TFirst, TSecond, TThird, TFourth
     scoped NativeLeaseView<TFourth> fourth,
     scoped NativeLeaseView<TFifth> fifth);
 
-/// <summary>Runs one bounded operation over one direct native view.</summary>
-public delegate void NativeLeaseUnaryAction<T>(scoped NativeLeaseView<T> value);
-
 /// <summary>Provides bounded multi-buffer operations without managed mirror copies.</summary>
 public static class NativeLeaseOperations
 {
-    /// <summary>
-    /// Enters one pooled lease for the duration of a bounded callback. The callback is
-    /// the only place where the direct native view can be observed.
-    /// </summary>
-    public static void Access<T>(
-        scoped Pooled<T> value,
-        NativeLeaseUnaryAction<T> action)
-    {
-        ArgumentNullException.ThrowIfNull(action);
-        NativeOperationToken token = value.KernelForComposite.EnterOperation(
-            value.GenerationForComposite,
-            value.AllocationIdForComposite,
-            nameof(Access));
-        try
-        {
-            action(token.GetView<T>());
-        }
-        finally
-        {
-            token.Dispose();
-        }
-    }
-
     /// <summary>
     /// Enters both pooled leases for the duration of one callback. Both spans are scoped
     /// to the callback and no handle or view can be retained by the API.

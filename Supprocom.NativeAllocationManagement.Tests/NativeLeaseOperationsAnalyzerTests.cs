@@ -6,27 +6,6 @@ namespace Supprocom.NativeAllocationManagement.Tests;
 public sealed class NativeLeaseOperationsAnalyzerTests
 {
     [Fact]
-    public async Task UnaryCompositeAccessAcceptsDirectPooledViewWithOwnerCleanup()
-    {
-        ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
-            """
-            using Supprocom.NativeAllocationManagement;
-
-            public static class Sample
-            {
-                public static void Run()
-                {
-                    using NativePool<int> pool = new();
-                    using Pooled<int> value = pool.Rent(1);
-                    NativeLeaseOperations.Access(value, static view => view[0] = 1);
-                }
-            }
-            """);
-
-        Assert.Empty(AnalyzerContractTests.NativeDiagnostics(diagnostics));
-    }
-
-    [Fact]
     public async Task QuintupleCompositeAccessAcceptsAllDirectViewsWithOwnerCleanup()
     {
         ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
@@ -198,6 +177,7 @@ public sealed class NativeLeaseOperationsAnalyzerTests
                 public static void Run(bool condition)
                 {
                     using NativePool<int> pool = new();
+                    scoped Pooled<int> value = pool.LeaseScoped(1);
                     try
                     {
                         scoped Pooled<int> value = pool.LeaseScoped(1);
@@ -214,7 +194,16 @@ public sealed class NativeLeaseOperationsAnalyzerTests
                 }
             }
             """);
-        Assert.DoesNotContain("NAM1020", AnalyzerContractTests.NativeDiagnostics(exceptional));
+        Diagnostic[] exceptionalNative = exceptional
+            .Where(item => item.Id is "NAM1007" or "NAM1020")
+            .ToArray();
+        Assert.Equal(2, exceptionalNative.Length);
+        Diagnostic live = exceptionalNative.Single(item => item.Id == "NAM1007");
+        Assert.Contains("pool.RecycleScoped", live.Location.SourceTree!.GetText().ToString(live.Location.SourceSpan));
+        Assert.Contains("value", live.Properties["NAM.Provenance"]!, StringComparison.Ordinal);
+        Diagnostic missing = exceptionalNative.Single(item => item.Id == "NAM1020");
+        Assert.Equal("NAM1020", missing.Properties["NAM.DiagnosticId"]);
+        Assert.Contains("pool", missing.Properties["NAM.Provenance"]!, StringComparison.Ordinal);
 
         ImmutableArray<Diagnostic> premature = await AnalyzerContractTests.AnalyzeAsync(
             """
@@ -676,6 +665,105 @@ public sealed class NativeLeaseOperationsAnalyzerTests
         Assert.Single(ambiguous);
         Assert.Equal("NAM1007", ambiguous[0].Properties["NAM.DiagnosticId"]);
         Assert.Contains("ambiguous scoped allocation", ambiguous[0].Properties["NAM.Provenance"]!);
+    }
+
+    [Fact]
+    public async Task FinallyConvergenceDoesNotReportTransientInvalidState()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run(bool condition)
+                {
+                    using NativePool<int> pool = new();
+                    try
+                    {
+                    }
+                    finally
+                    {
+                        if (condition)
+                        {
+                            pool.RecycleScoped();
+                        }
+                        else
+                        {
+                            pool.RecycleScoped();
+                        }
+                    }
+                }
+            }
+            """);
+
+        Assert.Empty(AnalyzerContractTests.NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task FinallyConvergenceReportsTrulyInvalidStableStateOnce()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run(bool condition)
+                {
+                    using NativePool<int> pool = new();
+                    scoped Pooled<int> value = pool.LeaseScoped(1);
+                    try
+                    {
+                    }
+                    finally
+                    {
+                        if (condition)
+                        {
+                            pool.RecycleScoped();
+                        }
+                    }
+                }
+            }
+            """);
+
+        Diagnostic[] live = diagnostics.Where(item => item.Id == "NAM1007").ToArray();
+        Assert.Single(live);
+        Assert.Contains("pool.RecycleScoped", live[0].Location.SourceTree!.GetText().ToString(live[0].Location.SourceSpan));
+        Assert.Equal("NAM1007", live[0].Properties["NAM.DiagnosticId"]);
+        Assert.Contains("pool", live[0].Properties["NAM.Provenance"]!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task FinallyStableReportingPreservesNonRecycleDiagnostics()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    using NativePool<int> pool = new(doNotLeaseOnDeclaration: true);
+                    try
+                    {
+                    }
+                    finally
+                    {
+                        pool.Rent(1);
+                    }
+                }
+            }
+            """);
+
+        Diagnostic[] native = diagnostics.Where(item => item.Id == "NAM1009").ToArray();
+        Assert.Single(native);
+        Assert.Equal(new[] { "NAM1009" }, native.Select(item => item.Id).ToArray());
+        Assert.Contains("pool.Rent", native[0].Location.SourceTree!.GetText().ToString(native[0].Location.SourceSpan));
+        Assert.Equal("NAM1009", native[0].Properties["NAM.DiagnosticId"]);
+        Assert.Contains("pool", native[0].Properties["NAM.Provenance"]!, StringComparison.Ordinal);
+        Assert.Single(AnalyzerContractTests.NativeDiagnostics(diagnostics));
     }
 
 }

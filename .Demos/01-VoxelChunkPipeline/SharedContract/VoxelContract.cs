@@ -66,7 +66,14 @@ public readonly record struct BlockTypeDescriptor(
 
 public readonly record struct CellCoordinate(int X, int Y, int Z);
 
-public readonly record struct FaceRecord(int CellIndex, int BlockId, int Mask);
+public readonly record struct FaceRecord(
+    int CellIndex,
+    int BlockId,
+    int Mask,
+    int PayloadBytes,
+    int Alignment,
+    int StageMask,
+    int StageBytes);
 
 public readonly record struct Vertex(int X, int Y, int Z, int Face, int Corner, int BlockId);
 
@@ -227,16 +234,35 @@ public static class VoxelMath
     public const int OutputFixtureElementLimit = 2;
     public const int OutputFixtureByteLimit = 512;
 
+    // These are setup-time value LUTs. The measured cells carry only ushort IDs,
+    // matching VoxelEngine's runtime BlockType registry contract.
+    public static readonly BlockTypeDescriptor[] BlockTypes =
+    [
+        new(AirBlockId, "air", 0, 1, -128, -32768, 0, 100),
+        new(256, "stone", 8, 4, 0, 32, 0b0011, 40),
+        new(257, "water", 24, 8, 16, -32768, 0b0101, 18),
+        new(258, "foliage", 40, 16, -12, -32768, 0b1001, 9),
+        new(259, "metal", 56, 32, 8, 24, 0b0110, 5),
+        new(260, "crystal", 72, 16, 24, 18, 0b1110, 2),
+        new(261, "moss", 16, 8, -4, -32768, 0b0010, 7)
+    ];
+
+    private static readonly ushort[] BlockTypeIndexById = CreateBlockTypeIndex();
+    public static readonly byte[] TypeIndexById = CreateTypeIndexById();
+    public static readonly bool[] TransparentById = CreateTransparentById();
+
+    public const int TotalFrequencyWeight = 181;
+
     public static readonly FaceRecord[] IndependentOpaqueRecords =
     [
-        new(CellIndex(1, 2, 3), 259, 0b100101),
-        new(CellIndex(7, 4, 2), 256, 0b001010)
+        CreateFaceRecord(CellIndex(1, 2, 3), 259, 0b100101),
+        CreateFaceRecord(CellIndex(7, 4, 2), 256, 0b001010)
     ];
 
     public static readonly FaceRecord[] IndependentTransparentRecords =
     [
-        new(CellIndex(4, 6, 1), 258, 0b010001),
-        new(CellIndex(12, 1, 5), 261, 0b100100)
+        CreateFaceRecord(CellIndex(4, 6, 1), 258, 0b010001),
+        CreateFaceRecord(CellIndex(12, 1, 5), 261, 0b100100)
     ];
 
     // This is a hand-authored expected output, not a second implementation of the
@@ -290,23 +316,6 @@ public static class VoxelMath
     );
 
     public static int SizeOf<T>() where T : unmanaged => Unsafe.SizeOf<T>();
-
-    // These are setup-time value LUTs. The measured cells carry only ushort IDs,
-    // matching VoxelEngine's runtime BlockType registry contract.
-    public static readonly BlockTypeDescriptor[] BlockTypes =
-    [
-        new(AirBlockId, "air", 0, 1, -128, -32768, 0, 100),
-        new(256, "stone", 8, 4, 0, 32, 0b0011, 40),
-        new(257, "water", 24, 8, 16, -32768, 0b0101, 18),
-        new(258, "foliage", 40, 16, -12, -32768, 0b1001, 9),
-        new(259, "metal", 56, 32, 8, 24, 0b0110, 5),
-        new(260, "crystal", 72, 16, 24, 18, 0b1110, 2),
-        new(261, "moss", 16, 8, -4, -32768, 0b0010, 7)
-    ];
-
-    private static readonly ushort[] BlockTypeIndexById = CreateBlockTypeIndex();
-
-    public const int TotalFrequencyWeight = 181;
 
     public static int CellIndex(int x, int y, int z) =>
         checked((z * ChunkDimension + y) * ChunkDimension + x);
@@ -524,12 +533,22 @@ public static class VoxelMath
     public static int FaceMaskFromCells(int cellIndex, ReadOnlySpan<VoxelCell> cells)
     {
         int current = cells[cellIndex].BlockId;
+        if (current == AirBlockId)
+        {
+            return 0;
+        }
+
+        bool currentTransparent = TransparentById[current];
         int mask = 0;
         for (int face = 0; face < FacesPerCell; face++)
         {
             int neighbor = NeighborIndex(cellIndex, face);
             int neighborBlock = neighbor < 0 ? AirBlockId : cells[neighbor].BlockId;
-            if (FaceVisible(current, neighborBlock))
+            bool visible = neighborBlock == AirBlockId
+                || (currentTransparent
+                    ? neighborBlock != current
+                    : TransparentById[neighborBlock]);
+            if (visible)
             {
                 mask |= 1 << face;
             }
@@ -558,6 +577,19 @@ public static class VoxelMath
         }
 
         return BlockTypes[index];
+    }
+
+    public static FaceRecord CreateFaceRecord(int cellIndex, int blockId, int mask)
+    {
+        BlockTypeDescriptor type = BlockTypeForId(blockId);
+        return new FaceRecord(
+            cellIndex,
+            blockId,
+            mask,
+            type.PayloadBytes,
+            type.Alignment,
+            type.StageMask,
+            StageBytesForType(type));
     }
 
     public static int BlockTypeIndexForId(int blockId)
@@ -603,7 +635,7 @@ public static class VoxelMath
                         distinct++;
                     }
 
-                    if (IsTransparent(blockId) && transparentCounts[index]++ == 0)
+                    if (TransparentById[blockId] && transparentCounts[index]++ == 0)
                     {
                         transparentIds++;
                     }
@@ -656,7 +688,7 @@ public static class VoxelMath
                         distinct++;
                     }
 
-                    if (IsTransparent(blockId) && transparentCounts[index]++ == 0)
+                    if (TransparentById[blockId] && transparentCounts[index]++ == 0)
                     {
                         transparentIds++;
                     }
@@ -707,12 +739,12 @@ public static class VoxelMath
                 {
                     int cell = row + x;
                     int blockId = materials[cell];
-                    if (!IsTransparent(blockId))
+                    if (!TransparentById[blockId])
                     {
                         continue;
                     }
 
-                    int typeIndex = BlockTypeIndexById[blockId];
+                    int typeIndex = TypeIndexById[blockId];
                     int maskIndex = maskSlots[typeIndex];
                     if (maskIndex < 0)
                     {
@@ -745,12 +777,12 @@ public static class VoxelMath
                 {
                     int cell = row + x;
                     int blockId = cells[cell].BlockId;
-                    if (!IsTransparent(blockId))
+                    if (!TransparentById[blockId])
                     {
                         continue;
                     }
 
-                    int typeIndex = BlockTypeIndexById[blockId];
+                    int typeIndex = TypeIndexById[blockId];
                     int maskIndex = maskSlots[typeIndex];
                     if (maskIndex < 0)
                     {
@@ -837,6 +869,29 @@ public static class VoxelMath
             value ^= value >> 15;
             return (int)(value & 0x7fffffff);
         }
+    }
+
+    private static byte[] CreateTypeIndexById()
+    {
+        byte[] lookup = new byte[ushort.MaxValue + 1];
+        for (int index = 0; index < BlockTypes.Length; index++)
+        {
+            lookup[BlockTypes[index].Id] = checked((byte)index);
+        }
+
+        return lookup;
+    }
+
+    private static bool[] CreateTransparentById()
+    {
+        bool[] lookup = new bool[ushort.MaxValue + 1];
+        for (int index = 0; index < BlockTypes.Length; index++)
+        {
+            BlockTypeDescriptor type = BlockTypes[index];
+            lookup[type.Id] = type.Id != AirBlockId && type.SolidThreshold < 0;
+        }
+
+        return lookup;
     }
 
     private static ushort[] CreateBlockTypeIndex()

@@ -17,7 +17,7 @@ internal static class Program
                 throw new ArgumentException($"Unknown mode '{mode}'.");
             }
 
-            ChildRunResult result = RunMeasured(options);
+            ChildRunResult result = RunMeasured(options, mode == "--correctness");
             Console.WriteLine(JsonSerializer.Serialize(result, VoxelJson.Options));
             return 0;
         }
@@ -28,12 +28,14 @@ internal static class Program
         }
     }
 
-    private static ChildRunResult RunMeasured(VoxelWorkloadOptions options)
+    private static ChildRunResult RunMeasured(
+        VoxelWorkloadOptions options,
+        bool captureMeasuredFixture)
     {
         GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
         long coldAllocationBefore = GC.GetTotalAllocatedBytes(precise: true);
         using WorkingSetSampler sampler = new();
-        PipelineResult result = SafeVoxelPipeline.Run(options);
+        PipelineResult result = SafeVoxelPipeline.Run(options, captureMeasuredFixture);
         long coldManagedAllocatedBytes = GC.GetTotalAllocatedBytes(precise: true) - coldAllocationBefore;
         sampler.Stop();
         GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
