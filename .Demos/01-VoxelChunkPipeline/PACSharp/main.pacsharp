@@ -1,0 +1,13 @@
+module Supprocom.NativeAllocationManagement.Demos.VoxelChunkPipeline.PACSharp;
+
+fn main
+    receives: args: RowList<Csharp.System.String>
+    returns: Csharp.System.Int32
+    effects: console
+{
+    let values: managed RowList<Csharp.System.Int32> = [256, 257, 258, 259, 260];
+    let digest: Csharp.System.Int32 = values.length;
+    print "PACSharp voxel fixture IDs 256..260";
+    print digest;
+    return 0;
+}
