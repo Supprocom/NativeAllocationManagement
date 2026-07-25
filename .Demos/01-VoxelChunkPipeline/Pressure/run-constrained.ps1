@@ -155,8 +155,8 @@ function Invoke-DockerChild {
     $arguments = @(
         "run",
         "--name", $containerName,
-        "--memory", "$MemoryBytes`b",
-        "--memory-swap", "$MemoryBytes`b",
+        "--memory", $MemoryBytes.ToString([Globalization.CultureInfo]::InvariantCulture),
+        "--memory-swap", $MemoryBytes.ToString([Globalization.CultureInfo]::InvariantCulture),
         "--memory-swappiness", "0",
         "--cpus", $CpuLimit.ToString([Globalization.CultureInfo]::InvariantCulture),
         "--pids-limit", "256",
