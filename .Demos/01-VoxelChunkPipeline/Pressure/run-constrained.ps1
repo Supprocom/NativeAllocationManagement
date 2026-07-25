@@ -21,6 +21,20 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+function ConvertTo-ProcessArguments {
+    param([string[]]$Arguments)
+
+    return [string]::Join(
+        " ",
+        ($Arguments | ForEach-Object {
+            if ($_ -match '[\s"]') {
+                '"' + $_.Replace('"', '\\"') + '"'
+            } else {
+                $_
+            }
+        }))
+}
+
 if ($Pairs -lt 30) {
     throw "Pairs must be at least 30 for the constrained statistical gate."
 }
@@ -63,9 +77,7 @@ function Invoke-CheckedCommand {
     $start.UseShellExecute = $false
     $start.RedirectStandardOutput = $true
     $start.RedirectStandardError = $true
-    foreach ($argument in $Arguments) {
-        $start.ArgumentList.Add($argument)
-    }
+    $start.Arguments = ConvertTo-ProcessArguments $Arguments
 
     $process = [Diagnostics.Process]::new()
     $process.StartInfo = $start
@@ -164,9 +176,7 @@ function Invoke-DockerChild {
     $start.UseShellExecute = $false
     $start.RedirectStandardOutput = $true
     $start.RedirectStandardError = $true
-    foreach ($argument in $arguments) {
-        $start.ArgumentList.Add($argument)
-    }
+    $start.Arguments = ConvertTo-ProcessArguments $arguments
 
     $process = [Diagnostics.Process]::new()
     $process.StartInfo = $start
