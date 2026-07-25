@@ -679,10 +679,10 @@ internal static class NativeVoxelPipeline
             transparentFaces,
             transparentBytes);
 
-        using NativePool<NativeFaceOutput> facePool = new();
-        using NativePool<Vertex> vertexPool = new();
-        using NativePool<int> indexPool = new();
-        using NativeArena heterogeneousArena = new();
+        using NativePool<NativeFaceOutput> facePool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativePool<Vertex> vertexPool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> indexPool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeArena heterogeneousArena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         int totalRecords = checked(VoxelMath.IndependentOpaqueRecords.Length
             + VoxelMath.IndependentTransparentRecords.Length);
         int totalVertices = checked((opaqueFaces + transparentFaces) * VoxelMath.VerticesPerFace);
@@ -766,8 +766,15 @@ internal static class NativeVoxelPipeline
         bool captureMeasuredFixture)
     {
         VoxelMath.ValidateBoundaryFixture();
-        OutputFixture independentFixture = CreateIndependentFixture();
         NativeMemoryStatistics baseline = NativeMemoryDiagnostics.Snapshot();
+        if (baseline.OutstandingNativeBytes != 0)
+        {
+            throw new InvalidOperationException(
+                $"NAM benchmark must start at a zero native baseline; observed {baseline.OutstandingNativeBytes} bytes.");
+        }
+
+        OutputFixture independentFixture = CreateIndependentFixture();
+        NativeMemoryStatistics measuredBaseline = NativeMemoryDiagnostics.Snapshot();
         WorkerResult[] workers = new WorkerResult[options.WorkerCount];
         Task[] tasks = new Task[options.WorkerCount];
         using CountdownEvent ready = new(options.WorkerCount);
@@ -788,7 +795,6 @@ internal static class NativeVoxelPipeline
         }
 
         ready.Wait();
-        NativeMemoryStatistics measuredBaseline = NativeMemoryDiagnostics.Snapshot();
         allocationBefore = GC.GetTotalAllocatedBytes(precise: true);
         gen0Before = GC.CollectionCount(0);
         gen1Before = GC.CollectionCount(1);
@@ -799,9 +805,7 @@ internal static class NativeVoxelPipeline
         stopwatch.Stop();
 
         NativeMemoryStatistics final = NativeMemoryDiagnostics.Snapshot();
-        long measuredPeakNative = Math.Max(
-            0,
-            final.PeakOutstandingNativeBytes - measuredBaseline.PeakOutstandingNativeBytes);
+        long measuredPeakNative = final.PeakOutstandingNativeBytes;
         long reusedNativeSegments = Math.Max(
             0,
             final.ReusedNativeSegmentCount - measuredBaseline.ReusedNativeSegmentCount);

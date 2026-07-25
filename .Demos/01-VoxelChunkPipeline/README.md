@@ -23,26 +23,32 @@ paths. The source references are `MVGE-INF/Models/Terrain/BlockType.cs:9-23`,
 Both implementations retain the expert safe techniques appropriate for bounded
 voxel work: worker-local reuse, `ArrayPool<T>` where it remains the right fit,
 pre-sized value storage, stack-based section counters and masks, and zero
-per-cell object creation. The safe baseline clears returned arrays so its reuse
-boundary has the same zeroing requirement as NAM's scoped recycle. The NAM path
-owns cell data, opaque and transparent face records, vertices, and indices in
-typed `NativePool<T>` leases. It uses a worker-local `NativeArena` for the
-variable transparent masks, slice descriptors, and exact upload-byte staging
-that have heterogeneous runtime-defined shapes. `NativeLeaseOperations.Access`
-exposes direct bounded views to useful processing callbacks; NAM does not copy a
-managed mirror into native storage and back. Small bounded masks remain
-`stackalloc` in both implementations.
+per-cell object creation. Every value-only managed array is fully overwritten in
+its logical range, so the safe baseline returns it without clearing rounded
+unused bucket capacity; the transparent-mask logical range is explicitly
+cleared before use. The NAM path owns cell data, opaque and transparent face
+records, vertices, and indices in typed `NativePool<T>` leases. It uses a
+worker-local `NativeArena` for the variable transparent masks, slice descriptors,
+and exact upload-byte staging that have heterogeneous runtime-defined shapes.
+`NativeLeaseOperations.Access` exposes direct bounded views to useful processing
+callbacks; NAM does not copy a managed mirror into native storage and back.
+Small bounded masks remain `stackalloc` in both implementations.
 
 The stage boundaries are explicit. Cell coordinates, density, material IDs,
-face masks, section classification, and transparent masks end before packing.
+face masks, section classification, and transparent masks are consumed before
+packing. The managed baseline returns its cell array immediately before the
+combined output pack. The NAM face-materialization callback still reads the
+native cell lease, so that lease remains live through face output and packing;
+the corresponding cell-pool recycle is therefore the outer cleanup boundary.
 Opaque and transparent face output ends after vertex, index, and upload packing.
-Each stage uses a lexical scoped lease followed by one analyzer-proven
-`RecycleScoped` completion, so a stale scoped handle cannot be used after the
-boundary. The completed opaque and transparent vertices, indices, descriptors,
-and upload bytes are materialized in both paths; the harness compares a small
-fixture of exact elements and bytes in addition to the full-work digest and
-counters. Worker-local owners remain alive across measured chunks, and terminal
-owner disposal requires the physical NAM native-byte delta to return to zero.
+Each recyclable stage uses a lexical scoped lease followed by one
+analyzer-proven `RecycleScoped` completion, so a stale scoped handle cannot be
+used after its boundary. The completed opaque and transparent vertices, indices,
+descriptors, and upload bytes are materialized in both paths; the harness
+compares a small fixture of exact elements and bytes in addition to the full-work
+digest and counters. Worker-local owners remain alive across measured chunks,
+and terminal owner disposal requires the process to return to its zero native
+baseline.
 
 The raw benchmark records generation and face derivation separately from
 transparent-mask, opaque-packing, and transparent-packing time, and records
@@ -84,10 +90,13 @@ as physical native memory. The demo is local verification only and does not
 publish or version-bump a NuGet or GitHub package.
 
 The backing-byte scopes are explicit. SafeCSharp reports the sum of its concurrent
-worker peak and cold backing values, while NAM reports process-global physical
-native bytes from `NativeMemoryDiagnostics` and a separate process-global managed
-backing value. The values are therefore compared at aggregate process scope rather
-than comparing one safe worker with both NAM workers. The independent fixture is a
-hand-authored complete expected byte range for both opaque and transparent output;
-the ordinary workload fixture remains a small captured parity sample, while the
-full workload digest covers every materialized output buffer.
+worker peak and cold backing values, while NAM reports the absolute process-global
+physical native high-water mark from `NativeMemoryDiagnostics` and a separate
+process-global managed backing value. The native child asserts zero outstanding
+bytes before setup and after terminal disposal. The coordinate, face, and packing
+stage fields are per-worker stage-budget diagnostics rather than a cross-allocator
+physical-memory comparison: Safe values include actual `ArrayPool<T>` bucket
+sizes, while NAM values are the exact native lease capacities. The independent
+fixture is a hand-authored complete expected byte range for both opaque and
+transparent output; the ordinary workload fixture remains a small captured parity
+sample, while the full workload digest covers every materialized output buffer.
