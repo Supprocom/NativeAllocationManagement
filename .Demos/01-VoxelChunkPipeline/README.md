@@ -1,8 +1,8 @@
 # Voxel chunk pipeline
 
-This demo compares expert safe C# with safe C# using Native Allocation Management
-(NAM) for a deterministic, memory-pressure-heavy voxel build, prerender,
-mesh-packing, and upload-staging pipeline. The tree is split into
+This demo compares expert safe C# with safe C# using Native Allocation
+Management (NAM) for a deterministic, memory-pressure-heavy voxel build,
+prerender, mesh-packing, and upload-staging pipeline. The tree is split into
 `SharedContract`, `SafeCSharp`, `NAM`, and `Harness`. The contract owns the
 machine-readable workload and parity rules, the safe project is the managed
 baseline, the NAM project is the direct native-backed implementation, and the
@@ -28,41 +28,40 @@ its logical range, so the safe baseline returns it without clearing rounded
 unused bucket capacity; the transparent-mask logical range is explicitly
 cleared before use. The NAM path owns cell data, opaque and transparent face
 records, vertices, and indices in typed `NativePool<T>` leases. It uses a
-worker-local `NativeArena` for the variable transparent masks, slice descriptors,
-and exact upload-byte staging that have heterogeneous runtime-defined shapes.
+worker-local `NativeArena` for variable transparent masks, slice descriptors, and
+exact upload-byte staging with heterogeneous runtime-defined shapes.
 `NativeLeaseOperations.Access` exposes direct bounded views to useful processing
-callbacks; NAM does not copy a managed mirror into native storage and back.
-Small bounded masks remain `stackalloc` in both implementations.
+callbacks; NAM does not copy a managed mirror into native storage and back. Small
+bounded masks remain `stackalloc` in both implementations.
 
-The stage boundaries are explicit. Cell coordinates, density, material IDs,
-face masks, section classification, and transparent masks are consumed before
+The stage boundaries are explicit. Cell coordinates, density, material IDs, face
+masks, section classification, and transparent masks are consumed before
 packing. The managed baseline returns its cell array immediately before the
-combined output pack. The NAM face-materialization callback still reads the
-native cell lease, so that lease remains live through face output and packing;
-the corresponding cell-pool recycle is therefore the outer cleanup boundary.
-Opaque and transparent face output ends after vertex, index, and upload packing.
-Each recyclable stage uses a lexical scoped lease followed by one
-analyzer-proven `RecycleScoped` completion, so a stale scoped handle cannot be
-used after its boundary. The completed opaque and transparent vertices, indices,
-descriptors, and upload bytes are materialized in both paths; the harness
-compares a small fixture of exact elements and bytes in addition to the full-work
-digest and counters. Worker-local owners remain alive across measured chunks,
-and terminal owner disposal requires the process to return to its zero native
-baseline.
+combined output pack. The NAM cell lease is ended and recycled as soon as face
+derivation and mask construction finish, before the output pack begins. Face
+records remain live through vertex, index, descriptor, and upload packing. Each
+recyclable stage uses a lexical scoped lease followed by one analyzer-proven
+`RecycleScoped` completion, so a stale scoped handle cannot be used after its
+boundary. Both implementations write the same complete output layout during
+correctness mode; the harness compares every fixture element and byte, while
+timed pressure runs retain the same materialized work and compare a canonical
+hash over every output element, descriptor, byte, length, and counter.
+Worker-local owners remain alive across measured chunks, and terminal owner
+disposal requires the process to return to its zero native baseline.
 
 The raw benchmark records generation and face derivation separately from
 transparent-mask, opaque-packing, and transparent-packing time, and records
-coordinate, face, mask, and packing recycle boundaries with their clearing
-work. Typed-pool slab reuse is reported separately from arena reclaimed-range
-reuse. Only the latter proves that `RecycleScoped` made an arena byte range
-available and that a later scoped acquisition overlapped that reclaimed range;
-the demo never treats a second allocation in an untouched bump segment as
-recycling evidence.
+coordinate, face, mask, and packing recycle boundaries with their clearing work.
+Typed-pool slab reuse is reported separately from arena reclaimed-range reuse.
+Only the latter proves that `RecycleScoped` made an arena byte range available and
+that a later scoped acquisition overlapped that reclaimed range; the demo never
+treats a second allocation in an untouched bump segment as recycling evidence.
 
 Build the four C# projects with these commands.
 
 ```text
 dotnet restore .Demos/01-VoxelChunkPipeline/Harness/Harness.csproj
+dotnet build .Demos/01-VoxelChunkPipeline/SharedContract/SharedContract.csproj -c Release --no-restore
 dotnet build .Demos/01-VoxelChunkPipeline/SafeCSharp/SafeCSharp.csproj -c Release --no-restore
 dotnet build .Demos/01-VoxelChunkPipeline/NAM/NAM.csproj -c Release --no-restore
 dotnet build .Demos/01-VoxelChunkPipeline/Harness/Harness.csproj -c Release --no-restore
@@ -70,13 +69,17 @@ dotnet build .Demos/01-VoxelChunkPipeline/Harness/Harness.csproj -c Release --no
 
 Run correctness parity with
 `dotnet .Demos/01-VoxelChunkPipeline/Harness/bin/Release/net10.0/VoxelChunkPipeline.Harness.dll
---correctness-only`. The controlled benchmark starts one isolated child per
-implementation for each paired sample. Each child warms its worker-local state
-inside the same process, resets logical counters, and then measures repeated
-chunks. The harness alternates implementation order, requires at least thirty
-paired samples, stores every raw sample, reports latency standard deviations and
-p50/p95/p99 values, and calculates a paired Student-t 95% interval over
-Safe/NAM speedups.
+--correctness-only`. Correctness mode serializes the complete canonical input
+cell sequence and the complete independent opaque and transparent output fixture
+outside the measured interval. The harness compares both implementation inputs,
+every fixture element and byte, full-work output hashes, lengths, and counters.
+
+The controlled benchmark starts one isolated child per implementation for each
+paired sample. Each child warms its worker-local state inside the same process,
+resets logical counters, and then measures repeated chunks. The harness
+alternates implementation order, requires at least thirty paired samples, stores
+every raw sample, reports latency standard deviations and p50/p95/p99 values, and
+calculates a paired Student-t 95% interval over Safe/NAM speedups.
 
 The optional `--enforce` switch returns failure unless all correctness counters
 match, NAM mean throughput is at least five percent higher, the paired confidence
@@ -93,10 +96,29 @@ The backing-byte scopes are explicit. SafeCSharp reports the sum of its concurre
 worker peak and cold backing values, while NAM reports the absolute process-global
 physical native high-water mark from `NativeMemoryDiagnostics` and a separate
 process-global managed backing value. The native child asserts zero outstanding
-bytes before setup and after terminal disposal. The coordinate, face, and packing
+bytes before setup and after terminal disposal. Coordinate, face, and packing
 stage fields are per-worker stage-budget diagnostics rather than a cross-allocator
 physical-memory comparison: Safe values include actual `ArrayPool<T>` bucket
-sizes, while NAM values are the exact native lease capacities. The independent
-fixture is a hand-authored complete expected byte range for both opaque and
-transparent output; the ordinary workload fixture remains a small captured parity
-sample, while the full workload digest covers every materialized output buffer.
+sizes, while NAM values are exact native lease capacities.
+
+The shared input contract carries the registry, workload options, ordered chunk
+cells, and little-endian byte hash facts in correctness mode; pressure runs carry
+the same count and hash without serializing the full cell array after timing. The
+shared output contract carries one `FaceRecord` layout, vertices, indices,
+`PayloadSlice` descriptors, upload bytes, lengths, and counters. Its digest order
+is fixed and byte-oriented, so equal aggregate counts cannot hide a changed
+element or byte. NAM also reports each owner’s requested bytes, peak physical
+segment capacity, retained and retired bytes, geometric slack, trim work, and
+fresh-segment regrowth. These are diagnostics of allocator policy, not substitutes
+for the common output contract.
+
+The constrained experiment is opt-in and uses
+`Pressure/run-constrained.ps1`. It builds a Linux runtime image before measuring,
+uses identical Docker memory and swap limits with CPU limits for both children,
+and predeclares an unconstrained control plus 1 GiB, 768 MiB, and 640 MiB profiles.
+It records completion, capacity/OOM status, cgroup limit and peak, GC memory
+availability and collection deltas, pause duration, heap/LOH/fragmentation
+facts, native peak/final bytes, every paired sample, and the Student-t gate. A
+constrained throughput result is valid only when SafeCSharp demonstrably sees
+collection pressure; an OOM or an invalid no-pressure run is preserved as its
+capacity or validity result rather than substituted with another profile.

@@ -72,6 +72,20 @@ public readonly record struct NativeMemoryStatistics(
     public long RetainedNativeBytes => OutstandingNativeBytes - DetachedNativeBytes;
 }
 
+/// <summary>Reports the current physical and logical state of one native owner.</summary>
+public readonly record struct NativeOwnerStatistics(
+    NativeOwnerLifecycle Lifecycle,
+    long Generation,
+    long RequestedBytes,
+    long RetainedBytes,
+    long RetiredBytes,
+    int SegmentCount,
+    int AvailableSegmentCount,
+    int RetiredSegmentCount,
+    long TrimmedBytes,
+    long TrimCallCount,
+    long FreshSegmentAllocationCount);
+
 /// <summary>Provides process-local physical storage counters for measurement and diagnostics.</summary>
 public static class NativeMemoryDiagnostics
 {
@@ -1193,6 +1207,9 @@ internal sealed class NativeOwnerKernel
     private NativeOwnerLifecycle _lifecycle;
     private readonly List<NativeGeneration> _retiredGenerations = [];
     private readonly List<NativeGeneration> _quarantinedGenerations = [];
+    private long _trimmedBytes;
+    private long _trimCallCount;
+    private long _freshSegmentAllocationCount;
 
     internal NativeOwnerLifecycle Lifecycle
     {
@@ -1203,6 +1220,91 @@ internal sealed class NativeOwnerKernel
                 return _lifecycle;
             }
         }
+    }
+
+    internal NativeOwnerStatistics GetStatistics()
+    {
+        lock (_gate)
+        {
+            NativeGeneration? current = _current;
+            if (current is null)
+            {
+                return new(
+                    _lifecycle,
+                    _generation,
+                    0,
+                    0,
+                    SumRetiredBytesLocked(),
+                    0,
+                    0,
+                    CountRetiredSegmentsLocked(),
+                    _trimmedBytes,
+                    _trimCallCount,
+                    _freshSegmentAllocationCount);
+            }
+
+            long requestedBytes = 0;
+            foreach (NativeAllocation allocation in current.Allocations.Values)
+            {
+                requestedBytes = checked(requestedBytes + (long)allocation.StorageBytes);
+            }
+
+            long retainedBytes = 0;
+            foreach (NativeSlab slab in current.Slabs)
+            {
+                retainedBytes = checked(retainedBytes + (long)slab.Segment.ByteLength);
+            }
+
+            foreach (NativeBumpSegment bump in current.BumpSegments)
+            {
+                retainedBytes = checked(retainedBytes + (long)bump.Segment.ByteLength);
+            }
+
+            return new(
+                _lifecycle,
+                current.Number,
+                requestedBytes,
+                retainedBytes,
+                SumRetiredBytesLocked(),
+                current.Slabs.Count + current.BumpSegments.Count,
+                current.AvailableSlabs.Count,
+                CountRetiredSegmentsLocked(),
+                _trimmedBytes,
+                _trimCallCount,
+                _freshSegmentAllocationCount);
+        }
+    }
+
+    private long SumRetiredBytesLocked()
+    {
+        long total = 0;
+        foreach (NativeGeneration generation in _retiredGenerations)
+        {
+            total = checked(total + generation.RetiredNativeBytes);
+        }
+
+        foreach (NativeGeneration generation in _quarantinedGenerations)
+        {
+            total = checked(total + generation.RetiredNativeBytes);
+        }
+
+        return total;
+    }
+
+    private int CountRetiredSegmentsLocked()
+    {
+        int total = 0;
+        foreach (NativeGeneration generation in _retiredGenerations)
+        {
+            total = checked(total + generation.RetiredSegmentCount);
+        }
+
+        foreach (NativeGeneration generation in _quarantinedGenerations)
+        {
+            total = checked(total + generation.RetiredSegmentCount);
+        }
+
+        return total;
     }
 
     internal int CurrentAllocationRecordCountForTest()
@@ -1535,6 +1637,7 @@ internal sealed class NativeOwnerKernel
                         bumpSegment = createdSegment;
                         AppendBumpSegmentLocked(generation, createdSegment);
                         generation.Owner.AddSegment(segment);
+                        _freshSegmentAllocationCount++;
                     }
 
                     if (scoped)
@@ -1901,7 +2004,10 @@ internal sealed class NativeOwnerKernel
                 return 0;
             }
 
-            return TrimRetainedMemoryLocked(null);
+            nuint released = TrimRetainedMemoryLocked(null);
+            _trimCallCount++;
+            _trimmedBytes = checked(_trimmedBytes + (long)released);
+            return released;
         }
     }
 
@@ -1919,7 +2025,10 @@ internal sealed class NativeOwnerKernel
                 return 0;
             }
 
-            return TrimRetainedMemoryLocked(bytesToRelease);
+            nuint released = TrimRetainedMemoryLocked(bytesToRelease);
+            _trimCallCount++;
+            _trimmedBytes = checked(_trimmedBytes + (long)released);
+            return released;
         }
     }
 
@@ -1943,7 +2052,10 @@ internal sealed class NativeOwnerKernel
             nuint requested = _kind == NativeOwnerKind.Pool
                 ? byteLength
                 : ChooseBumpSegmentBytes(_current!, checked(byteLength + alignment - 1));
-            return TrimRetainedMemoryLocked(requested);
+            nuint released = TrimRetainedMemoryLocked(requested);
+            _trimCallCount++;
+            _trimmedBytes = checked(_trimmedBytes + (long)released);
+            return released;
         }
     }
 
@@ -2060,6 +2172,7 @@ internal sealed class NativeOwnerKernel
             NativeBumpSegment bump = new(segment, NextSegmentOrdinalLocked());
             AppendBumpSegmentLocked(generation, bump);
             generation.Owner.AddSegment(segment);
+            _freshSegmentAllocationCount++;
         }
     }
 
@@ -2080,7 +2193,9 @@ internal sealed class NativeOwnerKernel
 
         try
         {
-            return new NativeSlab(segment, capacity, _containsReferences, NextSegmentOrdinalLocked());
+            NativeSlab slab = new(segment, capacity, _containsReferences, NextSegmentOrdinalLocked());
+            _freshSegmentAllocationCount++;
+            return slab;
         }
         catch
         {

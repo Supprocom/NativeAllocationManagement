@@ -559,6 +559,35 @@ public sealed class RuntimeLifecycleTests
     }
 
     [Fact]
+    public void OwnerStatisticsExposeLiveRequestsRetainedSegmentsAndTerminalRelease()
+    {
+        NativeMemoryTestHooks.Reset();
+        using NativePool<int> pool = new(initialCapacity: 4, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+
+        NativeOwnerStatistics initial = pool.GetStatistics();
+        Assert.Equal(NativeOwnerLifecycle.Active, initial.Lifecycle);
+        Assert.True(initial.RetainedBytes >= 4 * sizeof(int));
+        Assert.Equal(1, initial.SegmentCount);
+
+        {
+            scoped Pooled<int> lease = pool.LeaseScoped(4);
+            NativeOwnerStatistics live = pool.GetStatistics();
+            Assert.True(live.RequestedBytes >= 4 * sizeof(int));
+            Assert.Equal(initial.RetainedBytes, live.RetainedBytes);
+        }
+        pool.RecycleScoped();
+        NativeOwnerStatistics recycled = pool.GetStatistics();
+        Assert.Equal(0, recycled.RequestedBytes);
+        Assert.Equal(initial.RetainedBytes, recycled.RetainedBytes);
+        Assert.True(recycled.FreshSegmentAllocationCount >= initial.FreshSegmentAllocationCount);
+
+        pool.Dispose();
+        NativeOwnerStatistics disposed = pool.GetStatistics();
+        Assert.Equal(NativeOwnerLifecycle.Disposed, disposed.Lifecycle);
+        Assert.Equal(0, disposed.RetainedBytes);
+    }
+
+    [Fact]
     public void ReLeaseAllocationFailureDoesNotPublishAPartialGeneration()
     {
         NativeMemoryTestHooks.Reset();

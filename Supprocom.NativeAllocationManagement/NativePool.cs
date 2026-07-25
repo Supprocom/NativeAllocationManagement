@@ -33,6 +33,9 @@ public sealed class NativePool<T> : IDisposable
 
     internal void SetGenerationCounterForTest(long value) => _kernel.SetGenerationCounterForTest(value);
 
+    /// <summary>Reads the current logical and physical state of this owner.</summary>
+    public NativeOwnerStatistics GetStatistics() => _kernel.GetStatistics();
+
     /// <summary>Creates a typed pool, active immediately unless declaration leasing is disabled.</summary>
     /// <param name="initialCapacity">Optional number of elements reserved immediately or on activation.</param>
     /// <param name="returnMemoryOnDispose">The physical cleanup policy used by <see cref="Dispose"/>.</param>

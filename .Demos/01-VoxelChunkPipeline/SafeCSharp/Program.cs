@@ -12,12 +12,16 @@ internal static class Program
         {
             string mode = args.Length == 0 ? "--correctness" : args[0];
             VoxelWorkloadOptions options = VoxelWorkloadOptions.Parse(args.AsSpan(1).ToArray());
-            if (mode is not ("--correctness" or "--run"))
+            if (mode is not ("--correctness" or "--run" or "--pressure"))
             {
                 throw new ArgumentException($"Unknown mode '{mode}'.");
             }
 
-            ChildRunResult result = RunMeasured(options, mode == "--correctness");
+            ChildRunResult result = RunMeasured(
+                options,
+                captureMeasuredFixture: false,
+                pressureMode: mode == "--pressure",
+                includeCanonicalInputCells: mode == "--correctness");
             Console.WriteLine(JsonSerializer.Serialize(result, VoxelJson.Options));
             return 0;
         }
@@ -30,18 +34,56 @@ internal static class Program
 
     private static ChildRunResult RunMeasured(
         VoxelWorkloadOptions options,
-        bool captureMeasuredFixture)
+        bool captureMeasuredFixture,
+        bool pressureMode,
+        bool includeCanonicalInputCells)
     {
-        GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+        if (!pressureMode)
+        {
+            GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+        }
+
+        CgroupMemorySnapshot cgroupBefore = CgroupMemorySnapshot.Read();
+        TimeSpan pauseBefore = GC.GetTotalPauseDuration();
         long coldAllocationBefore = GC.GetTotalAllocatedBytes(precise: true);
         using WorkingSetSampler sampler = new();
-        PipelineResult result = SafeVoxelPipeline.Run(options, captureMeasuredFixture);
+        PipelineResult result = SafeVoxelPipeline.Run(
+            options,
+            captureMeasuredFixture,
+            includeCanonicalInputCells);
         long coldManagedAllocatedBytes = GC.GetTotalAllocatedBytes(precise: true) - coldAllocationBefore;
+        TimeSpan pauseAfter = GC.GetTotalPauseDuration();
+        CgroupMemorySnapshot cgroupAfter = CgroupMemorySnapshot.Read();
         sampler.Stop();
-        GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
-        GC.WaitForPendingFinalizers();
-        GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+        if (!pressureMode)
+        {
+            GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+            GC.WaitForPendingFinalizers();
+            GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+        }
+
         GCMemoryInfo memory = GC.GetGCMemoryInfo();
+        PressureRunMetrics? pressure = pressureMode
+            ? new PressureRunMetrics(
+                true,
+                cgroupAfter.Available,
+                cgroupAfter.LimitBytes,
+                cgroupBefore.CurrentBytes,
+                cgroupAfter.CurrentBytes,
+                cgroupAfter.PeakBytes,
+                Math.Max(0, cgroupAfter.OomEvents - cgroupBefore.OomEvents),
+                Math.Max(0, cgroupAfter.OomKillEvents - cgroupBefore.OomKillEvents),
+                cgroupAfter.AnonBytes,
+                cgroupAfter.FileBytes,
+                memory.TotalAvailableMemoryBytes,
+                memory.MemoryLoadBytes,
+                memory.HighMemoryLoadThresholdBytes,
+                memory.TotalCommittedBytes,
+                memory.HeapSizeBytes,
+                GetLargeObjectHeapBytes(memory),
+                memory.FragmentedBytes,
+                Math.Max(0, (pauseAfter - pauseBefore).TotalMilliseconds))
+            : null;
         return new ChildRunResult(
             "SafeCSharp",
             result,
@@ -53,7 +95,8 @@ internal static class Program
             memory.HeapSizeBytes,
             sampler.PeakWorkingSetBytes,
             GetLargeObjectHeapBytes(memory),
-            coldManagedAllocatedBytes);
+            coldManagedAllocatedBytes,
+            pressure);
     }
 
     private static long GetLargeObjectHeapBytes(GCMemoryInfo memory) =>

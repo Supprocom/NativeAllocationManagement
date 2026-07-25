@@ -81,57 +81,15 @@ internal static class SafeVoxelPipeline
         }
     }
 
-    private readonly record struct WorkerResult(PipelineResult Result);
-
-    private readonly record struct ChunkResult(
-        long Digest,
-        int OpaqueFaces,
-        int TransparentFaces,
-        int OpaqueVertices,
-        int TransparentVertices,
-        int OpaqueIndices,
-        int TransparentIndices,
-        int OpaqueStagedBytes,
-        int TransparentStagedBytes,
-        int EnabledStageBytes,
-        int EmptySections,
-        int UniformSections,
-        int ExpandedSections,
-        int PackedSections,
-        int MultiPackedSections,
-        int TransparentMaskCount,
-        int TransparentMaskWords,
-        int DominantTransparentSections,
-        int ResidualTransparentSections,
-        OutputFixture? MaterializedOutput,
-        double GenerationMilliseconds = 0,
-        double FaceDerivationMilliseconds = 0,
-        double TransparentMaskMilliseconds = 0,
-        double OpaquePackingMilliseconds = 0,
-        double TransparentPackingMilliseconds = 0,
-        double CoordinateRecycleMilliseconds = 0,
-        double FaceRecycleMilliseconds = 0,
-        double MaskRecycleMilliseconds = 0,
-        double PackingRecycleMilliseconds = 0)
-    {
-        internal int VisibleFaces => OpaqueFaces + TransparentFaces;
-        internal int Vertices => OpaqueVertices + TransparentVertices;
-        internal int Indices => OpaqueIndices + TransparentIndices;
-        internal int StagedBytes => OpaqueStagedBytes + TransparentStagedBytes;
-    }
-
-    private readonly record struct StreamResult(
-        int FaceCount,
-        int VertexCount,
-        int IndexCount,
-        int StagedBytes,
-        int EnabledStageBytes);
-
     public static PipelineResult Run(
         VoxelWorkloadOptions options,
-        bool captureMeasuredFixture)
+        bool captureMeasuredFixture,
+        bool includeCanonicalInputCells = false)
     {
+        VoxelMath.ValidateCanonicalInputFixture();
+        VoxelMath.ValidateHandAuthoredInputFixture();
         VoxelMath.ValidateBoundaryFixture();
+        CanonicalInputContract input = VoxelMath.ComputeCanonicalInput(options, includeCanonicalInputCells);
         OutputFixture independentFixture = CreateIndependentFixture();
         WorkerResult[] workers = new WorkerResult[options.WorkerCount];
         Task[] tasks = new Task[options.WorkerCount];
@@ -159,6 +117,8 @@ internal static class SafeVoxelPipeline
         stopwatch.Stop();
 
         long digest = 17;
+        long outputHash = 17;
+        List<ChunkOutputSummary> chunkOutputs = [];
         long chunks = 0;
         long visibleFaces = 0;
         long vertices = 0;
@@ -204,6 +164,10 @@ internal static class SafeVoxelPipeline
         {
             PipelineResult result = workers[worker].Result;
             digest = VoxelMath.DigestStep(digest, result.Digest);
+            if (result.ChunkOutputs is not null)
+            {
+                chunkOutputs.AddRange(result.ChunkOutputs);
+            }
             chunks += result.Chunks;
             visibleFaces += result.VisibleFaces;
             vertices += result.Vertices;
@@ -245,6 +209,12 @@ internal static class SafeVoxelPipeline
             maskRecycleMilliseconds += result.MaskRecycleMilliseconds;
             packingRecycleMilliseconds += result.PackingRecycleMilliseconds;
             materializedOutput ??= result.MaterializedOutput;
+        }
+
+        chunkOutputs.Sort(static (left, right) => left.ChunkId.CompareTo(right.ChunkId));
+        for (int index = 0; index < chunkOutputs.Count; index++)
+        {
+            outputHash = VoxelMath.DigestChunkOutputSummary(outputHash, chunkOutputs[index]);
         }
 
         return new PipelineResult(
@@ -303,7 +273,23 @@ internal static class SafeVoxelPipeline
             CoordinateRecycleMilliseconds: coordinateRecycleMilliseconds,
             FaceRecycleMilliseconds: faceRecycleMilliseconds,
             MaskRecycleMilliseconds: maskRecycleMilliseconds,
-            PackingRecycleMilliseconds: packingRecycleMilliseconds);
+            PackingRecycleMilliseconds: packingRecycleMilliseconds,
+            ChunkOutputs: chunkOutputs,
+            Input: input,
+            Output: new CanonicalOutputSummary(
+                outputHash,
+                checked((int)opaqueVertices),
+                checked((int)opaqueIndices),
+                checked((int)opaqueFaces),
+                checked((int)opaqueStaged),
+                checked((int)transparentVertices),
+                checked((int)transparentIndices),
+                checked((int)transparentFaces),
+                checked((int)transparentStaged),
+                opaqueFaces,
+                transparentFaces,
+                opaqueStaged,
+                transparentStaged));
     }
 
     private static OutputFixture CreateIndependentFixture()
@@ -314,6 +300,7 @@ internal static class SafeVoxelPipeline
             WorkerCount: 1,
             Iterations: 1);
         long digest = 17;
+        long outputDigest = 17;
         (int opaqueFaceCount, int opaqueStagedBytes) = MeasureRecords(VoxelMath.IndependentOpaqueRecords);
         (int transparentFaceCount, int transparentStagedBytes) = MeasureRecords(VoxelMath.IndependentTransparentRecords);
         Vertex[] opaqueVertices = new Vertex[Math.Max(1, checked(opaqueFaceCount * VoxelMath.VerticesPerFace))];
@@ -333,7 +320,8 @@ internal static class SafeVoxelPipeline
             opaqueUpload,
             opaqueFaceCount,
             opaqueStagedBytes,
-            ref digest);
+            ref digest,
+            ref outputDigest);
         StreamResult transparent = PackRange(
             fixtureOptions,
             VoxelMath.IndependentTransparentRecords,
@@ -343,7 +331,8 @@ internal static class SafeVoxelPipeline
             transparentUpload,
             transparentFaceCount,
             transparentStagedBytes,
-            ref digest);
+            ref digest,
+            ref outputDigest);
         return new OutputFixture(
             opaqueVertices.AsSpan(0, opaque.VertexCount).ToArray(),
             opaqueIndices.AsSpan(0, opaque.IndexCount).ToArray(),
@@ -365,7 +354,7 @@ internal static class SafeVoxelPipeline
         Metrics metrics = default;
         SectionSummary[] sectionSummaries = new SectionSummary[64];
         int totalChunks = checked(options.ChunkCount * options.Iterations);
-        for (int warmup = 0; warmup < VoxelWorkloadOptions.WarmupChunksPerWorker; warmup++)
+        for (int warmup = 0; warmup < options.WarmupChunksPerWorker; warmup++)
         {
             _ = ProcessChunk(
                 options,
@@ -382,6 +371,7 @@ internal static class SafeVoxelPipeline
         ready.Signal();
         start.Wait();
         long digest = 17;
+        List<ChunkOutputSummary> chunkOutputs = [];
         long chunks = 0;
         long visibleFaces = 0;
         long vertices = 0;
@@ -425,6 +415,7 @@ internal static class SafeVoxelPipeline
                 sectionSummaries,
                 captureMeasuredFixture);
             digest = result.Digest;
+            chunkOutputs.Add(VoxelMath.CreateChunkOutputSummary(result));
             chunks++;
             visibleFaces += result.VisibleFaces;
             vertices += result.Vertices;
@@ -509,7 +500,8 @@ internal static class SafeVoxelPipeline
             CoordinateRecycleMilliseconds: coordinateRecycleMilliseconds,
             FaceRecycleMilliseconds: faceRecycleMilliseconds,
             MaskRecycleMilliseconds: maskRecycleMilliseconds,
-            PackingRecycleMilliseconds: packingRecycleMilliseconds));
+            PackingRecycleMilliseconds: packingRecycleMilliseconds,
+            ChunkOutputs: chunkOutputs));
     }
 
     private static ChunkResult ProcessChunk(
@@ -530,6 +522,7 @@ internal static class SafeVoxelPipeline
         long maskRecycleTicksBefore = metrics.MaskRecycleTicks;
         long packingRecycleTicksBefore = metrics.PackingRecycleTicks;
         ChunkResult completed = default;
+        long outputDigest = 17;
         int cellCount = VoxelMath.CellsPerChunk;
         VoxelCell[] cells = Rent<VoxelCell>(cellCount, ref metrics, Stage.Coordinates);
         FaceRecord[] faces = Array.Empty<FaceRecord>();
@@ -742,7 +735,8 @@ internal static class SafeVoxelPipeline
                     upload.AsSpan(0, opaqueStagedBytes),
                     opaqueFaceCount,
                     opaqueStagedBytes,
-                    ref digest);
+                    ref digest,
+                    ref outputDigest);
                 if (metrics.MeasureTimings)
                 {
                     metrics.OpaquePackingTicks += Stopwatch.GetTimestamp() - opaquePackingStart;
@@ -758,7 +752,8 @@ internal static class SafeVoxelPipeline
                     upload.AsSpan(opaqueStagedBytes, transparentStagedBytes),
                     transparentFaceCount,
                     transparentStagedBytes,
-                    ref digest);
+                    ref digest,
+                    ref outputDigest);
                 if (metrics.MeasureTimings)
                 {
                     metrics.TransparentPackingTicks += Stopwatch.GetTimestamp() - transparentPackingStart;
@@ -812,7 +807,9 @@ internal static class SafeVoxelPipeline
                     transparentMaskWords,
                     dominant,
                     residual,
-                    fixture);
+                    fixture,
+                    OutputByteHash: outputDigest,
+                    ChunkId: chunk);
             }
             finally
             {
@@ -895,7 +892,8 @@ internal static class SafeVoxelPipeline
         Span<byte> upload,
         int expectedFaceCount,
         int expectedStagedBytes,
-        ref long digest)
+        ref long digest,
+        ref long outputDigest)
     {
         int vertexCount = 0;
         int indexCount = 0;
@@ -981,6 +979,12 @@ internal static class SafeVoxelPipeline
             indices[..indexCount],
             slices[..expectedFaceCount],
             upload[..expectedStagedBytes]);
+        outputDigest = VoxelMath.DigestMaterializedOutput(
+            outputDigest,
+            vertices[..vertexCount],
+            indices[..indexCount],
+            slices[..expectedFaceCount],
+            upload[..expectedStagedBytes]);
         return new StreamResult(expectedFaceCount, vertexCount, indexCount, expectedStagedBytes, enabledStageBytes);
     }
 
@@ -1003,14 +1007,14 @@ internal static class SafeVoxelPipeline
         int transparentUploadLength)
     {
         return new OutputFixture(
-            opaqueVertices[..Math.Min(opaqueVertexCount, VoxelMath.OutputFixtureElementLimit * VoxelMath.VerticesPerFace)].ToArray(),
-            opaqueIndices[..Math.Min(opaqueIndexCount, VoxelMath.OutputFixtureElementLimit * VoxelMath.IndicesPerFace)].ToArray(),
-            opaqueSlices[..Math.Min(opaqueSliceCount, VoxelMath.OutputFixtureElementLimit)].ToArray(),
-            opaqueUpload[..Math.Min(opaqueUploadLength, VoxelMath.OutputFixtureByteLimit)].ToArray(),
-            transparentVertices[..Math.Min(transparentVertexCount, VoxelMath.OutputFixtureElementLimit * VoxelMath.VerticesPerFace)].ToArray(),
-            transparentIndices[..Math.Min(transparentIndexCount, VoxelMath.OutputFixtureElementLimit * VoxelMath.IndicesPerFace)].ToArray(),
-            transparentSlices[..Math.Min(transparentSliceCount, VoxelMath.OutputFixtureElementLimit)].ToArray(),
-            transparentUpload[..Math.Min(transparentUploadLength, VoxelMath.OutputFixtureByteLimit)].ToArray());
+            opaqueVertices[..opaqueVertexCount].ToArray(),
+            opaqueIndices[..opaqueIndexCount].ToArray(),
+            opaqueSlices[..opaqueSliceCount].ToArray(),
+            opaqueUpload[..opaqueUploadLength].ToArray(),
+            transparentVertices[..transparentVertexCount].ToArray(),
+            transparentIndices[..transparentIndexCount].ToArray(),
+            transparentSlices[..transparentSliceCount].ToArray(),
+            transparentUpload[..transparentUploadLength].ToArray());
     }
 
     private static T[] Rent<T>(int length, ref Metrics metrics, Stage stage)

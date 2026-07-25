@@ -1,217 +1,8 @@
-using System.Globalization;
 using System.Numerics;
 using System.Runtime.CompilerServices;
-using System.Text.Json;
+using System.Text;
 
 namespace Supprocom.NativeAllocationManagement.Demos.VoxelChunkPipeline.SharedContract;
-
-public readonly record struct VoxelWorkloadOptions(
-    int Seed,
-    int ChunkCount,
-    int WorkerCount,
-    int Iterations)
-{
-    public const int DefaultSeed = 1_706_251;
-    public const int DefaultChunkCount = 4;
-    public const int DefaultWorkerCount = 2;
-    public const int DefaultIterations = 1;
-    public const int WarmupChunksPerWorker = 2;
-
-    public static VoxelWorkloadOptions Default => new(
-        DefaultSeed,
-        DefaultChunkCount,
-        DefaultWorkerCount,
-        DefaultIterations);
-
-    public static VoxelWorkloadOptions Parse(IReadOnlyList<string> args)
-    {
-        VoxelWorkloadOptions options = Default;
-        for (int index = 0; index < args.Count; index++)
-        {
-            string name = args[index];
-            if (index + 1 >= args.Count)
-            {
-                throw new ArgumentException($"Missing value for {name}.", nameof(args));
-            }
-
-            int value = int.Parse(args[++index], NumberStyles.Integer, CultureInfo.InvariantCulture);
-            options = name switch
-            {
-                "--seed" => options with { Seed = value },
-                "--chunks" => options with { ChunkCount = value },
-                "--workers" => options with { WorkerCount = value },
-                "--iterations" => options with { Iterations = value },
-                _ => throw new ArgumentException($"Unknown workload option '{name}'.", nameof(args))
-            };
-        }
-
-        if (options.ChunkCount <= 0 || options.WorkerCount <= 0 || options.Iterations <= 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(args), "Chunk, worker, and iteration counts must be positive.");
-        }
-
-        return options;
-    }
-}
-
-public readonly record struct BlockTypeDescriptor(
-    int Id,
-    string Name,
-    int PayloadBytes,
-    int Alignment,
-    int DensityBias,
-    int SolidThreshold,
-    int StageMask,
-    int FrequencyWeight);
-
-public readonly record struct CellCoordinate(int X, int Y, int Z);
-
-public readonly record struct FaceRecord(
-    int CellIndex,
-    int BlockId,
-    int Mask,
-    int PayloadBytes,
-    int Alignment,
-    int StageMask,
-    int StageBytes);
-
-public readonly record struct Vertex(int X, int Y, int Z, int Face, int Corner, int BlockId);
-
-public readonly record struct PayloadSlice(int Offset, int Length, int Alignment, int StageMask, int BlockId, int CellIndex);
-
-public struct VoxelCell
-{
-    public ushort BlockId;
-    public short Density;
-    public int FaceMask;
-    public int OpaqueMask;
-    public int TransparentMask;
-    public int Section;
-}
-
-public struct NativeFaceOutput
-{
-    public int CellIndex;
-    public int BlockId;
-    public int FaceMask;
-    public int PayloadBytes;
-    public int Alignment;
-    public int StageMask;
-    public int StageBytes;
-}
-
-public readonly record struct OutputFixture(
-    Vertex[] OpaqueVertices,
-    int[] OpaqueIndices,
-    PayloadSlice[] OpaqueSlices,
-    byte[] OpaqueUpload,
-    Vertex[] TransparentVertices,
-    int[] TransparentIndices,
-    PayloadSlice[] TransparentSlices,
-    byte[] TransparentUpload);
-
-public enum SectionRepresentationKind
-{
-    Empty,
-    Uniform,
-    Expanded,
-    Packed,
-    MultiPacked
-}
-
-public readonly record struct SectionSummary(
-    SectionRepresentationKind Kind,
-    int TransparentIds,
-    bool HasDominantTransparentId,
-    bool HasResidualTransparentIds);
-
-public readonly record struct PipelineResult(
-    string Implementation,
-    long Digest,
-    int Chunks,
-    long VisibleFaces,
-    long Vertices,
-    long Indices,
-    long StagedBytes,
-    long ManagedPayloadObjectBytes,
-    long PeakManagedBackingBytes,
-    long PeakNativeBackingBytes,
-    long PeakRetainedNativeBackingBytes,
-    long FinalNativeBackingBytes,
-    long PeakCoordinateStageBytes,
-    long PeakFaceStageBytes,
-    long PeakPackingStageBytes,
-    long RentCount,
-    long ScopedRecycleCount,
-    long ClearedBytes,
-    long EmptySections = 0,
-    long UniformSections = 0,
-    long ExpandedSections = 0,
-    long PackedSections = 0,
-    long MultiPackedSections = 0,
-    long TransparentMaskCount = 0,
-    long DominantTransparentSections = 0,
-    long ResidualTransparentSections = 0,
-    long OpaqueVisibleFaces = 0,
-    long TransparentVisibleFaces = 0,
-    long OpaqueVertices = 0,
-    long TransparentVertices = 0,
-    long OpaqueIndices = 0,
-    long TransparentIndices = 0,
-    long OpaqueStagedBytes = 0,
-    long TransparentStagedBytes = 0,
-    long EnabledStageBytes = 0,
-    long ManagedContainerBytes = 0,
-    long TransparentMaskWords = 0,
-    long MeasuredLeaseCount = 0,
-    long ReusedNativeSegmentCount = 0,
-    double MeasuredMilliseconds = 0,
-    long MeasuredManagedAllocatedBytes = 0,
-    int MeasuredGen0Collections = 0,
-    int MeasuredGen1Collections = 0,
-    int MeasuredGen2Collections = 0,
-    OutputFixture? MaterializedOutput = null,
-    long ColdManagedBackingBytes = 0,
-    OutputFixture? IndependentFixture = null,
-    long ReclaimedRangeReuseCount = 0,
-    long ReclaimedRangeReuseBytes = 0,
-    double GenerationMilliseconds = 0,
-    double FaceDerivationMilliseconds = 0,
-    double TransparentMaskMilliseconds = 0,
-    double OpaquePackingMilliseconds = 0,
-    double TransparentPackingMilliseconds = 0,
-    double CoordinateRecycleMilliseconds = 0,
-    double FaceRecycleMilliseconds = 0,
-    double MaskRecycleMilliseconds = 0,
-    double PackingRecycleMilliseconds = 0);
-
-public readonly record struct ChildRunResult(
-    string Implementation,
-    PipelineResult Result,
-    double ElapsedMilliseconds,
-    long ManagedAllocatedBytes,
-    int Gen0Collections,
-    int Gen1Collections,
-    int Gen2Collections,
-    long HeapBytesAfterRun,
-    long PeakWorkingSetBytes,
-    long LargeObjectHeapBytesAfterRun = 0,
-    long ColdManagedAllocatedBytes = 0)
-{
-    public string ToJson() => JsonSerializer.Serialize(this, VoxelJson.Options);
-
-    public static ChildRunResult FromJson(string json) =>
-        JsonSerializer.Deserialize<ChildRunResult>(json, VoxelJson.Options);
-}
-
-public static class VoxelJson
-{
-    public static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.General)
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        WriteIndented = false
-    };
-}
 
 public static class VoxelMath
 {
@@ -222,7 +13,6 @@ public static class VoxelMath
     public const int IndicesPerFace = 6;
     public static readonly int VoxelCellBytes = Unsafe.SizeOf<VoxelCell>();
     public static readonly int FaceRecordBytes = Unsafe.SizeOf<FaceRecord>();
-    public static readonly int NativeFaceOutputBytes = Unsafe.SizeOf<NativeFaceOutput>();
     public static readonly int VertexBytes = Unsafe.SizeOf<Vertex>();
     public static readonly int IndexBytes = Unsafe.SizeOf<int>();
     public static readonly int PayloadSliceBytes = Unsafe.SizeOf<PayloadSlice>();
@@ -231,8 +21,36 @@ public static class VoxelMath
     public const int DigestMultiplier = 1_000_003;
     public const int AirBlockId = 0;
     public const int IndependentFixtureSeed = 0x13579;
-    public const int OutputFixtureElementLimit = 2;
-    public const int OutputFixtureByteLimit = 512;
+
+    public static readonly CanonicalInputFixture ExpectedCanonicalInputFixture = new(
+        0x13579,
+        0,
+        [
+            new(0, 0, 0, 0, 0, 0, 0, short.MinValue),
+            new(0, 16, 16, 0, 0, 1, 256, 118),
+            new(0, 32, 32, 0, 0, 2, 257, 48),
+            new(0, 1024, 0, 16, 0, 4, 261, -88),
+            new(0, 1040, 16, 16, 0, 5, 258, -8)
+        ],
+        95816130);
+
+    public static readonly HandAuthoredInputFixture ExpectedHandAuthoredInputFixture = new(
+        0x2468,
+        7,
+        2,
+        2,
+        2,
+        [
+            new(7, 0, 0, 0, 0, 0, 0, short.MinValue),
+            new(7, 1, 1, 0, 0, 0, 256, 41),
+            new(7, 2, 0, 1, 0, 0, 257, -13),
+            new(7, 3, 1, 1, 0, 0, 258, 7),
+            new(7, 4, 0, 0, 1, 0, 259, 88),
+            new(7, 5, 1, 0, 1, 0, 260, 111),
+            new(7, 6, 0, 1, 1, 0, 261, -4),
+            new(7, 7, 1, 1, 1, 0, 256, 19)
+        ],
+        181681900);
 
     // These are setup-time value LUTs. The measured cells carry only ushort IDs,
     // matching VoxelEngine's runtime BlockType registry contract.
@@ -429,6 +247,220 @@ public static class VoxelMath
         return (state * DigestMultiplier + normalized + 97) % DigestModulus;
     }
 
+    public static long DigestInt32(long state, int value)
+    {
+        uint bits = unchecked((uint)value);
+        for (int shift = 0; shift < sizeof(int); shift++)
+        {
+            state = DigestStep(state, (byte)(bits >> (shift * 8)));
+        }
+
+        return state;
+    }
+
+    public static long DigestUInt16(long state, ushort value)
+    {
+        for (int shift = 0; shift < sizeof(ushort); shift++)
+        {
+            state = DigestStep(state, (byte)(value >> (shift * 8)));
+        }
+
+        return state;
+    }
+
+    public static long DigestInt16(long state, short value) =>
+        DigestUInt16(state, unchecked((ushort)value));
+
+    public static long DigestInt64(long state, long value)
+    {
+        ulong bits = unchecked((ulong)value);
+        for (int shift = 0; shift < sizeof(long); shift++)
+        {
+            state = DigestStep(state, (byte)(bits >> (shift * 8)));
+        }
+
+        return state;
+    }
+
+    public static long DigestCanonicalInputCell(long state, CanonicalInputCell value)
+    {
+        state = DigestInt32(state, value.ChunkId);
+        state = DigestInt32(state, value.CellIndex);
+        state = DigestInt32(state, value.X);
+        state = DigestInt32(state, value.Y);
+        state = DigestInt32(state, value.Z);
+        state = DigestInt32(state, value.Section);
+        state = DigestUInt16(state, value.BlockId);
+        return DigestInt16(state, value.Density);
+    }
+
+    public static CanonicalInputCell CreateCanonicalInputCell(
+        int seed,
+        int chunkId,
+        int cellIndex)
+    {
+        int x = cellIndex % ChunkDimension;
+        int y = (cellIndex / ChunkDimension) % ChunkDimension;
+        int z = cellIndex / (ChunkDimension * ChunkDimension);
+        int blockId = BlockIdForCell(seed, chunkId, x, y, z);
+        return new(
+            chunkId,
+            cellIndex,
+            x,
+            y,
+            z,
+            SectionIndex(x, y, z),
+            checked((ushort)blockId),
+            DensityForCell(seed, chunkId, x, y, z, blockId));
+    }
+
+    public static long ComputeCanonicalInputCellsByteHash(
+        int seed,
+        int chunkId,
+        ReadOnlySpan<CanonicalInputCell> cells)
+    {
+        long hash = 17;
+        hash = DigestInt32(hash, seed);
+        hash = DigestInt32(hash, chunkId);
+        for (int index = 0; index < cells.Length; index++)
+        {
+            hash = DigestCanonicalInputCell(hash, cells[index]);
+        }
+
+        return hash;
+    }
+
+    public static CanonicalInputContract ComputeCanonicalInput(
+        VoxelWorkloadOptions options,
+        bool includeCells = false)
+    {
+        long hash = 17;
+        hash = DigestInt32(hash, options.Seed);
+        hash = DigestInt32(hash, options.ChunkCount);
+        hash = DigestInt32(hash, options.WorkerCount);
+        hash = DigestInt32(hash, options.Iterations);
+        hash = DigestInt32(hash, options.WarmupChunksPerWorker);
+        long registryHash = ComputeRegistryHash();
+        hash = DigestInt32(hash, BlockTypes.Length);
+        hash = DigestInt64(hash, registryHash);
+        long chunkOrderHash = 17;
+        long cellValueHash = 17;
+        long cellCount = 0;
+        List<CanonicalInputCell>? completeCells = includeCells
+            ? new List<CanonicalInputCell>(checked(options.ChunkCount * CellsPerChunk))
+            : null;
+        for (int chunk = 0; chunk < options.ChunkCount; chunk++)
+        {
+            hash = DigestInt32(hash, chunk);
+            for (int cell = 0; cell < CellsPerChunk; cell++)
+            {
+                CanonicalInputCell value = CreateCanonicalInputCell(options.Seed, chunk, cell);
+                completeCells?.Add(value);
+                hash = DigestCanonicalInputCell(hash, value);
+                cellValueHash = DigestCanonicalInputCell(cellValueHash, value);
+                chunkOrderHash = DigestInt32(chunkOrderHash, chunk);
+                chunkOrderHash = DigestInt32(chunkOrderHash, cell);
+                cellCount++;
+            }
+        }
+
+        return new(
+            options,
+            BlockTypes.ToArray(),
+            cellCount,
+            cellValueHash,
+            hash,
+            chunkOrderHash,
+            completeCells?.ToArray());
+    }
+
+    public static long ComputeRegistryHash()
+    {
+        long registryHash = 17;
+        for (int index = 0; index < BlockTypes.Length; index++)
+        {
+            BlockTypeDescriptor type = BlockTypes[index];
+            registryHash = DigestInt32(registryHash, type.Id);
+            byte[] name = Encoding.UTF8.GetBytes(type.Name);
+            registryHash = DigestInt32(registryHash, name.Length);
+            registryHash = DigestBytes(registryHash, name);
+            registryHash = DigestInt32(registryHash, type.PayloadBytes);
+            registryHash = DigestInt32(registryHash, type.Alignment);
+            registryHash = DigestInt32(registryHash, type.DensityBias);
+            registryHash = DigestInt32(registryHash, type.SolidThreshold);
+            registryHash = DigestInt32(registryHash, type.StageMask);
+            registryHash = DigestInt32(registryHash, type.FrequencyWeight);
+        }
+
+        return registryHash;
+    }
+
+    public static void ValidateCanonicalInputFixture()
+    {
+        CanonicalInputFixture fixture = ExpectedCanonicalInputFixture;
+        CanonicalInputCell[] expected = fixture.Cells;
+        for (int index = 0; index < expected.Length; index++)
+        {
+            CanonicalInputCell actual = CreateCanonicalInputCell(
+                fixture.Seed,
+                fixture.ChunkId,
+                expected[index].CellIndex);
+            if (actual != expected[index])
+            {
+                throw new InvalidDataException($"Canonical input fixture mismatch at cell {index}: expected {expected[index]}, actual {actual}.");
+            }
+        }
+
+        long hash = ComputeCanonicalInputCellsByteHash(fixture.Seed, fixture.ChunkId, expected);
+        if (fixture.ExpectedByteHash != 0 && hash != fixture.ExpectedByteHash)
+        {
+            throw new InvalidDataException($"Canonical input fixture hash mismatch: expected {fixture.ExpectedByteHash}, actual {hash}.");
+        }
+    }
+
+    public static void ValidateHandAuthoredInputFixture()
+    {
+        HandAuthoredInputFixture fixture = ExpectedHandAuthoredInputFixture;
+        int expectedCount = checked(fixture.Width * fixture.Height * fixture.Depth);
+        if (fixture.Cells.Length != expectedCount)
+        {
+            throw new InvalidDataException(
+                $"Hand-authored input fixture is incomplete: expected {expectedCount} cells, actual {fixture.Cells.Length}.");
+        }
+
+        bool[] seen = new bool[expectedCount];
+        for (int index = 0; index < fixture.Cells.Length; index++)
+        {
+            CanonicalInputCell cell = fixture.Cells[index];
+            if (cell.ChunkId != fixture.ChunkId
+                || cell.CellIndex != index
+                || (uint)cell.X >= fixture.Width
+                || (uint)cell.Y >= fixture.Height
+                || (uint)cell.Z >= fixture.Depth
+                || cell.Section != 0)
+            {
+                throw new InvalidDataException(
+                    $"Hand-authored input fixture has an invalid complete-cell entry at index {index}: {cell}.");
+            }
+
+            int coordinateIndex = (cell.Z * fixture.Height + cell.Y) * fixture.Width + cell.X;
+            if (seen[coordinateIndex])
+            {
+                throw new InvalidDataException(
+                    $"Hand-authored input fixture repeats coordinate {cell.X},{cell.Y},{cell.Z}.");
+            }
+
+            seen[coordinateIndex] = true;
+        }
+
+        long hash = ComputeCanonicalInputCellsByteHash(fixture.Seed, fixture.ChunkId, fixture.Cells);
+        if (hash != fixture.ExpectedByteHash)
+        {
+            throw new InvalidDataException(
+                $"Hand-authored input fixture hash mismatch: expected {fixture.ExpectedByteHash}, actual {hash}.");
+        }
+    }
+
     public static long DigestBytes(long state, ReadOnlySpan<byte> bytes)
     {
         for (int index = 0; index < bytes.Length; index++)
@@ -456,35 +488,66 @@ public static class VoxelMath
         ReadOnlySpan<PayloadSlice> slices,
         ReadOnlySpan<byte> upload)
     {
+        state = DigestInt32(state, vertices.Length);
         for (int index = 0; index < vertices.Length; index++)
         {
             Vertex value = vertices[index];
-            state = DigestStep(state, value.X);
-            state = DigestStep(state, value.Y);
-            state = DigestStep(state, value.Z);
-            state = DigestStep(state, value.Face);
-            state = DigestStep(state, value.Corner);
-            state = DigestStep(state, value.BlockId);
+            state = DigestInt32(state, value.X);
+            state = DigestInt32(state, value.Y);
+            state = DigestInt32(state, value.Z);
+            state = DigestInt32(state, value.Face);
+            state = DigestInt32(state, value.Corner);
+            state = DigestInt32(state, value.BlockId);
         }
 
+        state = DigestInt32(state, indices.Length);
         for (int index = 0; index < indices.Length; index++)
         {
-            state = DigestStep(state, indices[index]);
+            state = DigestInt32(state, indices[index]);
         }
 
+        state = DigestInt32(state, slices.Length);
         for (int index = 0; index < slices.Length; index++)
         {
             PayloadSlice value = slices[index];
-            state = DigestStep(state, value.Offset);
-            state = DigestStep(state, value.Length);
-            state = DigestStep(state, value.Alignment);
-            state = DigestStep(state, value.StageMask);
-            state = DigestStep(state, value.BlockId);
-            state = DigestStep(state, value.CellIndex);
+            state = DigestInt32(state, value.Offset);
+            state = DigestInt32(state, value.Length);
+            state = DigestInt32(state, value.Alignment);
+            state = DigestInt32(state, value.StageMask);
+            state = DigestInt32(state, value.BlockId);
+            state = DigestInt32(state, value.CellIndex);
         }
 
+        state = DigestInt32(state, upload.Length);
         return DigestBytes(state, upload);
     }
+
+    public static long DigestChunkOutputSummary(long state, ChunkOutputSummary value)
+    {
+        state = DigestInt32(state, value.ChunkId);
+        state = DigestInt64(state, value.ByteHash);
+        state = DigestInt32(state, value.OpaqueVertexLength);
+        state = DigestInt32(state, value.OpaqueIndexLength);
+        state = DigestInt32(state, value.OpaqueSliceLength);
+        state = DigestInt32(state, value.OpaqueUploadLength);
+        state = DigestInt32(state, value.TransparentVertexLength);
+        state = DigestInt32(state, value.TransparentIndexLength);
+        state = DigestInt32(state, value.TransparentSliceLength);
+        return DigestInt32(state, value.TransparentUploadLength);
+    }
+
+    public static ChunkOutputSummary CreateChunkOutputSummary(ChunkResult result) =>
+        new(
+            result.ChunkId,
+            result.OutputByteHash,
+            result.OpaqueVertices,
+            result.OpaqueIndices,
+            result.OpaqueFaces,
+            result.OpaqueStagedBytes,
+            result.TransparentVertices,
+            result.TransparentIndices,
+            result.TransparentFaces,
+            result.TransparentStagedBytes);
 
     public static int FaceCount(int mask) => BitOperations.PopCount((uint)mask);
 

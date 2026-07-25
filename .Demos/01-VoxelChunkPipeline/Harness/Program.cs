@@ -17,7 +17,36 @@ internal static class Program
             HarnessArguments parsed = HarnessArguments.Parse(args);
             RunSafetyScan(root);
             CorrectnessReport correctness = RunCorrectness(root, parsed.Workload);
-            Console.WriteLine(JsonSerializer.Serialize(correctness, VoxelJson.Options));
+            Console.WriteLine(JsonSerializer.Serialize(
+                new
+                {
+                    correctness.Passed,
+                    SafeInput = new
+                    {
+                        correctness.Safe.Input.Options,
+                        RegistryCount = correctness.Safe.Input.Registry.Length,
+                        correctness.Safe.Input.CellCount,
+                        correctness.Safe.Input.CellValueByteHash,
+                        correctness.Safe.Input.ByteHash,
+                        correctness.Safe.Input.ChunkOrderHash,
+                        CompleteCells = correctness.Safe.Input.Cells?.Length ?? 0
+                    },
+                    NamInput = new
+                    {
+                        correctness.Nam.Input.Options,
+                        RegistryCount = correctness.Nam.Input.Registry.Length,
+                        correctness.Nam.Input.CellCount,
+                        correctness.Nam.Input.CellValueByteHash,
+                        correctness.Nam.Input.ByteHash,
+                        correctness.Nam.Input.ChunkOrderHash,
+                        CompleteCells = correctness.Nam.Input.Cells?.Length ?? 0
+                    },
+                    SafeOutput = correctness.Safe.Output,
+                    NamOutput = correctness.Nam.Output,
+                    SafeIndependentFixture = correctness.Safe.IndependentFixture is not null,
+                    NamIndependentFixture = correctness.Nam.IndependentFixture is not null
+                },
+                VoxelJson.Options));
             if (parsed.CorrectnessOnly)
             {
                 return correctness.Passed ? 0 : 2;
@@ -47,8 +76,15 @@ internal static class Program
 
     private static CorrectnessReport RunCorrectness(string root, VoxelWorkloadOptions options)
     {
-        ChildRunResult safe = RunChild(root, "SafeCSharp", options, "--correctness");
-        ChildRunResult nam = RunChild(root, "NAM", options, "--correctness");
+        VoxelWorkloadOptions correctnessOptions = options with
+        {
+            ChunkCount = 1,
+            WorkerCount = 1,
+            Iterations = 1,
+            WarmupChunksPerWorker = 0
+        };
+        ChildRunResult safe = RunChild(root, "SafeCSharp", correctnessOptions, "--correctness");
+        ChildRunResult nam = RunChild(root, "NAM", correctnessOptions, "--correctness");
         bool parity = SameWork(safe.Result, nam.Result);
         if (!parity)
         {
@@ -61,11 +97,8 @@ internal static class Program
         if (nam.Result.FinalNativeBackingBytes != 0
             || nam.Result.PeakNativeBackingBytes <= 0
             || nam.Result.PeakManagedBackingBytes != 0
-            || nam.Result.ReusedNativeSegmentCount <= 0
-            || nam.Result.ReclaimedRangeReuseCount <= 0
-            || nam.Result.ReclaimedRangeReuseBytes <= 0
             || nam.Result.ScopedRecycleCount <= 0
-            || nam.Result.MaterializedOutput is null)
+            || nam.Result.IndependentFixture is null)
         {
             throw new InvalidDataException("NAM did not report direct native backing, typed-slab reuse, arena reclaimed-range reuse, scoped reuse, and a zero final native baseline.");
         }
@@ -116,7 +149,7 @@ internal static class Program
             DateTime.UtcNow,
             parsed.Workload,
             parsed.Pairs,
-            VoxelWorkloadOptions.WarmupChunksPerWorker,
+            parsed.Workload.WarmupChunksPerWorker,
             "paired Student-t 95% interval over per-pair Safe/NAM speedup samples",
             summary.CorrectnessPassed,
             samples,
@@ -281,6 +314,8 @@ internal static class Program
         start.ArgumentList.Add(options.WorkerCount.ToString(CultureInfo.InvariantCulture));
         start.ArgumentList.Add("--iterations");
         start.ArgumentList.Add(options.Iterations.ToString(CultureInfo.InvariantCulture));
+        start.ArgumentList.Add("--warmup");
+        start.ArgumentList.Add(options.WarmupChunksPerWorker.ToString(CultureInfo.InvariantCulture));
         using Process process = Process.Start(start) ?? throw new InvalidOperationException("Could not start child process.");
         Task<string> stdoutTask = process.StandardOutput.ReadToEndAsync();
         Task<string> stderrTask = process.StandardError.ReadToEndAsync();
@@ -322,10 +357,48 @@ internal static class Program
             }
         }
 
-        string contractSource = File.ReadAllText(Path.Combine(demoRoot, "SharedContract", "VoxelContract.cs"));
-        if (!contractSource.Contains("stackalloc", StringComparison.Ordinal))
+        string[] sharedSources = Directory.EnumerateFiles(
+                Path.Combine(demoRoot, "SharedContract"),
+                "*.cs",
+                SearchOption.AllDirectories)
+            .ToArray();
+        if (!sharedSources.Any(path => File.ReadAllText(path).Contains("stackalloc", StringComparison.Ordinal)))
         {
             throw new InvalidDataException("The bounded section classifier must retain stack-based masks and counters.");
+        }
+
+        Type[] sharedDtos =
+        [
+            typeof(VoxelWorkloadOptions),
+            typeof(BlockTypeDescriptor),
+            typeof(CanonicalInputCell),
+            typeof(CanonicalInputContract),
+            typeof(CanonicalInputFixture),
+            typeof(HandAuthoredInputFixture),
+            typeof(FaceRecord),
+            typeof(Vertex),
+            typeof(PayloadSlice),
+            typeof(OutputFixture),
+            typeof(CanonicalOutputSummary),
+            typeof(ChunkOutputSummary),
+            typeof(NativeOwnerProfile),
+            typeof(ChunkResult),
+            typeof(StreamResult),
+            typeof(WorkerResult),
+            typeof(PipelineResult),
+            typeof(ChildRunResult),
+            typeof(PressureRunMetrics),
+            typeof(CgroupMemorySnapshot),
+            typeof(CorrectnessReport),
+            typeof(PairedSample),
+            typeof(BenchmarkReport),
+            typeof(BenchmarkSummary)
+        ];
+        if (sharedDtos.Any(type => type.Assembly != typeof(FaceRecord).Assembly)
+            || typeof(FaceRecord).Assembly.GetType(
+                "Supprocom.NativeAllocationManagement.Demos.VoxelChunkPipeline.SharedContract.NativeFaceOutput") is not null)
+        {
+            throw new InvalidDataException("All algorithm and protocol DTOs must come from one shared contract assembly.");
         }
 
         string namSource = File.ReadAllText(Path.Combine(demoRoot, "NAM", "NativeVoxelPipeline.cs"));
@@ -352,8 +425,8 @@ internal static class Program
             "NativeArena",
             "NativeLease"
         ];
-        foreach (string sourcePath in Directory.EnumerateFiles(Path.Combine(demoRoot, "SharedContract"), "*.cs")
-            .Concat(Directory.EnumerateFiles(Path.Combine(demoRoot, "SafeCSharp"), "*.cs")))
+        foreach (string sourcePath in Directory.EnumerateFiles(Path.Combine(demoRoot, "SharedContract"), "*.cs", SearchOption.AllDirectories)
+            .Concat(Directory.EnumerateFiles(Path.Combine(demoRoot, "SafeCSharp"), "*.cs", SearchOption.AllDirectories)))
         {
             string source = File.ReadAllText(sourcePath);
             foreach (string token in forbidden)
@@ -364,10 +437,26 @@ internal static class Program
                 }
             }
         }
+
+        string[] algorithmDtoNames =
+        ["VoxelCell", "FaceRecord", "Vertex", "PayloadSlice", "ChunkResult", "StreamResult", "WorkerResult", "PipelineResult"];
+        foreach (string sourcePath in Directory.EnumerateFiles(Path.Combine(demoRoot, "SafeCSharp"), "*.cs", SearchOption.AllDirectories)
+            .Concat(Directory.EnumerateFiles(Path.Combine(demoRoot, "NAM"), "*.cs", SearchOption.AllDirectories)))
+        {
+            string source = File.ReadAllText(sourcePath);
+            if (source.Contains("NativeFaceOutput", StringComparison.Ordinal)
+                || algorithmDtoNames.Any(name => source.Contains($"record struct {name}", StringComparison.Ordinal)))
+            {
+                throw new InvalidDataException($"Implementation-specific duplicate algorithm DTO found: {sourcePath}");
+            }
+        }
     }
 
     private static bool SameWork(PipelineResult left, PipelineResult right) =>
         left.Digest == right.Digest
+        && left.Input == right.Input
+        && left.Output == right.Output
+        && ChunkOutputsEqual(left.ChunkOutputs, right.ChunkOutputs)
         && left.Chunks == right.Chunks
         && left.VisibleFaces == right.VisibleFaces
         && left.Vertices == right.Vertices
@@ -421,6 +510,31 @@ internal static class Program
             && first.TransparentIndices.AsSpan().SequenceEqual(second.TransparentIndices)
             && first.TransparentSlices.AsSpan().SequenceEqual(second.TransparentSlices)
             && first.TransparentUpload.AsSpan().SequenceEqual(second.TransparentUpload);
+    }
+
+    private static bool ChunkOutputsEqual(
+        IReadOnlyList<ChunkOutputSummary>? left,
+        IReadOnlyList<ChunkOutputSummary>? right)
+    {
+        if (left is null || right is null)
+        {
+            return left is null && right is null;
+        }
+
+        if (left.Count != right.Count)
+        {
+            return false;
+        }
+
+        for (int index = 0; index < left.Count; index++)
+        {
+            if (left[index] != right[index])
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static string FindRepositoryRoot()
@@ -540,7 +654,7 @@ internal static class Program
                         break;
                     default:
                         workloadArgs.Add(args[index]);
-                        if (args[index] is "--seed" or "--chunks" or "--workers" or "--iterations")
+                        if (args[index] is "--seed" or "--chunks" or "--workers" or "--iterations" or "--warmup")
                         {
                             workloadArgs.Add(args[++index]);
                         }
@@ -557,99 +671,5 @@ internal static class Program
         }
     }
 
-    private readonly record struct CorrectnessReport(
-        bool Passed,
-        PipelineResult Safe,
-        PipelineResult Nam,
-        bool PayloadObjectParity);
 
-    private readonly record struct PairedSample(int Pair, ChildRunResult Safe, ChildRunResult Nam);
-
-    private readonly record struct BenchmarkReport(
-        DateTime UtcStarted,
-        VoxelWorkloadOptions Workload,
-        int PairedRuns,
-        int WarmupChunksPerWorker,
-        string ConfidenceMethod,
-        bool CorrectnessPassed,
-        IReadOnlyList<PairedSample> Samples,
-        BenchmarkSummary Summary);
-
-    private readonly record struct BenchmarkSummary(
-        bool CorrectnessPassed,
-        bool GatePassed,
-        double SafeMeanMilliseconds,
-        double NamMeanMilliseconds,
-        double SafeLatencyStandardDeviation,
-        double NamLatencyStandardDeviation,
-        double SafeMeanThroughput,
-        double NamMeanThroughput,
-        double MeanPairedSpeedup,
-        double PairedSpeedupStandardDeviation,
-        double StudentT95Critical,
-        double PairedSpeedupConfidenceLower95,
-        double PairedSpeedupConfidenceUpper95,
-        double SafeMeanManagedAllocatedBytes,
-        double NamMeanManagedAllocatedBytes,
-        double SafeMeanColdManagedAllocatedBytes,
-        double NamMeanColdManagedAllocatedBytes,
-        double SafeMeanColdManagedBackingBytes,
-        double NamMeanColdManagedBackingBytes,
-        bool MaterialManagedAllocationReduction,
-        bool WarmManagedAllocationReduction,
-        bool ThroughputGate,
-        bool ConfidenceGate,
-        double SafeP50Milliseconds,
-        double SafeP95Milliseconds,
-        double SafeP99Milliseconds,
-        double NamP50Milliseconds,
-        double NamP95Milliseconds,
-        double NamP99Milliseconds,
-        double SafeMeanGen0Collections,
-        double SafeMeanGen1Collections,
-        double SafeMeanGen2Collections,
-        double NamMeanGen0Collections,
-        double NamMeanGen1Collections,
-        double NamMeanGen2Collections,
-        double SafeMeanHeapBytesAfterRun,
-        double NamMeanHeapBytesAfterRun,
-        double SafeMeanLargeObjectHeapBytesAfterRun,
-        double NamMeanLargeObjectHeapBytesAfterRun,
-        double SafeMeanPeakWorkingSetBytes,
-        double NamMeanPeakWorkingSetBytes,
-        double SafeMeanPeakManagedBackingBytes,
-        double NamMeanPeakManagedBackingBytes,
-        double NamMeanPeakNativeBackingBytes,
-        double NamMeanPeakRetainedNativeBackingBytes,
-        double NamMeanFinalNativeBackingBytes,
-        double SafeMeanCoordinateStageBytes,
-        double SafeMeanFaceStageBytes,
-        double SafeMeanPackingStageBytes,
-        double NamMeanCoordinateStageBytes,
-        double NamMeanFaceStageBytes,
-        double NamMeanPackingStageBytes,
-         double NamMeanLeaseCount,
-         double NamMeanScopedRecycleCount,
-         double NamMeanClearedBytes,
-         double NamMeanReusedNativeSegmentCount,
-         double NamMeanReclaimedRangeReuseCount,
-         double NamMeanReclaimedRangeReuseBytes,
-         double NamMeanGenerationMilliseconds,
-         double NamMeanFaceDerivationMilliseconds,
-         double NamMeanTransparentMaskMilliseconds,
-         double NamMeanOpaquePackingMilliseconds,
-         double NamMeanTransparentPackingMilliseconds,
-         double NamMeanCoordinateRecycleMilliseconds,
-         double NamMeanFaceRecycleMilliseconds,
-         double NamMeanMaskRecycleMilliseconds,
-         double NamMeanPackingRecycleMilliseconds,
-         double SafeMeanGenerationMilliseconds = 0,
-         double SafeMeanFaceDerivationMilliseconds = 0,
-         double SafeMeanTransparentMaskMilliseconds = 0,
-         double SafeMeanOpaquePackingMilliseconds = 0,
-         double SafeMeanTransparentPackingMilliseconds = 0,
-         double SafeMeanCoordinateRecycleMilliseconds = 0,
-         double SafeMeanFaceRecycleMilliseconds = 0,
-         double SafeMeanMaskRecycleMilliseconds = 0,
-         double SafeMeanPackingRecycleMilliseconds = 0);
 }

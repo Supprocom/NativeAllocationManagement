@@ -24,6 +24,9 @@ public sealed class PublicSurfaceTests
         Assert.NotNull(typeof(NativeArena).GetMethod("Scratch"));
         Assert.NotNull(typeof(NativeArena).GetMethod("ScratchScoped"));
         Assert.NotNull(typeof(NativeRegion).GetMethod("Lease"));
+        Assert.NotNull(typeof(NativePool<int>).GetMethod("GetStatistics"));
+        Assert.NotNull(typeof(NativeArena).GetMethod("GetStatistics"));
+        Assert.NotNull(typeof(NativeRegion).GetMethod("GetStatistics"));
         Assert.DoesNotContain(
             typeof(NativeRegion).GetMethods(BindingFlags.Public | BindingFlags.Instance),
             method => method.Name == "Allocate");

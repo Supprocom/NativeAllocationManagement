@@ -22,6 +22,9 @@ public readonly ref struct NativeRegion
 
     internal int CurrentReferenceRootCountForTest => _kernel?.CurrentReferenceRootCountForTest() ?? 0;
 
+    /// <summary>Reads the current logical and physical state of this owner.</summary>
+    public NativeOwnerStatistics GetStatistics() => GetKernel(nameof(GetStatistics)).GetStatistics();
+
     /// <summary>Creates an active region unless the first generation is explicitly deferred.</summary>
     /// <param name="preAllocateBytes">Optional initial byte reservation.</param>
     /// <param name="returnMemoryOnDispose">The physical cleanup policy used by <see cref="Dispose"/>.</param>

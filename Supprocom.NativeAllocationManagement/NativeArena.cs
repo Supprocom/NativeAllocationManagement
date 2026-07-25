@@ -26,6 +26,9 @@ public sealed class NativeArena : IDisposable
 
     internal long[] CurrentSegmentOrdinalsForTest => _kernel.CurrentSegmentOrdinalsForTest();
 
+    /// <summary>Reads the current logical and physical state of this owner.</summary>
+    public NativeOwnerStatistics GetStatistics() => _kernel.GetStatistics();
+
     /// <summary>Creates an active arena unless the first generation is explicitly deferred.</summary>
     /// <param name="preAllocateBytes">Optional initial byte reservation.</param>
     /// <param name="returnMemoryOnDispose">The physical cleanup policy used by <see cref="Dispose"/>.</param>
