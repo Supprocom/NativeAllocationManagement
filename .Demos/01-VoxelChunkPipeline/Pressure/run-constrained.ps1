@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..\..")).Path,
+    [string]$RepoRoot = "",
     [int]$Pairs = 30,
     [int]$ControlPairs = 30,
     [int]$CalibrationChunks = 2,
@@ -20,6 +20,10 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+if ([string]::IsNullOrWhiteSpace($RepoRoot)) {
+    $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..\..")).Path
+}
 
 function ConvertTo-ProcessArguments {
     param([string[]]$Arguments)
@@ -196,9 +200,9 @@ function Invoke-DockerChild {
     $stderrTask = $process.StandardError.ReadToEndAsync()
     $timedOut = -not $process.WaitForExit($TimeoutSeconds * 1000)
     if ($timedOut) {
-        try { & docker kill $containerName 2>$null | Out-Null } catch { }
         try { $process.Kill($true) } catch { }
-        $process.WaitForExit()
+        try { $process.WaitForExit(5000) } catch { }
+        try { Invoke-CheckedCommand "docker" @("kill", $containerName) 5000 | Out-Null } catch { }
     } else {
         $process.WaitForExit()
     }
@@ -208,13 +212,13 @@ function Invoke-DockerChild {
     $exitCode = if ($timedOut) { 124 } else { $process.ExitCode }
     $state = $null
     try {
-        $stateText = (& docker inspect --format '{{json .State}}' $containerName 2>$null | Out-String).Trim()
+        $stateText = (Invoke-CheckedCommand "docker" @("inspect", "--format", '{{json .State}}', $containerName) 5000).StandardOutput.Trim()
         if ($stateText) {
             $state = $stateText | ConvertFrom-Json
         }
     } catch {
     }
-    try { & docker rm -f $containerName 2>$null | Out-Null } catch { }
+    try { Invoke-CheckedCommand "docker" @("rm", "-f", $containerName) 5000 | Out-Null } catch { }
 
     $child = Get-LastJsonObject $stdout
     $status = if ($timedOut) {
