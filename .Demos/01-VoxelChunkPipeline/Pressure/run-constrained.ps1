@@ -264,10 +264,49 @@ function Get-WorkSignature {
     $signature = [ordered]@{}
     foreach ($name in $names) {
         $value = $Child.result.$name
-        $signature[$name] = if ($name -in @("input", "output", "chunkOutputs")) {
-            $value | ConvertTo-Json -Depth 100 -Compress
+        if ($name -eq "input") {
+            $signature[$name] = [ordered]@{
+                options = $value.options
+                registry = $value.registry
+                cellCount = $value.cellCount
+                strongHash = $value.strongHash
+                observed = $value.observed
+            } | ConvertTo-Json -Depth 100 -Compress
+        } elseif ($name -eq "output") {
+            $signature[$name] = [ordered]@{
+                opaqueVertexLength = $value.opaqueVertexLength
+                opaqueIndexLength = $value.opaqueIndexLength
+                opaqueSliceLength = $value.opaqueSliceLength
+                opaqueUploadLength = $value.opaqueUploadLength
+                transparentVertexLength = $value.transparentVertexLength
+                transparentIndexLength = $value.transparentIndexLength
+                transparentSliceLength = $value.transparentSliceLength
+                transparentUploadLength = $value.transparentUploadLength
+                opaqueFaceCount = $value.opaqueFaceCount
+                transparentFaceCount = $value.transparentFaceCount
+                opaqueStagedBytes = $value.opaqueStagedBytes
+                transparentStagedBytes = $value.transparentStagedBytes
+                strongHash = $value.strongHash
+            } | ConvertTo-Json -Depth 100 -Compress
+        } elseif ($name -eq "chunkOutputs") {
+            $signature[$name] = @($value | ForEach-Object {
+                [ordered]@{
+                    chunkId = $_.chunkId
+                    opaqueVertexLength = $_.opaqueVertexLength
+                    opaqueIndexLength = $_.opaqueIndexLength
+                    opaqueSliceLength = $_.opaqueSliceLength
+                    opaqueUploadLength = $_.opaqueUploadLength
+                    transparentVertexLength = $_.transparentVertexLength
+                    transparentIndexLength = $_.transparentIndexLength
+                    transparentSliceLength = $_.transparentSliceLength
+                    transparentUploadLength = $_.transparentUploadLength
+                    strongOutputHash = $_.strongOutputHash
+                    strongInputHash = $_.strongInputHash
+                    inputCellCount = $_.inputCellCount
+                }
+            } | ConvertTo-Json -Depth 100 -Compress)
         } else {
-            $value
+            $signature[$name] = $value
         }
     }
     return $signature
