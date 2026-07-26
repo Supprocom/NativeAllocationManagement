@@ -86,10 +86,10 @@ internal static class SafeVoxelPipeline
         bool captureMeasuredFixture,
         bool includeCanonicalInputCells = false)
     {
+        Stopwatch endToEnd = Stopwatch.StartNew();
         VoxelMath.ValidateCanonicalInputFixture();
         VoxelMath.ValidateHandAuthoredInputFixture();
         VoxelMath.ValidateBoundaryFixture();
-        CanonicalInputContract input = VoxelMath.ComputeCanonicalInput(options, includeCanonicalInputCells);
         OutputFixture independentFixture = CreateIndependentFixture();
         WorkerResult[] workers = new WorkerResult[options.WorkerCount];
         Task[] tasks = new Task[options.WorkerCount];
@@ -103,7 +103,7 @@ internal static class SafeVoxelPipeline
                 workerId,
                 ready,
                 start,
-                captureMeasuredFixture));
+                captureMeasuredFixture || includeCanonicalInputCells));
         }
 
         ready.Wait();
@@ -216,6 +216,9 @@ internal static class SafeVoxelPipeline
         {
             outputHash = VoxelMath.DigestChunkOutputSummary(outputHash, chunkOutputs[index]);
         }
+        CanonicalInputContract input = VoxelMath.CreateObservedCanonicalInput(options, chunkOutputs);
+        string strongOutputHash = VoxelMath.ComputeStrongPipelineOutputHash(chunkOutputs);
+        endToEnd.Stop();
 
         return new PipelineResult(
             "SafeCSharp",
@@ -276,6 +279,8 @@ internal static class SafeVoxelPipeline
             PackingRecycleMilliseconds: packingRecycleMilliseconds,
             ChunkOutputs: chunkOutputs,
             Input: input,
+            StrongOutputHash: strongOutputHash,
+            ColdEndToEndMilliseconds: endToEnd.Elapsed.TotalMilliseconds,
             Output: new CanonicalOutputSummary(
                 outputHash,
                 checked((int)opaqueVertices),
@@ -289,7 +294,8 @@ internal static class SafeVoxelPipeline
                 opaqueFaces,
                 transparentFaces,
                 opaqueStaged,
-                transparentStaged));
+                transparentStaged,
+                strongOutputHash));
     }
 
     private static OutputFixture CreateIndependentFixture()
@@ -526,6 +532,14 @@ internal static class SafeVoxelPipeline
         int cellCount = VoxelMath.CellsPerChunk;
         VoxelCell[] cells = Rent<VoxelCell>(cellCount, ref metrics, Stage.Coordinates);
         FaceRecord[] faces = Array.Empty<FaceRecord>();
+        CanonicalInputCell[]? inputCells = captureMeasuredFixture
+            ? new CanonicalInputCell[cellCount]
+            : null;
+        using CanonicalHashAccumulator inputHash = new();
+        inputHash.AddString("voxel-input-chunk-v1");
+        inputHash.AddInt32(options.Seed);
+        inputHash.AddInt32(chunk);
+        inputHash.AddInt32(cellCount);
         try
         {
             long generationStart = metrics.MeasureTimings ? Stopwatch.GetTimestamp() : 0;
@@ -537,6 +551,17 @@ internal static class SafeVoxelPipeline
                 int blockId = VoxelMath.BlockIdForCell(options.Seed, chunk, x, y, z);
                 short density = VoxelMath.DensityForCell(options.Seed, chunk, x, y, z, blockId);
                 cells[cell] = new VoxelCell { BlockId = checked((ushort)blockId), Density = density, Section = VoxelMath.SectionIndex(x, y, z) };
+                CanonicalInputCell observed = new(
+                    chunk,
+                    cell,
+                    x,
+                    y,
+                    z,
+                    VoxelMath.SectionIndex(x, y, z),
+                    checked((ushort)blockId),
+                    density);
+                inputCells?[cell] = observed;
+                inputHash.AddCanonicalInputCell(observed);
                 digest = VoxelMath.DigestStep(digest, x);
                 digest = VoxelMath.DigestStep(digest, y);
                 digest = VoxelMath.DigestStep(digest, z);
@@ -787,6 +812,15 @@ internal static class SafeVoxelPipeline
                         upload.AsSpan(opaqueStagedBytes, transparentStagedBytes),
                         transparent.StagedBytes)
                     : null;
+                string strongOutputHash = VoxelMath.ComputeStrongOutputHash(
+                    vertices.AsSpan(0, opaqueVertexCount),
+                    indices.AsSpan(0, opaqueIndexCount),
+                    slices.AsSpan(0, opaqueFaceCount),
+                    upload.AsSpan(0, opaqueStagedBytes),
+                    vertices.AsSpan(opaqueVertexCount, transparentVertexCount),
+                    indices.AsSpan(opaqueIndexCount, transparentIndexCount),
+                    slices.AsSpan(opaqueFaceCount, transparentFaceCount),
+                    upload.AsSpan(opaqueStagedBytes, transparentStagedBytes));
                 completed = new ChunkResult(
                     digest,
                     opaque.FaceCount,
@@ -809,7 +843,10 @@ internal static class SafeVoxelPipeline
                     residual,
                     fixture,
                     OutputByteHash: outputDigest,
-                    ChunkId: chunk);
+                    ChunkId: chunk,
+                    StrongOutputHash: strongOutputHash,
+                    StrongInputHash: inputHash.Complete(),
+                    InputCells: inputCells);
             }
             finally
             {

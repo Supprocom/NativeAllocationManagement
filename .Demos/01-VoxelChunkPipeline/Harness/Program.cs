@@ -26,9 +26,8 @@ internal static class Program
                         correctness.Safe.Input.Options,
                         RegistryCount = correctness.Safe.Input.Registry.Length,
                         correctness.Safe.Input.CellCount,
-                        correctness.Safe.Input.CellValueByteHash,
-                        correctness.Safe.Input.ByteHash,
-                        correctness.Safe.Input.ChunkOrderHash,
+                        correctness.Safe.Input.StrongHash,
+                        correctness.Safe.Input.Observed,
                         CompleteCells = correctness.Safe.Input.Cells?.Length ?? 0
                     },
                     NamInput = new
@@ -36,9 +35,8 @@ internal static class Program
                         correctness.Nam.Input.Options,
                         RegistryCount = correctness.Nam.Input.Registry.Length,
                         correctness.Nam.Input.CellCount,
-                        correctness.Nam.Input.CellValueByteHash,
-                        correctness.Nam.Input.ByteHash,
-                        correctness.Nam.Input.ChunkOrderHash,
+                        correctness.Nam.Input.StrongHash,
+                        correctness.Nam.Input.Observed,
                         CompleteCells = correctness.Nam.Input.Cells?.Length ?? 0
                     },
                     SafeOutput = correctness.Safe.Output,
@@ -85,7 +83,10 @@ internal static class Program
         };
         ChildRunResult safe = RunChild(root, "SafeCSharp", correctnessOptions, "--correctness");
         ChildRunResult nam = RunChild(root, "NAM", correctnessOptions, "--correctness");
-        bool parity = SameWork(safe.Result, nam.Result);
+        CanonicalInputContract expectedInput = VoxelMath.ComputeCanonicalInput(correctnessOptions, includeCells: true);
+        AssertObservedInput(safe.Result, expectedInput, "SafeCSharp");
+        AssertObservedInput(nam.Result, expectedInput, "NAM");
+        bool parity = SameWork(safe.Result, nam.Result, requireMaterializedOutput: true);
         if (!parity)
         {
             throw new InvalidDataException("SafeCSharp and NAM correctness outputs differ.");
@@ -113,6 +114,7 @@ internal static class Program
     private static BenchmarkReport RunBenchmark(string root, HarnessArguments parsed)
     {
         List<PairedSample> samples = new(parsed.Pairs);
+        CanonicalInputContract expectedInput = VoxelMath.ComputeCanonicalInput(parsed.Workload);
         for (int pair = 0; pair < parsed.Pairs; pair++)
         {
             ChildRunResult safe;
@@ -128,6 +130,8 @@ internal static class Program
                 safe = RunChild(root, "SafeCSharp", parsed.Workload, "--run");
             }
 
+            AssertObservedInputHash(safe.Result, expectedInput, "SafeCSharp", pair);
+            AssertObservedInputHash(nam.Result, expectedInput, "NAM", pair);
             if (!SameWork(safe.Result, nam.Result))
             {
                 throw new InvalidDataException($"Correctness parity failed in measured pair {pair}.");
@@ -182,6 +186,8 @@ internal static class Program
         double namColdManaged = Mean(samples.Select(sample => (double)sample.Nam.ColdManagedAllocatedBytes));
         double safeColdBacking = Mean(samples.Select(sample => (double)sample.Safe.Result.ColdManagedBackingBytes));
         double namColdBacking = Mean(samples.Select(sample => (double)sample.Nam.Result.ColdManagedBackingBytes));
+        double safeColdElapsed = Mean(samples.Select(sample => sample.Safe.ColdElapsedMilliseconds));
+        double namColdElapsed = Mean(samples.Select(sample => sample.Nam.ColdElapsedMilliseconds));
         double namMeasuredLeases = Mean(samples.Select(sample => (double)sample.Nam.Result.MeasuredLeaseCount));
         double namReusedNativeSegments = Mean(samples.Select(sample => (double)sample.Nam.Result.ReusedNativeSegmentCount));
         double namReclaimedRangeReuseCount = Mean(samples.Select(sample => (double)sample.Nam.Result.ReclaimedRangeReuseCount));
@@ -277,7 +283,9 @@ internal static class Program
              Mean(samples.Select(sample => sample.Safe.Result.CoordinateRecycleMilliseconds)),
              Mean(samples.Select(sample => sample.Safe.Result.FaceRecycleMilliseconds)),
              Mean(samples.Select(sample => sample.Safe.Result.MaskRecycleMilliseconds)),
-             Mean(samples.Select(sample => sample.Safe.Result.PackingRecycleMilliseconds)));
+             Mean(samples.Select(sample => sample.Safe.Result.PackingRecycleMilliseconds)),
+             SafeMeanColdElapsedMilliseconds: safeColdElapsed,
+             NamMeanColdElapsedMilliseconds: namColdElapsed);
     }
 
     private static ChildRunResult RunChild(
@@ -452,10 +460,14 @@ internal static class Program
         }
     }
 
-    private static bool SameWork(PipelineResult left, PipelineResult right) =>
+    private static bool SameWork(
+        PipelineResult left,
+        PipelineResult right,
+        bool requireMaterializedOutput = false) =>
         left.Digest == right.Digest
         && left.Input == right.Input
         && left.Output == right.Output
+        && left.StrongOutputHash == right.StrongOutputHash
         && ChunkOutputsEqual(left.ChunkOutputs, right.ChunkOutputs)
         && left.Chunks == right.Chunks
         && left.VisibleFaces == right.VisibleFaces
@@ -481,8 +493,41 @@ internal static class Program
         && left.OpaqueStagedBytes == right.OpaqueStagedBytes
         && left.TransparentStagedBytes == right.TransparentStagedBytes
         && left.EnabledStageBytes == right.EnabledStageBytes
+        && (!requireMaterializedOutput || (left.MaterializedOutput is not null && right.MaterializedOutput is not null))
         && OutputFixturesEqual(left.MaterializedOutput, right.MaterializedOutput)
         && OutputFixturesEqual(left.IndependentFixture, right.IndependentFixture);
+
+    private static void AssertObservedInput(
+        PipelineResult actual,
+        CanonicalInputContract expected,
+        string implementation)
+    {
+        if (!actual.Input.Observed
+            || actual.Input.StrongHash != expected.StrongHash
+            || actual.Input.CellCount != expected.CellCount
+            || actual.Input.Cells is null
+            || expected.Cells is null
+            || !actual.Input.Cells.AsSpan().SequenceEqual(expected.Cells))
+        {
+            throw new InvalidDataException(
+                $"{implementation} did not report the complete observed pre-mutation input contract.");
+        }
+    }
+
+    private static void AssertObservedInputHash(
+        PipelineResult actual,
+        CanonicalInputContract expected,
+        string implementation,
+        int pair)
+    {
+        if (!actual.Input.Observed
+            || actual.Input.StrongHash != expected.StrongHash
+            || actual.Input.CellCount != expected.CellCount)
+        {
+            throw new InvalidDataException(
+                $"{implementation} measured pair {pair} did not report the expected observed input hash/count.");
+        }
+    }
 
     private static void AssertIndependentFixture(PipelineResult result, string implementation)
     {
@@ -528,7 +573,24 @@ internal static class Program
 
         for (int index = 0; index < left.Count; index++)
         {
-            if (left[index] != right[index])
+            ChunkOutputSummary first = left[index];
+            ChunkOutputSummary second = right[index];
+            if (first.ChunkId != second.ChunkId
+                || first.ByteHash != second.ByteHash
+                || first.OpaqueVertexLength != second.OpaqueVertexLength
+                || first.OpaqueIndexLength != second.OpaqueIndexLength
+                || first.OpaqueSliceLength != second.OpaqueSliceLength
+                || first.OpaqueUploadLength != second.OpaqueUploadLength
+                || first.TransparentVertexLength != second.TransparentVertexLength
+                || first.TransparentIndexLength != second.TransparentIndexLength
+                || first.TransparentSliceLength != second.TransparentSliceLength
+                || first.TransparentUploadLength != second.TransparentUploadLength
+                || first.StrongOutputHash != second.StrongOutputHash
+                || first.StrongInputHash != second.StrongInputHash
+                || first.InputCellCount != second.InputCellCount
+                || first.InputCells is null != (second.InputCells is null)
+                || (first.InputCells is not null
+                    && !first.InputCells.AsSpan().SequenceEqual(second.InputCells!)))
             {
                 return false;
             }

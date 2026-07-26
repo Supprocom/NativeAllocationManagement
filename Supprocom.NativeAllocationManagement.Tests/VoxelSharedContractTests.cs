@@ -90,10 +90,11 @@ public sealed class VoxelSharedContractTests
         CanonicalInputContract contract = VoxelMath.ComputeCanonicalInput(options);
         Assert.Equal(options, contract.Options);
         Assert.Equal(VoxelMath.BlockTypes, contract.Registry);
-        Assert.Equal((long)2 * VoxelMath.CellsPerChunk, contract.CellCount);
+        Assert.Equal((long)2 * 3 * VoxelMath.CellsPerChunk, contract.CellCount);
         Assert.NotEqual(0, contract.CellValueByteHash);
         Assert.NotEqual(0, contract.ByteHash);
         Assert.NotEqual(0, contract.ChunkOrderHash);
+        Assert.Equal(64, contract.StrongHash.Length);
         Assert.NotEqual(contract.ByteHash, VoxelMath.ComputeCanonicalInput(options with { Seed = options.Seed + 1 }).ByteHash);
     }
 
@@ -118,7 +119,78 @@ public sealed class VoxelSharedContractTests
         }
         Assert.Equal(contract.CellValueByteHash, cellHash);
         Assert.Equal(0, cells[0].CellIndex);
-        Assert.Equal(options.ChunkCount - 1, cells[^1].ChunkId);
+        Assert.Equal(options.ChunkCount * options.Iterations - 1, cells[^1].ChunkId);
+    }
+
+    [Fact]
+    public void ObservedInputUsesEveryMeasuredChunkAndStrongOutputHashCoversAllStreams()
+    {
+        VoxelWorkloadOptions options = VoxelWorkloadOptions.Default with
+        {
+            ChunkCount = 2,
+            Iterations = 2,
+            WorkerCount = 1,
+            WarmupChunksPerWorker = 0
+        };
+        CanonicalInputContract expected = VoxelMath.ComputeCanonicalInput(options);
+        List<ChunkOutputSummary> chunks = [];
+        for (int chunk = 0; chunk < options.ChunkCount * options.Iterations; chunk++)
+        {
+            CanonicalInputCell[] cells = new CanonicalInputCell[VoxelMath.CellsPerChunk];
+            for (int cell = 0; cell < cells.Length; cell++)
+            {
+                cells[cell] = VoxelMath.CreateCanonicalInputCell(options.Seed, chunk, cell);
+            }
+
+            chunks.Add(new ChunkOutputSummary(
+                chunk,
+                17,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                InputCellCount: cells.Length,
+                InputCells: cells,
+                StrongInputHash: VoxelMath.ComputeStrongCanonicalInputChunkHash(options.Seed, chunk, cells)));
+        }
+
+        CanonicalInputContract observed = VoxelMath.CreateObservedCanonicalInput(options, chunks);
+        Assert.Equal(expected.StrongHash, observed.StrongHash);
+        Assert.Equal(expected.CellCount, observed.CellCount);
+        Assert.Equal(expected.CellCount, observed.Cells!.LongLength);
+        Assert.True(observed.Observed);
+    }
+
+    [Fact]
+    public void StrongOutputHashIncludesEveryMaterializedElementAndByte()
+    {
+        OutputFixture fixture = VoxelMath.ExpectedIndependentFixture;
+        string original = VoxelMath.ComputeStrongOutputHash(
+            fixture.OpaqueVertices,
+            fixture.OpaqueIndices,
+            fixture.OpaqueSlices,
+            fixture.OpaqueUpload,
+            fixture.TransparentVertices,
+            fixture.TransparentIndices,
+            fixture.TransparentSlices,
+            fixture.TransparentUpload);
+        byte[] changedUpload = fixture.TransparentUpload.ToArray();
+        changedUpload[^1] ^= 0x01;
+        string changed = VoxelMath.ComputeStrongOutputHash(
+            fixture.OpaqueVertices,
+            fixture.OpaqueIndices,
+            fixture.OpaqueSlices,
+            fixture.OpaqueUpload,
+            fixture.TransparentVertices,
+            fixture.TransparentIndices,
+            fixture.TransparentSlices,
+            changedUpload);
+        Assert.Equal(64, original.Length);
+        Assert.NotEqual(original, changed);
     }
 
     [Fact]

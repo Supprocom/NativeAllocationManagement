@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Supprocom.NativeAllocationManagement.Demos.VoxelChunkPipeline.SharedContract;
 
 public readonly record struct FaceRecord(
@@ -34,7 +36,7 @@ public readonly record struct OutputFixture(
     byte[] TransparentUpload);
 
 public readonly record struct CanonicalOutputSummary(
-    long ByteHash,
+    [property: JsonIgnore] long ByteHash,
     int OpaqueVertexLength,
     int OpaqueIndexLength,
     int OpaqueSliceLength,
@@ -46,11 +48,12 @@ public readonly record struct CanonicalOutputSummary(
     long OpaqueFaceCount,
     long TransparentFaceCount,
     long OpaqueStagedBytes,
-    long TransparentStagedBytes);
+    long TransparentStagedBytes,
+    string StrongHash = "");
 
 public readonly record struct ChunkOutputSummary(
     int ChunkId,
-    long ByteHash,
+    [property: JsonIgnore] long ByteHash,
     int OpaqueVertexLength,
     int OpaqueIndexLength,
     int OpaqueSliceLength,
@@ -58,7 +61,11 @@ public readonly record struct ChunkOutputSummary(
     int TransparentVertexLength,
     int TransparentIndexLength,
     int TransparentSliceLength,
-    int TransparentUploadLength);
+    int TransparentUploadLength,
+    string StrongOutputHash = "",
+    string StrongInputHash = "",
+    long InputCellCount = 0,
+    CanonicalInputCell[]? InputCells = null);
 
 public readonly record struct NativeOwnerProfile(
     string Owner,
@@ -82,7 +89,7 @@ public readonly record struct StreamResult(
     int EnabledStageBytes);
 
 public readonly record struct ChunkResult(
-    long Digest,
+    [property: JsonIgnore] long Digest,
     int OpaqueFaces,
     int TransparentFaces,
     int OpaqueVertices,
@@ -111,8 +118,11 @@ public readonly record struct ChunkResult(
     double FaceRecycleMilliseconds = 0,
     double MaskRecycleMilliseconds = 0,
     double PackingRecycleMilliseconds = 0,
-    long OutputByteHash = 17,
-    int ChunkId = -1)
+    [property: JsonIgnore] long OutputByteHash = 17,
+    int ChunkId = -1,
+    string StrongOutputHash = "",
+    string StrongInputHash = "",
+    CanonicalInputCell[]? InputCells = null)
 {
     public int VisibleFaces => OpaqueFaces + TransparentFaces;
     public int Vertices => OpaqueVertices + TransparentVertices;
@@ -124,7 +134,7 @@ public readonly record struct WorkerResult(PipelineResult Result);
 
 public readonly record struct PipelineResult(
     string Implementation,
-    long Digest,
+    [property: JsonIgnore] long Digest,
     int Chunks,
     long VisibleFaces,
     long Vertices,
@@ -184,4 +194,6 @@ public readonly record struct PipelineResult(
     CanonicalInputContract Input = default,
     CanonicalOutputSummary Output = default,
     IReadOnlyList<NativeOwnerProfile>? NativeOwnerProfiles = null,
-    IReadOnlyList<ChunkOutputSummary>? ChunkOutputs = null);
+    IReadOnlyList<ChunkOutputSummary>? ChunkOutputs = null,
+    string StrongOutputHash = "",
+    double ColdEndToEndMilliseconds = 0);

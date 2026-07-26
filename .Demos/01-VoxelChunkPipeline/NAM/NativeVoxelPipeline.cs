@@ -26,6 +26,9 @@ internal static class NativeVoxelPipeline
         internal int TransparentStagedBytes;
         internal int EnabledStageBytes;
         internal long OutputByteHash;
+        internal string StrongOutputHash;
+        internal CanonicalHashAccumulator? InputHash;
+        internal CanonicalInputCell[]? InputCells;
         internal OutputFixture? MaterializedOutput;
     }
 
@@ -65,9 +68,12 @@ internal static class NativeVoxelPipeline
             _peakPhysicalBytes = Math.Max(_peakPhysicalBytes, statistics.RetainedBytes);
             _retainedPhysicalBytes = statistics.RetainedBytes;
             _retiredPhysicalBytes = statistics.RetiredBytes;
-            _peakGeometricSlackBytes = Math.Max(
-                _peakGeometricSlackBytes,
-                Math.Max(0, statistics.RetainedBytes - statistics.RequestedBytes));
+            if (statistics.RequestedBytes > 0)
+            {
+                _peakGeometricSlackBytes = Math.Max(
+                    _peakGeometricSlackBytes,
+                    Math.Max(0, statistics.RetainedBytes - statistics.RequestedBytes));
+            }
             _peakSegmentCount = Math.Max(_peakSegmentCount, statistics.SegmentCount);
             _retainedSegmentCount = statistics.SegmentCount;
         }
@@ -205,7 +211,20 @@ internal static class NativeVoxelPipeline
         internal void BeginChunk(int chunk, long digest, bool measureTimings = false)
         {
             _chunk = chunk;
-            _work = new Work { Digest = digest, OutputByteHash = 17 };
+            _work = new Work
+            {
+                Digest = digest,
+                OutputByteHash = 17,
+                StrongOutputHash = string.Empty,
+                InputHash = new CanonicalHashAccumulator(),
+                InputCells = _captureMeasuredFixture
+                    ? new CanonicalInputCell[VoxelMath.CellsPerChunk]
+                    : null
+            };
+            _work.InputHash.AddString("voxel-input-chunk-v1");
+            _work.InputHash.AddInt32(_options.Seed);
+            _work.InputHash.AddInt32(chunk);
+            _work.InputHash.AddInt32(VoxelMath.CellsPerChunk);
             _measureTimings = measureTimings;
             _generationTicks = 0;
             _faceDerivationTicks = 0;
@@ -249,6 +268,8 @@ internal static class NativeVoxelPipeline
             _work.Digest = VoxelMath.DigestStep(_work.Digest, _work.OpaqueStagedBytes);
             _work.Digest = VoxelMath.DigestStep(_work.Digest, _work.TransparentStagedBytes);
             _work.Digest = VoxelMath.DigestStep(_work.Digest, _work.EnabledStageBytes);
+            string inputHash = _work.InputHash?.Complete() ?? string.Empty;
+            _work.InputHash?.Dispose();
             return new ChunkResult(
                 _work.Digest,
                 _work.OpaqueFaces,
@@ -276,7 +297,10 @@ internal static class NativeVoxelPipeline
                 OpaquePackingMilliseconds,
                 TransparentPackingMilliseconds,
                 OutputByteHash: _work.OutputByteHash,
-                ChunkId: _chunk);
+                ChunkId: _chunk,
+                StrongOutputHash: _work.StrongOutputHash,
+                StrongInputHash: inputHash,
+                InputCells: _work.InputCells);
         }
 
         internal static double ToMilliseconds(long ticks) =>
@@ -303,6 +327,17 @@ internal static class NativeVoxelPipeline
                     Density = density,
                     Section = VoxelMath.SectionIndex(x, y, z)
                 };
+                CanonicalInputCell observed = new(
+                    chunk,
+                    cell,
+                    x,
+                    y,
+                    z,
+                    VoxelMath.SectionIndex(x, y, z),
+                    checked((ushort)blockId),
+                    density);
+                _work.InputCells?[cell] = observed;
+                _work.InputHash!.AddCanonicalInputCell(observed);
                 _work.Digest = VoxelMath.DigestStep(_work.Digest, x);
                 _work.Digest = VoxelMath.DigestStep(_work.Digest, y);
                 _work.Digest = VoxelMath.DigestStep(_work.Digest, z);
@@ -528,6 +563,16 @@ internal static class NativeVoxelPipeline
             {
                 _transparentPackingTicks += Stopwatch.GetTimestamp() - transparentStart;
             }
+
+            _work.StrongOutputHash = VoxelMath.ComputeStrongOutputHash(
+                vertexSpan.Slice(0, opaqueVertexCount),
+                indexSpan.Slice(0, opaqueIndexCount),
+                sliceSpan.Slice(0, _work.OpaqueFaces),
+                uploadSpan.Slice(0, _work.OpaqueStagedBytes),
+                vertexSpan.Slice(opaqueVertexCount, transparentVertexCount),
+                indexSpan.Slice(opaqueIndexCount, transparentIndexCount),
+                sliceSpan.Slice(_work.OpaqueFaces, _work.TransparentFaces),
+                uploadSpan.Slice(_work.OpaqueStagedBytes, _work.TransparentStagedBytes));
 
         }
 
@@ -805,10 +850,10 @@ internal static class NativeVoxelPipeline
         bool captureMeasuredFixture,
         bool includeCanonicalInputCells = false)
     {
+        Stopwatch endToEnd = Stopwatch.StartNew();
         VoxelMath.ValidateCanonicalInputFixture();
         VoxelMath.ValidateHandAuthoredInputFixture();
         VoxelMath.ValidateBoundaryFixture();
-        CanonicalInputContract input = VoxelMath.ComputeCanonicalInput(options, includeCanonicalInputCells);
         NativeMemoryStatistics baseline = NativeMemoryDiagnostics.Snapshot();
         if (baseline.OutstandingNativeBytes != 0)
         {
@@ -834,7 +879,7 @@ internal static class NativeVoxelPipeline
                 workerId,
                 ready,
                 start,
-                captureMeasuredFixture));
+                captureMeasuredFixture || includeCanonicalInputCells));
         }
 
         ready.Wait();
@@ -957,6 +1002,9 @@ internal static class NativeVoxelPipeline
         {
             outputHash = VoxelMath.DigestChunkOutputSummary(outputHash, chunkOutputs[index]);
         }
+        CanonicalInputContract input = VoxelMath.CreateObservedCanonicalInput(options, chunkOutputs);
+        string strongOutputHash = VoxelMath.ComputeStrongPipelineOutputHash(chunkOutputs);
+        endToEnd.Stop();
 
         return new PipelineResult(
             "NAM",
@@ -1018,6 +1066,8 @@ internal static class NativeVoxelPipeline
              PackingRecycleMilliseconds: packingRecycleMilliseconds,
              ChunkOutputs: chunkOutputs,
              Input: input,
+             StrongOutputHash: strongOutputHash,
+             ColdEndToEndMilliseconds: endToEnd.Elapsed.TotalMilliseconds,
              Output: new CanonicalOutputSummary(
                  outputHash,
                  checked((int)(opaqueFaces * VoxelMath.VerticesPerFace)),
@@ -1031,7 +1081,8 @@ internal static class NativeVoxelPipeline
                  opaqueFaces,
                  transparentFaces,
                  opaqueStaged,
-                 transparentStaged),
+                 transparentStaged,
+                 strongOutputHash),
              NativeOwnerProfiles: ownerProfiles);
     }
 

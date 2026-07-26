@@ -9,7 +9,7 @@ param(
     [int]$Chunks = 8,
     [int]$Workers = 4,
     [int]$Iterations = 2,
-    [int]$Warmup = 0,
+    [int]$Warmup = 1,
     [int]$CpuLimit = 2,
     [int]$TimeoutSeconds = 240,
     [string]$Image,
@@ -48,6 +48,7 @@ if ($Warmup -lt 0) {
 }
 
 $RepoRoot = (Resolve-Path $RepoRoot).Path
+$matrixStartedUtc = [DateTime]::UtcNow
 $demoRoot = Join-Path $RepoRoot ".Demos\01-VoxelChunkPipeline"
 $shortCommit = (& git -C $RepoRoot rev-parse --short=12 HEAD).Trim()
 $fullCommit = (& git -C $RepoRoot rev-parse HEAD).Trim()
@@ -66,7 +67,8 @@ if ([string]::IsNullOrWhiteSpace($OutputPath)) {
 $profiles = @(
     [pscustomobject]@{ Name = "1GiB"; Bytes = 1GB },
     [pscustomobject]@{ Name = "768MiB"; Bytes = 768MB },
-    [pscustomobject]@{ Name = "640MiB"; Bytes = 640MB }
+    [pscustomobject]@{ Name = "640MiB"; Bytes = 640MB },
+    [pscustomobject]@{ Name = "512MiB"; Bytes = 512MB }
 )
 
 function Invoke-CheckedCommand {
@@ -119,6 +121,11 @@ if (-not $SkipImageBuild) {
         "--file", (Join-Path $pressureDirectory "Dockerfile"),
         "--tag", $Image,
         $pressureDirectory) 300000 | Out-Null
+}
+
+$imageId = ((Invoke-CheckedCommand "docker" @("image", "inspect", "--format", "{{.Id}}", $Image) 30000).StandardOutput).Trim()
+if ([string]::IsNullOrWhiteSpace($imageId)) {
+    throw "Docker did not return an immutable image identity for $Image."
 }
 
 $safeAssembly = "/workspace/.Demos/01-VoxelChunkPipeline/SafeCSharp/bin/Release/net10.0/VoxelChunkPipeline.SafeCSharp.dll"
@@ -243,7 +250,7 @@ function Get-WorkSignature {
     param($Child)
 
     $names = @(
-        "digest", "chunks", "visibleFaces", "vertices", "indices", "stagedBytes",
+        "strongOutputHash", "chunks", "visibleFaces", "vertices", "indices", "stagedBytes",
         "managedPayloadObjectBytes", "emptySections", "uniformSections", "expandedSections",
         "packedSections", "multiPackedSections", "transparentMaskCount", "transparentMaskWords",
         "dominantTransparentSections", "residualTransparentSections", "opaqueVisibleFaces",
@@ -343,6 +350,8 @@ function Summarize-Runs {
                 Pair = $pair
                 SafeMilliseconds = [double]$safeRun.Child.elapsedMilliseconds
                 NamMilliseconds = [double]$namRun.Child.elapsedMilliseconds
+                SafeColdMilliseconds = [double]$safeRun.Child.coldElapsedMilliseconds
+                NamColdMilliseconds = [double]$namRun.Child.coldElapsedMilliseconds
                 Speedup = [double]$safeRun.Child.elapsedMilliseconds / [double]$namRun.Child.elapsedMilliseconds
                 Parity = $parity
                 SafeGen0 = [int]$safeRun.Child.result.measuredGen0Collections
@@ -400,7 +409,8 @@ function Summarize-Runs {
     $namFinal = @($namResult | ForEach-Object { [double]$_.finalNativeBackingBytes })
     $observedLimits = @($safePressure + $namPressure | ForEach-Object { [long]$_.cgroupLimitBytes } | Sort-Object -Unique)
     $parityCount = @($pairs | Where-Object { $_.Parity }).Count
-    $safePressureObserved = @($safeGc | Where-Object { $_ -gt 0 }).Count -gt 0 -or (Get-Mean $safePause) -gt 0
+    $safePeakRatio = if ($MemoryBytes -gt 0 -and $safePeak.Count -gt 0) { (Get-Mean $safePeak) / $MemoryBytes } else { 0.0 }
+    $safePressureObserved = $IsControl -or ((@($safeGc | Where-Object { $_ -gt 0 }).Count -gt 0) -and $safePeakRatio -ge 0.70)
     $allNativeZero = $namFinal.Count -gt 0 -and (@($namFinal | Where-Object { $_ -ne 0 }).Count -eq 0)
     $allCgroupLimitsMatch = $MemoryBytes -eq 0 -or ($observedLimits.Count -eq 1 -and $observedLimits[0] -eq $MemoryBytes)
     $completion = $pairs.Count -eq $ExpectedPairs
@@ -409,7 +419,8 @@ function Summarize-Runs {
     $throughputGate = $pairs.Count -gt 0 -and $namThroughput -ge ($safeThroughput * 1.05)
     $confidenceGate = $pairs.Count -gt 1 -and ($meanSpeedup - $half) -gt 1.0
     $managedAllocationReductionGate = $pairs.Count -gt 0 -and $meanSafeManaged -gt 0 -and $meanNamManaged -le ($meanSafeManaged * 0.95)
-    $validThroughput = $completion -and $parityCount -eq $pairs.Count -and $safePressureObserved -and $allNativeZero -and $allCgroupLimitsMatch -and $managedAllocationReductionGate
+    $pressureQualification = $IsControl -or $safePressureObserved
+    $validThroughput = $completion -and $parityCount -eq $pairs.Count -and $pressureQualification -and $allNativeZero -and $allCgroupLimitsMatch -and $managedAllocationReductionGate
     $gate = $validThroughput -and $throughputGate -and $confidenceGate
 
     [pscustomobject]@{
@@ -417,6 +428,7 @@ function Summarize-Runs {
         MemoryLimitBytes = $MemoryBytes
         IsUnconstrainedControl = $IsControl
         ExpectedPairs = $ExpectedPairs
+        MeasuredChildCount = $pairs.Count * 2
         CompletedPairs = $pairs.Count
         SafeCompletedRuns = $safe.Count
         NamCompletedRuns = $nam.Count
@@ -425,6 +437,7 @@ function Summarize-Runs {
         ParityPairs = $parityCount
         ObservedCgroupLimitsBytes = $observedLimits
         SafeCollectionPressureObserved = $safePressureObserved
+        MeanSafeCgroupPeakRatio = $safePeakRatio
         SafeCollectionDeltas = $safeGc
         NamCollectionDeltas = $namGc
         MeanSafeMilliseconds = $safeMean
@@ -464,6 +477,8 @@ function Summarize-Runs {
         MeanNamHeapBytes = Get-Mean $namHeap
         MeanNamPeakNativeBackingBytes = Get-Mean $namNative
         MeanNamFinalNativeBackingBytes = Get-Mean $namFinal
+        MeanSafeColdMilliseconds = Get-Mean @($pairs | ForEach-Object { [double]$_.SafeColdMilliseconds })
+        MeanNamColdMilliseconds = Get-Mean @($pairs | ForEach-Object { [double]$_.NamColdMilliseconds })
         CompletionGate = $completion
         ParityGate = $parityCount -eq $pairs.Count -and $pairs.Count -gt 0
         CollectionPressureGate = $safePressureObserved
@@ -474,7 +489,7 @@ function Summarize-Runs {
         ConfidenceGate = $confidenceGate
         ValidThroughputResult = $validThroughput
         GatePassed = $gate
-        Verdict = if ($capacityFailures -gt 0 -and -not $completion) { "capacity-limited" } elseif (-not $safePressureObserved) { "invalid-no-safe-gc-pressure" } elseif (-not $validThroughput) { "completed-but-invalid" } elseif ($gate) { "throughput-pass" } else { "throughput-fail" }
+        Verdict = if ($capacityFailures -gt 0 -and -not $completion) { "capacity-limited" } elseif (-not $pressureQualification) { "invalid-no-safe-gc-pressure" } elseif (-not $validThroughput) { "completed-but-invalid" } elseif ($gate) { "throughput-pass" } else { "throughput-fail" }
         Pairs = $pairs
     }
 }
@@ -497,6 +512,10 @@ function Invoke-Profile {
             $runs.Add((Invoke-DockerChild $Name $Bytes $implementation $pair "pressure" $WorkChunks $WorkWorkers $WorkIterations $WorkWarmup))
         }
         Write-Host "$Name pair $($pair + 1)/$PairCount complete"
+        if (@($runs | Where-Object { $_.Status -in @("OomKilled", "Timeout") }).Count -gt 0) {
+            Write-Host "$Name stopped after the first capacity/timeout result; remaining predeclared samples are not substituted."
+            break
+        }
     }
 
     [pscustomobject]@{
@@ -522,14 +541,17 @@ foreach ($profile in $profiles) {
     $profileReports += Invoke-Profile $profile.Name $profile.Bytes $Pairs $Chunks $Workers $Iterations $Warmup $false
 }
 
+$matrixFinishedUtc = [DateTime]::UtcNow
 $report = [ordered]@{
     Schema = "voxel-pressure-v1"
-    UtcStarted = [DateTime]::UtcNow
+    UtcStarted = $matrixStartedUtc
     RepositoryCommit = $fullCommit
     RepositoryShortCommit = $shortCommit
     RepositoryRoot = $RepoRoot
     Image = $Image
     ImageBuild = if ($SkipImageBuild) { "prebuilt" } else { "built-before-measurement" }
+    ImageId = $imageId
+    BaseImage = "mcr.microsoft.com/dotnet/runtime:10.0@sha256:ed5d539b27842d656a06a5984dbcb5114d3e885fbada612a49a5a7c3c3a44e1c"
     DockerMemoryFlags = @("--memory=profile", "--memory-swap=profile", "--memory-swappiness=0")
     CpuLimit = $CpuLimit
     NoManagedHeapHardLimit = $true
@@ -540,7 +562,7 @@ $report = [ordered]@{
         Iterations = $Iterations
         WarmupChunksPerWorker = $Warmup
         InFlightWorkers = $Workers
-        Description = "The existing worker-local generation, prerender, mesh-packing, and upload-staging pipeline runs variable chunk indices concurrently; no synthetic garbage or explicit GC is used in pressure mode."
+         Description = "$Workers worker-local generation, prerender, mesh-packing, and upload-staging pipelines overlap variable chunks and iterations; no synthetic garbage or explicit GC is used in pressure mode."
     }
     Calibration = [ordered]@{
         Workload = [ordered]@{ Chunks = $CalibrationChunks; Workers = $CalibrationWorkers; Iterations = $CalibrationIterations }
@@ -550,7 +572,8 @@ $report = [ordered]@{
     PredeclaredProfiles = $profiles
     UnconstrainedControl = $control
     Profiles = $profileReports
-    UtcFinished = [DateTime]::UtcNow
+    UtcFinished = $matrixFinishedUtc
+    MeasuredChildCount = (($ControlPairs * 2) + ($Pairs * 2 * $profiles.Count))
 }
 
 New-Item -ItemType Directory -Force (Split-Path -Parent $OutputPath) | Out-Null

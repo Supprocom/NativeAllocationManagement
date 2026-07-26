@@ -19,7 +19,7 @@ internal static class Program
 
             ChildRunResult result = RunMeasured(
                 options,
-                captureMeasuredFixture: false,
+                captureMeasuredFixture: mode == "--correctness",
                 pressureMode: mode == "--pressure",
                 includeCanonicalInputCells: mode == "--correctness");
             Console.WriteLine(JsonSerializer.Serialize(result, VoxelJson.Options));
@@ -96,7 +96,8 @@ internal static class Program
             sampler.PeakWorkingSetBytes,
             GetLargeObjectHeapBytes(memory),
             coldManagedAllocatedBytes,
-            pressure);
+            pressure,
+            result.ColdEndToEndMilliseconds);
     }
 
     private static long GetLargeObjectHeapBytes(GCMemoryInfo memory) =>

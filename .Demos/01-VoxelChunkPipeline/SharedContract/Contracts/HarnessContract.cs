@@ -94,5 +94,6 @@ public readonly record struct BenchmarkSummary(
     double SafeMeanCoordinateRecycleMilliseconds = 0,
     double SafeMeanFaceRecycleMilliseconds = 0,
     double SafeMeanMaskRecycleMilliseconds = 0,
-    double SafeMeanPackingRecycleMilliseconds = 0);
-
+    double SafeMeanPackingRecycleMilliseconds = 0,
+    double SafeMeanColdElapsedMilliseconds = 0,
+    double NamMeanColdElapsedMilliseconds = 0);

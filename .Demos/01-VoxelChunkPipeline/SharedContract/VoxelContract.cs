@@ -1,8 +1,118 @@
+using System.Buffers.Binary;
 using System.Numerics;
 using System.Runtime.CompilerServices;
+using System.Security.Cryptography;
 using System.Text;
 
 namespace Supprocom.NativeAllocationManagement.Demos.VoxelChunkPipeline.SharedContract;
+
+/// <summary>Builds a canonical SHA-256 stream using little-endian lengths and values.</summary>
+public sealed class CanonicalHashAccumulator : IDisposable
+{
+    private readonly IncrementalHash _hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+    private bool _completed;
+
+    public void AddInt32(int value)
+    {
+        Span<byte> bytes = stackalloc byte[sizeof(int)];
+        BinaryPrimitives.WriteInt32LittleEndian(bytes, value);
+        _hash.AppendData(bytes);
+    }
+
+    public void AddInt64(long value)
+    {
+        Span<byte> bytes = stackalloc byte[sizeof(long)];
+        BinaryPrimitives.WriteInt64LittleEndian(bytes, value);
+        _hash.AppendData(bytes);
+    }
+
+    public void AddUInt16(ushort value)
+    {
+        Span<byte> bytes = stackalloc byte[sizeof(ushort)];
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes, value);
+        _hash.AppendData(bytes);
+    }
+
+    public void AddInt16(short value) => AddUInt16(unchecked((ushort)value));
+
+    public void AddBytes(ReadOnlySpan<byte> bytes)
+    {
+        AddInt64(bytes.Length);
+        _hash.AppendData(bytes);
+    }
+
+    public void AddString(string value)
+    {
+        bool ascii = true;
+        for (int index = 0; index < value.Length; index++)
+        {
+            if (value[index] > 0x7F)
+            {
+                ascii = false;
+                break;
+            }
+        }
+
+        if (!ascii)
+        {
+            AddBytes(Encoding.UTF8.GetBytes(value));
+            return;
+        }
+
+        Span<byte> bytes = stackalloc byte[value.Length];
+        for (int index = 0; index < value.Length; index++)
+        {
+            bytes[index] = (byte)value[index];
+        }
+
+        AddBytes(bytes);
+    }
+
+    public void AddCanonicalInputCell(CanonicalInputCell value)
+    {
+        AddInt32(value.ChunkId);
+        AddInt32(value.CellIndex);
+        AddInt32(value.X);
+        AddInt32(value.Y);
+        AddInt32(value.Z);
+        AddInt32(value.Section);
+        AddUInt16(value.BlockId);
+        AddInt16(value.Density);
+    }
+
+    public void AddVertex(Vertex value)
+    {
+        AddInt32(value.X);
+        AddInt32(value.Y);
+        AddInt32(value.Z);
+        AddInt32(value.Face);
+        AddInt32(value.Corner);
+        AddInt32(value.BlockId);
+    }
+
+    public void AddPayloadSlice(PayloadSlice value)
+    {
+        AddInt32(value.Offset);
+        AddInt32(value.Length);
+        AddInt32(value.Alignment);
+        AddInt32(value.StageMask);
+        AddInt32(value.BlockId);
+        AddInt32(value.CellIndex);
+    }
+
+    public string Complete()
+    {
+        if (_completed)
+        {
+            throw new InvalidOperationException("The canonical hash has already been completed.");
+        }
+
+        _completed = true;
+        return Convert.ToHexString(_hash.GetHashAndReset());
+    }
+
+    public void Dispose() => _hash.Dispose();
+}
 
 public static class VoxelMath
 {
@@ -346,22 +456,35 @@ public static class VoxelMath
         long chunkOrderHash = 17;
         long cellValueHash = 17;
         long cellCount = 0;
+        int measuredChunkCount = checked(options.ChunkCount * options.Iterations);
         List<CanonicalInputCell>? completeCells = includeCells
-            ? new List<CanonicalInputCell>(checked(options.ChunkCount * CellsPerChunk))
+            ? new List<CanonicalInputCell>(checked(measuredChunkCount * CellsPerChunk))
             : null;
-        for (int chunk = 0; chunk < options.ChunkCount; chunk++)
+        using CanonicalHashAccumulator strong = new();
+        AddCanonicalInputPreamble(strong, options);
+        for (int chunk = 0; chunk < measuredChunkCount; chunk++)
         {
             hash = DigestInt32(hash, chunk);
+            using CanonicalHashAccumulator chunkStrong = new();
+            chunkStrong.AddString("voxel-input-chunk-v1");
+            chunkStrong.AddInt32(options.Seed);
+            chunkStrong.AddInt32(chunk);
+            chunkStrong.AddInt32(CellsPerChunk);
             for (int cell = 0; cell < CellsPerChunk; cell++)
             {
                 CanonicalInputCell value = CreateCanonicalInputCell(options.Seed, chunk, cell);
                 completeCells?.Add(value);
+                chunkStrong.AddCanonicalInputCell(value);
                 hash = DigestCanonicalInputCell(hash, value);
                 cellValueHash = DigestCanonicalInputCell(cellValueHash, value);
                 chunkOrderHash = DigestInt32(chunkOrderHash, chunk);
                 chunkOrderHash = DigestInt32(chunkOrderHash, cell);
                 cellCount++;
             }
+
+            strong.AddInt32(chunk);
+            strong.AddInt64(CellsPerChunk);
+            strong.AddString(chunkStrong.Complete());
         }
 
         return new(
@@ -371,7 +494,105 @@ public static class VoxelMath
             cellValueHash,
             hash,
             chunkOrderHash,
-            completeCells?.ToArray());
+            completeCells?.ToArray(),
+            strong.Complete(),
+            observed: false);
+    }
+
+    /// <summary>Builds the input contract from values observed by an implementation before mutation.</summary>
+    public static CanonicalInputContract CreateObservedCanonicalInput(
+        VoxelWorkloadOptions options,
+        IReadOnlyList<ChunkOutputSummary> chunks)
+    {
+        ChunkOutputSummary[] ordered = chunks
+            .OrderBy(static value => value.ChunkId)
+            .ToArray();
+        using CanonicalHashAccumulator strong = new();
+        AddCanonicalInputPreamble(strong, options);
+        long cellCount = 0;
+        bool complete = ordered.Length != 0;
+        List<CanonicalInputCell>? cells = [];
+        long cellValueHash = 17;
+        long chunkOrderHash = 17;
+        long legacyHash = 17;
+        for (int index = 0; index < ordered.Length; index++)
+        {
+            ChunkOutputSummary chunk = ordered[index];
+            strong.AddInt32(chunk.ChunkId);
+            strong.AddInt64(chunk.InputCellCount);
+            strong.AddString(chunk.StrongInputHash);
+            cellCount = checked(cellCount + chunk.InputCellCount);
+            CanonicalInputCell[]? observed = chunk.InputCells;
+            if (observed is null)
+            {
+                complete = false;
+                continue;
+            }
+
+            for (int cell = 0; cell < observed.Length; cell++)
+            {
+                CanonicalInputCell value = observed[cell];
+                cells!.Add(value);
+                cellValueHash = DigestCanonicalInputCell(cellValueHash, value);
+                chunkOrderHash = DigestInt32(chunkOrderHash, value.ChunkId);
+                chunkOrderHash = DigestInt32(chunkOrderHash, value.CellIndex);
+                legacyHash = DigestCanonicalInputCell(legacyHash, value);
+            }
+        }
+
+        return new(
+            options,
+            BlockTypes.ToArray(),
+            cellCount,
+            complete ? cellValueHash : 0,
+            legacyHash,
+            chunkOrderHash,
+            complete ? cells!.ToArray() : null,
+            strong.Complete(),
+            observed: true);
+    }
+
+    private static void AddCanonicalInputPreamble(
+        CanonicalHashAccumulator hash,
+        VoxelWorkloadOptions options)
+    {
+        hash.AddString("voxel-input-v1");
+        hash.AddInt32(options.Seed);
+        hash.AddInt32(options.ChunkCount);
+        hash.AddInt32(options.WorkerCount);
+        hash.AddInt32(options.Iterations);
+        hash.AddInt32(options.WarmupChunksPerWorker);
+        hash.AddInt32(BlockTypes.Length);
+        for (int index = 0; index < BlockTypes.Length; index++)
+        {
+            BlockTypeDescriptor type = BlockTypes[index];
+            hash.AddInt32(type.Id);
+            hash.AddString(type.Name);
+            hash.AddInt32(type.PayloadBytes);
+            hash.AddInt32(type.Alignment);
+            hash.AddInt32(type.DensityBias);
+            hash.AddInt32(type.SolidThreshold);
+            hash.AddInt32(type.StageMask);
+            hash.AddInt32(type.FrequencyWeight);
+        }
+    }
+
+    public static string ComputeStrongCanonicalInputChunkHash(
+        int seed,
+        int chunkId,
+        ReadOnlySpan<CanonicalInputCell> cells)
+    {
+        using CanonicalHashAccumulator hash = new();
+        hash.AddString("voxel-input-chunk-v1");
+        hash.AddInt32(seed);
+        hash.AddInt32(chunkId);
+        hash.AddInt32(cells.Length);
+        for (int index = 0; index < cells.Length; index++)
+        {
+            hash.AddCanonicalInputCell(cells[index]);
+        }
+
+        return hash.Complete();
     }
 
     public static long ComputeRegistryHash()
@@ -522,6 +743,82 @@ public static class VoxelMath
         return DigestBytes(state, upload);
     }
 
+    /// <summary>Hashes every materialized output element and byte in canonical little-endian order.</summary>
+    public static string ComputeStrongOutputHash(
+        ReadOnlySpan<Vertex> opaqueVertices,
+        ReadOnlySpan<int> opaqueIndices,
+        ReadOnlySpan<PayloadSlice> opaqueSlices,
+        ReadOnlySpan<byte> opaqueUpload,
+        ReadOnlySpan<Vertex> transparentVertices,
+        ReadOnlySpan<int> transparentIndices,
+        ReadOnlySpan<PayloadSlice> transparentSlices,
+        ReadOnlySpan<byte> transparentUpload)
+    {
+        using CanonicalHashAccumulator hash = new();
+        hash.AddString("voxel-output-v2");
+        AddOutputStream(hash, "opaque", opaqueVertices, opaqueIndices, opaqueSlices, opaqueUpload);
+        AddOutputStream(hash, "transparent", transparentVertices, transparentIndices, transparentSlices, transparentUpload);
+        return hash.Complete();
+    }
+
+    private static void AddOutputStream(
+        CanonicalHashAccumulator hash,
+        string name,
+        ReadOnlySpan<Vertex> vertices,
+        ReadOnlySpan<int> indices,
+        ReadOnlySpan<PayloadSlice> slices,
+        ReadOnlySpan<byte> upload)
+    {
+        hash.AddString(name);
+        hash.AddInt32(vertices.Length);
+        for (int index = 0; index < vertices.Length; index++)
+        {
+            hash.AddVertex(vertices[index]);
+        }
+
+        hash.AddInt32(indices.Length);
+        for (int index = 0; index < indices.Length; index++)
+        {
+            hash.AddInt32(indices[index]);
+        }
+
+        hash.AddInt32(slices.Length);
+        for (int index = 0; index < slices.Length; index++)
+        {
+            hash.AddPayloadSlice(slices[index]);
+        }
+
+        hash.AddBytes(upload);
+    }
+
+    public static string ComputeStrongPipelineOutputHash(
+        IReadOnlyList<ChunkOutputSummary> chunks)
+    {
+        using CanonicalHashAccumulator hash = new();
+        hash.AddString("voxel-pipeline-output-v2");
+        ChunkOutputSummary[] ordered = chunks
+            .OrderBy(static value => value.ChunkId)
+            .ToArray();
+        hash.AddInt32(ordered.Length);
+        for (int index = 0; index < ordered.Length; index++)
+        {
+            ChunkOutputSummary chunk = ordered[index];
+            hash.AddInt32(chunk.ChunkId);
+            hash.AddInt64(chunk.ByteHash);
+            hash.AddString(chunk.StrongOutputHash);
+            hash.AddInt32(chunk.OpaqueVertexLength);
+            hash.AddInt32(chunk.OpaqueIndexLength);
+            hash.AddInt32(chunk.OpaqueSliceLength);
+            hash.AddInt32(chunk.OpaqueUploadLength);
+            hash.AddInt32(chunk.TransparentVertexLength);
+            hash.AddInt32(chunk.TransparentIndexLength);
+            hash.AddInt32(chunk.TransparentSliceLength);
+            hash.AddInt32(chunk.TransparentUploadLength);
+        }
+
+        return hash.Complete();
+    }
+
     public static long DigestChunkOutputSummary(long state, ChunkOutputSummary value)
     {
         state = DigestInt32(state, value.ChunkId);
@@ -547,7 +844,11 @@ public static class VoxelMath
             result.TransparentVertices,
             result.TransparentIndices,
             result.TransparentFaces,
-            result.TransparentStagedBytes);
+            result.TransparentStagedBytes,
+            result.StrongOutputHash,
+            result.StrongInputHash,
+            result.InputCells?.LongLength ?? VoxelMath.CellsPerChunk,
+            result.InputCells);
 
     public static int FaceCount(int mask) => BitOperations.PopCount((uint)mask);
 

@@ -92,7 +92,9 @@ public readonly struct CanonicalInputContract : IEquatable<CanonicalInputContrac
         long cellValueByteHash,
         long byteHash,
         long chunkOrderHash,
-        CanonicalInputCell[]? cells = null)
+        CanonicalInputCell[]? cells = null,
+        string strongHash = "",
+        bool observed = false)
     {
         Options = options;
         Registry = registry;
@@ -101,6 +103,8 @@ public readonly struct CanonicalInputContract : IEquatable<CanonicalInputContrac
         ByteHash = byteHash;
         ChunkOrderHash = chunkOrderHash;
         Cells = cells;
+        StrongHash = strongHash;
+        Observed = observed;
     }
 
     public VoxelWorkloadOptions Options { get; }
@@ -109,14 +113,23 @@ public readonly struct CanonicalInputContract : IEquatable<CanonicalInputContrac
 
     public long CellCount { get; }
 
+    [JsonIgnore]
     public long CellValueByteHash { get; }
 
+    [JsonIgnore]
     public long ByteHash { get; }
 
+    [JsonIgnore]
     public long ChunkOrderHash { get; }
 
     /// <summary>Complete pre-mutation cells when correctness mode requests materialized input; null in timed pressure runs.</summary>
     public CanonicalInputCell[]? Cells { get; }
+
+    /// <summary>SHA-256 over the complete canonical input contract and every measured cell.</summary>
+    public string StrongHash { get; }
+
+    /// <summary>True only when the implementation reported cells observed in its own pre-mutation storage.</summary>
+    public bool Observed { get; }
 
     public bool Equals(CanonicalInputContract other) =>
         Options == other.Options
@@ -124,6 +137,8 @@ public readonly struct CanonicalInputContract : IEquatable<CanonicalInputContrac
         && CellValueByteHash == other.CellValueByteHash
         && ByteHash == other.ByteHash
         && ChunkOrderHash == other.ChunkOrderHash
+        && StrongHash == other.StrongHash
+        && Observed == other.Observed
         && (Cells ?? Array.Empty<CanonicalInputCell>()).AsSpan()
             .SequenceEqual((other.Cells ?? Array.Empty<CanonicalInputCell>()).AsSpan())
         && (Registry ?? Array.Empty<BlockTypeDescriptor>()).AsSpan()
@@ -146,6 +161,8 @@ public readonly struct CanonicalInputContract : IEquatable<CanonicalInputContrac
         hash.Add(CellValueByteHash);
         hash.Add(ByteHash);
         hash.Add(ChunkOrderHash);
+        hash.Add(StrongHash);
+        hash.Add(Observed);
         BlockTypeDescriptor[] registry = Registry ?? Array.Empty<BlockTypeDescriptor>();
         for (int index = 0; index < registry.Length; index++)
         {

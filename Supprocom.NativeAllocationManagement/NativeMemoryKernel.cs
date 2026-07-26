@@ -73,6 +73,12 @@ public readonly record struct NativeMemoryStatistics(
 }
 
 /// <summary>Reports the current physical and logical state of one native owner.</summary>
+/// <remarks>
+/// Requested bytes describe live logical lease demand. Retained bytes describe
+/// physical segments still held by the owner, including idle reusable capacity.
+/// Growth slack is therefore derived only while a request is live; retained idle
+/// capacity must not be interpreted as geometric growth slack.
+/// </remarks>
 public readonly record struct NativeOwnerStatistics(
     NativeOwnerLifecycle Lifecycle,
     long Generation,

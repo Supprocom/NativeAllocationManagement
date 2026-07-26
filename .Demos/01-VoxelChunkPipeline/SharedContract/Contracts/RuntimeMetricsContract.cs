@@ -14,7 +14,8 @@ public readonly record struct ChildRunResult(
     long PeakWorkingSetBytes,
     long LargeObjectHeapBytesAfterRun = 0,
     long ColdManagedAllocatedBytes = 0,
-    PressureRunMetrics? Pressure = null)
+    PressureRunMetrics? Pressure = null,
+    double ColdElapsedMilliseconds = 0)
 {
     public string ToJson() => JsonSerializer.Serialize(this, VoxelJson.Options);
 
@@ -212,5 +213,4 @@ public static class VoxelJson
         WriteIndented = false
     };
 }
-
 
