@@ -97,7 +97,10 @@ internal sealed class SafePressureSession :
             _mappedUploadStream
             ?? throw new InvalidOperationException(
                 "The managed GPU upload range is not ready.");
-        List<PressureChunkEvidence> consumed = [];
+        List<PressureChunkEvidence>? evidence = exactVerification
+            ? new List<PressureChunkEvidence>(
+                request.PlannedChunkCount)
+            : null;
         long realizedDemand = 0;
         long completedLogicalBytes = 0;
         long sourceInputBytes = 0;
@@ -542,10 +545,9 @@ internal sealed class SafePressureSession :
                                     + shape.OpaqueFaceCount),
                                 shape.TransparentFaceCount),
                             transparentStages);
-                        PressureOutputEvidence output;
                         if (exactVerification)
                         {
-                            output =
+                            PressureOutputEvidence output =
                                 PressureWorkContract.VerifyAndHashOutput(
                                 request.Seed,
                                 chunkFaces.Slice(0, shape.OpaqueRecordCount),
@@ -578,23 +580,14 @@ internal sealed class SafePressureSession :
                                     shape.TransparentFaceCount),
                                 opaqueStages,
                                 transparentStages);
+                            _slots[batchIndex] = slot with
+                            {
+                                Output = output,
+                                Evidence = CreateEvidence(
+                                    slot,
+                                    output)
+                            };
                         }
-                        else
-                        {
-                            output =
-                                PressureWorkContract.DescribeOutput(
-                                shape);
-                        }
-
-                        PressureChunkEvidence evidence = CreateEvidence(
-                            slot,
-                            output,
-                            exactVerification);
-                        _slots[batchIndex] = slot with
-                        {
-                            Output = output,
-                            Evidence = evidence
-                        };
                         peakLiveLogicalBytes = Math.Max(
                             peakLiveLogicalBytes,
                             checked(
@@ -691,7 +684,11 @@ internal sealed class SafePressureSession :
                                 transparentStages);
                         }
 
-                        consumed.Add(slot.Evidence);
+                        if (exactVerification)
+                        {
+                            evidence!.Add(slot.Evidence);
+                        }
+
                         completedLogicalBytes = checked(
                             completedLogicalBytes + slot.Demand);
                         _slots[batchIndex] = default;
@@ -785,28 +782,33 @@ internal sealed class SafePressureSession :
             Implementation,
             request.ProfilePercent,
             PressureProgressKind.ProcessingCompleted,
-            consumed.Count,
+            builtChunks,
             completedLogicalBytes,
             lastStage,
             lastChunkId));
         PressureRuntimeSnapshot after = PressureRuntimeSnapshot.Capture();
-        string evidenceHash = PressureWorkContract.ComputeProfileEvidenceHash(consumed);
+        string evidenceHash = evidence is null
+            ? string.Empty
+            : PressureWorkContract.ComputeProfileEvidenceHash(
+                evidence);
         bool correctness = outcome == PressureProfileOutcome.Completed
-            && consumed.Count != 0
-            && (!exactVerification
-                || consumed.All(
+            && builtChunks != 0
+            && (evidence is null
+                || evidence.Count == builtChunks
+                && evidence.All(
                     static chunk => chunk.ExactVerificationPassed))
             && realizedDemand >= request.RequestedCumulativeDemandBytes;
         return new PressureProfileResult(
             Implementation,
             outcome,
             request.ProfilePercent,
+            request.ExecutionMode,
             request.CgroupCapBytes,
             request.RequestedCumulativeDemandBytes,
             realizedDemand,
             Math.Max(0, realizedDemand - request.RequestedCumulativeDemandBytes),
             request.DeadlineMilliseconds,
-            consumed.Count,
+            builtChunks,
             completedLogicalBytes,
             sourceInputBytes,
             peakLiveLogicalBytes,
@@ -819,7 +821,9 @@ internal sealed class SafePressureSession :
             lastChunkId,
             correctness,
             evidenceHash,
-            consumed,
+            evidence is { } capturedEvidence
+                ? capturedEvidence
+                : Array.Empty<PressureChunkEvidence>(),
             before,
             after,
             Math.Max(0, after.TotalAllocatedBytes - before.TotalAllocatedBytes),
@@ -1108,8 +1112,7 @@ internal sealed class SafePressureSession :
 
     private static PressureChunkEvidence CreateEvidence(
         BatchSlot slot,
-        PressureOutputEvidence output,
-        bool exactVerification) =>
+        PressureOutputEvidence output) =>
         new(
             slot.ChunkId,
             PressureWorkContract.SourceInputBytesPerChunk,
@@ -1126,12 +1129,10 @@ internal sealed class SafePressureSession :
             slot.Shape.SectionValueCount,
             slot.Shape.SectionWordCount,
             slot.Shape.SectionStateWordCount,
-            exactVerification
-                ? PressureWorkContract.CombineChunkEvidence(
-                    slot.SectionEvidenceHash,
-                    output.CompleteHash)
-                : string.Empty,
-            ExactVerificationPassed: exactVerification);
+            PressureWorkContract.CombineChunkEvidence(
+                slot.SectionEvidenceHash,
+                output.CompleteHash),
+            ExactVerificationPassed: true);
 
     public void Dispose()
     {

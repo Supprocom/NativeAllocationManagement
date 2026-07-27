@@ -206,6 +206,82 @@ public sealed class VoxelSharedContractTests
     }
 
     [Fact]
+    public void MeasuredProfilesDoNotCreatePerChunkEvidence()
+    {
+        string root = FindRepositoryRoot();
+        string demoRoot = Path.Combine(
+            root,
+            ".Demos",
+            "01-VoxelChunkPipeline");
+        string safeSource = File.ReadAllText(
+            Path.Combine(
+                demoRoot,
+                "SafeCSharp",
+                "SafePressureSession.cs"));
+        string nativeSource = File.ReadAllText(
+            Path.Combine(
+                demoRoot,
+                "NAM",
+                "NativePressureSession.cs"));
+        string workerSource = File.ReadAllText(
+            Path.Combine(
+                demoRoot,
+                "SharedContract",
+                "WorkerLocalPressureSession.cs"));
+        string harnessSource = File.ReadAllText(
+            Path.Combine(
+                demoRoot,
+                "Harness",
+                "PressureMatrixHarness.cs"));
+
+        Assert.Contains(
+            "List<PressureChunkEvidence>? evidence = exactVerification",
+            safeSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Evidence = request.ExecutionMode",
+            nativeSource,
+            StringComparison.Ordinal);
+        int measuredHandoffStart = nativeSource.IndexOf(
+            "internal void CompleteScatterHandoff()",
+            StringComparison.Ordinal);
+        int exactHandoffStart = nativeSource.IndexOf(
+            "private void CompleteScatterHandoff(",
+            StringComparison.Ordinal);
+        Assert.True(measuredHandoffStart >= 0);
+        Assert.True(exactHandoffStart > measuredHandoffStart);
+        string measuredNativeHandoff = nativeSource[
+            measuredHandoffStart..exactHandoffStart];
+        Assert.DoesNotContain(
+            "CreateChunkEvidence",
+            measuredNativeHandoff,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "DescribeOutput",
+            measuredNativeHandoff,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "PressureChunkEvidence[] evidence = verification",
+            workerSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "executions.All(ResultMatchesWorkerPlan)",
+            workerSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "left.ChunkEvidence.Count == 0",
+            harnessSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "left.ChunkEvidence.Count != 0",
+            harnessSource,
+            StringComparison.Ordinal);
+        Assert.NotNull(
+            typeof(PressureProfileResult).GetProperty(
+                nameof(PressureProfileResult.ExecutionMode)));
+    }
+
+    [Fact]
     public void BothImplementationsSelectRuntimeCapacityWithinSharedBounds()
     {
         string root = FindRepositoryRoot();

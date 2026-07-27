@@ -244,6 +244,7 @@ public readonly record struct PressureProfileResult(
     string Implementation,
     PressureProfileOutcome Outcome,
     int ProfilePercent,
+    PressureExecutionMode ExecutionMode,
     long CgroupCapBytes,
     long RequestedCumulativeDemandBytes,
     long RealizedCumulativeDemandBytes,

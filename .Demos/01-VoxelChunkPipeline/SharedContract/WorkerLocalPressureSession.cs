@@ -465,16 +465,21 @@ public sealed class WorkerLocalPressureSession : IPressureProfileSession
                 ? MapFailureOutcome(failedExecution.Failure)
                 : failedResult?.Outcome
                     ?? PressureProfileOutcome.Completed;
-        PressureChunkEvidence[] evidence = results
-            .SelectMany(
-                static result =>
-                    result.ChunkEvidence)
-            .OrderBy(
-                static chunk =>
-                    chunk.ChunkId)
-            .ToArray();
-        bool exactPlan = evidence.Length == plan.Count;
-        if (exactPlan)
+        bool verification = request.ExecutionMode
+            == PressureExecutionMode.Verification;
+        PressureChunkEvidence[] evidence = verification
+            ? results
+                .SelectMany(
+                    static result =>
+                        result.ChunkEvidence)
+                .OrderBy(
+                    static chunk =>
+                        chunk.ChunkId)
+                .ToArray()
+            : [];
+        bool exactEvidencePlan = !verification
+            || evidence.Length == plan.Count;
+        if (verification && exactEvidencePlan)
         {
             for (int index = 0;
                 index < evidence.Length;
@@ -483,12 +488,15 @@ public sealed class WorkerLocalPressureSession : IPressureProfileSession
                 if (evidence[index].ChunkId
                     != plan[index].ChunkId)
                 {
-                    exactPlan = false;
+                    exactEvidencePlan = false;
                     break;
                 }
             }
         }
 
+        int completedChunks = results.Sum(
+            static result =>
+                result.CompletedChunks);
         long realizedDemand = results.Sum(
             static result =>
                 result.RealizedCumulativeDemandBytes);
@@ -497,11 +505,13 @@ public sealed class WorkerLocalPressureSession : IPressureProfileSession
                 result.PeakLiveLogicalBytes);
         bool correctness = outcome
                 == PressureProfileOutcome.Completed
-            && exactPlan
+            && exactEvidencePlan
             && results.Length == executions.Count
+            && executions.All(ResultMatchesWorkerPlan)
             && results.All(
                 static result =>
                     result.CorrectnessPassed)
+            && completedChunks == plan.Count
             && realizedDemand
                 >= request.RequestedCumulativeDemandBytes;
         Exception? failure = failedExecution?.Failure;
@@ -520,9 +530,15 @@ public sealed class WorkerLocalPressureSession : IPressureProfileSession
                         ?? [])
                 .ToArray()
             : null;
-        int lastCompletedChunkId = evidence.Length == 0
-            ? -1
-            : evidence[^1].ChunkId;
+        int lastCompletedChunkId =
+            outcome == PressureProfileOutcome.Completed
+                ? plan[^1].ChunkId
+                : results
+                    .Select(
+                        static result =>
+                            result.LastCompletedChunkId)
+                    .DefaultIfEmpty(-1)
+                    .Max();
         VoxelPipelineStage lastStage =
             outcome == PressureProfileOutcome.Completed
                 ? VoxelPipelineStage.Completed
@@ -532,6 +548,7 @@ public sealed class WorkerLocalPressureSession : IPressureProfileSession
             Implementation,
             outcome,
             request.ProfilePercent,
+            request.ExecutionMode,
             request.CgroupCapBytes,
             request.RequestedCumulativeDemandBytes,
             realizedDemand,
@@ -540,7 +557,7 @@ public sealed class WorkerLocalPressureSession : IPressureProfileSession
                 realizedDemand
                     - request.RequestedCumulativeDemandBytes),
             request.DeadlineMilliseconds,
-            evidence.Length,
+            completedChunks,
             results.Sum(
                 static result =>
                     result.CompletedLogicalBytes),
@@ -565,8 +582,10 @@ public sealed class WorkerLocalPressureSession : IPressureProfileSession
             lastStage,
             lastCompletedChunkId,
             correctness,
-            PressureWorkContract.ComputeProfileEvidenceHash(
-                evidence),
+            verification
+                ? PressureWorkContract.ComputeProfileEvidenceHash(
+                    evidence)
+                : string.Empty,
             evidence,
             before,
             after,
@@ -614,6 +633,38 @@ public sealed class WorkerLocalPressureSession : IPressureProfileSession
             ActiveWorkerCount: _activeWorkerCount,
             WorkerBudgetBytes: _workerBudgets,
             WorkerCapacities: _workerCapacities);
+    }
+
+    private static bool ResultMatchesWorkerPlan(
+        WorkerExecution execution)
+    {
+        if (execution.Result is not { } result
+            || execution.Request.PlannedChunks is not { Length: > 0 } plan)
+        {
+            return false;
+        }
+
+        long plannedDemand = plan.Sum(
+            static chunk =>
+                chunk.LogicalDemandBytes);
+        bool verification = execution.Request.ExecutionMode
+            == PressureExecutionMode.Verification;
+        return result.ExecutionMode
+                == execution.Request.ExecutionMode
+            && result.CompletedChunks == plan.Length
+            && result.RealizedCumulativeDemandBytes == plannedDemand
+            && result.CompletedLogicalBytes == plannedDemand
+            && result.SourceInputBytes == checked(
+                (long)plan.Length
+                    * PressureWorkContract.SourceInputBytesPerChunk)
+            && result.LastCompletedStage
+                == VoxelPipelineStage.Completed
+            && result.LastCompletedChunkId
+                == plan[^1].ChunkId
+            && (verification
+                ? result.ChunkEvidence.Count == plan.Length
+                : result.ChunkEvidence.Count == 0
+                    && result.CanonicalEvidenceHash.Length == 0);
     }
 
     private static PressureProfileOutcome MapFailureOutcome(

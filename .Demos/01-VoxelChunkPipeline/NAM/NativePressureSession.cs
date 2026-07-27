@@ -195,7 +195,7 @@ internal sealed class NativePressureSession :
                             _context.BeginBatch(
                                 request,
                                 reportProgress,
-                                state.Consumed,
+                                state.Evidence,
                                 state.BuiltChunks,
                                 state.RealizedDemand,
                                 Math.Max(
@@ -344,7 +344,7 @@ internal sealed class NativePressureSession :
                         Implementation,
                         request.ProfilePercent,
                         PressureProgressKind.ProcessingCompleted,
-                        state.Consumed.Count,
+                        state.BuiltChunks,
                         _context.CompletedLogicalBytes,
                         state.LastStage,
                         state.LastChunkId));
@@ -360,12 +360,15 @@ internal sealed class NativePressureSession :
                         [
                             state.PhaseArenaPeakRequest
                         ]);
-                    string evidenceHash =
-                        PressureWorkContract.ComputeProfileEvidenceHash(state.Consumed);
+                    string evidenceHash = state.Evidence is null
+                        ? string.Empty
+                        : PressureWorkContract.ComputeProfileEvidenceHash(
+                            state.Evidence);
                     bool correctness = outcome == PressureProfileOutcome.Completed
-                        && state.Consumed.Count != 0
-                        && (!_context.ExactVerification
-                            || state.Consumed.All(
+                        && state.BuiltChunks != 0
+                        && (state.Evidence is null
+                            || state.Evidence.Count == state.BuiltChunks
+                            && state.Evidence.All(
                                 static chunk =>
                                     chunk.ExactVerificationPassed))
                         && state.RealizedDemand
@@ -378,6 +381,7 @@ internal sealed class NativePressureSession :
                         Implementation,
                         outcome,
                         request.ProfilePercent,
+                        request.ExecutionMode,
                         request.CgroupCapBytes,
                         request.RequestedCumulativeDemandBytes,
                         state.RealizedDemand,
@@ -386,7 +390,7 @@ internal sealed class NativePressureSession :
                             state.RealizedDemand
                                 - request.RequestedCumulativeDemandBytes),
                         request.DeadlineMilliseconds,
-                        state.Consumed.Count,
+                        state.BuiltChunks,
                         _context.CompletedLogicalBytes,
                         state.SourceInputBytes,
                         state.PeakLiveLogicalBytes,
@@ -402,7 +406,9 @@ internal sealed class NativePressureSession :
                         state.LastChunkId,
                         correctness,
                         evidenceHash,
-                        state.Consumed,
+                        state.Evidence is { } evidence
+                            ? evidence
+                            : Array.Empty<PressureChunkEvidence>(),
                         before,
                         after,
                         Math.Max(
@@ -577,9 +583,14 @@ internal sealed class NativePressureSession :
                     && !request.HasPlannedChunks
                 ? request.RetentionDepth
                 : 0;
+            Evidence = request.ExecutionMode
+                    == PressureExecutionMode.Verification
+                ? new List<PressureChunkEvidence>(
+                    request.PlannedChunkCount)
+                : null;
         }
 
-        internal List<PressureChunkEvidence> Consumed { get; } = [];
+        internal List<PressureChunkEvidence>? Evidence { get; }
 
         internal int MinimumWarmupChunks { get; }
 
@@ -709,7 +720,7 @@ internal sealed class NativePressureSession :
         private readonly BatchSlot[] _slots;
         private PressureProfileRequest _request;
         private Action<PressureProgress> _reportProgress = null!;
-        private List<PressureChunkEvidence> _consumed = null!;
+        private List<PressureChunkEvidence>? _evidence;
         private int _startingChunkId;
         private long _startingDemand;
         private int _minimumChunks;
@@ -826,7 +837,7 @@ internal sealed class NativePressureSession :
         internal void BeginBatch(
             PressureProfileRequest request,
             Action<PressureProgress> reportProgress,
-            List<PressureChunkEvidence> consumed,
+            List<PressureChunkEvidence>? evidence,
             int startingChunkId,
             long startingDemand,
             int minimumChunks,
@@ -835,7 +846,7 @@ internal sealed class NativePressureSession :
         {
             _request = request;
             _reportProgress = reportProgress;
-            _consumed = consumed;
+            _evidence = evidence;
             _startingChunkId = startingChunkId;
             _startingDemand = startingDemand;
             _minimumChunks = minimumChunks;
@@ -1296,20 +1307,8 @@ internal sealed class NativePressureSession :
                 batchIndex++)
             {
                 BatchSlot slot = _slots[batchIndex];
-                PressureOutputEvidence output =
-                    PressureWorkContract.DescribeOutput(
-                        slot.Shape);
-                BatchSlot retained = slot with
-                {
-                    Output = output,
-                    Evidence = CreateChunkEvidence(
-                        slot,
-                        output,
-                        string.Empty,
-                        exactVerificationPassed: false)
-                };
-                _slots[batchIndex] = retained;
-                PublishScatterHandoff(retained);
+                CompletedLogicalBytes = checked(
+                    CompletedLogicalBytes + slot.Demand);
             }
         }
 
@@ -1399,7 +1398,7 @@ internal sealed class NativePressureSession :
 
         private void PublishScatterHandoff(BatchSlot retained)
         {
-            _consumed.Add(retained.Evidence);
+            _evidence!.Add(retained.Evidence);
             CompletedLogicalBytes = checked(
                 CompletedLogicalBytes + retained.Demand);
         }

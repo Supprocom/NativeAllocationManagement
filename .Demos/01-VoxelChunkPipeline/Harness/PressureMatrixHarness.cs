@@ -248,7 +248,7 @@ internal static class PressureMatrixHarness
             ["samplesPerProfile"] = options.SamplesPerProfile.ToString(
                 CultureInfo.InvariantCulture),
             ["measurementEvidence"] =
-                "structural lengths and completed mapped handoff",
+                "predeclared plan and terminal completion without per-chunk evidence",
             ["exactVerification"] =
                 "maximum deterministic prefix after all measured profiles",
             ["gcHeapHardLimitPercent"] = options.GcHeapHardLimitPercent.ToString(
@@ -273,6 +273,7 @@ internal static class PressureMatrixHarness
             [
                 "The host samples Docker and cgroup metrics outside each worker.",
                 "The child does not run a benchmark timer or scan allocator statistics during processing.",
+                "Measured child results contain no per-chunk evidence.",
                 "Each measured profile materializes every output and completes its mapped handoff.",
                 "One exact maximum-demand run follows measurement. It reads every output byte."
             ]);
@@ -546,14 +547,28 @@ internal static class PressureMatrixHarness
         PressureProfileResult? safe,
         PressureProfileResult? nam)
     {
-        if (!StructuralParity(safe, nam)
-            || safe is not { } left
+        if (safe is not { } left
             || nam is not { } right)
         {
             return false;
         }
 
-        return left.ChunkEvidence.All(
+        return CompletionParity(left, right)
+            && left.ExecutionMode
+                == PressureExecutionMode.Verification
+            && right.ExecutionMode
+                == PressureExecutionMode.Verification
+            && left.ChunkEvidence.Count == left.CompletedChunks
+            && right.ChunkEvidence.Count == right.CompletedChunks
+            && left.ChunkEvidence.Count != 0
+            && left.ChunkEvidence.SequenceEqual(
+                right.ChunkEvidence)
+            && left.CanonicalEvidenceHash.Length != 0
+            && string.Equals(
+                left.CanonicalEvidenceHash,
+                right.CanonicalEvidenceHash,
+                StringComparison.Ordinal)
+            && left.ChunkEvidence.All(
                 static chunk => chunk.ExactVerificationPassed)
             && right.ChunkEvidence.All(
                 static chunk => chunk.ExactVerificationPassed);
@@ -568,15 +583,31 @@ internal static class PressureMatrixHarness
             return false;
         }
 
-        return left.CorrectnessPassed
+        return CompletionParity(left, right)
+            && left.ExecutionMode
+                == PressureExecutionMode.Measurement
+            && right.ExecutionMode
+                == PressureExecutionMode.Measurement
+            && left.CanonicalEvidenceHash.Length == 0
+            && right.CanonicalEvidenceHash.Length == 0
+            && left.ChunkEvidence.Count == 0
+            && right.ChunkEvidence.Count == 0;
+    }
+
+    private static bool CompletionParity(
+        PressureProfileResult left,
+        PressureProfileResult right) =>
+        left.CorrectnessPassed
             && right.CorrectnessPassed
+            && left.ProfilePercent == right.ProfilePercent
             && left.RequestedCumulativeDemandBytes == right.RequestedCumulativeDemandBytes
             && left.RealizedCumulativeDemandBytes == right.RealizedCumulativeDemandBytes
+            && left.DemandOvershootBytes == right.DemandOvershootBytes
             && left.SourceInputBytes == right.SourceInputBytes
             && left.CompletedLogicalBytes == right.CompletedLogicalBytes
             && left.CompletedChunks == right.CompletedChunks
-            && left.ChunkEvidence.SequenceEqual(right.ChunkEvidence);
-    }
+            && left.LastCompletedStage == right.LastCompletedStage
+            && left.LastCompletedChunkId == right.LastCompletedChunkId;
 
     private static double RequiredSpeedup(int percent) =>
         percent switch

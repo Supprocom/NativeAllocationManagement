@@ -35,14 +35,18 @@ all eight chunk archetypes and every section representation kind. Each
 50-percent step adds one complete cycle. Thus every profile has the same type
 mix and logical work per byte. Later profiles change only cumulative turnover.
 
-The canonical evidence is ordered by chunk. Typed vertices and indices are
-checked against independently derived values. Retained descriptors and upload
-bytes are checked again at the GPU consumer boundary. This check includes
-every encoded field and zero-filled byte. A SHA-256 stream includes every
-logical typed value, descriptor, byte, length, partition boundary, and chunk
-boundary. The hash reads each typed stage range in its canonical order. Safe C#
-and NAM must produce identical per-chunk evidence and the same final evidence
-stream.
+The separate exact verification creates canonical evidence in chunk order.
+Typed vertices and indices are checked against independently derived values.
+Retained descriptors and upload bytes are checked again at the GPU consumer
+boundary. This check includes every encoded field and zero-filled byte.
+
+A SHA-256 stream includes every logical typed value, descriptor, byte, length,
+partition boundary, and chunk boundary. The hash reads each typed stage range
+in canonical order. Safe C# and NAM must produce identical per-chunk evidence
+and the same final evidence stream.
+
+Measured profiles use the predeclared plan and terminal completion values.
+They do not create per-chunk evidence or a canonical evidence hash.
 
 ## The corrected managed baseline
 
@@ -170,6 +174,10 @@ completion boundary after it completes the mapped handoff. Owner and runtime
 snapshots occur outside the processing boundary. Docker CPU and resident
 samples are polled externally. The harness captures cgroup state at profile
 boundaries.
+
+Measured child results contain no per-chunk evidence. The outer worker checks
+completed chunks, logical bytes, source bytes, stage, and chunk position
+against each predeclared worker plan.
 
 Both controls must complete with exact parity. Their mean paired NAM speedup
 must be at least 1.50. The 200-percent profile requires at least 1.75.
