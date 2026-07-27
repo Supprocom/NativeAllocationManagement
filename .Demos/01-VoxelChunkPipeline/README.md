@@ -166,6 +166,12 @@ four GC heaps. Both use the same 90 percent GC heap hard limit. No CFS CPU
 quota is applied. The harness runs each pair sequentially. It alternates the
 first implementation across samples.
 
+The child sends `ProcessingReady` after all workers reach their start gate.
+The child then waits. The host records the start time and sends
+`BeginProcessing`. Only then can the workers start pipeline work. The host
+records the stop time when it receives `ProcessingCompleted`. This handshake
+prevents pipe buffering from hiding processing time.
+
 The predeclared profiles are 50, 100, 200, 300, 400, 500, 600, 700, 800, 900,
 and 1000 percent of the binary cgroup cap. Fifty and one hundred percent are
 control profiles. Each profile starts a new Safe container and a new NAM

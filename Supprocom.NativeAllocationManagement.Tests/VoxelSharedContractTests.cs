@@ -218,6 +218,51 @@ public sealed class VoxelSharedContractTests
             "options.ProfilePercents.Reverse()",
             pressureHarness,
             StringComparison.Ordinal);
+        int processingReady = pressureHarness.IndexOf(
+            "PressureProgressKind.ProcessingReady",
+            StringComparison.Ordinal);
+        int startTick = pressureHarness.IndexOf(
+            "startTick = tick;",
+            processingReady,
+            StringComparison.Ordinal);
+        int beginProcessing = pressureHarness.IndexOf(
+            "PressureCommandKind.BeginProcessing",
+            StringComparison.Ordinal);
+        int sendBegin = pressureHarness.IndexOf(
+            "WriteLineAsync(",
+            startTick,
+            StringComparison.Ordinal);
+        Assert.True(processingReady >= 0);
+        Assert.True(beginProcessing >= 0);
+        Assert.True(startTick > processingReady);
+        Assert.True(sendBegin > startTick);
+        Assert.DoesNotContain(
+            "PressureProgressKind.ProcessingStarted",
+            pressureHarness,
+            StringComparison.Ordinal);
+
+        string protocol = File.ReadAllText(
+            Path.Combine(
+                demoRoot,
+                "SharedContract",
+                "Contracts",
+                "PressureProtocolContract.cs"));
+        Assert.Contains(
+            "progress.Kind != PressureProgressKind.ProcessingReady",
+            protocol,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Console.ReadLine()",
+            protocol,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "begin.Kind != PressureCommandKind.BeginProcessing",
+            protocol,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "ProcessingStarted",
+            protocol,
+            StringComparison.Ordinal);
         Assert.DoesNotContain(
             "consumes every upload byte",
             pressureHarness,

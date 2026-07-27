@@ -31,6 +31,7 @@ public enum PressureCommandKind
     Warmup,
     RunProfile,
     VerifyProfile,
+    BeginProcessing,
     Shutdown
 }
 
@@ -51,7 +52,7 @@ public enum PressureEnvelopeKind
 
 public enum PressureProgressKind
 {
-    ProcessingStarted,
+    ProcessingReady,
     Checkpoint,
     ProcessingCompleted
 }
@@ -377,11 +378,10 @@ public static class PressureProtocolServer
                                         ? PressureExecutionMode.Verification
                                         : PressureExecutionMode.Measurement
                                 },
-                                progress => Write(new PressureEnvelope(
+                                progress => ReportProgress(
                                     command.RequestId,
-                                    PressureEnvelopeKind.Progress,
                                     session.Implementation,
-                                    Progress: progress)));
+                                    progress));
                             Write(new PressureEnvelope(
                                 command.RequestId,
                                 PressureEnvelopeKind.Result,
@@ -394,6 +394,9 @@ public static class PressureProtocolServer
                                 PressureEnvelopeKind.Goodbye,
                                 session.Implementation));
                             return 0;
+                        case PressureCommandKind.BeginProcessing:
+                            throw new InvalidDataException(
+                                "BeginProcessing is valid only after ProcessingReady.");
                         default:
                             throw new InvalidDataException($"Unknown pressure command '{command.Kind}'.");
                     }
@@ -419,6 +422,44 @@ public static class PressureProtocolServer
             implementation,
             ErrorType: exception.GetType().FullName,
             ErrorMessage: exception.Message));
+
+    private static void ReportProgress(
+        string requestId,
+        string implementation,
+        PressureProgress progress)
+    {
+        Write(new PressureEnvelope(
+            requestId,
+            PressureEnvelopeKind.Progress,
+            implementation,
+            Progress: progress));
+        if (progress.Kind != PressureProgressKind.ProcessingReady)
+        {
+            return;
+        }
+
+        string line = Console.ReadLine()
+            ?? throw new EndOfStreamException(
+                "The host ended the protocol before BeginProcessing.");
+        PressureCommand begin = JsonSerializer.Deserialize<PressureCommand>(
+            line.TrimStart('\uFEFF'),
+            VoxelJson.Options);
+        if (!string.Equals(
+                begin.RequestId,
+                requestId,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                "BeginProcessing has an incorrect request identifier.");
+        }
+
+        if (begin.Kind != PressureCommandKind.BeginProcessing
+            || begin.Profile is not null)
+        {
+            throw new InvalidDataException(
+                "ProcessingReady requires BeginProcessing without a profile.");
+        }
+    }
 
     private static void Write(PressureEnvelope envelope)
     {

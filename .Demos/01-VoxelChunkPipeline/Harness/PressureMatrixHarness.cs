@@ -310,6 +310,8 @@ internal static class PressureMatrixHarness
                 CultureInfo.InvariantCulture),
             ["measurementEvidence"] =
                 "predeclared plan and terminal completion without per-chunk evidence",
+            ["measurementBoundary"] =
+                "host starts before BeginProcessing and stops at ProcessingCompleted",
             ["exactVerification"] =
                 "maximum deterministic prefix after all measured profiles",
             ["gcHeapHardLimitPercent"] = options.GcHeapHardLimitPercent.ToString(
@@ -1030,6 +1032,11 @@ internal static class PressureMatrixHarness
         {
             string requestId = $"{_implementation}-{request.ProfilePercent}-{Guid.NewGuid():N}";
             PressureCommand command = new(requestId, commandKind, request);
+            string beginProcessing = JsonSerializer.Serialize(
+                new PressureCommand(
+                    requestId,
+                    PressureCommandKind.BeginProcessing),
+                VoxelJson.Options);
             (CgroupMemorySnapshot initialCgroup, bool peakReset) =
                 await PrepareCgroupProfileAsync();
             long sentTick = Stopwatch.GetTimestamp();
@@ -1115,9 +1122,12 @@ internal static class PressureMatrixHarness
                 {
                     long tick = Stopwatch.GetTimestamp();
                     lastProgress = current;
-                    if (current.Kind == PressureProgressKind.ProcessingStarted)
+                    if (current.Kind == PressureProgressKind.ProcessingReady)
                     {
                         startTick = tick;
+                        await _process!.StandardInput.WriteLineAsync(
+                            beginProcessing);
+                        await _process.StandardInput.FlushAsync();
                     }
                     else if (startTick.HasValue)
                     {

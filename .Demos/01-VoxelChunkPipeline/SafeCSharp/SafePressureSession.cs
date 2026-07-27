@@ -121,7 +121,7 @@ internal sealed class SafePressureSession :
         reportProgress(new PressureProgress(
             Implementation,
             request.ProfilePercent,
-            PressureProgressKind.ProcessingStarted,
+            PressureProgressKind.ProcessingReady,
             0,
             0,
             VoxelPipelineStage.None,

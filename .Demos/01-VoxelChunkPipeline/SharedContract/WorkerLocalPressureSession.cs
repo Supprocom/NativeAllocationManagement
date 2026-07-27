@@ -96,7 +96,7 @@ public sealed class WorkerLocalPressureSession : IPressureProfileSession
             reportProgress(new PressureProgress(
                 Implementation,
                 request.ProfilePercent,
-                PressureProgressKind.ProcessingStarted,
+                PressureProgressKind.ProcessingReady,
                 0,
                 0,
                 VoxelPipelineStage.None,
@@ -870,7 +870,7 @@ public sealed class WorkerLocalPressureSession : IPressureProfileSession
             PressureProgress progress)
         {
             if (progress.Kind
-                == PressureProgressKind.ProcessingStarted)
+                == PressureProgressKind.ProcessingReady)
             {
                 execution.Ready.Set();
                 execution.StartGate.Wait();
