@@ -35,11 +35,6 @@ internal sealed class SafePressureSession :
     private readonly BudgetedArrayPool<uint> _sectionWords;
     private readonly BudgetedArrayPool<ulong> _sectionStates;
     private readonly BudgetedArrayPool<PayloadSlice> _slices;
-    private readonly BudgetedArrayPool<GpuStage160> _stage160;
-    private readonly BudgetedArrayPool<GpuStage168> _stage168;
-    private readonly BudgetedArrayPool<GpuStage176> _stage176;
-    private readonly BudgetedArrayPool<GpuStage192> _stage192;
-    private readonly BudgetedArrayPool<GpuStage224> _stage224;
     private readonly SectionSummary[] _sections = new SectionSummary[
         PressureWorkContract.DefaultRetentionDepth * VoxelMath.SectionsPerChunk];
     private readonly BatchSlot[] _slots = new BatchSlot[
@@ -55,11 +50,6 @@ internal sealed class SafePressureSession :
         _sectionWords = new(_transientBudget);
         _sectionStates = new(_transientBudget);
         _slices = new(_transientBudget);
-        _stage160 = new(_transientBudget);
-        _stage168 = new(_transientBudget);
-        _stage176 = new(_transientBudget);
-        _stage192 = new(_transientBudget);
-        _stage224 = new(_transientBudget);
     }
 
     public string Implementation => "SafeCSharp";
@@ -136,11 +126,6 @@ internal sealed class SafePressureSession :
                 Vertex[]? vertices = null;
                 int[]? indices = null;
                 PayloadSlice[]? slices = null;
-                GpuStage160[]? stage160 = null;
-                GpuStage168[]? stage168 = null;
-                GpuStage176[]? stage176 = null;
-                GpuStage192[]? stage192 = null;
-                GpuStage224[]? stage224 = null;
                 try
                 {
                     int batchCount = 0;
@@ -154,11 +139,6 @@ internal sealed class SafePressureSession :
                     int totalSectionStateWords = 0;
                     int totalVertices = 0;
                     int totalIndices = 0;
-                    int totalStage160 = 0;
-                    int totalStage168 = 0;
-                    int totalStage176 = 0;
-                    int totalStage192 = 0;
-                    int totalStage224 = 0;
                     long sectionStorageBytes = 0;
                     long outputStorageBytes = 0;
                     lastStage = VoxelPipelineStage.Build;
@@ -209,21 +189,6 @@ internal sealed class SafePressureSession :
                             totalVertices + shape.VertexCount);
                         int candidateIndices = checked(
                             totalIndices + shape.IndexCount);
-                        int candidateStage160 = checked(
-                            totalStage160
-                            + shape.GpuStages.Stage160Count);
-                        int candidateStage168 = checked(
-                            totalStage168
-                            + shape.GpuStages.Stage168Count);
-                        int candidateStage176 = checked(
-                            totalStage176
-                            + shape.GpuStages.Stage176Count);
-                        int candidateStage192 = checked(
-                            totalStage192
-                            + shape.GpuStages.Stage192Count);
-                        int candidateStage224 = checked(
-                            totalStage224
-                            + shape.GpuStages.Stage224Count);
                         long candidateSectionStorageBytes =
                             CalculateSectionStorageBytes(
                                 candidateSectionValues,
@@ -233,12 +198,7 @@ internal sealed class SafePressureSession :
                             CalculateOutputStorageBytes(
                                 candidateVertices,
                                 candidateIndices,
-                                candidateFaces,
-                                candidateStage160,
-                                candidateStage168,
-                                candidateStage176,
-                                candidateStage192,
-                                candidateStage224);
+                                candidateFaces);
                         if (batchCount != 0
                             && !CanAdmitBatch(
                                 admission.RetentionBudgetBytes,
@@ -257,11 +217,6 @@ internal sealed class SafePressureSession :
                             totalFaces,
                             totalVertices,
                             totalIndices,
-                            totalStage160,
-                            totalStage168,
-                            totalStage176,
-                            totalStage192,
-                            totalStage224,
                             totalSectionDescriptors,
                             totalSectionValues,
                             totalSectionWords,
@@ -279,11 +234,6 @@ internal sealed class SafePressureSession :
                             candidateSectionStateWords;
                         totalVertices = candidateVertices;
                         totalIndices = candidateIndices;
-                        totalStage160 = candidateStage160;
-                        totalStage168 = candidateStage168;
-                        totalStage176 = candidateStage176;
-                        totalStage192 = candidateStage192;
-                        totalStage224 = candidateStage224;
                         sectionStorageBytes =
                             candidateSectionStorageBytes;
                         outputStorageBytes =
@@ -438,28 +388,7 @@ internal sealed class SafePressureSession :
                     slices = RentBuffer(
                         _slices,
                         totalFaces);
-                    stage160 = RentBuffer(
-                        _stage160,
-                        totalStage160);
-                    stage168 = RentBuffer(
-                        _stage168,
-                        totalStage168);
-                    stage176 = RentBuffer(
-                        _stage176,
-                        totalStage176);
-                    stage192 = RentBuffer(
-                        _stage192,
-                        totalStage192);
-                    stage224 = RentBuffer(
-                        _stage224,
-                        totalStage224);
                     _transientBudget.CompletePhase();
-                    GpuStageBuffers allStages = new(
-                        Slice(stage160, 0, totalStage160),
-                        Slice(stage168, 0, totalStage168),
-                        Slice(stage176, 0, totalStage176),
-                        Slice(stage192, 0, totalStage192),
-                        Slice(stage224, 0, totalStage224));
                     for (int batchIndex = 0;
                         batchIndex < batchCount;
                         batchIndex++)
@@ -477,30 +406,13 @@ internal sealed class SafePressureSession :
                             indices,
                             slot.IndexOffset,
                             shape.IndexCount);
-                        GpuStageBuffers opaqueStages = allStages.Slice(
-                            shape.GpuStages,
-                            slot.Stage160Offset,
-                            slot.Stage168Offset,
-                            slot.Stage176Offset,
-                            slot.Stage192Offset,
-                            slot.Stage224Offset,
-                            opaque: true);
-                        GpuStageBuffers transparentStages = allStages.Slice(
-                            shape.GpuStages,
-                            slot.Stage160Offset,
-                            slot.Stage168Offset,
-                            slot.Stage176Offset,
-                            slot.Stage192Offset,
-                            slot.Stage224Offset,
-                            opaque: false);
                         int opaqueVertexCount = checked(
                             shape.OpaqueFaceCount
                             * VoxelMath.VerticesPerFace);
                         int opaqueIndexCount = checked(
                             shape.OpaqueFaceCount
                             * VoxelMath.IndicesPerFace);
-                        _ = PressureWorkContract.PackStream(
-                            request.Seed,
+                        PressureWorkContract.PackAliasedScatterStream(
                             chunkFaces.Slice(
                                 0,
                                 shape.OpaqueRecordCount),
@@ -513,10 +425,8 @@ internal sealed class SafePressureSession :
                             Slice(
                                 slices,
                                 slot.SliceOffset,
-                                shape.OpaqueFaceCount),
-                            opaqueStages);
-                        _ = PressureWorkContract.PackStream(
-                            request.Seed,
+                                shape.OpaqueFaceCount));
+                        PressureWorkContract.PackAliasedScatterStream(
                             chunkFaces.Slice(
                                 shape.OpaqueRecordCount,
                                 shape.TransparentRecordCount),
@@ -533,13 +443,14 @@ internal sealed class SafePressureSession :
                                 checked(
                                     slot.SliceOffset
                                     + shape.OpaqueFaceCount),
-                                shape.TransparentFaceCount),
-                            transparentStages);
+                                shape.TransparentFaceCount));
                         PressureOutputEvidence output;
                         if (exactVerification)
                         {
-                            output = PressureWorkContract.VerifyAndHashOutput(
+                            output =
+                                PressureWorkContract.VerifyAndHashScatterOutput(
                                 request.Seed,
+                                PressureWorkContract.PayloadPatternTable,
                                 chunkFaces.Slice(0, shape.OpaqueRecordCount),
                                 chunkVertices.Slice(
                                     0,
@@ -565,15 +476,14 @@ internal sealed class SafePressureSession :
                                 Slice(
                                     slices,
                                     checked(
-                                        slot.SliceOffset
-                                        + shape.OpaqueFaceCount),
-                                    shape.TransparentFaceCount),
-                                opaqueStages,
-                                transparentStages);
+                                    slot.SliceOffset
+                                    + shape.OpaqueFaceCount),
+                                    shape.TransparentFaceCount));
                         }
                         else
                         {
-                            output = PressureWorkContract.DescribeOutput(
+                            output =
+                                PressureWorkContract.DescribeScatterOutput(
                                 chunkVertices.Slice(
                                     0,
                                     opaqueVertexCount),
@@ -595,11 +505,9 @@ internal sealed class SafePressureSession :
                                 Slice(
                                     slices,
                                     checked(
-                                        slot.SliceOffset
-                                        + shape.OpaqueFaceCount),
-                                    shape.TransparentFaceCount),
-                                opaqueStages,
-                                transparentStages);
+                                    slot.SliceOffset
+                                    + shape.OpaqueFaceCount),
+                                    shape.TransparentFaceCount));
                         }
 
                         PressureChunkEvidence evidence = CreateEvidence(
@@ -648,26 +556,18 @@ internal sealed class SafePressureSession :
                             indices,
                             slot.IndexOffset,
                             shape.IndexCount);
-                        GpuStageBuffers opaqueStages = allStages.Slice(
-                            shape.GpuStages,
-                            slot.Stage160Offset,
-                            slot.Stage168Offset,
-                            slot.Stage176Offset,
-                            slot.Stage192Offset,
-                            slot.Stage224Offset,
-                            opaque: true);
-                        GpuStageBuffers transparentStages = allStages.Slice(
-                            shape.GpuStages,
-                            slot.Stage160Offset,
-                            slot.Stage168Offset,
-                            slot.Stage176Offset,
-                            slot.Stage192Offset,
-                            slot.Stage224Offset,
-                            opaque: false);
+                        Span<FaceRecord> chunkFaces = faces.AsSpan(
+                            slot.RecordOffset,
+                            Math.Max(1, shape.RecordCount));
                         if (exactVerification)
                         {
-                            PressureWorkContract.VerifyRetainedOutput(
+                            PressureWorkContract.VerifyRetainedScatterOutput(
                                 slot.Output,
+                                request.Seed,
+                                PressureWorkContract.PayloadPatternTable,
+                                chunkFaces.Slice(
+                                    0,
+                                    shape.OpaqueRecordCount),
                                 chunkVertices.Slice(
                                     0,
                                     opaqueVertexCount),
@@ -678,6 +578,9 @@ internal sealed class SafePressureSession :
                                     slices,
                                     slot.SliceOffset,
                                     shape.OpaqueFaceCount),
+                                chunkFaces.Slice(
+                                    shape.OpaqueRecordCount,
+                                    shape.TransparentRecordCount),
                                 chunkVertices.Slice(
                                     opaqueVertexCount,
                                     shape.VertexCount
@@ -691,14 +594,17 @@ internal sealed class SafePressureSession :
                                     checked(
                                         slot.SliceOffset
                                         + shape.OpaqueFaceCount),
-                                    shape.TransparentFaceCount),
-                                opaqueStages,
-                                transparentStages);
+                                    shape.TransparentFaceCount));
                         }
                         else
                         {
-                            PressureWorkContract.ConsumeGpuUpload(
+                            PressureWorkContract.ConsumeScatterGpuUpload(
                                 slot.Output,
+                                request.Seed,
+                                PressureWorkContract.PayloadPatternTable,
+                                chunkFaces.Slice(
+                                    0,
+                                    shape.OpaqueRecordCount),
                                 chunkVertices.Slice(
                                     0,
                                     opaqueVertexCount),
@@ -709,6 +615,9 @@ internal sealed class SafePressureSession :
                                     slices,
                                     slot.SliceOffset,
                                     shape.OpaqueFaceCount),
+                                chunkFaces.Slice(
+                                    shape.OpaqueRecordCount,
+                                    shape.TransparentRecordCount),
                                 chunkVertices.Slice(
                                     opaqueVertexCount,
                                     shape.VertexCount
@@ -722,9 +631,7 @@ internal sealed class SafePressureSession :
                                     checked(
                                         slot.SliceOffset
                                         + shape.OpaqueFaceCount),
-                                    shape.TransparentFaceCount),
-                                opaqueStages,
-                                transparentStages);
+                                    shape.TransparentFaceCount));
                         }
 
                         consumed.Add(slot.Evidence);
@@ -739,16 +646,6 @@ internal sealed class SafePressureSession :
                     indices = null;
                     ReturnBuffer(_slices, slices);
                     slices = null;
-                    ReturnBuffer(_stage160, stage160);
-                    stage160 = null;
-                    ReturnBuffer(_stage168, stage168);
-                    stage168 = null;
-                    ReturnBuffer(_stage176, stage176);
-                    stage176 = null;
-                    ReturnBuffer(_stage192, stage192);
-                    stage192 = null;
-                    ReturnBuffer(_stage224, stage224);
-                    stage224 = null;
                     _faces.Return(faces, clearArray: false);
                     faces = null;
                     _cells.Return(cells, clearArray: false);
@@ -793,11 +690,6 @@ internal sealed class SafePressureSession :
                     ReturnBuffer(_vertices, vertices);
                     ReturnBuffer(_indices, indices);
                     ReturnBuffer(_slices, slices);
-                    ReturnBuffer(_stage160, stage160);
-                    ReturnBuffer(_stage168, stage168);
-                    ReturnBuffer(_stage176, stage176);
-                    ReturnBuffer(_stage192, stage192);
-                    ReturnBuffer(_stage224, stage224);
                 }
             }
         }
@@ -929,11 +821,6 @@ internal sealed class SafePressureSession :
         _vertices.Prime(plan.VertexCapacity);
         _indices.Prime(plan.IndexCapacity);
         _slices.Prime(plan.SliceCapacity);
-        _stage160.Prime(plan.Stage160Capacity);
-        _stage168.Prime(plan.Stage168Capacity);
-        _stage176.Prime(plan.Stage176Capacity);
-        _stage192.Prime(plan.Stage192Capacity);
-        _stage224.Prime(plan.Stage224Capacity);
         _capacityPlan = plan;
         return new SafeAdmissionPlan(
             plan.RetentionDepth,
@@ -963,21 +850,11 @@ internal sealed class SafePressureSession :
     private static long CalculateOutputStorageBytes(
         int vertexCount,
         int indexCount,
-        int sliceCount,
-        int stage160Count,
-        int stage168Count,
-        int stage176Count,
-        int stage192Count,
-        int stage224Count) =>
+        int sliceCount) =>
         checked(
             BufferBytes<Vertex>(vertexCount)
             + BufferBytes<int>(indexCount)
-            + BufferBytes<PayloadSlice>(sliceCount)
-            + BufferBytes<GpuStage160>(stage160Count)
-            + BufferBytes<GpuStage168>(stage168Count)
-            + BufferBytes<GpuStage176>(stage176Count)
-            + BufferBytes<GpuStage192>(stage192Count)
-            + BufferBytes<GpuStage224>(stage224Count));
+            + BufferBytes<PayloadSlice>(sliceCount));
 
     private static long BufferBytes<T>(int length) =>
         checked((long)length * Unsafe.SizeOf<T>());
@@ -1085,11 +962,6 @@ internal sealed class SafePressureSession :
         _sectionWords.Dispose();
         _sectionStates.Dispose();
         _slices.Dispose();
-        _stage160.Dispose();
-        _stage168.Dispose();
-        _stage176.Dispose();
-        _stage192.Dispose();
-        _stage224.Dispose();
         _transientBudget.Dispose();
         _fixedRetainedBytes = 0;
     }
@@ -1103,11 +975,6 @@ internal sealed class SafePressureSession :
         int SliceOffset,
         int VertexOffset,
         int IndexOffset,
-        int Stage160Offset,
-        int Stage168Offset,
-        int Stage176Offset,
-        int Stage192Offset,
-        int Stage224Offset,
         int SectionDescriptorOffset,
         int SectionValueOffset,
         int SectionWordOffset,
@@ -1173,16 +1040,6 @@ internal sealed class SafePressureSession :
 
         internal int SliceCapacity { get; private set; }
 
-        internal int Stage160Capacity { get; private set; }
-
-        internal int Stage168Capacity { get; private set; }
-
-        internal int Stage176Capacity { get; private set; }
-
-        internal int Stage192Capacity { get; private set; }
-
-        internal int Stage224Capacity { get; private set; }
-
         internal static SafeCapacityPlan Create(
             PressureProfileRequest request,
             int maximumRetentionDepth,
@@ -1231,11 +1088,6 @@ internal sealed class SafePressureSession :
             int maximumVertices = 0;
             int maximumIndices = 0;
             int maximumSlices = 0;
-            int maximumStage160 = 0;
-            int maximumStage168 = 0;
-            int maximumStage176 = 0;
-            int maximumStage192 = 0;
-            int maximumStage224 = 0;
             long realizedDemand = 0;
             int builtChunks = 0;
             int minimumWarmupChunks =
@@ -1257,11 +1109,6 @@ internal sealed class SafePressureSession :
                 int vertices = 0;
                 int indices = 0;
                 int slices = 0;
-                int stage160 = 0;
-                int stage168 = 0;
-                int stage176 = 0;
-                int stage192 = 0;
-                int stage224 = 0;
                 while (batchCount < retentionDepth
                     && request.NeedsChunk(
                         builtChunks,
@@ -1307,21 +1154,6 @@ internal sealed class SafePressureSession :
                         indices + shape.IndexCount);
                     slices = checked(
                         slices + Math.Max(1, shape.FaceCount));
-                    stage160 = checked(
-                        stage160
-                        + shape.GpuStages.Stage160Count);
-                    stage168 = checked(
-                        stage168
-                        + shape.GpuStages.Stage168Count);
-                    stage176 = checked(
-                        stage176
-                        + shape.GpuStages.Stage176Count);
-                    stage192 = checked(
-                        stage192
-                        + shape.GpuStages.Stage192Count);
-                    stage224 = checked(
-                        stage224
-                        + shape.GpuStages.Stage224Count);
                     realizedDemand = checked(
                         realizedDemand
                         + PressureWorkContract.CalculateLogicalDemand(
@@ -1348,21 +1180,6 @@ internal sealed class SafePressureSession :
                 maximumSlices = Math.Max(
                     maximumSlices,
                     slices);
-                maximumStage160 = Math.Max(
-                    maximumStage160,
-                    stage160);
-                maximumStage168 = Math.Max(
-                    maximumStage168,
-                    stage168);
-                maximumStage176 = Math.Max(
-                    maximumStage176,
-                    stage176);
-                maximumStage192 = Math.Max(
-                    maximumStage192,
-                    stage192);
-                maximumStage224 = Math.Max(
-                    maximumStage224,
-                    stage224);
                 long sectionBytes =
                     CalculateSectionStorageBytes(
                         values,
@@ -1372,12 +1189,7 @@ internal sealed class SafePressureSession :
                     CalculateOutputStorageBytes(
                         vertices,
                         indices,
-                        slices,
-                        stage160,
-                        stage168,
-                        stage176,
-                        stage192,
-                        stage224);
+                        slices);
                 plan.PeakTransientBytes = Math.Max(
                     plan.PeakTransientBytes,
                     Math.Max(
@@ -1400,11 +1212,6 @@ internal sealed class SafePressureSession :
             plan.VertexCapacity = maximumVertices;
             plan.IndexCapacity = maximumIndices;
             plan.SliceCapacity = maximumSlices;
-            plan.Stage160Capacity = maximumStage160;
-            plan.Stage168Capacity = maximumStage168;
-            plan.Stage176Capacity = maximumStage176;
-            plan.Stage192Capacity = maximumStage192;
-            plan.Stage224Capacity = maximumStage224;
             plan.CoreResidentBytes =
                 plan.CalculateCoreResidentBytes();
             plan.MinimumResidentBytes = checked(
@@ -1416,12 +1223,7 @@ internal sealed class SafePressureSession :
                 + BufferBytes<ulong>(maximumStates)
                 + BufferBytes<Vertex>(maximumVertices)
                 + BufferBytes<int>(maximumIndices)
-                + BufferBytes<PayloadSlice>(maximumSlices)
-                + BufferBytes<GpuStage160>(maximumStage160)
-                + BufferBytes<GpuStage168>(maximumStage168)
-                + BufferBytes<GpuStage176>(maximumStage176)
-                + BufferBytes<GpuStage192>(maximumStage192)
-                + BufferBytes<GpuStage224>(maximumStage224));
+                + BufferBytes<PayloadSlice>(maximumSlices));
             plan.PreferredResidentBytes = checked(
                 plan.CoreResidentBytes
                 + completeTransientCacheBytes);

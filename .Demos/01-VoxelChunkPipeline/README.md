@@ -43,20 +43,25 @@ evidence stream.
 
 The managed implementation uses unsafe-disabled C#, `Span<T>`,
 `ReadOnlySpan<T>`, exact logical slices, stack storage for small bounded data,
-and worker-local `ArrayPool<T>` instances. Transient size classes retain one
-array, while the upload and payload-descriptor size classes retain exactly the
-maximum admitted horizon of fifteen arrays. This matches each array's true
-lifetime, eliminates avoidable per-batch allocations after warmup, and keeps
-managed retention explicitly bounded. Value buffers are completely overwritten
-in their logical ranges and are returned without clearing unused bucket slack.
+and worker-local `ArrayPool<T>` instances. Its size classes retain bounded
+capacities for each typed output. This matches each array's true lifetime and
+removes avoidable per-batch allocation after warmup. Value buffers are fully
+overwritten in their logical ranges. The pools return these buffers without a
+clear operation on unused bucket space.
+
+The managed worker also retains one immutable payload pattern table. Each
+payload descriptor stores an offset into that table. The managed worker does
+not materialize a repeated payload array for each face. The GPU consumer
+reconstructs every logical payload byte from the stable table and retained
+descriptors.
 
 The requested in-flight horizon is twenty chunks. Under the 256 MiB profile,
 the admission controller reserves one third of the effective managed limit,
-with a minimum 64 MiB guard, for the CLR, GC, typed transient stages, and pool
-metadata. It admits no more than fifteen chunks into a resident batch. When
-more work remains, the upload consumer drains that batch, the arrays return to
-their bounded size classes, and production resumes. No chunk, output, or byte
-is dropped. The resulting orchestration and GC work is part of the managed
+with a minimum 64 MiB guard, for the CLR, GC, typed outputs, and pool metadata.
+It admits no more than fifteen chunks into a resident batch. When more work
+remains, the upload consumer drains that batch. The arrays then return to their
+bounded size classes, and production resumes. No chunk, output, or byte is
+dropped. The resulting orchestration and GC work is part of the managed
 implementation's measured cost.
 
 In simplified form, the managed flow is equivalent to the following code.
@@ -66,8 +71,9 @@ read the effective managed-memory limit
 derive the bounded admission depth
 while cumulative demand remains:
     build at most fifteen complete chunks
-    rent exact logical stage buffers from bounded worker-local pools
-    render and prerender every materialized output
+    rent exact typed outputs from bounded worker-local pools
+    store payload descriptors that alias the immutable pattern table
+    render and prerender every unique output
     verify and consume outputs in canonical order
     return every buffer at its true consumer boundary
 ```
@@ -91,15 +97,16 @@ The typed owners and heterogeneous arena use the verified physical bounds.
 Warmup establishes their backing. Later fixed-shape batches reuse the same
 physical segments without geometric regrowth.
 
-The workload uses a small set of immutable payload patterns. NAM copies this
-table into persistent native storage during warmup. Each face record identifies
-one stable pattern range. This design removes a repeated copy for each visible
-face. Vertices, indices, and payload descriptors remain unique scoped outputs.
+The workload uses a small set of immutable payload patterns. Both
+implementations retain one table and use stable pattern ranges. This shared
+optimization is not a NAM advantage. NAM copies the table into persistent
+native storage during warmup. Vertices, indices, and payload descriptors remain
+unique scoped outputs.
 
-The pattern table and scoped outputs use the same stable native arena. A real
-native consumer can use these ranges without a managed staging copy. Exact
+The pattern table and scoped outputs use the same stable native arena. A native
+consumer can use these ranges without a managed staging copy. Exact
 verification reconstructs every logical upload byte from the aliased ranges.
-It then compares the result with the canonical Safe C# hash.
+It then compares the result with the common canonical hash.
 
 `NativeLeaseOperations.Access` enters related same-owner views with one
 failure-atomic composite operation. Scoped arena recycling uses recorded
