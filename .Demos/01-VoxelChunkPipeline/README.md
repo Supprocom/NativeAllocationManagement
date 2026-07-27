@@ -111,19 +111,32 @@ dotnet restore Supprocom.NativeAllocationManagement.slnx
 dotnet build Supprocom.NativeAllocationManagement.slnx -c Release --no-restore
 ```
 
-Run the fixed matrix from the repository root.
+Prepare the worker image first. This setup command runs outside the measured
+matrix and writes the compiler artifact.
 
 ```powershell
 & .Demos/01-VoxelChunkPipeline/Pressure/run-constrained.ps1 `
   -RepoRoot E:\source\Supprocom\NativeAllocationManagement `
   -CompilationOutputPath artifacts\voxel-compilation-final.json `
+  -SetupOnly
+```
+
+Run the fixed matrix from the repository root after setup.
+
+```powershell
+& .Demos/01-VoxelChunkPipeline/Pressure/run-constrained.ps1 `
+  -RepoRoot E:\source\Supprocom\NativeAllocationManagement `
+  -Image nam-voxel-pressure:6ce01e47949c `
+  -CompilationOutputPath artifacts\voxel-compilation-final.json `
   -OutputPath artifacts\voxel-pressure-final.json `
   -SamplesPerProfile 11 `
+  -SkipBuild `
+  -SkipImageBuild `
   -Enforce
 ```
 
-The script uses hard timeouts for compilation, profile execution, and the
-complete command.
+The setup and matrix commands use hard timeouts for compilation and profile
+execution. The matrix command returns a nonzero exit code when any gate fails.
 
 The command creates local evidence only. It does not change or publish the
 package.

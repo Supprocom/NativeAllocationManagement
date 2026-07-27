@@ -14,6 +14,7 @@ param(
     [int]$CompilationPairs = 5,
     [int]$SamplesPerProfile = 11,
     [int]$GcHeapHardLimitPercent = 90,
+    [switch]$SetupOnly,
     [switch]$SkipBuild,
     [switch]$SkipImageBuild,
     [switch]$Enforce)
@@ -192,6 +193,11 @@ if (-not $SkipImageBuild) {
         "--tag",
         $Image,
         $PSScriptRoot) 180000 | Out-Null
+}
+
+if ($SetupOnly) {
+    Write-Output "Setup completed for image $Image. Run the matrix with -SkipBuild -SkipImageBuild."
+    exit 0
 }
 
 $arguments = @(

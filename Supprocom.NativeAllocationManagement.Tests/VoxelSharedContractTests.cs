@@ -304,6 +304,14 @@ public sealed class VoxelSharedContractTests
             "[string]$Profiles = \"50,100,200,500,1000,10000\"",
             runner,
             StringComparison.Ordinal);
+        Assert.Contains(
+            "[switch]$SetupOnly",
+            runner,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Run the matrix with -SkipBuild -SkipImageBuild",
+            runner,
+            StringComparison.Ordinal);
         int compilation = runner.IndexOf(
             "\"--compile-gate\"",
             StringComparison.Ordinal);
