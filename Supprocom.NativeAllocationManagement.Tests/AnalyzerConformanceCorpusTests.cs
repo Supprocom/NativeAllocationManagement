@@ -37,7 +37,12 @@ public sealed class AnalyzerConformanceCorpusTests
                 [tree],
                 [.. GetTrustedPlatformReferences(), MetadataReference.CreateFromFile(typeof(NativePool<int>).Assembly.Location)],
                 new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, allowUnsafe: true));
-            bool compilerRejected = compilation.GetDiagnostics().Any(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+            Diagnostic[] compilerErrors = compilation.GetDiagnostics()
+                .Where(
+                    static diagnostic =>
+                        diagnostic.Severity == DiagnosticSeverity.Error)
+                .ToArray();
+            bool compilerRejected = compilerErrors.Length != 0;
             if (testCase.CompilerRejected)
             {
                 Assert.True(compilerRejected, $"Corpus case '{testCase.Name}' was marked compilerRejected but compiled successfully.");
@@ -45,7 +50,15 @@ public sealed class AnalyzerConformanceCorpusTests
                 continue;
             }
 
-            Assert.False(compilerRejected, $"Corpus case '{testCase.Name}' unexpectedly failed C# compilation.");
+            Assert.False(
+                compilerRejected,
+                $"Corpus case '{testCase.Name}' unexpectedly failed C# compilation."
+                    + Environment.NewLine
+                    + string.Join(
+                        Environment.NewLine,
+                        compilerErrors.Select(
+                            static diagnostic =>
+                                diagnostic.ToString())));
             CompilationWithAnalyzers analyzed = compilation.WithAnalyzers(
                 ImmutableArray.Create<DiagnosticAnalyzer>(new NativeAllocationAnalyzer()));
             ImmutableArray<Diagnostic> actualDiagnostics = await analyzed.GetAnalyzerDiagnosticsAsync();
@@ -63,24 +76,68 @@ public sealed class AnalyzerConformanceCorpusTests
                         : string.Empty))
                 .ToArray();
 
-            Assert.Equal(
-                expectedDiagnostics.Select(expected => expected.Id).OrderBy(id => id, StringComparer.Ordinal),
-                actual.Select(diagnostic => diagnostic.Id).Distinct().OrderBy(id => id, StringComparer.Ordinal));
+            string[] expectedIds = expectedDiagnostics
+                .Select(static expected => expected.Id)
+                .OrderBy(
+                    static id => id,
+                    StringComparer.Ordinal)
+                .ToArray();
+            string[] actualIds = actual
+                .Select(static diagnostic => diagnostic.Id)
+                .Distinct()
+                .OrderBy(
+                    static id => id,
+                    StringComparer.Ordinal)
+                .ToArray();
+            Assert.True(
+                expectedIds.SequenceEqual(actualIds),
+                $"Corpus case '{testCase.Name}' diagnostic identifiers differ."
+                    + Environment.NewLine
+                    + $"Expected: {string.Join(", ", expectedIds)}"
+                    + Environment.NewLine
+                    + $"Actual: {string.Join(", ", actualIds)}");
 
             foreach (ExpectedDiagnostic expected in expectedDiagnostics)
             {
                 ActualDiagnostic[] actualForId = actual.Where(diagnostic => diagnostic.Id == expected.Id).ToArray();
-                Assert.Equal(expected.Count, actualForId.Length);
+                Assert.True(
+                    expected.Count == actualForId.Length,
+                    $"Corpus case '{testCase.Name}' expected {expected.Count} "
+                        + $"{expected.Id} diagnostics but received "
+                        + $"{actualForId.Length}.");
                 if (expected.Severity is not null)
                 {
                     Assert.All(actualForId, diagnostic => Assert.Equal(expected.Severity, diagnostic.Severity));
                 }
 
-                Assert.Equal(
-                    expected.Facts.OrderBy(fact => fact.Line).ThenBy(fact => fact.Column).ThenBy(fact => fact.Provenance),
-                    actualForId
-                        .Select(diagnostic => new DiagnosticFact(diagnostic.Line, diagnostic.Column, diagnostic.Provenance))
-                        .OrderBy(fact => fact.Line).ThenBy(fact => fact.Column).ThenBy(fact => fact.Provenance));
+                DiagnosticFact[] expectedFacts = expected.Facts
+                    .OrderBy(static fact => fact.Line)
+                    .ThenBy(static fact => fact.Column)
+                    .ThenBy(
+                        static fact => fact.Provenance,
+                        StringComparer.Ordinal)
+                    .ToArray();
+                DiagnosticFact[] actualFacts = actualForId
+                    .Select(
+                        static diagnostic =>
+                            new DiagnosticFact(
+                                diagnostic.Line,
+                                diagnostic.Column,
+                                diagnostic.Provenance))
+                    .OrderBy(static fact => fact.Line)
+                    .ThenBy(static fact => fact.Column)
+                    .ThenBy(
+                        static fact => fact.Provenance,
+                        StringComparer.Ordinal)
+                    .ToArray();
+                Assert.True(
+                    expectedFacts.SequenceEqual(actualFacts),
+                    $"Corpus case '{testCase.Name}' facts differ for "
+                        + $"{expected.Id}."
+                        + Environment.NewLine
+                        + $"Expected: {string.Join(", ", expectedFacts)}"
+                        + Environment.NewLine
+                        + $"Actual: {string.Join(", ", actualFacts)}");
             }
 
             analyzerCases++;

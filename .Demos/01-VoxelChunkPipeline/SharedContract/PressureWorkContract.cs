@@ -200,53 +200,54 @@ public readonly record struct PressureChunkShape(
 
 public static class PressureWorkContract
 {
-    private static readonly int[] RegionArchetypes =
+    private static readonly int[] CanonicalSourceCycle =
     [
-        6,
-        4,
+        5096,
+        5777,
+        1410,
+        3451,
+        2948,
+        5701,
+        7862,
+        6207,
+        16,
+        1410,
+        2275,
+        2948,
         5,
-        1,
-        3,
-        7,
-        0,
-        2,
-        5,
-        4,
-        6,
-        1,
-        7,
-        3,
-        0,
-        2
+        7894,
+        6207,
+        6207
     ];
 
     private static readonly long[] ManagedResidentBytesByDepth =
     [
         0,
         18_449_920,
-        29_558_272,
-        41_774_080,
-        51_776_512,
-        64_411_648,
-        76_208_128,
-        86_169_600,
-        96_212_992,
-        111_423_488,
-        121_483_264,
-        131_444_736,
-        145_076_224,
-        155_037_696,
-        164_999_168,
-        174_960_640,
-        185_085_952,
-        205_545_472,
-        215_506_944,
-        225_665_024,
-        235_626_496
+        25_888_256,
+        36_441_088,
+        45_304_832,
+        59_119_616,
+        64_100_352,
+        69_081_088,
+        75_700_224,
+        93_794_304,
+        103_100_416,
+        108_212_224,
+        113_848_320,
+        123_154_432,
+        128_135_168,
+        130_428_928,
+        130_740_224,
+        151_199_744,
+        159_588_352,
+        168_894_464,
+        182_132_736
     ];
 
     public const int DefaultRetentionDepth = 20;
     public const int DefaultResidentDepth = DefaultRetentionDepth;
+    public const int CanonicalPressureCycleLength = 16;
     public const int CanonicalManagedAdmissionDepth = 14;
     public const int DefaultProgressEveryChunks = 4;
     public const int CanonicalPressureSeed = 17;
@@ -295,20 +296,20 @@ public static class PressureWorkContract
             * MaximumPayloadBytes));
 
     public const int CanonicalResidentCellCapacity = 655_360;
-    public const int CanonicalResidentFaceRecordCapacity = 429_588;
-    public const int CanonicalResidentTransparentMaskWordCapacity = 30_720;
-    public const int CanonicalResidentPayloadSliceCapacity = 693_168;
-    public const int CanonicalResidentUploadByteCapacity = 127_726_496;
+    public const int CanonicalResidentFaceRecordCapacity = 268_532;
+    public const int CanonicalResidentTransparentMaskWordCapacity = 18_496;
+    public const int CanonicalResidentPayloadSliceCapacity = 481_532;
+    public const int CanonicalResidentUploadByteCapacity = 86_915_248;
     public const int CanonicalResidentSectionDescriptorCapacity = 160;
-    public const int CanonicalResidentSectionValueCapacity = 655_360;
-    public const int CanonicalResidentSectionWordCapacity = 64_320;
-    public const int CanonicalResidentSectionStateWordCapacity = 38_400;
+    public const int CanonicalResidentSectionValueCapacity = 110_980;
+    public const int CanonicalResidentSectionWordCapacity = 38_674;
+    public const int CanonicalResidentSectionStateWordCapacity = 30_160;
     public const int CanonicalMaximumVertexCapacity = 140_344;
     public const int CanonicalMaximumIndexCapacity = 210_516;
-    public const int CanonicalMaximumArraysPerPoolBucket = 20;
+    public const int CanonicalMaximumArraysPerPoolBucket = 15;
     public const int CanonicalRetainedArraysPerPoolBucket = 1;
-    public const long CanonicalArenaReservationBytes = 47_865_152;
-    public const long CanonicalManagedPoolResidentBytes = 235_626_496;
+    public const long CanonicalArenaReservationBytes = 37_157_808;
+    public const long CanonicalManagedPoolResidentBytes = 182_132_736;
     public const int GpuCommandPaddingBytesPerFace = 32;
     public const int OccupancyWordsPerSection = 64;
     public const int BoundaryWordsPerFace = 4;
@@ -344,7 +345,8 @@ public static class PressureWorkContract
         long realizedDemand = 0;
         while (realizedDemand
                     < requestedCumulativeDemandBytes
-            || entries.Count < minimumChunks)
+            || entries.Count < minimumChunks
+            || entries.Count % CanonicalPressureCycleLength != 0)
         {
             int chunkId = entries.Count;
             GenerateCells(
@@ -372,15 +374,8 @@ public static class PressureWorkContract
     public static int PressureSourceChunkIndex(int chunkId)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(chunkId);
-        if (chunkId < DefaultRetentionDepth)
-        {
-            return chunkId;
-        }
-
-        int relative = chunkId - DefaultRetentionDepth;
-        int region = relative / DefaultRetentionDepth;
-        int archetype = RegionArchetypes[region % RegionArchetypes.Length];
-        return checked((chunkId << 3) | archetype);
+        return CanonicalSourceCycle[
+            chunkId % CanonicalPressureCycleLength];
     }
 
     public static long CanonicalManagedResidentBytes(int retentionDepth)

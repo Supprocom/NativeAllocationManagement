@@ -294,27 +294,31 @@ public sealed class VoxelSharedContractTests
             nativeSource,
             StringComparison.Ordinal);
         Assert.Contains(
-            "NativeLeaseSourceOctupleSpanInitializer<",
+            "NativeLeaseSourceQuadSpanInitializer<",
             nativeSource,
             StringComparison.Ordinal);
         Assert.Contains(
-            "PressureWorkContract.PackStream(",
+            "PressureWorkContract.PackAliasedScatterStream(",
             nativeSource,
             StringComparison.Ordinal);
-        Assert.DoesNotContain(
-            "PackAliasedScatterStream(",
-            nativeSource,
-            StringComparison.Ordinal);
-        Assert.DoesNotContain(
+        Assert.Contains(
             "PayloadPatternTableBytes",
             nativeSource,
             StringComparison.Ordinal);
         Assert.Contains(
-            "CompleteMappedHandoff(",
+            "CompleteScatterHandoff(",
+            nativeSource,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "PressureWorkContract.PackStream(",
             nativeSource,
             StringComparison.Ordinal);
         Assert.DoesNotContain(
             "ConsumeGpuUpload(",
+            nativeSource,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "ConsumeScatterGpuUpload(",
             nativeSource,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -876,45 +880,107 @@ public sealed class VoxelSharedContractTests
     }
 
     [Fact]
-    public void PressureCorpusStartsBalancedAndThenUsesSpatialRegions()
+    public void PressureCorpusRepeatsOneHeterogeneousCycle()
     {
+        int cycleLength =
+            PressureWorkContract.CanonicalPressureCycleLength;
+        int[] firstCycle = Enumerable.Range(0, cycleLength)
+            .Select(
+                PressureWorkContract.PressureSourceChunkIndex)
+            .ToArray();
+
+        Assert.Equal(16, cycleLength);
+        Assert.Equal(
+            8,
+            firstCycle
+                .Select(static source => source & 7)
+                .Distinct()
+                .Count());
+        for (int archetype = 0; archetype < 8; archetype++)
+        {
+            Assert.Contains(
+                firstCycle,
+                source => (source & 7) == archetype);
+        }
+
         for (int chunk = 0;
-            chunk < PressureWorkContract.DefaultRetentionDepth;
+            chunk
+                < PressureWorkContract
+                    .CanonicalPressureCorpusLength;
             chunk++)
         {
             Assert.Equal(
-                chunk,
-                PressureWorkContract.PressureSourceChunkIndex(chunk));
+                firstCycle[chunk % cycleLength],
+                PressureWorkContract.PressureSourceChunkIndex(
+                    chunk));
         }
+    }
 
-        for (int region = 0; region < 16; region++)
-        {
-            int firstChunk = checked(
-                PressureWorkContract.DefaultRetentionDepth
-                * (region + 1));
-            int archetype = PressureWorkContract.PressureSourceChunkIndex(
-                firstChunk) & 7;
-            for (int offset = 1;
-                offset < PressureWorkContract.DefaultRetentionDepth;
-                offset++)
+    [Fact]
+    public void CanonicalPressureProfilesAddCompleteEqualCycles()
+    {
+        const long capBytes = 268_435_456;
+        int cycleLength =
+            PressureWorkContract.CanonicalPressureCycleLength;
+        PressureChunkPlanEntry[] largest =
+            PressureWorkContract.CreateCanonicalChunkPlan(
+                PressureWorkContract.CanonicalPressureSeed,
+                capBytes * 10,
+                minimumChunks: 0);
+        PressureChunkPlanEntry[] firstCycle =
+            largest[..cycleLength];
+        long cycleDemand = firstCycle.Sum(
+            static chunk => chunk.LogicalDemandBytes);
+
+        Assert.InRange(
+            cycleDemand,
+            capBytes / 2,
+            capBytes / 2 + capBytes / 200);
+        foreach (int percent in new[]
             {
+                50,
+                100,
+                200,
+                300,
+                400,
+                500,
+                600,
+                700,
+                800,
+                900,
+                1000
+            })
+        {
+            int cycleCount = percent / 50;
+            PressureChunkPlanEntry[] plan =
+                PressureWorkContract.CreateCanonicalChunkPlan(
+                    PressureWorkContract.CanonicalPressureSeed,
+                    checked(capBytes * percent / 100),
+                    minimumChunks: 0);
+
+            Assert.Equal(
+                checked(cycleCount * cycleLength),
+                plan.Length);
+            Assert.Equal(
+                checked(cycleDemand * cycleCount),
+                plan.Sum(
+                    static chunk =>
+                        chunk.LogicalDemandBytes));
+            for (int index = 0; index < plan.Length; index++)
+            {
+                PressureChunkPlanEntry expected =
+                    firstCycle[index % cycleLength];
                 Assert.Equal(
-                    archetype,
-                    PressureWorkContract.PressureSourceChunkIndex(
-                        firstChunk + offset) & 7);
+                    expected.LogicalDemandBytes,
+                    plan[index].LogicalDemandBytes);
+                Assert.Equal(
+                    expected.EstimatedWorkUnits,
+                    plan[index].EstimatedWorkUnits);
+                Assert.Equal(
+                    expected.Shape,
+                    plan[index].Shape);
             }
         }
-
-        Assert.Equal(
-            8,
-            Enumerable.Range(0, 16)
-                .Select(region =>
-                    PressureWorkContract.PressureSourceChunkIndex(
-                        PressureWorkContract.DefaultRetentionDepth
-                            * (region + 1))
-                    & 7)
-                .Distinct()
-                .Count());
     }
 
     [Fact]

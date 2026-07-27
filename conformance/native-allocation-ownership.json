@@ -3,7 +3,7 @@
     "name": "both-branches-return",
     "compilerRejected": false,
     "expectedDiagnostics": [],
-    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run(bool condition) { NativePool<int> pool = new(); if (condition) { pool.ReturnMemoryToNativeMemory(); } else { pool.ReturnMemoryToNativeMemory(); } pool.LeaseFromMemory(); Pooled<int> value = pool.Rent(1); value.Dispose(); pool.Dispose(); } }"
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run(bool condition) { NativePool<int> pool = new(); if (condition) { pool.ReturnMemoryToNativeMemory(); } else { pool.ReturnMemoryToNativeMemory(); } pool.LeaseFromMemory(); Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!)); value.Dispose(); pool.Dispose(); } }"
   },
   {
     "name": "one-branch-return",
@@ -42,19 +42,18 @@
         { "line": 2, "column": 162, "provenance": "value" }
       ] }
     ],
-    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static int Run() { NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory); Pooled<int> value = pool.Rent(1); return 42; } }"
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static int Run() { NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory); Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!)); return 42; } }"
   },
   {
     "name": "direct-helper",
     "compilerRejected": false,
     "expectedDiagnostics": [],
-    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativePool<int> pool = new(); ReturnPool(pool); pool.LeaseFromMemory(); Pooled<int> value = pool.Rent(1); value.Dispose(); pool.Dispose(); } private static void ReturnPool(NativePool<int> pool) => pool.ReturnMemoryToNativeMemory(); }"
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativePool<int> pool = new(); ReturnPool(pool); pool.LeaseFromMemory(); Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!)); value.Dispose(); pool.Dispose(); } private static void ReturnPool(NativePool<int> pool) => pool.ReturnMemoryToNativeMemory(); }"
   },
   {
     "name": "conditional-helper",
     "compilerRejected": false,
     "expectedDiagnostics": [
-      { "id": "NAM1001", "count": 1, "facts": [{ "line": 2, "column": 113, "provenance": "pool -> the call argument" }] },
       { "id": "NAM1009", "count": 1, "facts": [{ "line": 2, "column": 131, "provenance": "pool -> LeaseFromMemory" }] }
     ],
     "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run(bool condition) { NativePool<int> pool = new(); MaybeReturn(pool, condition); pool.LeaseFromMemory(); } private static void MaybeReturn(NativePool<int> pool, bool condition) { if (condition) { pool.ReturnMemoryToNativeMemory(); } } }"
@@ -69,7 +68,7 @@
         { "line": 4, "column": 224, "provenance": "value" }
       ] }
     ],
-    "source": "using System;\nusing Supprocom.NativeAllocationManagement;\npublic sealed class DisposableThing : IDisposable { public void Dispose() { } }\npublic static class Sample { public static void Run() { using (new DisposableThing()) { NativeRegion region = new(); NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory); Pooled<int> value = pool.Rent(1); } } }"
+    "source": "using System;\nusing Supprocom.NativeAllocationManagement;\npublic sealed class DisposableThing : IDisposable { public void Dispose() { } }\npublic static class Sample { public static void Run() { using (new DisposableThing()) { NativeRegion region = new(); NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory); Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!)); } } }"
   },
   {
     "name": "wrong-field-disposal",
@@ -120,99 +119,99 @@
     "name": "array-of-ref-struct",
     "compilerRejected": true,
     "expectedDiagnostics": [],
-    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativePool<int> pool = new(); Pooled<int> value = pool.Rent(1); Pooled<int>[] values = new[] { value }; } }"
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativePool<int> pool = new(); Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!)); Pooled<int>[] values = new[] { value }; } }"
   },
   {
     "name": "generic-container-of-ref-struct",
     "compilerRejected": true,
     "expectedDiagnostics": [],
-    "source": "using Supprocom.NativeAllocationManagement;\npublic sealed class Holder<T> { public T Value = default!; }\npublic static class Sample { public static void Run() { NativePool<int> pool = new(); Pooled<int> value = pool.Rent(1); Holder<Pooled<int>> holder = new(); holder.Value = value; } }"
+    "source": "using Supprocom.NativeAllocationManagement;\npublic sealed class Holder<T> { public T Value = default!; }\npublic static class Sample { public static void Run() { NativePool<int> pool = new(); Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!)); Holder<Pooled<int>> holder = new(); holder.Value = value; } }"
   },
   {
     "name": "dynamic-boxing",
     "compilerRejected": true,
     "expectedDiagnostics": [],
-    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativePool<int> pool = new(); Pooled<int> value = pool.Rent(1); dynamic boxed = value; } }"
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativePool<int> pool = new(); Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!)); dynamic boxed = value; } }"
   },
   {
     "name": "closure-capture",
     "compilerRejected": true,
     "expectedDiagnostics": [],
-    "source": "using System;\nusing Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativePool<int> pool = new(); Pooled<int> value = pool.Rent(1); Action callback = () => Console.WriteLine(value.Length); } }"
+    "source": "using System;\nusing Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativePool<int> pool = new(); Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!)); Action callback = () => Console.WriteLine(value.Length); } }"
   },
   {
     "name": "async-state",
     "compilerRejected": false,
     "expectedDiagnostics": [
-      { "id": "NAM1011", "count": 1, "facts": [{ "line": 3, "column": 127, "provenance": "value" }] },
+      { "id": "NAM1011", "count": 1, "facts": [{ "line": 3, "column": 167, "provenance": "value" }] },
       { "id": "NAM1003", "count": 1, "facts": [{ "line": 3, "column": 113, "provenance": "value" }] }
     ],
-    "source": "using System.Threading.Tasks;\nusing Supprocom.NativeAllocationManagement;\npublic static class Sample { public static async Task Run() { NativePool<int> pool = new(); Pooled<int> value = pool.Rent(1); await Task.Yield(); _ = value.Length; } }"
+    "source": "using System.Threading.Tasks;\nusing Supprocom.NativeAllocationManagement;\npublic static class Sample { public static async Task Run() { NativePool<int> pool = new(); Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!)); await Task.Yield(); _ = value.Length; } }"
   },
   {
     "name": "iterator-state",
     "compilerRejected": false,
     "expectedDiagnostics": [
-      { "id": "NAM1011", "count": 1, "facts": [{ "line": 3, "column": 133, "provenance": "value" }] },
+      { "id": "NAM1011", "count": 1, "facts": [{ "line": 3, "column": 173, "provenance": "value" }] },
       { "id": "NAM1003", "count": 1, "facts": [{ "line": 3, "column": 119, "provenance": "value" }] }
     ],
-    "source": "using System.Collections.Generic;\nusing Supprocom.NativeAllocationManagement;\npublic static class Sample { public static IEnumerable<int> Run() { NativePool<int> pool = new(); Pooled<int> value = pool.Rent(1); yield return value.Length; } }"
+    "source": "using System.Collections.Generic;\nusing Supprocom.NativeAllocationManagement;\npublic static class Sample { public static IEnumerable<int> Run() { NativePool<int> pool = new(); Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!)); yield return value.Length; } }"
   },
   {
     "name": "unknown-call",
     "compilerRejected": false,
     "expectedDiagnostics": [
-      { "id": "NAM1016", "count": 1, "facts": [{ "line": 2, "column": 129, "provenance": "value -> void Sample.Consume(Pooled<int> value)" }] },
+      { "id": "NAM1016", "count": 1, "facts": [{ "line": 2, "column": 169, "provenance": "value -> void Sample.Consume(Pooled<int> value)" }] },
       { "id": "NAM1003", "count": 2, "facts": [
         { "line": 2, "column": 107, "provenance": "value" },
-        { "line": 2, "column": 192, "provenance": "value" }
+        { "line": 2, "column": 232, "provenance": "value" }
       ] }
     ],
-    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativePool<int> pool = new(); Pooled<int> value = pool.Rent(1); Consume(value); } private static void Consume(Pooled<int> value) { _ = value.Length; } }"
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativePool<int> pool = new(); Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!)); Consume(value); } private static void Consume(Pooled<int> value) { _ = value.Length; } }"
   },
   {
     "name": "nested-helper",
     "compilerRejected": false,
     "expectedDiagnostics": [],
-    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativePool<int> pool = new(); ReturnOuter(pool); pool.LeaseFromMemory(); Pooled<int> value = pool.Rent(1); value.Dispose(); pool.Dispose(); } private static void ReturnOuter(NativePool<int> pool) => ReturnInner(pool); private static void ReturnInner(NativePool<int> pool) => pool.ReturnMemoryToNativeMemory(); }"
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativePool<int> pool = new(); ReturnOuter(pool); pool.LeaseFromMemory(); Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!)); value.Dispose(); pool.Dispose(); } private static void ReturnOuter(NativePool<int> pool) => ReturnInner(pool); private static void ReturnInner(NativePool<int> pool) => pool.ReturnMemoryToNativeMemory(); }"
   },
   {
     "name": "post-return-operations",
     "compilerRejected": false,
     "expectedDiagnostics": [
-      { "id": "NAM1007", "count": 1, "facts": [{ "line": 2, "column": 121, "provenance": "pool -> stale" }] },
+      { "id": "NAM1007", "count": 1, "facts": [{ "line": 2, "column": 161, "provenance": "pool -> stale" }] },
       { "id": "NAM1004", "count": 10, "facts": [
-        { "line": 2, "column": 160, "provenance": "stale -> Length" },
-        { "line": 2, "column": 178, "provenance": "stale -> Capacity" },
-        { "line": 2, "column": 198, "provenance": "stale -> this[]" },
-        { "line": 2, "column": 208, "provenance": "stale -> this[]" },
-        { "line": 2, "column": 222, "provenance": "stale -> Clear" },
-        { "line": 2, "column": 237, "provenance": "stale -> CopyFrom" },
-        { "line": 2, "column": 265, "provenance": "stale -> CopyTo" },
-        { "line": 2, "column": 291, "provenance": "stale -> Access" },
-        { "line": 2, "column": 326, "provenance": "stale -> Read" },
-        { "line": 2, "column": 362, "provenance": "stale -> Dispose" }
+        { "line": 2, "column": 200, "provenance": "stale -> Length" },
+        { "line": 2, "column": 218, "provenance": "stale -> Capacity" },
+        { "line": 2, "column": 238, "provenance": "stale -> this[]" },
+        { "line": 2, "column": 248, "provenance": "stale -> this[]" },
+        { "line": 2, "column": 262, "provenance": "stale -> Clear" },
+        { "line": 2, "column": 277, "provenance": "stale -> CopyFrom" },
+        { "line": 2, "column": 305, "provenance": "stale -> CopyTo" },
+        { "line": 2, "column": 331, "provenance": "stale -> Access" },
+        { "line": 2, "column": 366, "provenance": "stale -> Read" },
+        { "line": 2, "column": 402, "provenance": "stale -> Dispose" }
       ] }
     ],
-    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativePool<int> pool = new(); Pooled<int> stale = pool.Rent(2); pool.ReturnMemoryToNativeMemory(); _ = stale.Length; _ = stale.Capacity; _ = stale[0]; stale[0] = 1; stale.Clear(); stale.CopyFrom(new int[2]); stale.CopyTo(new int[2]); stale.Access(static _ => { }); _ = stale.Read(static span => span[0]); stale.Dispose(); pool.Dispose(); } }"
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativePool<int> pool = new(); Pooled<int> stale = pool.Rent(2, static writer => writer.Fill(default!)); pool.ReturnMemoryToNativeMemory(); _ = stale.Length; _ = stale.Capacity; _ = stale[0]; stale[0] = 1; stale.Clear(); stale.CopyFrom(new int[2]); stale.CopyTo(new int[2]); stale.Access(static _ => { }); _ = stale.Read(static span => span[0]); stale.Dispose(); pool.Dispose(); } }"
   },
   {
     "name": "var-spelling-and-multiple-pools",
     "compilerRejected": false,
     "expectedDiagnostics": [],
-    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { var first = new NativePool<int>(); var second = new NativePool<long>(); first.ReturnMemoryToGarbageCollector(); second.ReturnMemoryToNativeMemory(); first.LeaseFromMemory(); second.LeaseFromMemory(); var firstValue = first.Rent(1); var secondValue = second.Rent(1); firstValue.Dispose(); secondValue.Dispose(); first.Dispose(); second.Dispose(); } }"
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { var first = new NativePool<int>(); var second = new NativePool<long>(); first.ReturnMemoryToGarbageCollector(); second.ReturnMemoryToNativeMemory(); first.LeaseFromMemory(); second.LeaseFromMemory(); var firstValue = first.Rent(1, static writer => writer.Fill(default!)); var secondValue = second.Rent(1, static writer => writer.Fill(default!)); firstValue.Dispose(); secondValue.Dispose(); first.Dispose(); second.Dispose(); } }"
   },
   {
     "name": "balanced-generation-loop",
     "compilerRejected": false,
     "expectedDiagnostics": [],
-    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run(int iterations) { NativePool<int> pool = new(); for (int index = 0; index < iterations; index++) { pool.ReturnMemoryToNativeMemory(); pool.LeaseFromMemory(); Pooled<int> value = pool.Rent(1); value.Dispose(); } pool.Dispose(); } }"
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run(int iterations) { NativePool<int> pool = new(); for (int index = 0; index < iterations; index++) { pool.ReturnMemoryToNativeMemory(); pool.LeaseFromMemory(); Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!)); value.Dispose(); } pool.Dispose(); } }"
   },
   {
     "name": "balanced-generation-both-policies",
     "compilerRejected": false,
     "expectedDiagnostics": [],
-    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run(int iterations, bool native) { NativePool<int> pool = new(); for (int index = 0; index < iterations; index++) { if (native) { pool.ReturnMemoryToNativeMemory(); } else { pool.ReturnMemoryToGarbageCollector(); } pool.LeaseFromMemory(); Pooled<int> value = pool.Rent(1); value.Dispose(); } pool.Dispose(); } }"
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run(int iterations, bool native) { NativePool<int> pool = new(); for (int index = 0; index < iterations; index++) { if (native) { pool.ReturnMemoryToNativeMemory(); } else { pool.ReturnMemoryToGarbageCollector(); } pool.LeaseFromMemory(); Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!)); value.Dispose(); } pool.Dispose(); } }"
   },
   {
     "name": "balanced-generation-goto-retry",
@@ -224,11 +223,11 @@
     "name": "balanced-generation-stale-handle",
     "compilerRejected": false,
     "expectedDiagnostics": [
-      { "id": "NAM1007", "count": 1, "facts": [{ "line": 2, "column": 186, "provenance": "pool -> stale" }] },
-      { "id": "NAM1004", "count": 1, "facts": [{ "line": 2, "column": 249, "provenance": "stale -> Length" }] },
+      { "id": "NAM1007", "count": 1, "facts": [{ "line": 2, "column": 226, "provenance": "pool -> stale" }] },
+      { "id": "NAM1004", "count": 1, "facts": [{ "line": 2, "column": 289, "provenance": "stale -> Length" }] },
       { "id": "NAM1003", "count": 1, "facts": [{ "line": 2, "column": 121, "provenance": "stale" }] }
     ],
-    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run(int iterations) { NativePool<int> pool = new(); Pooled<int> stale = pool.Rent(1); for (int index = 0; index < iterations; index++) { pool.ReturnMemoryToNativeMemory(); pool.LeaseFromMemory(); _ = stale.Length; } pool.Dispose(); } }"
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run(int iterations) { NativePool<int> pool = new(); Pooled<int> stale = pool.Rent(1, static writer => writer.Fill(default!)); for (int index = 0; index < iterations; index++) { pool.ReturnMemoryToNativeMemory(); pool.LeaseFromMemory(); _ = stale.Length; } pool.Dispose(); } }"
   },
   {
     "name": "nested-default-root-abandoned",
@@ -236,7 +235,7 @@
     "expectedDiagnostics": [
       { "id": "NAM1003", "count": 1, "facts": [{ "line": 2, "column": 109, "provenance": "value" }] }
     ],
-    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativePool<int> pool = new(); { Pooled<int> value = pool.Rent(1); } pool.Dispose(); } }"
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativePool<int> pool = new(); { Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!)); } pool.Dispose(); } }"
   },
   {
     "name": "nested-deterministic-root-owner-dispose-only",
@@ -244,13 +243,13 @@
     "expectedDiagnostics": [
       { "id": "NAM1003", "count": 1, "facts": [{ "line": 2, "column": 165, "provenance": "value" }] }
     ],
-    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory); { Pooled<int> value = pool.Rent(1); } pool.Dispose(); } }"
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory); { Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!)); } pool.Dispose(); } }"
   },
   {
     "name": "nested-root-explicit-dispose",
     "compilerRejected": false,
     "expectedDiagnostics": [],
-    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativePool<int> pool = new(); { Pooled<int> value = pool.Rent(1); value.Dispose(); } pool.Dispose(); } }"
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativePool<int> pool = new(); { Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!)); value.Dispose(); } pool.Dispose(); } }"
   },
   {
     "name": "nested-root-generation-return",
@@ -260,17 +259,17 @@
         "id": "NAM1007",
         "count": 1,
         "facts": [
-          { "line": 2, "column": 123, "provenance": "pool -> value" }
+          { "line": 2, "column": 163, "provenance": "pool -> value" }
         ]
       }
     ],
-    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativePool<int> pool = new(); { Pooled<int> value = pool.Rent(1); pool.ReturnMemoryToNativeMemory(); } pool.LeaseFromMemory(); pool.Dispose(); } }"
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativePool<int> pool = new(); { Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!)); pool.ReturnMemoryToNativeMemory(); } pool.LeaseFromMemory(); pool.Dispose(); } }"
   },
   {
     "name": "nested-loop-disposed-zero-one-many",
     "compilerRejected": false,
     "expectedDiagnostics": [],
-    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run(int iterations) { NativePool<int> pool = new(); for (int index = 0; index < iterations; index++) { Pooled<int> value = pool.Rent(1); value.Dispose(); } pool.Dispose(); } }"
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run(int iterations) { NativePool<int> pool = new(); for (int index = 0; index < iterations; index++) { Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!)); value.Dispose(); } pool.Dispose(); } }"
   },
   {
     "name": "nested-switch-section-break-leak",
@@ -278,7 +277,7 @@
     "expectedDiagnostics": [
       { "id": "NAM1003", "count": 1, "facts": [{ "line": 2, "column": 149, "provenance": "value" }] }
     ],
-    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run(int selector) { NativePool<int> pool = new(); switch (selector) { case 1: { Pooled<int> value = pool.Rent(1); break; } default: break; } pool.Dispose(); } }"
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run(int selector) { NativePool<int> pool = new(); switch (selector) { case 1: { Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!)); break; } default: break; } pool.Dispose(); } }"
   },
   {
     "name": "nested-loop-break-leak",
@@ -286,7 +285,7 @@
     "expectedDiagnostics": [
       { "id": "NAM1003", "count": 1, "facts": [{ "line": 2, "column": 141, "provenance": "value" }] }
     ],
-    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run(bool condition) { NativePool<int> pool = new(); while (condition) { Pooled<int> value = pool.Rent(1); break; } pool.Dispose(); } }"
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run(bool condition) { NativePool<int> pool = new(); while (condition) { Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!)); break; } pool.Dispose(); } }"
   },
   {
     "name": "nested-loop-continue-leak",
@@ -294,7 +293,7 @@
     "expectedDiagnostics": [
       { "id": "NAM1003", "count": 1, "facts": [{ "line": 2, "column": 141, "provenance": "value" }] }
     ],
-    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run(bool condition) { NativePool<int> pool = new(); while (condition) { Pooled<int> value = pool.Rent(1); continue; } pool.Dispose(); } }"
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run(bool condition) { NativePool<int> pool = new(); while (condition) { Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!)); continue; } pool.Dispose(); } }"
   },
   {
     "name": "nested-goto-leak",
@@ -302,7 +301,7 @@
     "expectedDiagnostics": [
       { "id": "NAM1003", "count": 1, "facts": [{ "line": 2, "column": 109, "provenance": "value" }] }
     ],
-    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativePool<int> pool = new(); { Pooled<int> value = pool.Rent(1); goto Done; } Done: pool.Dispose(); } }"
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativePool<int> pool = new(); { Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!)); goto Done; } Done: pool.Dispose(); } }"
   },
   {
     "name": "nested-return-leak",
@@ -310,7 +309,7 @@
     "expectedDiagnostics": [
       { "id": "NAM1003", "count": 1, "facts": [{ "line": 2, "column": 108, "provenance": "value" }] }
     ],
-    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static int Run() { NativePool<int> pool = new(); { Pooled<int> value = pool.Rent(1); return 42; } } }"
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static int Run() { NativePool<int> pool = new(); { Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!)); return 42; } } }"
   },
   {
     "name": "nested-exception-leak",
@@ -318,35 +317,35 @@
     "expectedDiagnostics": [
       { "id": "NAM1003", "count": 1, "facts": [{ "line": 3, "column": 113, "provenance": "value" }] }
     ],
-    "source": "using System;\nusing Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativePool<int> pool = new(); try { Pooled<int> value = pool.Rent(1); throw new InvalidOperationException(); } catch (InvalidOperationException) { } pool.Dispose(); } }"
+    "source": "using System;\nusing Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativePool<int> pool = new(); try { Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!)); throw new InvalidOperationException(); } catch (InvalidOperationException) { } pool.Dispose(); } }"
   },
   {
     "name": "delayed-pool-activation",
     "compilerRejected": false,
     "expectedDiagnostics": [],
-    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativePool<int> pool = new(doNotLeaseOnDeclaration: true); pool.LeaseFromMemory(); Pooled<int> value = pool.Rent(1); value.Dispose(); pool.Dispose(); } }"
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativePool<int> pool = new(doNotLeaseOnDeclaration: true); pool.LeaseFromMemory(); Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!)); value.Dispose(); pool.Dispose(); } }"
   },
   {
     "name": "delayed-region-explicit-using-statement",
     "compilerRejected": false,
     "expectedDiagnostics": [],
-    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { using (NativeRegion region = new(doNotLeaseOnDeclaration: true)) { region.LeaseFromMemory(); Local<int> value = region.Lease<int>(1); value[0] = 42; } } }"
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { using (NativeRegion region = new(doNotLeaseOnDeclaration: true)) { region.LeaseFromMemory(); Local<int> value = region.Lease<int>(1, static writer => writer.Fill(default!)); value[0] = 42; } } }"
   },
   {
     "name": "region-native-return-live-root-error",
     "compilerRejected": false,
     "expectedDiagnostics": [
-      { "id": "NAM1007", "count": 1, "severity": "Error", "facts": [{ "line": 2, "column": 136, "provenance": "region -> value" }] }
+      { "id": "NAM1007", "count": 1, "severity": "Error", "facts": [{ "line": 2, "column": 176, "provenance": "region -> value" }] }
     ],
-    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { using (NativeRegion region = new()) { Local<int> value = region.Lease<int>(1); region.ReturnMemoryToNativeMemory(); } } }"
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { using (NativeRegion region = new()) { Local<int> value = region.Lease<int>(1, static writer => writer.Fill(default!)); region.ReturnMemoryToNativeMemory(); } } }"
   },
   {
     "name": "region-garbage-return-live-root-warning",
     "compilerRejected": false,
     "expectedDiagnostics": [
-      { "id": "NAM1017", "count": 1, "severity": "Warning", "facts": [{ "line": 2, "column": 136, "provenance": "region -> value" }] }
+      { "id": "NAM1017", "count": 1, "severity": "Warning", "facts": [{ "line": 2, "column": 176, "provenance": "region -> value" }] }
     ],
-    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { using (NativeRegion region = new()) { Local<int> value = region.Lease<int>(1); region.ReturnMemoryToGarbageCollector(); } } }"
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { using (NativeRegion region = new()) { Local<int> value = region.Lease<int>(1, static writer => writer.Fill(default!)); region.ReturnMemoryToGarbageCollector(); } } }"
   },
   {
     "name": "region-field-compiler-boundary",
@@ -363,11 +362,11 @@
         "count": 1,
         "severity": "Warning",
         "facts": [
-          { "line": 2, "column": 121, "provenance": "pool -> value" }
+          { "line": 2, "column": 161, "provenance": "pool -> value" }
         ]
       }
     ],
-    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativePool<int> pool = new(); Pooled<int> value = pool.Rent(1); pool.ReturnMemoryToGarbageCollector(); pool.Dispose(); } }"
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativePool<int> pool = new(); Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!)); pool.ReturnMemoryToGarbageCollector(); pool.Dispose(); } }"
   },
   {
     "name": "nested-fallthrough-leak",
@@ -375,7 +374,7 @@
     "expectedDiagnostics": [
       { "id": "NAM1003", "count": 1, "facts": [{ "line": 2, "column": 138, "provenance": "value" }] }
     ],
-    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run(bool condition) { NativePool<int> pool = new(); if (condition) { Pooled<int> value = pool.Rent(1); } pool.Dispose(); } }"
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run(bool condition) { NativePool<int> pool = new(); if (condition) { Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!)); } pool.Dispose(); } }"
   },
   {
     "name": "native-pool-return-live-root-error",
@@ -386,11 +385,11 @@
         "count": 1,
         "severity": "Error",
         "facts": [
-          { "line": 2, "column": 121, "provenance": "pool -> value" }
+          { "line": 2, "column": 161, "provenance": "pool -> value" }
         ]
       }
     ],
-    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativePool<int> pool = new(); Pooled<int> value = pool.Rent(1); pool.ReturnMemoryToNativeMemory(); pool.Dispose(); } }"
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativePool<int> pool = new(); Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!)); pool.ReturnMemoryToNativeMemory(); pool.Dispose(); } }"
   },
   {
     "name": "native-pool-return-active-borrow-error",
@@ -401,11 +400,11 @@
         "count": 1,
         "severity": "Error",
         "facts": [
-          { "line": 2, "column": 139, "provenance": "pool -> value -> scoped callback" }
+          { "line": 2, "column": 179, "provenance": "pool -> value -> scoped callback" }
         ]
       }
     ],
-    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativePool<int> pool = new(); Pooled<int> value = pool.Rent(1); value.Access(_ => pool.ReturnMemoryToNativeMemory()); pool.Dispose(); } }"
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativePool<int> pool = new(); Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!)); value.Access(_ => pool.ReturnMemoryToNativeMemory()); pool.Dispose(); } }"
   },
   {
     "name": "deferred-pool-return-active-borrow-warning",
@@ -416,55 +415,55 @@
         "count": 1,
         "severity": "Warning",
         "facts": [
-          { "line": 2, "column": 139, "provenance": "pool -> value -> scoped callback" }
+          { "line": 2, "column": 179, "provenance": "pool -> value -> scoped callback" }
         ]
       }
     ],
-    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativePool<int> pool = new(); Pooled<int> value = pool.Rent(1); value.Access(_ => pool.ReturnMemoryToGarbageCollector()); pool.Dispose(); } }"
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativePool<int> pool = new(); Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!)); value.Access(_ => pool.ReturnMemoryToGarbageCollector()); pool.Dispose(); } }"
   },
   {
     "name": "arena-balanced-release-generation",
     "compilerRejected": false,
     "expectedDiagnostics": [],
-    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run(int iterations) { NativeArena arena = new(); for (int index = 0; index < iterations; index++) { { ArenaLease<int> value = arena.Scratch<int>(1); } arena.ReleaseLeasesToNativeMemory(); } arena.Dispose(); } }"
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run(int iterations) { NativeArena arena = new(); for (int index = 0; index < iterations; index++) { { ArenaLease<int> value = arena.Scratch<int>(1, static writer => writer.Fill(default!)); } arena.ReleaseLeasesToNativeMemory(); } arena.Dispose(); } }"
   },
   {
     "name": "arena-native-release-live-root-error",
     "compilerRejected": false,
     "expectedDiagnostics": [
-      { "id": "NAM1007", "count": 1, "severity": "Error", "facts": [{ "line": 2, "column": 131, "provenance": "arena -> value" }] }
+      { "id": "NAM1007", "count": 1, "severity": "Error", "facts": [{ "line": 2, "column": 171, "provenance": "arena -> value" }] }
     ],
-    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativeArena arena = new(); ArenaLease<int> value = arena.Scratch<int>(1); arena.ReleaseLeasesToNativeMemory(); arena.Dispose(); } }"
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativeArena arena = new(); ArenaLease<int> value = arena.Scratch<int>(1, static writer => writer.Fill(default!)); arena.ReleaseLeasesToNativeMemory(); arena.Dispose(); } }"
   },
   {
     "name": "arena-garbage-release-live-root-warning",
     "compilerRejected": false,
     "expectedDiagnostics": [
-      { "id": "NAM1017", "count": 1, "severity": "Warning", "facts": [{ "line": 2, "column": 131, "provenance": "arena -> value" }] }
+      { "id": "NAM1017", "count": 1, "severity": "Warning", "facts": [{ "line": 2, "column": 171, "provenance": "arena -> value" }] }
     ],
-    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativeArena arena = new(); ArenaLease<int> value = arena.Scratch<int>(1); arena.ReleaseLeasesToGarbageCollector(); arena.Dispose(); } }"
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativeArena arena = new(); ArenaLease<int> value = arena.Scratch<int>(1, static writer => writer.Fill(default!)); arena.ReleaseLeasesToGarbageCollector(); arena.Dispose(); } }"
   },
   {
     "name": "arena-native-release-active-borrow-error",
     "compilerRejected": false,
     "expectedDiagnostics": [
-      { "id": "NAM1007", "count": 1, "severity": "Error", "facts": [{ "line": 2, "column": 149, "provenance": "arena -> value -> scoped callback" }] }
+      { "id": "NAM1007", "count": 1, "severity": "Error", "facts": [{ "line": 2, "column": 189, "provenance": "arena -> value -> scoped callback" }] }
     ],
-    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativeArena arena = new(); ArenaLease<int> value = arena.Scratch<int>(1); value.Access(_ => arena.ReleaseLeasesToNativeMemory()); arena.Dispose(); } }"
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativeArena arena = new(); ArenaLease<int> value = arena.Scratch<int>(1, static writer => writer.Fill(default!)); value.Access(_ => arena.ReleaseLeasesToNativeMemory()); arena.Dispose(); } }"
   },
   {
     "name": "arena-garbage-release-active-borrow-warning",
     "compilerRejected": false,
     "expectedDiagnostics": [
-      { "id": "NAM1017", "count": 1, "severity": "Warning", "facts": [{ "line": 2, "column": 149, "provenance": "arena -> value -> scoped callback" }] }
+      { "id": "NAM1017", "count": 1, "severity": "Warning", "facts": [{ "line": 2, "column": 189, "provenance": "arena -> value -> scoped callback" }] }
     ],
-    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativeArena arena = new(); ArenaLease<int> value = arena.Scratch<int>(1); value.Access(_ => arena.ReleaseLeasesToGarbageCollector()); arena.Dispose(); } }"
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativeArena arena = new(); ArenaLease<int> value = arena.Scratch<int>(1, static writer => writer.Fill(default!)); value.Access(_ => arena.ReleaseLeasesToGarbageCollector()); arena.Dispose(); } }"
   },
   {
     "name": "arena-scoped-recycle-complete",
     "compilerRejected": false,
     "expectedDiagnostics": [],
-    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativeArena arena = new(); { scoped ArenaLease<int> value = arena.ScratchScoped<int>(1); value[0] = 1; } arena.RecycleScoped(); arena.Dispose(); } }"
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativeArena arena = new(); { scoped ArenaLease<int> value = arena.ScratchScoped<int>(1, static writer => writer.Fill(default!)); value[0] = 1; } arena.RecycleScoped(); arena.Dispose(); } }"
   },
   {
     "name": "arena-scoped-recycle-missing",
@@ -472,6 +471,6 @@
     "expectedDiagnostics": [
       { "id": "NAM1020", "count": 1, "severity": "Warning", "facts": [{ "line": 2, "column": 83, "provenance": "arena" }] }
     ],
-    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { using NativeArena arena = new(); { scoped ArenaLease<int> value = arena.ScratchScoped<int>(1); value[0] = 1; } } }"
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { using NativeArena arena = new(); { scoped ArenaLease<int> value = arena.ScratchScoped<int>(1, static writer => writer.Fill(default!)); value[0] = 1; } } }"
   }
 ]

@@ -30,6 +30,11 @@ requested percentage of the 256 MiB cgroup cap. Thus 1000 percent means about
 2.5 GiB of real pipeline allocation requests turned through bounded storage,
 not a simultaneous 2.5 GiB resident set and not synthetic garbage.
 
+The workload repeats one fixed 16-chunk heterogeneous cycle. The cycle contains
+all eight chunk archetypes and every section representation kind. Each
+50-percent step adds one complete cycle. Thus every profile has the same type
+mix and logical work per byte. Later profiles change only cumulative turnover.
+
 The canonical evidence is ordered by chunk. Typed vertices and indices are
 checked against independently derived values. Retained descriptors and upload
 bytes are checked again at the GPU consumer boundary. This check includes
@@ -93,14 +98,19 @@ ranges and final output ranges use separate scoped phases in the same bounded
 backing. Warmup establishes the complete physical capacity. Later batches
 recycle the same native ranges without geometric growth.
 
-The final phase creates `Vertex`, `int`, `PayloadSlice`, and all five GPU stage
-ranges in one grouped operation. The packer writes every stage record directly
-into mapped external storage. NAM does not create a managed stage array. NAM
-also does not perform a managed-to-mapped transfer.
+The final phase creates `Vertex`, `int`, and `PayloadSlice` ranges in one
+grouped operation. A persistent native payload table supplies the payload
+fragments.
 
-Vertices, indices, descriptors, and stage records share one generation
-boundary. Exact verification reads every typed value and every mapped stage
-byte. It compares the result with the common canonical hash.
+Each logical GPU stage references its payload, vertex, index, and zero-padding
+ranges. NAM does not copy vertices or indices into duplicate stage records.
+
+These native ranges share one generation boundary. Publication keeps every
+output lease valid through the mapped handoff. The measured handoff transfers
+ownership without entering or scanning the native ranges.
+
+Exact verification uses one composite access for all related ranges. It reads
+every logical stage byte and compares the result with the canonical hash.
 
 `NativeLeaseOperations.Access` enters related same-owner views with one
 failure-atomic composite operation. Scoped arena recycling uses recorded
@@ -170,9 +180,9 @@ The matrix also requires NAM mean milliseconds per realized GiB to decrease
 at each later profile. A flat or increasing NAM cost fails the scaling gate.
 
 Measured profiles do not scan output bytes for benchmark evidence. The Safe
-path completes its checked mapped transfer. The NAM path completes a direct
-handoff of its mapped ranges. A separate maximum-demand run reads and verifies
-every typed value and output byte.
+path completes its checked mapped transfer. The NAM path completes a native
+scatter handoff without copying its typed ranges. A separate maximum-demand
+run reads and verifies every typed value and output byte.
 
 A pressure profile also requires a Safe C# Gen2 collection, managed allocation
 turnover above the effective heap limit, and resident evidence from either an

@@ -195,7 +195,10 @@ public sealed class WorkerLocalPressureSession : IPressureProfileSession
         int count = 0;
         while (realizedDemand
                     < request.RequestedCumulativeDemandBytes
-            || count < minimumChunks)
+            || count < minimumChunks
+            || count
+                % PressureWorkContract.CanonicalPressureCycleLength
+                != 0)
         {
             realizedDemand = checked(
                 realizedDemand
