@@ -1466,10 +1466,35 @@ public static class PressureWorkContract
         Span<int> indices,
         Span<PayloadSlice> slices)
     {
+        int expectedFaceCount = 0;
+        for (int recordIndex = 0;
+            recordIndex < records.Length;
+            recordIndex++)
+        {
+            expectedFaceCount = checked(
+                expectedFaceCount
+                + BitOperations.PopCount(
+                    unchecked((uint)records[recordIndex].Mask)
+                    & 0b11_1111u));
+        }
+
+        if (vertices.Length != checked(
+                expectedFaceCount * VoxelMath.VerticesPerFace)
+            || indices.Length != checked(
+                expectedFaceCount * VoxelMath.IndicesPerFace)
+            || slices.Length != expectedFaceCount)
+        {
+            throw new InvalidDataException(
+                "Aliased scatter packing did not receive exact output ranges.");
+        }
+
         int vertexCount = 0;
         int indexCount = 0;
         int sliceCount = 0;
         Span<int> stageCursors = stackalloc int[5];
+        ref Vertex vertexBase = ref MemoryMarshal.GetReference(vertices);
+        ref int indexBase = ref MemoryMarshal.GetReference(indices);
+        ref PayloadSlice sliceBase = ref MemoryMarshal.GetReference(slices);
         for (int recordIndex = 0;
             recordIndex < records.Length;
             recordIndex++)
@@ -1495,24 +1520,20 @@ public static class PressureWorkContract
 
                 int vertexOffset = vertexCount;
                 WriteFaceVertices(
+                    ref Unsafe.Add(ref vertexBase, vertexOffset),
                     x,
                     y,
                     z,
                     record.BlockId,
-                    face,
-                    vertices.Slice(
-                        vertexOffset,
-                        VoxelMath.VerticesPerFace));
+                    face);
                 vertexCount += VoxelMath.VerticesPerFace;
 
                 WriteFaceIndices(
-                    vertexOffset,
-                    indices.Slice(
-                        indexCount,
-                        VoxelMath.IndicesPerFace));
+                    ref Unsafe.Add(ref indexBase, indexCount),
+                    vertexOffset);
                 indexCount += VoxelMath.IndicesPerFace;
 
-                slices[sliceCount++] = new PayloadSlice(
+                Unsafe.Add(ref sliceBase, sliceCount++) = new PayloadSlice(
                     stageOffset,
                     record.StageBytes,
                     record.Alignment,
@@ -3801,6 +3822,77 @@ public static class PressureWorkContract
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void WriteFaceVertices(
+        ref Vertex destination,
+        int x,
+        int y,
+        int z,
+        int blockId,
+        int face)
+    {
+        switch (face)
+        {
+            case 0:
+                destination = new(x, y, z, face, 0, blockId);
+                Unsafe.Add(ref destination, 1) =
+                    new(x, y, z + 1, face, 1, blockId);
+                Unsafe.Add(ref destination, 2) =
+                    new(x, y + 1, z + 1, face, 2, blockId);
+                Unsafe.Add(ref destination, 3) =
+                    new(x, y + 1, z, face, 3, blockId);
+                return;
+            case 1:
+                destination = new(x + 1, y, z, face, 0, blockId);
+                Unsafe.Add(ref destination, 1) =
+                    new(x + 1, y, z + 1, face, 1, blockId);
+                Unsafe.Add(ref destination, 2) =
+                    new(x + 1, y + 1, z + 1, face, 2, blockId);
+                Unsafe.Add(ref destination, 3) =
+                    new(x + 1, y + 1, z, face, 3, blockId);
+                return;
+            case 2:
+                destination = new(x, y, z, face, 0, blockId);
+                Unsafe.Add(ref destination, 1) =
+                    new(x + 1, y, z + 1, face, 1, blockId);
+                Unsafe.Add(ref destination, 2) =
+                    new(x, y, z + 1, face, 2, blockId);
+                Unsafe.Add(ref destination, 3) =
+                    new(x + 1, y, z, face, 3, blockId);
+                return;
+            case 3:
+                destination = new(x, y + 1, z, face, 0, blockId);
+                Unsafe.Add(ref destination, 1) =
+                    new(x + 1, y + 1, z + 1, face, 1, blockId);
+                Unsafe.Add(ref destination, 2) =
+                    new(x, y + 1, z + 1, face, 2, blockId);
+                Unsafe.Add(ref destination, 3) =
+                    new(x + 1, y + 1, z, face, 3, blockId);
+                return;
+            case 4:
+                destination = new(x, y, z, face, 0, blockId);
+                Unsafe.Add(ref destination, 1) =
+                    new(x + 1, y, z, face, 1, blockId);
+                Unsafe.Add(ref destination, 2) =
+                    new(x, y + 1, z, face, 2, blockId);
+                Unsafe.Add(ref destination, 3) =
+                    new(x + 1, y + 1, z, face, 3, blockId);
+                return;
+            case 5:
+                destination = new(x, y, z + 1, face, 0, blockId);
+                Unsafe.Add(ref destination, 1) =
+                    new(x + 1, y, z + 1, face, 1, blockId);
+                Unsafe.Add(ref destination, 2) =
+                    new(x, y + 1, z + 1, face, 2, blockId);
+                Unsafe.Add(ref destination, 3) =
+                    new(x + 1, y + 1, z + 1, face, 3, blockId);
+                return;
+            default:
+                throw new ArgumentOutOfRangeException(
+                    nameof(face));
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void WriteFaceIndices(
         int vertexOffset,
         Span<int> destination)
@@ -3811,6 +3903,19 @@ public static class PressureWorkContract
         destination[3] = vertexOffset + 2;
         destination[4] = vertexOffset + 3;
         destination[5] = vertexOffset;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void WriteFaceIndices(
+        ref int destination,
+        int vertexOffset)
+    {
+        destination = vertexOffset;
+        Unsafe.Add(ref destination, 1) = vertexOffset + 1;
+        Unsafe.Add(ref destination, 2) = vertexOffset + 2;
+        Unsafe.Add(ref destination, 3) = vertexOffset + 2;
+        Unsafe.Add(ref destination, 4) = vertexOffset + 3;
+        Unsafe.Add(ref destination, 5) = vertexOffset;
     }
 
     private static void WriteVertices(
