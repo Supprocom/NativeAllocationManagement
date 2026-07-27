@@ -142,11 +142,6 @@ internal sealed class NativePressureSession :
                     phaseArena.Scratch<ulong>(
                         outputCapacity.MaskCapacity,
                         static writer => writer.Fill(default!));
-                ArenaLease<byte> persistentPayloadPatterns =
-                    phaseArena.Scratch<byte>(
-                        PressureWorkContract.PayloadPatternTableBytes,
-                        static writer => writer.Write(
-                            PressureWorkContract.PayloadPatternTable));
                 while (true)
                 {
                     try
@@ -279,27 +274,36 @@ internal sealed class NativePressureSession :
                                     indices;
                                 scoped ArenaLease<PayloadSlice>
                                     slices;
-                                scoped ArenaLease<byte>
-                                    aliasMarker;
+                                scoped ArenaLease<GpuStage160>
+                                    stage160;
+                                scoped ArenaLease<GpuStage168>
+                                    stage168;
+                                scoped ArenaLease<GpuStage176>
+                                    stage176;
+                                scoped ArenaLease<GpuStage192>
+                                    stage192;
+                                scoped ArenaLease<GpuStage224>
+                                    stage224;
                                 NativeLeaseOperations.InitializeScoped(
                                     persistentFaces,
                                     phaseArena,
                                     _context.TotalVertices,
                                     _context.TotalIndices,
                                     _context.TotalFaces,
-                                    0,
+                                    _context.TotalStage160,
+                                    _context.TotalStage168,
+                                    _context.TotalStage176,
+                                    _context.TotalStage192,
+                                    _context.TotalStage224,
                                     _context.PackInitializeAction,
                                     out vertices,
                                     out indices,
                                     out slices,
-                                    out aliasMarker);
-                                NativeLeaseOperations.Access(
-                                    persistentFaces,
-                                    persistentPayloadPatterns,
-                                    vertices,
-                                    indices,
-                                    slices,
-                                    _context.PackCompleteAction);
+                                    out stage160,
+                                    out stage168,
+                                    out stage176,
+                                    out stage192,
+                                    out stage224);
                                 RecordCompletedBatch(state);
                                 state.RecordArena(_context);
                             }
@@ -655,8 +659,7 @@ internal sealed class NativePressureSession :
                     * VoxelMath.VoxelCellBytes
                 + (long)context.TotalRecords
                     * VoxelMath.FaceRecordBytes
-                + (long)context.TotalMaskWords * sizeof(ulong)
-                + PressureWorkContract.PayloadPatternTableBytes);
+                + (long)context.TotalMaskWords * sizeof(ulong));
             long phaseBytes = Math.Max(
                 context.SectionArenaLogicalRequestBytes,
                 context.OutputArenaLogicalRequestBytes);
@@ -721,7 +724,6 @@ internal sealed class NativePressureSession :
             SectionVerifyAction = VerifySections;
             FaceMaskAction = PopulateFacesAndMasks;
             PackInitializeAction = InitializePack;
-            PackCompleteAction = CompletePack;
         }
 
         internal NativeLeaseAction<VoxelCell> BuildAction { get; }
@@ -754,19 +756,16 @@ internal sealed class NativePressureSession :
             SectionPrerenderDescriptor>
             FaceMaskAction { get; }
 
-        internal NativeLeaseSourceQuadSpanInitializer<
+        internal NativeLeaseSourceOctupleSpanInitializer<
             FaceRecord,
             Vertex,
             int,
             PayloadSlice,
-            byte> PackInitializeAction { get; }
-
-        internal NativeLeaseQuintupleAction<
-            FaceRecord,
-            byte,
-            Vertex,
-            int,
-            PayloadSlice> PackCompleteAction { get; }
+            GpuStage160,
+            GpuStage168,
+            GpuStage176,
+            GpuStage192,
+            GpuStage224> PackInitializeAction { get; }
 
         internal int BatchCount { get; private set; }
 
@@ -792,6 +791,16 @@ internal sealed class NativePressureSession :
 
         internal int TotalIndices { get; private set; }
 
+        internal int TotalStage160 { get; private set; }
+
+        internal int TotalStage168 { get; private set; }
+
+        internal int TotalStage176 { get; private set; }
+
+        internal int TotalStage192 { get; private set; }
+
+        internal int TotalStage224 { get; private set; }
+
         internal long SectionArenaLogicalRequestBytes =>
             CalculateSectionArenaLogicalRequestBytes(
                 TotalSectionDescriptors,
@@ -803,7 +812,12 @@ internal sealed class NativePressureSession :
             CalculateOutputArenaLogicalRequestBytes(
                 TotalFaces,
                 TotalVertices,
-                TotalIndices);
+                TotalIndices,
+                TotalStage160,
+                TotalStage168,
+                TotalStage176,
+                TotalStage192,
+                TotalStage224);
 
         internal long ArenaLogicalRequestBytes => checked(
             SectionArenaLogicalRequestBytes
@@ -846,6 +860,11 @@ internal sealed class NativePressureSession :
             TotalSectionStateWords = 0;
             TotalVertices = 0;
             TotalIndices = 0;
+            TotalStage160 = 0;
+            TotalStage168 = 0;
+            TotalStage176 = 0;
+            TotalStage192 = 0;
+            TotalStage224 = 0;
             CompletedLogicalBytes = startingDemand;
         }
 
@@ -897,6 +916,21 @@ internal sealed class NativePressureSession :
                     TotalVertices + shape.VertexCount);
                 int candidateIndices = checked(
                     TotalIndices + shape.IndexCount);
+                int candidateStage160 = checked(
+                    TotalStage160
+                    + shape.GpuStages.Stage160Count);
+                int candidateStage168 = checked(
+                    TotalStage168
+                    + shape.GpuStages.Stage168Count);
+                int candidateStage176 = checked(
+                    TotalStage176
+                    + shape.GpuStages.Stage176Count);
+                int candidateStage192 = checked(
+                    TotalStage192
+                    + shape.GpuStages.Stage192Count);
+                int candidateStage224 = checked(
+                    TotalStage224
+                    + shape.GpuStages.Stage224Count);
                 long candidateSectionArenaBytes = checked(
                     AlignmentAllowanceBytes
                     + CalculateSectionArenaLogicalRequestBytes(
@@ -920,6 +954,11 @@ internal sealed class NativePressureSession :
                     TotalFaces,
                     TotalVertices,
                     TotalIndices,
+                    TotalStage160,
+                    TotalStage168,
+                    TotalStage176,
+                    TotalStage192,
+                    TotalStage224,
                     TotalSectionDescriptors,
                     TotalSectionValues,
                     TotalSectionWords,
@@ -935,6 +974,11 @@ internal sealed class NativePressureSession :
                 TotalSectionStateWords = candidateSectionStateWords;
                 TotalVertices = candidateVertices;
                 TotalIndices = candidateIndices;
+                TotalStage160 = candidateStage160;
+                TotalStage168 = candidateStage168;
+                TotalStage176 = candidateStage176;
+                TotalStage192 = candidateStage192;
+                TotalStage224 = candidateStage224;
                 BatchDemand = checked(BatchDemand + demand);
                 BatchCount++;
             }
@@ -955,11 +999,21 @@ internal sealed class NativePressureSession :
         private static long CalculateOutputArenaLogicalRequestBytes(
             int faces,
             int vertices,
-            int indices) =>
+            int indices,
+            int stage160,
+            int stage168,
+            int stage176,
+            int stage192,
+            int stage224) =>
             checked(
                 (long)vertices * VoxelMath.VertexBytes
                 + (long)indices * VoxelMath.IndexBytes
-                + (long)faces * VoxelMath.PayloadSliceBytes);
+                + (long)faces * VoxelMath.PayloadSliceBytes
+                + (long)stage160 * 160
+                + (long)stage168 * 168
+                + (long)stage176 * 176
+                + (long)stage192 * 192
+                + (long)stage224 * 224);
 
         private void InitializeSections(
             scoped NativeLeaseView<VoxelCell> cells,
@@ -1150,15 +1204,19 @@ internal sealed class NativePressureSession :
             scoped Span<Vertex> allVertices,
             scoped Span<int> allIndices,
             scoped Span<PayloadSlice> allSlices,
-            scoped Span<byte> aliasMarker)
+            scoped Span<GpuStage160> stage160,
+            scoped Span<GpuStage168> stage168,
+            scoped Span<GpuStage176> stage176,
+            scoped Span<GpuStage192> stage192,
+            scoped Span<GpuStage224> stage224)
         {
-            if (!aliasMarker.IsEmpty)
-            {
-                throw new InvalidOperationException(
-                    "The aliased payload marker must not reserve storage.");
-            }
-
             Span<FaceRecord> allFaces = faces.AsSpan();
+            GpuStageBuffers allStages = new(
+                stage160,
+                stage168,
+                stage176,
+                stage192,
+                stage224);
             for (int batchIndex = 0; batchIndex < BatchCount; batchIndex++)
             {
                 BatchSlot slot = _slots[batchIndex];
@@ -1172,18 +1230,37 @@ internal sealed class NativePressureSession :
                 Span<int> chunkIndices = allIndices.Slice(
                     slot.IndexOffset,
                     shape.IndexCount);
+                GpuStageBuffers opaqueStages = allStages.Slice(
+                    shape.GpuStages,
+                    slot.Stage160Offset,
+                    slot.Stage168Offset,
+                    slot.Stage176Offset,
+                    slot.Stage192Offset,
+                    slot.Stage224Offset,
+                    opaque: true);
+                GpuStageBuffers transparentStages = allStages.Slice(
+                    shape.GpuStages,
+                    slot.Stage160Offset,
+                    slot.Stage168Offset,
+                    slot.Stage176Offset,
+                    slot.Stage192Offset,
+                    slot.Stage224Offset,
+                    opaque: false);
                 int opaqueVertices = checked(
                     shape.OpaqueFaceCount * VoxelMath.VerticesPerFace);
                 int opaqueIndices = checked(
                     shape.OpaqueFaceCount * VoxelMath.IndicesPerFace);
-                PressureWorkContract.PackAliasedScatterStream(
+                _ = PressureWorkContract.PackStream(
+                    _request.Seed,
                     chunkFaces.Slice(0, shape.OpaqueRecordCount),
                     chunkVertices.Slice(0, opaqueVertices),
                     chunkIndices.Slice(0, opaqueIndices),
                     allSlices.Slice(
                         slot.SliceOffset,
-                        shape.OpaqueFaceCount));
-                PressureWorkContract.PackAliasedScatterStream(
+                        shape.OpaqueFaceCount),
+                    opaqueStages);
+                _ = PressureWorkContract.PackStream(
+                    _request.Seed,
                     chunkFaces.Slice(
                         shape.OpaqueRecordCount,
                         shape.TransparentRecordCount),
@@ -1197,49 +1274,12 @@ internal sealed class NativePressureSession :
                         checked(
                             slot.SliceOffset
                             + shape.OpaqueFaceCount),
-                        shape.TransparentFaceCount));
-            }
-        }
-
-        private void CompletePack(
-            scoped NativeLeaseView<FaceRecord> faces,
-            scoped NativeLeaseView<byte> payloadPatterns,
-            scoped NativeLeaseView<Vertex> vertices,
-            scoped NativeLeaseView<int> indices,
-            scoped NativeLeaseView<PayloadSlice> slices)
-        {
-            Span<FaceRecord> allFaces = faces.AsSpan();
-            ReadOnlySpan<byte> allPayloadPatterns =
-                payloadPatterns.AsSpan();
-            Span<Vertex> allVertices = vertices.AsSpan();
-            Span<int> allIndices = indices.AsSpan();
-            Span<PayloadSlice> allSlices = slices.AsSpan();
-            for (int batchIndex = 0;
-                batchIndex < BatchCount;
-                batchIndex++)
-            {
-                BatchSlot slot = _slots[batchIndex];
-                PressureChunkShape shape = slot.Shape;
-                Span<FaceRecord> chunkFaces = allFaces.Slice(
-                    slot.RecordOffset,
-                    Math.Max(1, shape.RecordCount));
-                Span<Vertex> chunkVertices = allVertices.Slice(
-                    slot.VertexOffset,
-                    shape.VertexCount);
-                Span<int> chunkIndices = allIndices.Slice(
-                    slot.IndexOffset,
-                    shape.IndexCount);
-                int opaqueVertices = checked(
-                    shape.OpaqueFaceCount
-                    * VoxelMath.VerticesPerFace);
-                int opaqueIndices = checked(
-                    shape.OpaqueFaceCount
-                    * VoxelMath.IndicesPerFace);
+                        shape.TransparentFaceCount),
+                    transparentStages);
                 PressureOutputEvidence output =
                     ExactVerification
-                    ? PressureWorkContract.VerifyAndHashScatterOutput(
+                    ? PressureWorkContract.VerifyAndHashOutput(
                         _request.Seed,
-                        allPayloadPatterns,
                         chunkFaces.Slice(0, shape.OpaqueRecordCount),
                         chunkVertices.Slice(0, opaqueVertices),
                         chunkIndices.Slice(0, opaqueIndices),
@@ -1259,8 +1299,10 @@ internal sealed class NativePressureSession :
                             checked(
                                 slot.SliceOffset
                                 + shape.OpaqueFaceCount),
-                            shape.TransparentFaceCount))
-                    : PressureWorkContract.DescribeScatterOutput(
+                            shape.TransparentFaceCount),
+                        opaqueStages,
+                        transparentStages)
+                    : PressureWorkContract.DescribeOutput(
                         chunkVertices.Slice(0, opaqueVertices),
                         chunkIndices.Slice(0, opaqueIndices),
                         allSlices.Slice(
@@ -1276,7 +1318,9 @@ internal sealed class NativePressureSession :
                             checked(
                                 slot.SliceOffset
                                 + shape.OpaqueFaceCount),
-                            shape.TransparentFaceCount));
+                            shape.TransparentFaceCount),
+                        opaqueStages,
+                        transparentStages);
                 PressureChunkEvidence evidence = new(
                     slot.ChunkId,
                     PressureWorkContract.SourceInputBytesPerChunk,
@@ -1307,27 +1351,38 @@ internal sealed class NativePressureSession :
             }
 
             Consume(
-                allFaces,
-                allPayloadPatterns,
                 allVertices,
                 allIndices,
-                allSlices);
+                allSlices,
+                allStages);
         }
 
         private void Consume(
-            scoped Span<FaceRecord> allFaces,
-            scoped ReadOnlySpan<byte> payloadPatterns,
             scoped Span<Vertex> allVertices,
             scoped Span<int> allIndices,
-            scoped Span<PayloadSlice> allSlices)
+            scoped Span<PayloadSlice> allSlices,
+            scoped GpuStageBuffers allStages)
         {
             for (int batchIndex = 0; batchIndex < BatchCount; batchIndex++)
             {
                 BatchSlot retained = _slots[batchIndex];
                 PressureChunkShape retainedShape = retained.Shape;
-                Span<FaceRecord> retainedFaces = allFaces.Slice(
-                    retained.RecordOffset,
-                    Math.Max(1, retainedShape.RecordCount));
+                GpuStageBuffers opaqueStages = allStages.Slice(
+                    retainedShape.GpuStages,
+                    retained.Stage160Offset,
+                    retained.Stage168Offset,
+                    retained.Stage176Offset,
+                    retained.Stage192Offset,
+                    retained.Stage224Offset,
+                    opaque: true);
+                GpuStageBuffers transparentStages = allStages.Slice(
+                    retainedShape.GpuStages,
+                    retained.Stage160Offset,
+                    retained.Stage168Offset,
+                    retained.Stage176Offset,
+                    retained.Stage192Offset,
+                    retained.Stage224Offset,
+                    opaque: false);
                 int opaqueVertexCount = checked(
                     retainedShape.OpaqueFaceCount
                         * VoxelMath.VerticesPerFace);
@@ -1336,13 +1391,8 @@ internal sealed class NativePressureSession :
                         * VoxelMath.IndicesPerFace);
                 if (ExactVerification)
                 {
-                    PressureWorkContract.VerifyRetainedScatterOutput(
+                    PressureWorkContract.VerifyRetainedOutput(
                         retained.Output,
-                        _request.Seed,
-                        payloadPatterns,
-                        retainedFaces.Slice(
-                            0,
-                            retainedShape.OpaqueRecordCount),
                         allVertices.Slice(
                             retained.VertexOffset,
                             opaqueVertexCount),
@@ -1352,9 +1402,6 @@ internal sealed class NativePressureSession :
                         allSlices.Slice(
                             retained.SliceOffset,
                             retainedShape.OpaqueFaceCount),
-                        retainedFaces.Slice(
-                            retainedShape.OpaqueRecordCount,
-                            retainedShape.TransparentRecordCount),
                         allVertices.Slice(
                             retained.VertexOffset
                                 + opaqueVertexCount,
@@ -1368,17 +1415,14 @@ internal sealed class NativePressureSession :
                         allSlices.Slice(
                             retained.SliceOffset
                                 + retainedShape.OpaqueFaceCount,
-                            retainedShape.TransparentFaceCount));
+                            retainedShape.TransparentFaceCount),
+                        opaqueStages,
+                        transparentStages);
                 }
                 else
                 {
-                    PressureWorkContract.ConsumeScatterGpuUpload(
+                    PressureWorkContract.ConsumeGpuUpload(
                         retained.Output,
-                        _request.Seed,
-                        payloadPatterns,
-                        retainedFaces.Slice(
-                            0,
-                            retainedShape.OpaqueRecordCount),
                         allVertices.Slice(
                             retained.VertexOffset,
                             opaqueVertexCount),
@@ -1388,9 +1432,6 @@ internal sealed class NativePressureSession :
                         allSlices.Slice(
                             retained.SliceOffset,
                             retainedShape.OpaqueFaceCount),
-                        retainedFaces.Slice(
-                            retainedShape.OpaqueRecordCount,
-                            retainedShape.TransparentRecordCount),
                         allVertices.Slice(
                             retained.VertexOffset
                                 + opaqueVertexCount,
@@ -1404,7 +1445,9 @@ internal sealed class NativePressureSession :
                         allSlices.Slice(
                             retained.SliceOffset
                                 + retainedShape.OpaqueFaceCount,
-                            retainedShape.TransparentFaceCount));
+                            retainedShape.TransparentFaceCount),
+                        opaqueStages,
+                        transparentStages);
                 }
 
                 _consumed.Add(retained.Evidence);
@@ -1447,6 +1490,16 @@ internal sealed class NativePressureSession :
 
         internal int SliceCapacity { get; private set; }
 
+        internal int Stage160Capacity { get; private set; }
+
+        internal int Stage168Capacity { get; private set; }
+
+        internal int Stage176Capacity { get; private set; }
+
+        internal int Stage192Capacity { get; private set; }
+
+        internal int Stage224Capacity { get; private set; }
+
         internal bool IsReady { get; set; }
 
         internal int Seed { get; set; }
@@ -1457,12 +1510,16 @@ internal sealed class NativePressureSession :
             NativeBatchContext.AlignmentAllowanceBytes
             + (long)VertexCapacity * VoxelMath.VertexBytes
             + (long)IndexCapacity * VoxelMath.IndexBytes
-            + (long)SliceCapacity * VoxelMath.PayloadSliceBytes);
+            + (long)SliceCapacity * VoxelMath.PayloadSliceBytes
+            + (long)Stage160Capacity * 160
+            + (long)Stage168Capacity * 168
+            + (long)Stage176Capacity * 176
+            + (long)Stage192Capacity * 192
+            + (long)Stage224Capacity * 224);
 
         internal nuint RequiredPhaseArenaCapacity => checked(
             (nuint)(
                 NativeBatchContext.AlignmentAllowanceBytes
-                + PressureWorkContract.PayloadPatternTableBytes
                 + (long)CellCapacity * VoxelMath.VoxelCellBytes
                 + (long)FaceCapacity * VoxelMath.FaceRecordBytes
                 + (long)MaskCapacity * sizeof(ulong)
@@ -1512,6 +1569,11 @@ internal sealed class NativePressureSession :
                 int batchStates = 0;
                 int batchVertices = 0;
                 int batchIndices = 0;
+                int batchStage160 = 0;
+                int batchStage168 = 0;
+                int batchStage176 = 0;
+                int batchStage192 = 0;
+                int batchStage224 = 0;
                 while (batchCount < retentionDepth
                     && request.NeedsChunk(
                         builtChunks,
@@ -1566,6 +1628,21 @@ internal sealed class NativePressureSession :
                         batchVertices + shape.VertexCount);
                     batchIndices = checked(
                         batchIndices + shape.IndexCount);
+                    batchStage160 = checked(
+                        batchStage160
+                        + shape.GpuStages.Stage160Count);
+                    batchStage168 = checked(
+                        batchStage168
+                        + shape.GpuStages.Stage168Count);
+                    batchStage176 = checked(
+                        batchStage176
+                        + shape.GpuStages.Stage176Count);
+                    batchStage192 = checked(
+                        batchStage192
+                        + shape.GpuStages.Stage192Count);
+                    batchStage224 = checked(
+                        batchStage224
+                        + shape.GpuStages.Stage224Count);
                     realizedDemand = checked(
                         realizedDemand
                         + PressureWorkContract.CalculateLogicalDemand(
@@ -1613,6 +1690,21 @@ internal sealed class NativePressureSession :
                 plan.SliceCapacity = Math.Max(
                     plan.SliceCapacity,
                     batchSlices);
+                plan.Stage160Capacity = Math.Max(
+                    plan.Stage160Capacity,
+                    batchStage160);
+                plan.Stage168Capacity = Math.Max(
+                    plan.Stage168Capacity,
+                    batchStage168);
+                plan.Stage176Capacity = Math.Max(
+                    plan.Stage176Capacity,
+                    batchStage176);
+                plan.Stage192Capacity = Math.Max(
+                    plan.Stage192Capacity,
+                    batchStage192);
+                plan.Stage224Capacity = Math.Max(
+                    plan.Stage224Capacity,
+                    batchStage224);
             }
 
             plan.IsReady = true;
@@ -1644,6 +1736,11 @@ internal sealed class NativePressureSession :
             VertexCapacity = 0;
             IndexCapacity = 0;
             SliceCapacity = 0;
+            Stage160Capacity = 0;
+            Stage168Capacity = 0;
+            Stage176Capacity = 0;
+            Stage192Capacity = 0;
+            Stage224Capacity = 0;
             IsReady = false;
             Seed = seed;
             RetentionDepth = retentionDepth;
@@ -1663,7 +1760,12 @@ internal sealed class NativePressureSession :
                     > SectionStateCapacity
                 || context.TotalVertices > VertexCapacity
                 || context.TotalIndices > IndexCapacity
-                || context.TotalFaces > SliceCapacity)
+                || context.TotalFaces > SliceCapacity
+                || context.TotalStage160 > Stage160Capacity
+                || context.TotalStage168 > Stage168Capacity
+                || context.TotalStage176 > Stage176Capacity
+                || context.TotalStage192 > Stage192Capacity
+                || context.TotalStage224 > Stage224Capacity)
             {
                 throw new InvalidOperationException(
                     $"The runtime shape exceeds its plan: "
@@ -1682,7 +1784,17 @@ internal sealed class NativePressureSession :
                     + $"{context.TotalIndices}/"
                     + $"{IndexCapacity} indices, "
                     + $"{context.TotalFaces}/"
-                    + $"{SliceCapacity} slices.");
+                    + $"{SliceCapacity} slices, "
+                    + $"{context.TotalStage160}/"
+                    + $"{Stage160Capacity} stage-160 values, "
+                    + $"{context.TotalStage168}/"
+                    + $"{Stage168Capacity} stage-168 values, "
+                    + $"{context.TotalStage176}/"
+                    + $"{Stage176Capacity} stage-176 values, "
+                    + $"{context.TotalStage192}/"
+                    + $"{Stage192Capacity} stage-192 values, "
+                    + $"{context.TotalStage224}/"
+                    + $"{Stage224Capacity} stage-224 values.");
             }
         }
     }
@@ -1735,6 +1847,11 @@ internal sealed class NativePressureSession :
         int SliceOffset,
         int VertexOffset,
         int IndexOffset,
+        int Stage160Offset,
+        int Stage168Offset,
+        int Stage176Offset,
+        int Stage192Offset,
+        int Stage224Offset,
         int SectionDescriptorOffset,
         int SectionValueOffset,
         int SectionWordOffset,

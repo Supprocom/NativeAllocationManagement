@@ -217,6 +217,26 @@ public sealed class VoxelSharedContractTests
             safeSource,
             StringComparison.Ordinal);
         Assert.Contains(
+            "MappedGpuBuffer",
+            safeSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "_mappedUploadStream",
+            safeSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "CopyStagesToMappedUpload(",
+            safeSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "PressureWorkContract.PackStream(",
+            safeSource,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "PackAliasedScatterStream(",
+            safeSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
             "CreateNativeCapacityPlan(",
             nativeSource,
             StringComparison.Ordinal);
@@ -234,6 +254,22 @@ public sealed class VoxelSharedContractTests
             StringComparison.Ordinal);
         Assert.Contains(
             "MappedGpuBuffer",
+            nativeSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "NativeLeaseSourceOctupleSpanInitializer<",
+            nativeSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "PressureWorkContract.PackStream(",
+            nativeSource,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "PackAliasedScatterStream(",
+            nativeSource,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "PayloadPatternTableBytes",
             nativeSource,
             StringComparison.Ordinal);
         Assert.Contains(

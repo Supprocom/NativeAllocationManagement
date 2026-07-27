@@ -35,9 +35,9 @@ checked against independently derived values. Retained descriptors and upload
 bytes are checked again at the GPU consumer boundary. This check includes
 every encoded field and zero-filled byte. A SHA-256 stream includes every
 logical typed value, descriptor, byte, length, partition boundary, and chunk
-boundary. The hash reconstructs aliased ranges in their canonical order. Safe
-C# and NAM must produce identical per-chunk evidence and the same final
-evidence stream.
+boundary. The hash reads each typed stage range in its canonical order. Safe C#
+and NAM must produce identical per-chunk evidence and the same final evidence
+stream.
 
 ## The corrected managed baseline
 
@@ -49,31 +49,29 @@ removes avoidable per-batch allocation after warmup. Value buffers are fully
 overwritten in their logical ranges. The pools return these buffers without a
 clear operation on unused bucket space.
 
-The managed worker also retains one immutable payload pattern table. Each
-payload descriptor stores an offset into that table. The managed worker does
-not materialize a repeated payload array for each face. The GPU consumer
-reconstructs every logical payload byte from the stable table and retained
-descriptors.
+The managed worker materializes the five exact GPU stage types in worker-local
+pools. At the upload boundary, it writes these ranges into one persistent
+mapped GPU buffer through `UnmanagedMemoryStream`. Unsafe code remains
+disabled. This transfer is necessary because safe managed spans cannot
+reference external native storage.
 
 The requested in-flight horizon is twenty chunks. Under the 256 MiB profile,
-the admission controller reserves one third of the effective managed limit,
-with a minimum 64 MiB guard, for the CLR, GC, typed outputs, and pool metadata.
-It admits no more than fifteen chunks into a resident batch. When more work
-remains, the upload consumer drains that batch. The arrays then return to their
-bounded size classes, and production resumes. No chunk, output, or byte is
-dropped. The resulting orchestration and GC work is part of the managed
-implementation's measured cost.
+the runtime plan counts the mapped sink, CLR storage, typed outputs, and pool
+metadata. It selects the largest batch that fits the retained-memory limit.
+All outputs remain live through the mapped transfer and consumer boundary. The
+worker then returns each array to its bounded size class. No chunk, output, or
+byte is dropped.
 
 In simplified form, the managed flow is equivalent to the following code.
 
 ```text
 read the effective managed-memory limit
 derive the bounded admission depth
-while cumulative demand remains:
-    build at most fifteen complete chunks
-    rent exact typed outputs from bounded worker-local pools
-    store payload descriptors that alias the immutable pattern table
+while cumulative demand remains
+    build one bounded batch
+    rent each exact typed output from a worker-local pool
     render and prerender every unique output
+    transfer the five GPU stage ranges into mapped storage
     verify and consume outputs in canonical order
     return every buffer at its true consumer boundary
 ```
@@ -85,28 +83,24 @@ the expected path.
 ## The NAM implementation
 
 The NAM process keeps one persistent execution worker and its owners alive
-across warmup and every profile. Predictable types use exact typed size
-classes. The heterogeneous arena groups output types that share one generation
-boundary. The resident admission depth is the same fifteen chunks used by the
-managed path. The public requested horizon remains twenty.
+across warmup and every profile. One heterogeneous arena uses a persistent
+mapped GPU buffer as its external backing. The runtime plan selects the largest
+batch that fits the native retained-memory limit. The public requested horizon
+remains twenty.
 
-The predeclared capacities are verified across 1024 canonical chunks. A batch
-contains at most fourteen thousand face records, thirty-six thousand visible
-faces, 1024 transparent-mask words, and seven million logical upload bytes.
-The typed owners and heterogeneous arena use the verified physical bounds.
-Warmup establishes their backing. Later fixed-shape batches reuse the same
-physical segments without geometric regrowth.
+The arena retains source cells, face records, and transparent masks. Section
+ranges and final output ranges use separate scoped phases in the same bounded
+backing. Warmup establishes the complete physical capacity. Later batches
+recycle the same native ranges without geometric growth.
 
-The workload uses a small set of immutable payload patterns. Both
-implementations retain one table and use stable pattern ranges. This shared
-optimization is not a NAM advantage. NAM copies the table into persistent
-native storage during warmup. Vertices, indices, and payload descriptors remain
-unique scoped outputs.
+The final phase creates `Vertex`, `int`, `PayloadSlice`, and all five GPU stage
+ranges in one grouped operation. The packer writes every stage record directly
+into mapped external storage. NAM does not create a managed stage array. NAM
+also does not perform a managed-to-mapped transfer.
 
-The pattern table and scoped outputs use the same stable native arena. A native
-consumer can use these ranges without a managed staging copy. Exact
-verification reconstructs every logical upload byte from the aliased ranges.
-It then compares the result with the common canonical hash.
+Vertices, indices, descriptors, and stage records share one generation
+boundary. Exact verification reads every typed value and every mapped stage
+byte. It compares the result with the common canonical hash.
 
 `NativeLeaseOperations.Access` enters related same-owner views with one
 failure-atomic composite operation. Scoped arena recycling uses recorded
