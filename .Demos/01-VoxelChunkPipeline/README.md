@@ -114,7 +114,7 @@ Run the fixed matrix from the repository root.
   -RepoRoot E:\source\Supprocom\NativeAllocationManagement `
   -CompilationOutputPath artifacts\voxel-compilation-final.json `
   -OutputPath artifacts\voxel-pressure-final.json `
-  -SamplesPerProfile 5 `
+  -SamplesPerProfile 11 `
   -Enforce
 ```
 
