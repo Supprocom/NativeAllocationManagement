@@ -15,12 +15,11 @@ generation until the callback exits.
 
 ## Measured performance
 
-The included voxel benchmark estimates an approximately 50 percent performance
-improvement over expert safe C# in a non-memory-constrained environment.
+The included voxel benchmark estimates a 50 to 85 percent performance
+improvement over expert safe C# in non-memory-constrained control profiles.
 
-In a very memory-constrained environment, the estimated improvement is more
-than 110 percent. The advantage continues to increase with cumulative memory
-turnover.
+In very memory-constrained profiles, the estimate ranges from 95 to 115
+percent, with higher-turnover runs above 110 percent.
 
 Both implementations process equal inputs and outputs. The safe C#
 implementation uses pooling, exact sizing, bounded retention, and proactive

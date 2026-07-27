@@ -12,17 +12,16 @@ optimizations?
 
 ## Current estimates
 
-The control profiles estimate that NAM is approximately 50 percent faster in a
+The control profiles estimate that NAM is 50 to 85 percent faster in a
 non-memory-constrained environment.
 
-The constrained profiles estimate that NAM is more than 110 percent faster in
-a very memory-constrained environment. The advantage continues to increase
-with cumulative memory turnover.
+The constrained profiles estimate that NAM is 95 to 115 percent faster in a
+very memory-constrained environment. Higher-turnover runs exceed 110 percent.
 
 | Environment | Estimated improvement |
 |---|---:|
-| Non-memory-constrained | Approximately 50% |
-| Very memory-constrained | More than 110% |
+| Non-memory-constrained controls | Approximately 50–85% |
+| Very memory-constrained profiles | Approximately 95–115% |
 
 These values are workload and system estimates. Use the included command to
 measure the result on the applicable target system.
