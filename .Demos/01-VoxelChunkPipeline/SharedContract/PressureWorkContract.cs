@@ -1466,23 +1466,12 @@ public static class PressureWorkContract
         Span<int> indices,
         Span<PayloadSlice> slices)
     {
-        int expectedFaceCount = 0;
-        for (int recordIndex = 0;
-            recordIndex < records.Length;
-            recordIndex++)
-        {
-            expectedFaceCount = checked(
-                expectedFaceCount
-                + BitOperations.PopCount(
-                    unchecked((uint)records[recordIndex].Mask)
-                    & 0b11_1111u));
-        }
-
-        if (vertices.Length != checked(
-                expectedFaceCount * VoxelMath.VerticesPerFace)
-            || indices.Length != checked(
-                expectedFaceCount * VoxelMath.IndicesPerFace)
-            || slices.Length != expectedFaceCount)
+        if (vertices.Length % VoxelMath.VerticesPerFace != 0
+            || indices.Length % VoxelMath.IndicesPerFace != 0
+            || vertices.Length / VoxelMath.VerticesPerFace
+                != slices.Length
+            || indices.Length / VoxelMath.IndicesPerFace
+                != slices.Length)
         {
             throw new InvalidDataException(
                 "Aliased scatter packing did not receive exact output ranges.");
@@ -1514,6 +1503,16 @@ public static class PressureWorkContract
                 int face = BitOperations.TrailingZeroCount(
                     remainingFaces);
                 remainingFaces &= remainingFaces - 1;
+                if (vertexCount > vertices.Length
+                        - VoxelMath.VerticesPerFace
+                    || indexCount > indices.Length
+                        - VoxelMath.IndicesPerFace
+                    || sliceCount >= slices.Length)
+                {
+                    throw new InvalidDataException(
+                        "Aliased scatter packing exceeded its output ranges.");
+                }
+
                 int stageOffset = stageCursors[stageClass];
                 stageCursors[stageClass] = checked(
                     stageOffset + record.StageBytes);

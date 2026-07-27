@@ -1071,6 +1071,29 @@ public sealed class VoxelSharedContractTests
     }
 
     [Fact]
+    public void AliasedScatterPackingRejectsARecordThatExceedsOutputRanges()
+    {
+        FaceRecord[] records =
+        [
+            new FaceRecord(
+                CellIndex: 0,
+                BlockId: 259,
+                Mask: 1,
+                PayloadBytes: 0,
+                Alignment: 1,
+                StageMask: 1,
+                StageBytes: 160)
+        ];
+
+        Assert.Throws<InvalidDataException>(
+            () => PressureWorkContract.PackAliasedScatterStream(
+                records,
+                [],
+                [],
+                []));
+    }
+
+    [Fact]
     public void PressureCapacityCoversThePredeclaredCanonicalChunkRange()
     {
         VoxelCell[] cells = new VoxelCell[VoxelMath.CellsPerChunk];
