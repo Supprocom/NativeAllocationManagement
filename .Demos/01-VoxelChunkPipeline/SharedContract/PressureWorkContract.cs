@@ -1376,6 +1376,10 @@ public static class PressureWorkContract
                 + record.CellIndex * 11
                 + record.BlockId * 37
                 + record.StageMask * 13);
+            int x = record.CellIndex % VoxelMath.ChunkDimension;
+            int yz = record.CellIndex / VoxelMath.ChunkDimension;
+            int y = yz % VoxelMath.ChunkDimension;
+            int z = yz / VoxelMath.ChunkDimension;
             uint remainingFaces =
                 unchecked((uint)record.Mask) & 0b11_1111u;
             while (remainingFaces != 0)
@@ -1404,7 +1408,10 @@ public static class PressureWorkContract
                     vertexOffset,
                     VoxelMath.VerticesPerFace);
                 WriteFaceVertices(
-                    record,
+                    x,
+                    y,
+                    z,
+                    record.BlockId,
                     face,
                     faceVertices);
                 vertexCount += VoxelMath.VerticesPerFace;
@@ -1471,6 +1478,10 @@ public static class PressureWorkContract
                 ref records[recordIndex];
             int stageClass = StageClassIndex(
                 record.StageBytes);
+            int x = record.CellIndex % VoxelMath.ChunkDimension;
+            int yz = record.CellIndex / VoxelMath.ChunkDimension;
+            int y = yz % VoxelMath.ChunkDimension;
+            int z = yz / VoxelMath.ChunkDimension;
             uint remainingFaces =
                 unchecked((uint)record.Mask) & 0b11_1111u;
             while (remainingFaces != 0)
@@ -1484,7 +1495,10 @@ public static class PressureWorkContract
 
                 int vertexOffset = vertexCount;
                 WriteFaceVertices(
-                    record,
+                    x,
+                    y,
+                    z,
+                    record.BlockId,
                     face,
                     vertices.Slice(
                         vertexOffset,
@@ -1566,6 +1580,10 @@ public static class PressureWorkContract
                 + record.CellIndex * 11
                 + record.BlockId * 37
                 + record.StageMask * 13);
+            int x = record.CellIndex % VoxelMath.ChunkDimension;
+            int yz = record.CellIndex / VoxelMath.ChunkDimension;
+            int y = yz % VoxelMath.ChunkDimension;
+            int z = yz / VoxelMath.ChunkDimension;
             uint remainingFaces =
                 unchecked((uint)record.Mask) & 0b11_1111u;
             while (remainingFaces != 0)
@@ -1595,7 +1613,10 @@ public static class PressureWorkContract
 
                 int vertexOffset = vertexCount;
                 WriteFaceVertices(
-                    record,
+                    x,
+                    y,
+                    z,
+                    record.BlockId,
                     face,
                     faceVertices);
 
@@ -3723,7 +3744,18 @@ public static class PressureWorkContract
         int yz = record.CellIndex / VoxelMath.ChunkDimension;
         int y = yz % VoxelMath.ChunkDimension;
         int z = yz / VoxelMath.ChunkDimension;
-        int blockId = record.BlockId;
+        WriteFaceVertices(x, y, z, record.BlockId, face, destination);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void WriteFaceVertices(
+        int x,
+        int y,
+        int z,
+        int blockId,
+        int face,
+        Span<Vertex> destination)
+    {
         switch (face)
         {
             case 0:
