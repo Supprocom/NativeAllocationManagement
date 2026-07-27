@@ -753,6 +753,7 @@ public static class PressureWorkContract
         int valueCursor = 0;
         int wordCursor = 0;
         int stateCursor = 0;
+        states.Clear();
         for (int sectionIndex = 0;
             sectionIndex < VoxelMath.SectionsPerChunk;
             sectionIndex++)
@@ -761,23 +762,22 @@ public static class PressureWorkContract
             int valueLength = SectionValueCount(summary);
             int wordLength = SectionWordCount(summary);
             int stateLength = SectionStateWordCount(summary);
+            int stateStart = stateCursor;
             SpanSectionInitializationBuffer<ushort> valueBuffer = new(
                 values.Slice(valueCursor, valueLength));
             SpanSectionInitializationBuffer<uint> wordBuffer = new(
                 words.Slice(wordCursor, wordLength));
-            SpanSectionInitializationBuffer<ulong> stateBuffer = new(
-                states.Slice(stateCursor, stateLength));
             SectionPrerenderDescriptor descriptor =
                 BuildSectionRepresentation<
                     SpanSectionInitializationBuffer<ushort>,
-                    SpanSectionInitializationBuffer<uint>,
-                    SpanSectionInitializationBuffer<ulong>>(
+                    SpanSectionInitializationBuffer<uint>>(
                 cells,
                 sectionIndex,
                 summary,
                 ref valueBuffer,
                 ref wordBuffer,
-                ref stateBuffer,
+                states.Slice(stateStart, stateLength),
+                clearStates: false,
                 ref valueCursor,
                 ref wordCursor,
                 ref stateCursor);
@@ -806,38 +806,36 @@ public static class PressureWorkContract
     {
         SpanSectionInitializationBuffer<ushort> valueBuffer = new(values);
         SpanSectionInitializationBuffer<uint> wordBuffer = new(words);
-        SpanSectionInitializationBuffer<ulong> stateBuffer = new(states);
         return BuildSectionRepresentation<
             SpanSectionInitializationBuffer<ushort>,
-            SpanSectionInitializationBuffer<uint>,
-            SpanSectionInitializationBuffer<ulong>>(
+            SpanSectionInitializationBuffer<uint>>(
             cells,
             sectionIndex,
             summary,
             ref valueBuffer,
             ref wordBuffer,
-            ref stateBuffer,
+            states,
+            clearStates: true,
             ref valueCursor,
             ref wordCursor,
             ref stateCursor);
     }
 
-    public static SectionPrerenderDescriptor BuildSectionRepresentation<
+    private static SectionPrerenderDescriptor BuildSectionRepresentation<
         TValueBuffer,
-        TWordBuffer,
-        TStateBuffer>(
+        TWordBuffer>(
         ReadOnlySpan<VoxelCell> cells,
         int sectionIndex,
         SectionSummary summary,
         ref TValueBuffer values,
         ref TWordBuffer words,
-        ref TStateBuffer states,
+        Span<ulong> states,
+        bool clearStates,
         ref int valueCursor,
         ref int wordCursor,
         ref int stateCursor)
         where TValueBuffer : ISectionInitializationBuffer<ushort>, allows ref struct
         where TWordBuffer : ISectionInitializationBuffer<uint>, allows ref struct
-        where TStateBuffer : ISectionInitializationBuffer<ulong>, allows ref struct
     {
         int valueStart = valueCursor;
         int wordStart = wordCursor;
@@ -869,21 +867,21 @@ public static class PressureWorkContract
             relative,
             ref values,
             ref words);
-        PopulateSectionStates(
+        PopulateSectionStateWords(
             cells,
             sectionIndex,
             relative,
-            ref states);
+            states,
+            clearStates);
         values.Complete();
         words.Complete();
-        states.Complete();
         return descriptor with
         {
             ContentTag = ComputeSectionContentTag(
                 relative,
                 ref values,
                 ref words,
-                ref states)
+                states)
         };
     }
 
@@ -2617,47 +2615,20 @@ public static class PressureWorkContract
         SectionPrerenderDescriptor descriptor,
         Span<ulong> states)
     {
-        SpanSectionInitializationBuffer<ulong> buffer = new(states);
-        PopulateSectionStates(
-            cells,
-            sectionIndex,
-            descriptor,
-            ref buffer);
-    }
-
-    private static void PopulateSectionStates<TStateBuffer>(
-        ReadOnlySpan<VoxelCell> cells,
-        int sectionIndex,
-        SectionPrerenderDescriptor descriptor,
-        ref TStateBuffer states)
-        where TStateBuffer : ISectionInitializationBuffer<ulong>, allows ref struct
-    {
-        int start = FirstStateOffset(descriptor);
-        int length = SectionStateLength(descriptor);
-        if (length == 0)
-        {
-            return;
-        }
-
-        Span<ulong> materialized =
-            stackalloc ulong[MaximumSectionStateWordsPerSection];
-        materialized = materialized[..length];
         PopulateSectionStateWords(
             cells,
             sectionIndex,
             descriptor,
-            materialized);
-        foreach (ulong value in materialized)
-        {
-            states.Append(value);
-        }
+            states,
+            clearStates: true);
     }
 
     private static void PopulateSectionStateWords(
         ReadOnlySpan<VoxelCell> cells,
         int sectionIndex,
         SectionPrerenderDescriptor descriptor,
-        Span<ulong> states)
+        Span<ulong> states,
+        bool clearStates)
     {
         int start = FirstStateOffset(descriptor);
         int length = SectionStateLength(descriptor);
@@ -2668,7 +2639,11 @@ public static class PressureWorkContract
                 nameof(states));
         }
 
-        states.Clear();
+        if (clearStates)
+        {
+            states.Clear();
+        }
+
         for (int localIndex = 0;
             localIndex < VoxelMath.CellsPerSection;
             localIndex++)
@@ -3224,15 +3199,13 @@ public static class PressureWorkContract
 
     private static int ComputeSectionContentTag<
         TValueBuffer,
-        TWordBuffer,
-        TStateBuffer>(
+        TWordBuffer>(
         SectionPrerenderDescriptor descriptor,
         ref TValueBuffer values,
         ref TWordBuffer words,
-        ref TStateBuffer states)
+        ReadOnlySpan<ulong> states)
         where TValueBuffer : ISectionInitializationBuffer<ushort>, allows ref struct
         where TWordBuffer : ISectionInitializationBuffer<uint>, allows ref struct
-        where TStateBuffer : ISectionInitializationBuffer<ulong>, allows ref struct
     {
         uint hash = BeginSectionContentTag(descriptor);
         hash = values.MixInitialized(
@@ -3247,10 +3220,15 @@ public static class PressureWorkContract
             hash,
             descriptor.TransparentTileOffset,
             descriptor.TransparentTileLength);
-        hash = states.MixInitialized(
-            hash,
-            FirstStateOffset(descriptor),
-            SectionStateLength(descriptor));
+        int stateLength = SectionStateLength(descriptor);
+        if (stateLength > 0)
+        {
+            hash = MixSectionContent(
+                hash,
+                states.Slice(
+                    FirstStateOffset(descriptor),
+                    stateLength));
+        }
 
         int result = unchecked((int)hash);
         return result == 0 ? 1 : result;
