@@ -3703,12 +3703,28 @@ internal sealed class NativeOwnerKernel
     }
 
     internal void CompleteBumpInitializationGroup(
-        NativeBumpInitializationGroup group)
+        NativeBumpInitializationGroup group) =>
+        CompleteBumpInitializationGroup(
+            group,
+            validateInitializedLengths: true);
+
+    internal void CompleteUnmanagedBumpInitializationGroup(
+        NativeBumpInitializationGroup group) =>
+        CompleteBumpInitializationGroup(
+            group,
+            validateInitializedLengths: false);
+
+    private void CompleteBumpInitializationGroup(
+        NativeBumpInitializationGroup group,
+        bool validateInitializedLengths)
     {
-        ValidateInitializedLength(group.First);
-        ValidateInitializedLength(group.Second);
-        ValidateInitializedLength(group.Third);
-        ValidateInitializedLength(group.Fourth);
+        if (validateInitializedLengths)
+        {
+            ValidateInitializedLength(group.First);
+            ValidateInitializedLength(group.Second);
+            ValidateInitializedLength(group.Third);
+            ValidateInitializedLength(group.Fourth);
+        }
 
         if (group.UsesSingleInitializationAdmission)
         {
@@ -3744,18 +3760,34 @@ internal sealed class NativeOwnerKernel
     }
 
     internal void CompleteBumpInitializationOctet(
-        in NativeBumpInitializationOctet octet)
+        in NativeBumpInitializationOctet octet) =>
+        CompleteBumpInitializationOctet(
+            octet,
+            validateInitializedLengths: true);
+
+    internal void CompleteUnmanagedBumpInitializationOctet(
+        in NativeBumpInitializationOctet octet) =>
+        CompleteBumpInitializationOctet(
+            octet,
+            validateInitializedLengths: false);
+
+    private void CompleteBumpInitializationOctet(
+        in NativeBumpInitializationOctet octet,
+        bool validateInitializedLengths)
     {
         NativeBumpInitializationGroup first = octet.First;
         NativeBumpInitializationGroup second = octet.Second;
-        ValidateInitializedLength(first.First);
-        ValidateInitializedLength(first.Second);
-        ValidateInitializedLength(first.Third);
-        ValidateInitializedLength(first.Fourth);
-        ValidateInitializedLength(second.First);
-        ValidateInitializedLength(second.Second);
-        ValidateInitializedLength(second.Third);
-        ValidateInitializedLength(second.Fourth);
+        if (validateInitializedLengths)
+        {
+            ValidateInitializedLength(first.First);
+            ValidateInitializedLength(first.Second);
+            ValidateInitializedLength(first.Third);
+            ValidateInitializedLength(first.Fourth);
+            ValidateInitializedLength(second.First);
+            ValidateInitializedLength(second.Second);
+            ValidateInitializedLength(second.Third);
+            ValidateInitializedLength(second.Fourth);
+        }
 
         if (octet.UsesSingleInitializationAdmission)
         {

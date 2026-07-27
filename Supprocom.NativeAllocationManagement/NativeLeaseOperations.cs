@@ -529,15 +529,7 @@ public static class NativeLeaseOperations
                 group.Second.Allocation.AsSpan<TSecond>(),
                 group.Third.Allocation.AsSpan<TThird>(),
                 group.Fourth.Allocation.AsSpan<TFourth>());
-            group.First.Allocation.InitializedLength =
-                group.First.Allocation.Length;
-            group.Second.Allocation.InitializedLength =
-                group.Second.Allocation.Length;
-            group.Third.Allocation.InitializedLength =
-                group.Third.Allocation.Length;
-            group.Fourth.Allocation.InitializedLength =
-                group.Fourth.Allocation.Length;
-            arenaKernel.CompleteBumpInitializationGroup(group);
+            arenaKernel.CompleteUnmanagedBumpInitializationGroup(group);
             first = new ArenaLease<TFirst>(
                 arenaKernel,
                 group.First.Lease);
@@ -790,23 +782,7 @@ public static class NativeLeaseOperations
                 secondGroup.Second.Allocation.AsSpan<TSixth>(),
                 secondGroup.Third.Allocation.AsSpan<TSeventh>(),
                 secondGroup.Fourth.Allocation.AsSpan<TEighth>());
-            firstGroup.First.Allocation.InitializedLength =
-                firstGroup.First.Allocation.Length;
-            firstGroup.Second.Allocation.InitializedLength =
-                firstGroup.Second.Allocation.Length;
-            firstGroup.Third.Allocation.InitializedLength =
-                firstGroup.Third.Allocation.Length;
-            firstGroup.Fourth.Allocation.InitializedLength =
-                firstGroup.Fourth.Allocation.Length;
-            secondGroup.First.Allocation.InitializedLength =
-                secondGroup.First.Allocation.Length;
-            secondGroup.Second.Allocation.InitializedLength =
-                secondGroup.Second.Allocation.Length;
-            secondGroup.Third.Allocation.InitializedLength =
-                secondGroup.Third.Allocation.Length;
-            secondGroup.Fourth.Allocation.InitializedLength =
-                secondGroup.Fourth.Allocation.Length;
-            arenaKernel.CompleteBumpInitializationOctet(octet);
+            arenaKernel.CompleteUnmanagedBumpInitializationOctet(octet);
             first = new ArenaLease<TFirst>(
                 arenaKernel,
                 firstGroup.First.Lease);
