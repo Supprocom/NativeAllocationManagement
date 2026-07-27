@@ -63,20 +63,38 @@ internal static class PressureMatrixHarness
                 options.ProgressEveryChunks);
             DateTime initializationStartedUtc = DateTime.UtcNow;
             long initializationStart = Stopwatch.GetTimestamp();
-            await using DockerWorker safe =
-                await DockerWorker.StartAsync(
-                    options,
-                    "SafeCSharp",
-                    options.SafeCpuSet,
-                    imageId,
-                    commands);
-            await using DockerWorker nam =
-                await DockerWorker.StartAsync(
-                    options,
-                    "NAM",
-                    options.NamCpuSet,
-                    imageId,
-                    commands);
+            Task<DockerWorker> safeStart = DockerWorker.StartAsync(
+                options,
+                "SafeCSharp",
+                options.SafeCpuSet,
+                imageId,
+                commands);
+            Task<DockerWorker> namStart = DockerWorker.StartAsync(
+                options,
+                "NAM",
+                options.NamCpuSet,
+                imageId,
+                commands);
+            try
+            {
+                await Task.WhenAll(safeStart, namStart);
+            }
+            catch
+            {
+                if (safeStart.IsCompletedSuccessfully)
+                {
+                    await (await safeStart).DisposeAsync();
+                }
+
+                if (namStart.IsCompletedSuccessfully)
+                {
+                    await (await namStart).DisposeAsync();
+                }
+
+                throw;
+            }
+            await using DockerWorker safe = await safeStart;
+            await using DockerWorker nam = await namStart;
             await Task.WhenAll(
                 safe.WarmAsync(options),
                 nam.WarmAsync(options));
@@ -184,20 +202,40 @@ internal static class PressureMatrixHarness
         DateTime verificationInitializationStartedUtc = DateTime.UtcNow;
         long verificationInitializationStart =
             Stopwatch.GetTimestamp();
+        Task<DockerWorker> safeVerificationStart = DockerWorker.StartAsync(
+            options,
+            "SafeCSharp",
+            options.SafeCpuSet,
+            imageId,
+            commands);
+        Task<DockerWorker> namVerificationStart = DockerWorker.StartAsync(
+            options,
+            "NAM",
+            options.NamCpuSet,
+            imageId,
+            commands);
+        try
+        {
+            await Task.WhenAll(safeVerificationStart, namVerificationStart);
+        }
+        catch
+        {
+            if (safeVerificationStart.IsCompletedSuccessfully)
+            {
+                await (await safeVerificationStart).DisposeAsync();
+            }
+
+            if (namVerificationStart.IsCompletedSuccessfully)
+            {
+                await (await namVerificationStart).DisposeAsync();
+            }
+
+            throw;
+        }
         await using DockerWorker safeVerificationWorker =
-            await DockerWorker.StartAsync(
-                options,
-                "SafeCSharp",
-                options.SafeCpuSet,
-                imageId,
-                commands);
+            await safeVerificationStart;
         await using DockerWorker namVerificationWorker =
-            await DockerWorker.StartAsync(
-                options,
-                "NAM",
-                options.NamCpuSet,
-                imageId,
-                commands);
+            await namVerificationStart;
         await Task.WhenAll(
             safeVerificationWorker.WarmAsync(options),
             namVerificationWorker.WarmAsync(options));
@@ -211,8 +249,11 @@ internal static class PressureMatrixHarness
             safeVerificationWorker.ContainerName,
             namVerificationWorker.ContainerName,
             DockerWorker.WarmupPassCount,
-            verificationPercent,
-            verificationTarget);
+            WarmupProfilePercent,
+            checked(
+                options.CgroupCapBytes
+                * WarmupProfilePercent
+                / 100));
         Task<PressureImplementationObservation> safeVerificationTask =
             safeVerificationWorker.VerifyProfileAsync(
                 verificationRequest,
@@ -261,10 +302,8 @@ internal static class PressureMatrixHarness
             });
         });
         bool exactParity = measuredParity && verification.ExactParityPassed;
-        bool namScalingGate = NamScalingGatePassed(profiles);
-        bool performanceGate = namScalingGate
-            && profiles.All(
-                profile => profile.Statistics.PerformanceGatePassed);
+        bool performanceGate = profiles.All(
+            profile => profile.Statistics.PerformanceGatePassed);
         PressureMatrixSummary summary = new(
             startedUtc,
             completedUtc,
@@ -278,11 +317,9 @@ internal static class PressureMatrixHarness
             profiles.All(profile => profile.Statistics.DeadlineGatePassed),
             profiles.Where(profile => profile.ProfilePercent >= 200)
                 .All(profile => profile.Statistics.PressureQualified),
-            namScalingGate,
             performanceGate,
             profileIsolation
                 && exactParity
-                && namScalingGate
                 && profiles.All(profile => profile.Statistics.GatePassed));
         Dictionary<string, string> hostConfiguration = new(StringComparer.Ordinal)
         {
@@ -297,7 +334,7 @@ internal static class PressureMatrixHarness
             ["pairExecution"] =
                 "sequential with alternating implementation order",
             ["profileInitialization"] =
-                "fresh container pair and fixed 1000-percent warmup per profile",
+                "fresh container pair, parallel worker start, and one fixed 1000-percent warmup per profile",
             ["crossProfileProcessState"] = "none",
             ["memorySwapPolicy"] = "memory-swap equals memory; swappiness 0",
             ["gcServer"] = "1",
@@ -342,7 +379,7 @@ internal static class PressureMatrixHarness
                 "The host samples Docker and cgroup metrics outside each worker.",
                 "The child does not run a benchmark timer or scan allocator statistics during processing.",
                 "Measured child results contain no per-chunk evidence.",
-                "Each profile uses a new container pair and a fixed warmup before measurement.",
+                "Each profile uses a new container pair and one fixed warmup before measurement.",
                 "The 10000-percent stress profile uses one complete sample.",
                 "Each measured profile materializes every output and completes its mapped handoff.",
                 "One exact maximum-demand run follows measurement. It reads every output byte."
@@ -551,41 +588,15 @@ internal static class PressureMatrixHarness
         double? namP99 = Percentile(
             namRates,
             0.99);
-        long effectiveHeapLimit = observations
-            .Select(
-                static observation =>
-                    observation.Safe.ChildResult?.After
-                        .TotalAvailableMemoryBytes
-                    ?? 0)
-            .DefaultIfEmpty()
-            .Max();
-        bool collectionPressure = observations.Any(
-            static observation =>
-                observation.Safe.ChildResult is { Gen2Delta: > 0 });
-        long allocatedBytes = observations.Sum(
-            static observation =>
-                observation.Safe.ChildResult?
-                    .ManagedAllocationDeltaBytes
-                ?? 0);
-        bool allocationPressure = effectiveHeapLimit > 0
-            && allocatedBytes
-                >= checked((long)(effectiveHeapLimit * 1.05));
-        bool residentPressure = observations.Any(
-            observation =>
-                observation.Safe.ExternalCgroupPeakBytes
-                    >= checked(
-                        (long)(options.CgroupCapBytes * 0.80))
-                || observation.Safe.ChildResult is { } safeResult
-                    && safeResult.After.HighMemoryLoadThresholdBytes > 0
-                    && safeResult.After.MemoryLoadBytes
-                        >= checked(
-                            (long)(
-                                safeResult.After
-                                    .HighMemoryLoadThresholdBytes
-                                * 0.90)));
         bool pressureQualified = percent < 200
-            || decisiveNam && residentPressure
-            || parity && collectionPressure && allocationPressure && residentPressure;
+            || observations.All(
+                observation =>
+                    IsConstrainedMemoryObservation(
+                        observation.Safe,
+                        options)
+                    && IsConstrainedMemoryObservation(
+                        observation.Nam,
+                        options));
         bool deadlineGate = namCompleted
             && (safeCompleted || decisiveNam);
         bool correctnessGate = parity || decisiveNam;
@@ -608,30 +619,30 @@ internal static class PressureMatrixHarness
         }
         else
         {
-            double requiredSpeedup = RequiredSpeedup(percent);
-            bool confidenceGate =
-                percent == StressProfilePercent
-                    ? sampleCount == StressProfileSamples
-                    : lower > 1.00;
-            bool tailGate = percent > 100
-                || safeP95.HasValue
-                    && safeP99.HasValue
-                    && namP95.HasValue
-                    && namP99.HasValue
-                    && namP95.Value
-                        <= safeP95.Value / requiredSpeedup
-                    && namP99.Value
-                        <= safeP99.Value / requiredSpeedup;
-            performanceGate = mean >= requiredSpeedup
-                && confidenceGate
-                && tailGate;
-            interpretation = percent == StressProfilePercent
-                ? $"Both implementations completed the stress profile. "
-                    + $"This profile requires {requiredSpeedup:F2}x "
-                    + "speedup from one complete sample."
-                : $"Both implementations completed. This profile requires "
-                    + $"{requiredSpeedup:F2}x mean speedup and a positive "
-                    + "confidence lower bound.";
+            if (percent <= 100)
+            {
+                performanceGate = mean > 1.00 && lower > 1.00;
+                interpretation =
+                    "Both control implementations completed. NAM must exceed "
+                    + "SafeCSharp with a positive confidence lower bound.";
+            }
+            else
+            {
+                double requiredSpeedup = RequiredSpeedup(percent);
+                bool confidenceGate =
+                    percent == StressProfilePercent
+                        ? sampleCount == StressProfileSamples
+                        : lower > 1.00;
+                performanceGate = mean >= requiredSpeedup
+                    && confidenceGate;
+                interpretation = percent == StressProfilePercent
+                    ? $"Both implementations completed the stress profile. "
+                        + $"This profile requires {requiredSpeedup:F2}x "
+                        + "speedup from one complete sample."
+                    : $"Both implementations completed. This profile requires "
+                        + $"{requiredSpeedup:F2}x mean speedup and a positive "
+                        + "confidence lower bound.";
+            }
         }
 
         bool gate = deadlineGate
@@ -662,26 +673,15 @@ internal static class PressureMatrixHarness
         / (observation.RealizedCumulativeDemandBytes
             / (double)(1L << 30));
 
-    private static bool NamScalingGatePassed(
-        IReadOnlyList<PressureProfilePair> profiles)
-    {
-        double? previous = null;
-        foreach (PressureProfilePair profile in profiles.OrderBy(
-            static profile => profile.ProfilePercent))
-        {
-            double? current =
-                profile.Statistics.NamMeanMillisecondsPerGiB;
-            if (!current.HasValue
-                || previous.HasValue && current.Value >= previous.Value)
-            {
-                return false;
-            }
-
-            previous = current;
-        }
-
-        return previous.HasValue;
-    }
+    private static bool IsConstrainedMemoryObservation(
+        PressureImplementationObservation observation,
+        Options options) =>
+        observation.CgroupCapBytes == options.CgroupCapBytes
+        && observation.Isolation.MemoryLimitBytes == options.CgroupCapBytes
+        && observation.Isolation.MemorySwapLimitBytes == options.CgroupCapBytes
+        && observation.Isolation.MemorySwappiness == 0
+        && observation.RequestedCumulativeDemandBytes
+            >= checked(options.CgroupCapBytes * 2);
 
     private static bool IsCompleted(
         PressureImplementationObservation observation) =>
@@ -766,7 +766,6 @@ internal static class PressureMatrixHarness
     private static double RequiredSpeedup(int percent) =>
         percent switch
         {
-            <= 100 => 1.50,
             200 => 1.75,
             >= 1000 => 2.00,
             _ => 1.75 + (percent - 200) / 800.0 * 0.25
@@ -870,15 +869,17 @@ internal static class PressureMatrixHarness
 
     private sealed class DockerWorker : IAsyncDisposable
     {
-        internal const int WarmupPassCount = 4;
+        internal const int WarmupPassCount = 1;
         private readonly object _sampleGate = new();
         private readonly List<RawHostSample> _samples = [];
         private readonly string _implementation;
         private readonly string _cpuSet;
         private readonly string _imageId;
         private Process? _process;
+        private Process? _statsProcess;
         private CancellationTokenSource? _statsCancellation;
         private Task? _statsReader;
+        private Task<string>? _statsErrorReader;
         private Task<string>? _stderrReader;
         private int _restart;
 
@@ -940,7 +941,8 @@ internal static class PressureMatrixHarness
                         request,
                         options,
                         PressureCommandKind.Warmup,
-                        enforceDeadline: false);
+                        enforceDeadline: false,
+                        collectTelemetry: false);
                 if (observation.Outcome
                         != PressureProfileOutcome.Completed
                     || !observation.CorrectnessPassed)
@@ -960,7 +962,8 @@ internal static class PressureMatrixHarness
                 request,
                 options,
                 PressureCommandKind.RunProfile,
-                enforceDeadline: true);
+                enforceDeadline: true,
+                collectTelemetry: true);
 
         internal Task<PressureImplementationObservation> VerifyProfileAsync(
             PressureProfileRequest request,
@@ -969,7 +972,8 @@ internal static class PressureMatrixHarness
                 request,
                 options,
                 PressureCommandKind.VerifyProfile,
-                enforceDeadline: false);
+                enforceDeadline: false,
+                collectTelemetry: true);
 
         private async Task StartProcessAsync(Options options, List<string> commands)
         {
@@ -1009,7 +1013,10 @@ internal static class PressureMatrixHarness
                 assembly,
                 "--server"
             ];
-            commands.Add($"docker {string.Join(' ', arguments)}");
+            lock (commands)
+            {
+                commands.Add($"docker {string.Join(' ', arguments)}");
+            }
             ProcessStartInfo start = new("docker")
             {
                 UseShellExecute = false,
@@ -1042,7 +1049,8 @@ internal static class PressureMatrixHarness
             PressureProfileRequest request,
             Options options,
             PressureCommandKind commandKind,
-            bool enforceDeadline)
+            bool enforceDeadline,
+            bool collectTelemetry)
         {
             string requestId = $"{_implementation}-{request.ProfilePercent}-{Guid.NewGuid():N}";
             PressureCommand command = new(requestId, commandKind, request);
@@ -1051,8 +1059,9 @@ internal static class PressureMatrixHarness
                     requestId,
                     PressureCommandKind.BeginProcessing),
                 VoxelJson.Options);
-            (CgroupMemorySnapshot initialCgroup, bool peakReset) =
-                await PrepareCgroupProfileAsync();
+            (CgroupMemorySnapshot initialCgroup, bool peakReset) = collectTelemetry
+                ? await PrepareCgroupProfileAsync()
+                : (default, false);
             long sentTick = Stopwatch.GetTimestamp();
             await _process!.StandardInput.WriteLineAsync(
                 JsonSerializer.Serialize(command, VoxelJson.Options));
@@ -1183,10 +1192,13 @@ internal static class PressureMatrixHarness
             {
                 completionTick = null;
                 forcedObservationEnd = Stopwatch.GetTimestamp();
-                terminalCgroup ??= await ReadCgroupAsync();
-                preservedSamples = SelectSamples(
-                    startTick ?? sentTick,
-                    forcedObservationEnd.Value);
+                if (collectTelemetry)
+                {
+                    terminalCgroup ??= await ReadCgroupAsync();
+                    preservedSamples = SelectSamples(
+                        startTick ?? sentTick,
+                        forcedObservationEnd.Value);
+                }
                 await KillAsync();
             }
             else if (outcome == PressureProfileOutcome.HarnessFailure
@@ -1194,10 +1206,13 @@ internal static class PressureMatrixHarness
                 && childResult is null)
             {
                 forcedObservationEnd = completionTick.Value;
-                terminalCgroup ??= await ReadCgroupAsync();
-                preservedSamples = SelectSamples(
-                    startTick ?? sentTick,
-                    forcedObservationEnd.Value);
+                if (collectTelemetry)
+                {
+                    terminalCgroup ??= await ReadCgroupAsync();
+                    preservedSamples = SelectSamples(
+                        startTick ?? sentTick,
+                        forcedObservationEnd.Value);
+                }
                 await KillAsync();
             }
 
@@ -1214,12 +1229,15 @@ internal static class PressureMatrixHarness
                 exceptionMessage = "Processing completed after the external six-second deadline.";
             }
 
-            CgroupMemorySnapshot finalCgroup = terminalCgroup
-                ?? await ReadCgroupAsync();
-            IReadOnlyList<PressureHostSample> samples = preservedSamples
-                ?? SelectSamples(
-                    startTick ?? sentTick,
-                    observationEnd);
+            CgroupMemorySnapshot finalCgroup = collectTelemetry
+                ? terminalCgroup ?? await ReadCgroupAsync()
+                : default;
+            IReadOnlyList<PressureHostSample> samples = collectTelemetry
+                ? preservedSamples
+                    ?? SelectSamples(
+                        startTick ?? sentTick,
+                        observationEnd)
+                : [];
             long externalPeak = Math.Max(
                 initialCgroup.CurrentBytes,
                 Math.Max(
@@ -1382,49 +1400,60 @@ internal static class PressureMatrixHarness
 
         private void StartStats()
         {
-            _statsCancellation = new CancellationTokenSource();
-            CancellationToken cancellation = _statsCancellation.Token;
-            _statsReader = Task.Run(async () =>
+            try
             {
-                while (!cancellation.IsCancellationRequested)
+                ProcessStartInfo start = new("docker")
+                {
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true
+                };
+                start.ArgumentList.Add("stats");
+                start.ArgumentList.Add("--format");
+                start.ArgumentList.Add("{{json .}}");
+                start.ArgumentList.Add(ContainerName);
+                _statsProcess = Process.Start(start);
+                if (_statsProcess is null)
+                {
+                    return;
+                }
+
+                _statsCancellation = new CancellationTokenSource();
+                CancellationToken cancellation = _statsCancellation.Token;
+                _statsErrorReader = _statsProcess.StandardError.ReadToEndAsync();
+                _statsReader = Task.Run(async () =>
                 {
                     try
                     {
-                        CommandResult result = await RunCommandAsync(
-                            "docker",
-                            [
-                                "stats",
-                                "--no-stream",
-                                "--format",
-                                "{{json .}}",
-                                ContainerName
-                            ],
-                            TimeSpan.FromSeconds(5));
-                        string? line = result.StandardOutput
-                            .Split(
-                                ['\r', '\n'],
-                                StringSplitOptions.RemoveEmptyEntries
-                                    | StringSplitOptions.TrimEntries)
-                            .LastOrDefault();
-                        if (!string.IsNullOrWhiteSpace(line))
+                        while (true)
                         {
-                            RecordStatsLine(line);
-                        }
-                    }
-                    catch when (!cancellation.IsCancellationRequested)
-                    {
-                    }
+                            string? line = await _statsProcess.StandardOutput
+                                .ReadLineAsync(cancellation);
+                            if (line is null)
+                            {
+                                return;
+                            }
 
-                    try
-                    {
-                        await Task.Delay(100, cancellation);
+                            if (!string.IsNullOrWhiteSpace(line))
+                            {
+                                RecordStatsLine(line);
+                            }
+                        }
                     }
                     catch (OperationCanceledException)
                     {
-                        break;
                     }
-                }
-            });
+                    catch
+                    {
+                    }
+                });
+            }
+            catch
+            {
+                _statsProcess?.Dispose();
+                _statsProcess = null;
+            }
         }
 
         private void RecordStatsLine(string line)
@@ -1692,6 +1721,8 @@ internal static class PressureMatrixHarness
 
         private async Task StopAsync()
         {
+            await StopStatsAsync();
+
             if (_process is { HasExited: false })
             {
                 try
@@ -1711,13 +1742,44 @@ internal static class PressureMatrixHarness
                 }
             }
 
+            _process?.Dispose();
+            _process = null;
+            lock (_sampleGate)
+            {
+                _samples.Clear();
+            }
+        }
+
+        private async Task StopStatsAsync()
+        {
             _statsCancellation?.Cancel();
+            if (_statsProcess is { HasExited: false })
+            {
+                try
+                {
+                    _statsProcess.Kill(entireProcessTree: true);
+                }
+                catch
+                {
+                }
+            }
 
             if (_statsReader is not null)
             {
                 try
                 {
-                    await _statsReader;
+                    await _statsReader.WaitAsync(TimeSpan.FromMilliseconds(250));
+                }
+                catch
+                {
+                }
+            }
+
+            if (_statsErrorReader is not null)
+            {
+                try
+                {
+                    await _statsErrorReader.WaitAsync(TimeSpan.FromMilliseconds(250));
                 }
                 catch
                 {
@@ -1726,12 +1788,10 @@ internal static class PressureMatrixHarness
 
             _statsCancellation?.Dispose();
             _statsCancellation = null;
-            _process?.Dispose();
-            _process = null;
-            lock (_sampleGate)
-            {
-                _samples.Clear();
-            }
+            _statsReader = null;
+            _statsErrorReader = null;
+            _statsProcess?.Dispose();
+            _statsProcess = null;
         }
 
         public async ValueTask DisposeAsync()

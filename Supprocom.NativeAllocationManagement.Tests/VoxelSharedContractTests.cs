@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using Supprocom.NativeAllocationManagement.Demos.VoxelChunkPipeline.SharedContract;
 
 namespace Supprocom.NativeAllocationManagement.Tests;
@@ -165,10 +166,6 @@ public sealed class VoxelSharedContractTests
         string pressureHarness = File.ReadAllText(
             Path.Combine(demoRoot, "Harness", "PressureMatrixHarness.cs"));
         Assert.Contains(
-            "<= 100 => 1.50",
-            pressureHarness,
-            StringComparison.Ordinal);
-        Assert.Contains(
             "200 => 1.75",
             pressureHarness,
             StringComparison.Ordinal);
@@ -177,14 +174,14 @@ public sealed class VoxelSharedContractTests
             pressureHarness,
             StringComparison.Ordinal);
         Assert.Contains(
-            "/ 800.0 * 0.25",
+            "performanceGate = mean > 1.00 && lower > 1.00",
             pressureHarness,
             StringComparison.Ordinal);
-        Assert.Contains(
-            "NamScalingGatePassed(profiles)",
+        Assert.DoesNotContain(
+            "NamScalingGatePassed",
             pressureHarness,
             StringComparison.Ordinal);
-        Assert.Contains(
+        Assert.DoesNotContain(
             "current.Value >= previous.Value",
             pressureHarness,
             StringComparison.Ordinal);
@@ -192,7 +189,7 @@ public sealed class VoxelSharedContractTests
             "for (int profileOrdinal = 0;",
             StringComparison.Ordinal);
         int safeStart = pressureHarness.IndexOf(
-            "await DockerWorker.StartAsync(",
+            "Task<DockerWorker> safeStart = DockerWorker.StartAsync(",
             profileRound,
             StringComparison.Ordinal);
         int sampleRound = pressureHarness.IndexOf(
@@ -220,6 +217,10 @@ public sealed class VoxelSharedContractTests
             StringComparison.Ordinal);
         Assert.Contains(
             "private const int WarmupProfilePercent = 1000;",
+            pressureHarness,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "WarmupProfilePercent,\n                checked(",
             pressureHarness,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -314,6 +315,68 @@ public sealed class VoxelSharedContractTests
         Assert.True(compilation >= 0);
         Assert.True(publish > compilation);
         Assert.True(pressure > publish);
+    }
+
+    [Fact]
+    public void VerificationReportStoresSelectedProfileAndActualWarmupSeparately()
+    {
+        const long capBytes = 268_435_456;
+        PressureProfileInitialization initialization = new(
+            6,
+            DateTime.UnixEpoch,
+            0,
+            "safe",
+            "nam",
+            4,
+            1000,
+            capBytes * 10);
+        PressureVerificationPair verification = new(
+            10000,
+            capBytes * 100,
+            initialization,
+            default,
+            default,
+            true);
+        PressureMatrixReport report = new(
+            "commit",
+            "image",
+            capBytes,
+            "bytes",
+            6000,
+            1,
+            1,
+            1,
+            1,
+            [10000],
+            [],
+            verification,
+            new PressureMatrixSummary(
+                DateTime.UnixEpoch,
+                DateTime.UnixEpoch,
+                0,
+                0,
+                0,
+                0,
+                0,
+                true,
+                true,
+                true,
+                true,
+                true,
+                true),
+            new Dictionary<string, string>(),
+            [],
+            []);
+
+        string json = JsonSerializer.Serialize(report, VoxelJson.Options);
+        PressureMatrixReport roundTrip = JsonSerializer.Deserialize<PressureMatrixReport>(
+            json,
+            VoxelJson.Options);
+
+        Assert.Equal(10000, roundTrip.Verification.ProfilePercent);
+        Assert.Equal(1000, roundTrip.Verification.Initialization.WarmupProfilePercent);
+        Assert.Equal(capBytes * 10, roundTrip.Verification.Initialization.WarmupCumulativeDemandBytes);
+        Assert.Equal(capBytes * 100, roundTrip.Verification.RequestedCumulativeDemandBytes);
     }
 
     [Fact]

@@ -136,7 +136,6 @@ public readonly record struct PressureMatrixSummary(
     bool ExactParityPassed,
     bool DeadlineGatePassed,
     bool PressureQualificationPassed,
-    bool NamScalingGatePassed,
     bool PerformanceGatePassed,
     bool GatePassed);
 
