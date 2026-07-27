@@ -1137,7 +1137,8 @@ public sealed class PackageSmokeTests
             }
 
             string repositoryRoot = FindRepositoryRoot();
-            string version = "0.1.3-smoke." + Guid.NewGuid().ToString("N")[..12];
+            string version = "0.1.0-smoke."
+                + Guid.NewGuid().ToString("N")[..12];
             string packageDirectory = Path.Combine(Path.GetTempPath(), "nam-package-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(packageDirectory);
             string packagePath = Path.Combine(packageDirectory, $"Supprocom.NativeAllocationManagement.{version}.nupkg");

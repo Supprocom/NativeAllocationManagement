@@ -223,6 +223,18 @@ public sealed class VoxelSharedContractTests
             pressureHarness,
             StringComparison.Ordinal);
         Assert.Contains(
+            "private const int StressProfileSamples = 1;",
+            pressureHarness,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "private const int NonMeasuredOperationTimeoutSeconds = 60;",
+            pressureHarness,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "percent == StressProfilePercent",
+            pressureHarness,
+            StringComparison.Ordinal);
+        Assert.Contains(
             "cycleOwners[cyclePosition]",
             File.ReadAllText(
                 Path.Combine(

@@ -9,6 +9,9 @@ namespace Supprocom.NativeAllocationManagement.Demos.VoxelChunkPipeline.Harness;
 internal static class PressureMatrixHarness
 {
     private const int WarmupProfilePercent = 1000;
+    private const int StressProfilePercent = 10000;
+    private const int StressProfileSamples = 1;
+    private const int NonMeasuredOperationTimeoutSeconds = 60;
     private static readonly int[] ProfilePercents =
     [
         50,
@@ -94,10 +97,14 @@ internal static class PressureMatrixHarness
                     options.CgroupCapBytes
                     * WarmupProfilePercent
                     / 100));
+            int samplesInProfile =
+                percent == StressProfilePercent
+                    ? StressProfileSamples
+                    : options.SamplesPerProfile;
             List<PressurePairedObservation> observations = new(
-                options.SamplesPerProfile);
+                samplesInProfile);
             for (int sampleIndex = 0;
-                sampleIndex < options.SamplesPerProfile;
+                sampleIndex < samplesInProfile;
                 sampleIndex++)
             {
                 if (!safe.IsAlive || safe.RequiresRestart)
@@ -290,7 +297,7 @@ internal static class PressureMatrixHarness
             ["pairExecution"] =
                 "sequential with alternating implementation order",
             ["profileInitialization"] =
-                "fresh container pair and fixed maximum-demand warmup per profile",
+                "fresh container pair and fixed 1000-percent warmup per profile",
             ["crossProfileProcessState"] = "none",
             ["memorySwapPolicy"] = "memory-swap equals memory; swappiness 0",
             ["gcServer"] = "1",
@@ -303,6 +310,9 @@ internal static class PressureMatrixHarness
                 CultureInfo.InvariantCulture),
             ["samplesPerProfile"] = options.SamplesPerProfile.ToString(
                 CultureInfo.InvariantCulture),
+            ["stressProfileSamples"] =
+                $"{StressProfilePercent} percent uses "
+                + $"{StressProfileSamples} complete sample",
             ["measurementEvidence"] =
                 "predeclared plan and terminal completion without per-chunk evidence",
             ["measurementBoundary"] =
@@ -333,6 +343,7 @@ internal static class PressureMatrixHarness
                 "The child does not run a benchmark timer or scan allocator statistics during processing.",
                 "Measured child results contain no per-chunk evidence.",
                 "Each profile uses a new container pair and a fixed warmup before measurement.",
+                "The 10000-percent stress profile uses one complete sample.",
                 "Each measured profile materializes every output and completes its mapped handoff.",
                 "One exact maximum-demand run follows measurement. It reads every output byte."
             ]);
@@ -598,6 +609,10 @@ internal static class PressureMatrixHarness
         else
         {
             double requiredSpeedup = RequiredSpeedup(percent);
+            bool confidenceGate =
+                percent == StressProfilePercent
+                    ? sampleCount == StressProfileSamples
+                    : lower > 1.00;
             bool tailGate = percent > 100
                 || safeP95.HasValue
                     && safeP99.HasValue
@@ -608,12 +623,15 @@ internal static class PressureMatrixHarness
                     && namP99.Value
                         <= safeP99.Value / requiredSpeedup;
             performanceGate = mean >= requiredSpeedup
-                && lower > 1.00
+                && confidenceGate
                 && tailGate;
-            interpretation =
-                $"Both implementations completed. This profile requires "
-                + $"{requiredSpeedup:F2}x mean speedup and a positive "
-                + "confidence lower bound.";
+            interpretation = percent == StressProfilePercent
+                ? $"Both implementations completed the stress profile. "
+                    + $"This profile requires {requiredSpeedup:F2}x "
+                    + "speedup from one complete sample."
+                : $"Both implementations completed. This profile requires "
+                    + $"{requiredSpeedup:F2}x mean speedup and a positive "
+                    + "confidence lower bound.";
         }
 
         bool gate = deadlineGate
@@ -1073,7 +1091,8 @@ internal static class PressureMatrixHarness
                 }
                 else
                 {
-                    timeout = TimeSpan.FromSeconds(20);
+                    timeout = TimeSpan.FromSeconds(
+                        NonMeasuredOperationTimeoutSeconds);
                 }
 
                 PressureEnvelope envelope;
@@ -1091,8 +1110,10 @@ internal static class PressureMatrixHarness
                     exceptionType = typeof(TimeoutException).FullName;
                     exceptionMessage = completionTick.HasValue
                         ? "The worker completed processing but did not transfer its result."
-                        : startTick.HasValue
+                        : startTick.HasValue && enforceDeadline
                             ? "The external six-second processing deadline expired."
+                            : startTick.HasValue
+                                ? "The non-measured worker operation exceeded its hard timeout."
                             : "The worker did not enter its processing boundary.";
                     break;
                 }

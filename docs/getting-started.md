@@ -12,7 +12,7 @@ normal package reference and keep its analyzer asset enabled.
 
 ```xml
 <ItemGroup>
-  <PackageReference Include="Supprocom.NativeAllocationManagement" Version="0.1.3" />
+  <PackageReference Include="Supprocom.NativeAllocationManagement" Version="0.1.0" />
 </ItemGroup>
 ```
 

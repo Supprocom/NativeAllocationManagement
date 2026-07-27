@@ -13,11 +13,27 @@ values. A bounded `Access` or `Read` callback receives a scoped `NativeLeaseView
 the view cannot escape the callback, and the runtime operation token retains the exact
 generation until the callback exits.
 
-Install the package with a normal package reference. Version `0.1.3` is the current
-local development line.
+## Measured performance
+
+The included voxel benchmark estimates a 53.82 percent performance improvement
+over expert safe C# in a non-memory-constrained environment.
+
+In a very memory-constrained environment, the estimated improvement is more
+than 111.83 percent and continues to increase with cumulative memory turnover.
+
+Both implementations process equal inputs and outputs. The safe C#
+implementation uses pooling, exact sizing, bounded retention, and proactive
+memory admission.
+
+These estimates are specific to the included workload and test system. The
+[voxel pipeline guide](.Demos/01-VoxelChunkPipeline/README.md) gives the
+method, commands, and current evidence.
+
+Install the package with a normal package reference. Version `0.1.0` is the
+first public release.
 
 ```xml
-<PackageReference Include="Supprocom.NativeAllocationManagement" Version="0.1.3" />
+<PackageReference Include="Supprocom.NativeAllocationManagement" Version="0.1.0" />
 ```
 
 The package contains the runtime assembly, the ownership analyzer, and its
