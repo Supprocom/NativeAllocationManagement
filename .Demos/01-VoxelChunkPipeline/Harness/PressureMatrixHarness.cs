@@ -139,7 +139,8 @@ internal static class PressureMatrixHarness
 
                 PressureImplementationObservation safeObservation;
                 PressureImplementationObservation namObservation;
-                if ((pairOrdinal & 1) == 0)
+                bool safeFirst = ((pairOrdinal + profileOrdinal) & 1) == 0;
+                if (safeFirst)
                 {
                     safeObservation = await safe.RunProfileAsync(
                         request,
@@ -332,7 +333,7 @@ internal static class PressureMatrixHarness
             ["namCpuSet"] = options.NamCpuSet,
             ["cpuQuota"] = "none",
             ["pairExecution"] =
-                "sequential with alternating implementation order",
+                "sequential with per-profile alternating implementation order",
             ["profileInitialization"] =
                 "fresh container pair, parallel worker start, and one fixed 1000-percent warmup per profile",
             ["crossProfileProcessState"] = "none",
