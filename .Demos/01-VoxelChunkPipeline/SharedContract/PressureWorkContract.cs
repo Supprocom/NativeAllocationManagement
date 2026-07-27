@@ -1817,11 +1817,14 @@ public static class PressureWorkContract
             shape.TransparentFaceCount,
             shape.TransparentUploadBytes);
 
-    public static void VerifyRetainedOutput(
+    public static PressureOutputEvidence VerifyRetainedOutput(
         PressureOutputEvidence expected,
+        int seed,
+        ReadOnlySpan<FaceRecord> opaqueRecords,
         ReadOnlySpan<Vertex> opaqueVertices,
         ReadOnlySpan<int> opaqueIndices,
         ReadOnlySpan<PayloadSlice> opaqueSlices,
+        ReadOnlySpan<FaceRecord> transparentRecords,
         ReadOnlySpan<Vertex> transparentVertices,
         ReadOnlySpan<int> transparentIndices,
         ReadOnlySpan<PayloadSlice> transparentSlices,
@@ -1837,6 +1840,24 @@ public static class PressureWorkContract
             transparentIndices,
             transparentSlices);
 
+        VerifyTypedStream(
+            opaqueRecords,
+            opaqueVertices,
+            opaqueIndices);
+        VerifyTypedStream(
+            transparentRecords,
+            transparentVertices,
+            transparentIndices);
+        VerifyRetainedStream(
+            seed,
+            opaqueRecords,
+            opaqueSlices,
+            opaqueStages);
+        VerifyRetainedStream(
+            seed,
+            transparentRecords,
+            transparentSlices,
+            transparentStages);
         string retainedHash = ComputeTypedOutputHash(
             opaqueVertices,
             opaqueIndices,
@@ -1846,17 +1867,20 @@ public static class PressureWorkContract
             transparentSlices,
             opaqueStages,
             transparentStages);
-        if (!string.Equals(
-            retainedHash,
-            expected.CompleteHash,
-            StringComparison.Ordinal))
+        if (expected.CompleteHash.Length != 0
+            && !string.Equals(
+                retainedHash,
+                expected.CompleteHash,
+                StringComparison.Ordinal))
         {
             throw new InvalidDataException(
                 "Retained output values changed before the upload consumer boundary.");
         }
+
+        return expected with { CompleteHash = retainedHash };
     }
 
-    public static void VerifyRetainedScatterOutput(
+    public static PressureOutputEvidence VerifyRetainedScatterOutput(
         PressureOutputEvidence expected,
         int seed,
         ReadOnlySpan<byte> payloadPatterns,
@@ -1878,6 +1902,24 @@ public static class PressureWorkContract
             transparentIndices,
             transparentSlices);
         ValidatePayloadPatternTable(payloadPatterns);
+        VerifyTypedStream(
+            opaqueRecords,
+            opaqueVertices,
+            opaqueIndices);
+        VerifyTypedStream(
+            transparentRecords,
+            transparentVertices,
+            transparentIndices);
+        VerifyScatterRetainedStream(
+            seed,
+            opaqueRecords,
+            opaqueSlices,
+            payloadPatterns);
+        VerifyScatterRetainedStream(
+            seed,
+            transparentRecords,
+            transparentSlices,
+            payloadPatterns);
 
         string retainedHash = ComputeScatterOutputHash(
             seed,
@@ -1890,14 +1932,17 @@ public static class PressureWorkContract
             transparentVertices,
             transparentIndices,
             transparentSlices);
-        if (!string.Equals(
-            retainedHash,
-            expected.CompleteHash,
-            StringComparison.Ordinal))
+        if (expected.CompleteHash.Length != 0
+            && !string.Equals(
+                retainedHash,
+                expected.CompleteHash,
+                StringComparison.Ordinal))
         {
             throw new InvalidDataException(
                 "Retained scatter output changed before upload.");
         }
+
+        return expected with { CompleteHash = retainedHash };
     }
 
     private static void ValidateRetainedOutputLengths(

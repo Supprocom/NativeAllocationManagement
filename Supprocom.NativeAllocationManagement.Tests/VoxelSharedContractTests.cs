@@ -915,9 +915,12 @@ public sealed class VoxelSharedContractTests
             PressureWorkContract.DescribeOutput(shape));
         PressureWorkContract.VerifyRetainedOutput(
             evidence,
+            seed,
+            records,
             vertices,
             indices,
             slices,
+            [],
             [],
             [],
             [],
@@ -1047,9 +1050,12 @@ public sealed class VoxelSharedContractTests
         {
             PressureWorkContract.VerifyRetainedOutput(
                 evidence,
+                seed,
+                records,
                 vertices,
                 indices,
                 slices,
+                [],
                 [],
                 [],
                 [],

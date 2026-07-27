@@ -551,38 +551,7 @@ internal sealed class SafePressureSession :
                         if (exactVerification)
                         {
                             PressureOutputEvidence output =
-                                PressureWorkContract.VerifyAndHashOutput(
-                                request.Seed,
-                                chunkFaces.Slice(0, shape.OpaqueRecordCount),
-                                chunkVertices.Slice(
-                                    0,
-                                    opaqueVertexCount),
-                                chunkIndices.Slice(
-                                    0,
-                                    opaqueIndexCount),
-                                Slice(
-                                    slices,
-                                    slot.SliceOffset,
-                                    shape.OpaqueFaceCount),
-                                chunkFaces.Slice(
-                                    shape.OpaqueRecordCount,
-                                    shape.TransparentRecordCount),
-                                chunkVertices.Slice(
-                                    opaqueVertexCount,
-                                    shape.VertexCount
-                                    - opaqueVertexCount),
-                                chunkIndices.Slice(
-                                    opaqueIndexCount,
-                                    shape.IndexCount
-                                    - opaqueIndexCount),
-                                Slice(
-                                    slices,
-                                    checked(
-                                        slot.SliceOffset
-                                        + shape.OpaqueFaceCount),
-                                    shape.TransparentFaceCount),
-                                opaqueStages,
-                                transparentStages);
+                                PressureWorkContract.DescribeOutput(shape);
                             _slots[batchIndex] = slot with
                             {
                                 Output = output,
@@ -626,6 +595,10 @@ internal sealed class SafePressureSession :
                         if (exactVerification)
                         {
                             PressureChunkShape shape = slot.Shape;
+                            Span<FaceRecord> chunkFaces = Slice(
+                                faces,
+                                slot.RecordOffset,
+                                Math.Max(1, shape.RecordCount));
                             int opaqueVertexCount = checked(
                                 shape.OpaqueFaceCount
                                 * VoxelMath.VerticesPerFace);
@@ -657,34 +630,48 @@ internal sealed class SafePressureSession :
                                     slot.Stage192Offset,
                                     slot.Stage224Offset,
                                     opaque: false);
-                            PressureWorkContract.VerifyRetainedOutput(
-                                slot.Output,
-                                chunkVertices.Slice(
-                                    0,
-                                    opaqueVertexCount),
-                                chunkIndices.Slice(
-                                    0,
-                                    opaqueIndexCount),
-                                Slice(
-                                    slices,
-                                    slot.SliceOffset,
-                                    shape.OpaqueFaceCount),
-                                chunkVertices.Slice(
-                                    opaqueVertexCount,
-                                    shape.VertexCount
-                                    - opaqueVertexCount),
-                                chunkIndices.Slice(
-                                    opaqueIndexCount,
-                                    shape.IndexCount
-                                    - opaqueIndexCount),
-                                Slice(
-                                    slices,
-                                    checked(
-                                        slot.SliceOffset
-                                        + shape.OpaqueFaceCount),
-                                    shape.TransparentFaceCount),
-                                opaqueStages,
-                                transparentStages);
+                            PressureOutputEvidence output =
+                                PressureWorkContract.VerifyRetainedOutput(
+                                    slot.Output,
+                                    request.Seed,
+                                    chunkFaces.Slice(
+                                        0,
+                                        shape.OpaqueRecordCount),
+                                    chunkVertices.Slice(
+                                        0,
+                                        opaqueVertexCount),
+                                    chunkIndices.Slice(
+                                        0,
+                                        opaqueIndexCount),
+                                    Slice(
+                                        slices,
+                                        slot.SliceOffset,
+                                        shape.OpaqueFaceCount),
+                                    chunkFaces.Slice(
+                                        shape.OpaqueRecordCount,
+                                        shape.TransparentRecordCount),
+                                    chunkVertices.Slice(
+                                        opaqueVertexCount,
+                                        shape.VertexCount
+                                        - opaqueVertexCount),
+                                    chunkIndices.Slice(
+                                        opaqueIndexCount,
+                                        shape.IndexCount
+                                        - opaqueIndexCount),
+                                    Slice(
+                                        slices,
+                                        checked(
+                                            slot.SliceOffset
+                                            + shape.OpaqueFaceCount),
+                                        shape.TransparentFaceCount),
+                                    opaqueStages,
+                                    transparentStages);
+                            _slots[batchIndex] = slot with
+                            {
+                                Output = output,
+                                Evidence = CreateEvidence(slot, output)
+                            };
+                            slot = _slots[batchIndex];
                         }
 
                         if (exactVerification)

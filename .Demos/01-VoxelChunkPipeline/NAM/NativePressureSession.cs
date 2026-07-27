@@ -1284,29 +1284,7 @@ internal sealed class NativePressureSession :
                     shape.OpaqueFaceCount
                     * VoxelMath.IndicesPerFace);
                 PressureOutputEvidence output =
-                    PressureWorkContract.VerifyAndHashScatterOutput(
-                        _request.Seed,
-                        allPayloadPatterns,
-                        chunkFaces.Slice(0, shape.OpaqueRecordCount),
-                        chunkVertices.Slice(0, opaqueVertices),
-                        chunkIndices.Slice(0, opaqueIndices),
-                        allSlices.Slice(
-                            slot.SliceOffset,
-                            shape.OpaqueFaceCount),
-                        chunkFaces.Slice(
-                            shape.OpaqueRecordCount,
-                            shape.TransparentRecordCount),
-                        chunkVertices.Slice(
-                            opaqueVertices,
-                            shape.VertexCount - opaqueVertices),
-                        chunkIndices.Slice(
-                            opaqueIndices,
-                            shape.IndexCount - opaqueIndices),
-                        allSlices.Slice(
-                            checked(
-                                slot.SliceOffset
-                                    + shape.OpaqueFaceCount),
-                            shape.TransparentFaceCount));
+                    PressureWorkContract.DescribeOutput(shape);
                 PressureChunkEvidence evidence =
                     CreateChunkEvidence(
                         slot,
@@ -1357,39 +1335,52 @@ internal sealed class NativePressureSession :
                 int opaqueIndexCount = checked(
                     retainedShape.OpaqueFaceCount
                         * VoxelMath.IndicesPerFace);
-                PressureWorkContract.VerifyRetainedScatterOutput(
-                    retained.Output,
-                    _request.Seed,
-                    payloadPatterns,
-                    retainedFaces.Slice(
-                        0,
-                        retainedShape.OpaqueRecordCount),
-                    allVertices.Slice(
-                        retained.VertexOffset,
-                        opaqueVertexCount),
-                    allIndices.Slice(
-                        retained.IndexOffset,
-                        opaqueIndexCount),
-                    allSlices.Slice(
-                        retained.SliceOffset,
-                        retainedShape.OpaqueFaceCount),
-                    retainedFaces.Slice(
-                        retainedShape.OpaqueRecordCount,
-                        retainedShape.TransparentRecordCount),
-                    allVertices.Slice(
-                        retained.VertexOffset
-                            + opaqueVertexCount,
-                        retainedShape.VertexCount
-                            - opaqueVertexCount),
-                    allIndices.Slice(
-                        retained.IndexOffset
-                            + opaqueIndexCount,
-                        retainedShape.IndexCount
-                            - opaqueIndexCount),
-                    allSlices.Slice(
-                        retained.SliceOffset
-                            + retainedShape.OpaqueFaceCount,
-                        retainedShape.TransparentFaceCount));
+                PressureOutputEvidence output =
+                    PressureWorkContract.VerifyRetainedScatterOutput(
+                        retained.Output,
+                        _request.Seed,
+                        payloadPatterns,
+                        retainedFaces.Slice(
+                            0,
+                            retainedShape.OpaqueRecordCount),
+                        allVertices.Slice(
+                            retained.VertexOffset,
+                            opaqueVertexCount),
+                        allIndices.Slice(
+                            retained.IndexOffset,
+                            opaqueIndexCount),
+                        allSlices.Slice(
+                            retained.SliceOffset,
+                            retainedShape.OpaqueFaceCount),
+                        retainedFaces.Slice(
+                            retainedShape.OpaqueRecordCount,
+                            retainedShape.TransparentRecordCount),
+                        allVertices.Slice(
+                            retained.VertexOffset
+                                + opaqueVertexCount,
+                            retainedShape.VertexCount
+                                - opaqueVertexCount),
+                        allIndices.Slice(
+                            retained.IndexOffset
+                                + opaqueIndexCount,
+                            retainedShape.IndexCount
+                                - opaqueIndexCount),
+                        allSlices.Slice(
+                            retained.SliceOffset
+                                + retainedShape.OpaqueFaceCount,
+                            retainedShape.TransparentFaceCount));
+                retained = retained with
+                {
+                    Output = output,
+                    Evidence = CreateChunkEvidence(
+                        retained,
+                        output,
+                        PressureWorkContract.CombineChunkEvidence(
+                            retained.SectionEvidenceHash,
+                            retained.MaskEvidenceHash,
+                            output.CompleteHash),
+                        exactVerificationPassed: true)
+                };
                 PublishScatterHandoff(retained);
             }
         }
