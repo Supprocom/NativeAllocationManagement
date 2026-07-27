@@ -138,10 +138,6 @@ internal sealed class NativePressureSession :
                     phaseArena.Scratch<FaceRecord>(
                         outputCapacity.FaceCapacity,
                         static writer => writer.Fill(default!));
-                ArenaLease<ulong> persistentMasks =
-                    phaseArena.Scratch<ulong>(
-                        outputCapacity.MaskCapacity,
-                        static writer => writer.Fill(default!));
                 ArenaLease<byte> persistentPayloadPatterns =
                     phaseArena.Scratch<byte>(
                         PressureWorkContract.PayloadPatternTableBytes,
@@ -219,6 +215,14 @@ internal sealed class NativePressureSession :
                                     sectionWords;
                                 scoped ArenaLease<ulong>
                                     sectionStates;
+                                scoped ArenaLease<ulong>
+                                    sectionMasks;
+                                scoped ArenaLease<byte>
+                                    firstMaskMarker;
+                                scoped ArenaLease<byte>
+                                    secondMaskMarker;
+                                scoped ArenaLease<byte>
+                                    thirdMaskMarker;
                                 NativeLeaseOperations
                                     .InitializeScoped(
                                         persistentCells,
@@ -229,12 +233,20 @@ internal sealed class NativePressureSession :
                                         _context.TotalSectionWords,
                                         _context
                                             .TotalSectionStateWords,
+                                        _context.TotalMaskWords,
+                                        0,
+                                        0,
+                                        0,
                                         _context
                                             .SectionInitializeAction,
                                         out sectionDescriptors,
                                         out sectionValues,
                                         out sectionWords,
-                                        out sectionStates);
+                                        out sectionStates,
+                                        out sectionMasks,
+                                        out firstMaskMarker,
+                                        out secondMaskMarker,
+                                        out thirdMaskMarker);
                                 if (_context.ExactVerification)
                                 {
                                     NativeLeaseOperations.Access(
@@ -250,7 +262,6 @@ internal sealed class NativePressureSession :
                                 NativeLeaseOperations.Access(
                                     persistentCells,
                                     persistentFaces,
-                                    persistentMasks,
                                     sectionDescriptors,
                                     _context.FaceMaskAction);
                                 state.RecordRender(_context);
@@ -264,6 +275,8 @@ internal sealed class NativePressureSession :
                                         sectionStates,
                                         _context
                                             .SectionVerifyAction);
+                                    sectionMasks.Access(
+                                        _context.MaskRecordAction);
                                 }
                             }
                             finally
@@ -720,19 +733,24 @@ internal sealed class NativePressureSession :
             SectionInitializeAction = InitializeSections;
             SectionRecordAction = RecordSections;
             SectionVerifyAction = VerifySections;
-            FaceMaskAction = PopulateFacesAndMasks;
+            MaskRecordAction = RecordMasks;
+            FaceMaskAction = PopulateFaces;
             PackInitializeAction = InitializePack;
             PackCompleteAction = CompletePack;
         }
 
         internal NativeLeaseAction<VoxelCell> BuildAction { get; }
 
-        internal NativeLeaseSourceQuadSpanInitializer<
+        internal NativeLeaseSourceOctupleSpanInitializer<
             VoxelCell,
             SectionPrerenderDescriptor,
             ushort,
             uint,
-            ulong> SectionInitializeAction { get; }
+            ulong,
+            ulong,
+            byte,
+            byte,
+            byte> SectionInitializeAction { get; }
 
         internal NativeLeaseQuintupleAction<
             VoxelCell,
@@ -748,10 +766,11 @@ internal sealed class NativePressureSession :
             uint,
             ulong> SectionVerifyAction { get; }
 
-        internal NativeLeaseQuadrupleAction<
+        internal NativeLeaseAction<ulong> MaskRecordAction { get; }
+
+        internal NativeLeaseTripleAction<
             VoxelCell,
             FaceRecord,
-            ulong,
             SectionPrerenderDescriptor>
             FaceMaskAction { get; }
 
@@ -798,7 +817,8 @@ internal sealed class NativePressureSession :
                 TotalSectionDescriptors,
                 TotalSectionValues,
                 TotalSectionWords,
-                TotalSectionStateWords);
+                TotalSectionStateWords,
+                TotalMaskWords);
 
         internal long OutputArenaLogicalRequestBytes =>
             CalculateOutputArenaLogicalRequestBytes(
@@ -879,7 +899,7 @@ internal sealed class NativePressureSession :
                     TotalRecords + Math.Max(1, shape.RecordCount));
                 int candidateMaskWords = checked(
                     TotalMaskWords
-                    + Math.Max(1, shape.TransparentMaskWords));
+                    + shape.TransparentMaskWords);
                 int candidateFaces = checked(
                     TotalFaces + Math.Max(1, shape.FaceCount));
                 int candidateUploadBytes = checked(
@@ -904,7 +924,8 @@ internal sealed class NativePressureSession :
                         candidateSectionDescriptors,
                         candidateSectionValues,
                         candidateSectionWords,
-                        candidateSectionStateWords));
+                        candidateSectionStateWords,
+                        candidateMaskWords));
                 if (BatchCount != 0
                     && _arenaCapacityBytes != 0
                     && candidateSectionArenaBytes > _arenaCapacityBytes)
@@ -945,13 +966,15 @@ internal sealed class NativePressureSession :
             int sectionDescriptors,
             int sectionValues,
             int sectionWords,
-            int sectionStateWords) =>
+            int sectionStateWords,
+            int maskWords) =>
             checked(
                 (long)sectionDescriptors
                     * VoxelMath.SectionPrerenderDescriptorBytes
                 + (long)sectionValues * sizeof(ushort)
                 + (long)sectionWords * sizeof(uint)
-                + (long)sectionStateWords * sizeof(ulong));
+                + (long)sectionStateWords * sizeof(ulong)
+                + (long)maskWords * sizeof(ulong));
 
         private static long CalculateOutputArenaLogicalRequestBytes(
             int faces,
@@ -967,8 +990,20 @@ internal sealed class NativePressureSession :
             scoped Span<SectionPrerenderDescriptor> descriptors,
             scoped Span<ushort> values,
             scoped Span<uint> words,
-            scoped Span<ulong> states)
+            scoped Span<ulong> states,
+            scoped Span<ulong> masks,
+            scoped Span<byte> firstMaskMarker,
+            scoped Span<byte> secondMaskMarker,
+            scoped Span<byte> thirdMaskMarker)
         {
+            if (!firstMaskMarker.IsEmpty
+                || !secondMaskMarker.IsEmpty
+                || !thirdMaskMarker.IsEmpty)
+            {
+                throw new InvalidOperationException(
+                    "The mask initialization markers must not reserve storage.");
+            }
+
             Span<VoxelCell> allCells = cells.AsSpan();
             for (int batchIndex = 0;
                 batchIndex < BatchCount;
@@ -998,7 +1033,10 @@ internal sealed class NativePressureSession :
                         slot.Shape.SectionWordCount),
                     states.Slice(
                         slot.SectionStateWordOffset,
-                        slot.Shape.SectionStateWordCount));
+                        slot.Shape.SectionStateWordCount),
+                    masks.Slice(
+                        slot.MaskOffset,
+                        slot.Shape.TransparentMaskWords));
             }
         }
 
@@ -1108,17 +1146,15 @@ internal sealed class NativePressureSession :
             }
         }
 
-        private void PopulateFacesAndMasks(
+        private void PopulateFaces(
             scoped NativeLeaseView<VoxelCell> cells,
             scoped NativeLeaseView<FaceRecord> faces,
-            scoped NativeLeaseView<ulong> masks,
             scoped NativeLeaseView<SectionPrerenderDescriptor> descriptors)
         {
             Span<VoxelCell> allCells = cells.AsSpan();
             Span<SectionPrerenderDescriptor> allDescriptors =
                 descriptors.AsSpan();
             Span<FaceRecord> allFaces = faces.AsSpan();
-            Span<ulong> allMasks = masks.AsSpan();
             for (int batchIndex = 0; batchIndex < BatchCount; batchIndex++)
             {
                 BatchSlot slot = _slots[batchIndex];
@@ -1133,16 +1169,27 @@ internal sealed class NativePressureSession :
                     allFaces.Slice(
                         slot.RecordOffset,
                         Math.Max(1, slot.Shape.RecordCount)));
-                PressureWorkContract.BuildTransparentMasks(
-                    allCells.Slice(
-                        checked(batchIndex * VoxelMath.CellsPerChunk),
-                        VoxelMath.CellsPerChunk),
-                    _sections.AsSpan(
-                        checked(batchIndex * VoxelMath.SectionsPerChunk),
-                        VoxelMath.SectionsPerChunk),
-                    allMasks.Slice(
-                        slot.MaskOffset,
-                        slot.Shape.TransparentMaskWords));
+            }
+        }
+
+        private void RecordMasks(
+            scoped NativeLeaseView<ulong> masks)
+        {
+            Span<ulong> allMasks = masks.AsSpan();
+            for (int batchIndex = 0;
+                batchIndex < BatchCount;
+                batchIndex++)
+            {
+                BatchSlot slot = _slots[batchIndex];
+                _slots[batchIndex] = slot with
+                {
+                    MaskEvidenceHash =
+                        PressureWorkContract.HashTransparentMasks(
+                            slot.ChunkId,
+                            allMasks.Slice(
+                                slot.MaskOffset,
+                                slot.Shape.TransparentMaskWords))
+                };
             }
         }
 
@@ -1266,6 +1313,7 @@ internal sealed class NativePressureSession :
                         output,
                         PressureWorkContract.CombineChunkEvidence(
                             slot.SectionEvidenceHash,
+                            slot.MaskEvidenceHash,
                             output.CompleteHash),
                         exactVerificationPassed: true);
                 _slots[batchIndex] = slot with
@@ -1432,7 +1480,6 @@ internal sealed class NativePressureSession :
                 + PressureWorkContract.PayloadPatternTableBytes
                 + (long)CellCapacity * VoxelMath.VoxelCellBytes
                 + (long)FaceCapacity * VoxelMath.FaceRecordBytes
-                + (long)MaskCapacity * sizeof(ulong)
                 + Math.Max(
                     SectionAdmissionCapacityBytes,
                     RequiredOutputTailCapacity)));
@@ -1509,9 +1556,7 @@ internal sealed class NativePressureSession :
                         + Math.Max(1, shape.RecordCount));
                     int candidateMasks = checked(
                         batchMasks
-                        + Math.Max(
-                            1,
-                            shape.TransparentMaskWords));
+                        + shape.TransparentMaskWords);
                     int candidateDescriptors = checked(
                         batchDescriptors
                         + shape.SectionDescriptorCount);
@@ -1547,7 +1592,8 @@ internal sealed class NativePressureSession :
                         batchDescriptors,
                         batchValues,
                         batchWords,
-                        batchStates));
+                        batchStates,
+                        batchMasks));
                 retainedSectionBytes = Math.Max(
                     retainedSectionBytes,
                     requiredSectionBytes);
@@ -1590,13 +1636,15 @@ internal sealed class NativePressureSession :
             int descriptors,
             int values,
             int words,
-            int states) =>
+            int states,
+            int masks) =>
             checked(
                 (long)descriptors
                     * VoxelMath.SectionPrerenderDescriptorBytes
                 + (long)values * sizeof(ushort)
                 + (long)words * sizeof(uint)
-                + (long)states * sizeof(ulong));
+                + (long)states * sizeof(ulong)
+                + (long)masks * sizeof(ulong));
 
         internal void Reset(int seed, int retentionDepth)
         {
@@ -1708,6 +1756,7 @@ internal sealed class NativePressureSession :
         int SectionStateWordOffset,
         long CumulativeDemand,
         string SectionEvidenceHash = "",
+        string MaskEvidenceHash = "",
         PressureOutputEvidence Output = default,
         PressureChunkEvidence Evidence = default);
 }

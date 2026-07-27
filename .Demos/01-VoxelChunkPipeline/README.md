@@ -97,10 +97,16 @@ mapped GPU buffer as its external backing. The runtime plan selects the largest
 batch that fits the native retained-memory limit. The public requested horizon
 remains twenty.
 
-The arena retains source cells, face records, and transparent masks. Section
-ranges and final output ranges use separate scoped phases in the same bounded
-backing. Warmup establishes the complete physical capacity. Later batches
-recycle the same native ranges without geometric growth.
+The arena retains source cells and face records. Section ranges, including
+transparent masks, share one scoped phase in the same bounded backing. Final
+output ranges use a second scoped phase.
+
+Section state and per-material masks use one Y-fast traversal. Mask slots
+follow stable runtime block-registry order. Safe C# uses the same fused
+computation because direct comparison shows that it is faster for both paths.
+
+Warmup establishes the complete physical capacity. Later batches recycle the
+same native ranges without geometric growth.
 
 The final phase creates `Vertex`, `int`, and `PayloadSlice` ranges in one
 grouped operation. A persistent native payload table supplies the payload

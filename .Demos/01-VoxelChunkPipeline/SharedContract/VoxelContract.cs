@@ -1292,10 +1292,15 @@ public static class VoxelMath
                         : SectionRepresentationKind.MultiPacked;
         int largest = 0;
         int totalTransparent = 0;
+        ulong transparentTypeMask = 0;
         for (int index = 0; index < transparentCounts.Length; index++)
         {
             largest = Math.Max(largest, transparentCounts[index]);
             totalTransparent += transparentCounts[index];
+            if (transparentCounts[index] != 0)
+            {
+                transparentTypeMask |= 1UL << index;
+            }
         }
 
         int emptyCount = counts[0];
@@ -1318,7 +1323,8 @@ public static class VoxelMath
             emptyCount,
             bitsPerIndex,
             dominant,
-            transparentIds > 1 && !dominant);
+            transparentIds > 1 && !dominant,
+            transparentTypeMask);
     }
 
     public static int BuildTransparentMasks(
@@ -1355,7 +1361,10 @@ public static class VoxelMath
                         maskIndex = maskSlots[typeIndex] = transparentIds++;
                     }
 
-                    int local = ((z - startZ) * 16 + (y - startY)) * 16 + x - startX;
+                    int local = ((z - startZ) * SectionDimension
+                            + x - startX)
+                        * SectionDimension
+                        + y - startY;
                     destination[maskIndex * TransparentMaskWordsPerId + (local >> 6)] |= 1UL << (local & 63);
                 }
             }
@@ -1393,8 +1402,83 @@ public static class VoxelMath
                         maskIndex = maskSlots[typeIndex] = transparentIds++;
                     }
 
-                    int local = ((z - startZ) * 16 + (y - startY)) * 16 + x - startX;
+                    int local = ((z - startZ) * SectionDimension
+                            + x - startX)
+                        * SectionDimension
+                        + y - startY;
                     destination[maskIndex * TransparentMaskWordsPerId + (local >> 6)] |= 1UL << (local & 63);
+                }
+            }
+        }
+
+        return transparentIds;
+    }
+
+    public static int BuildTransparentMasks(
+        ReadOnlySpan<VoxelCell> cells,
+        int sectionIndex,
+        ulong transparentTypeMask,
+        Span<ulong> destination)
+    {
+        int transparentIds =
+            BitOperations.PopCount(transparentTypeMask);
+        if (destination.Length
+            != transparentIds * TransparentMaskWordsPerId)
+        {
+            throw new ArgumentException(
+                "The transparent-mask range does not match its material types.",
+                nameof(destination));
+        }
+
+        Span<int> maskSlots = stackalloc int[BlockTypes.Length];
+        maskSlots.Fill(-1);
+        int nextMaskSlot = 0;
+        for (int typeIndex = 0;
+            typeIndex < BlockTypes.Length;
+            typeIndex++)
+        {
+            if ((transparentTypeMask & (1UL << typeIndex)) != 0)
+            {
+                maskSlots[typeIndex] = nextMaskSlot++;
+            }
+        }
+
+        int startX =
+            (sectionIndex % SectionsPerAxis) * SectionDimension;
+        int startY =
+            ((sectionIndex / SectionsPerAxis) % SectionsPerAxis)
+                * SectionDimension;
+        int startZ =
+            (sectionIndex / (SectionsPerAxis * SectionsPerAxis))
+                * SectionDimension;
+        for (int z = startZ; z < startZ + SectionDimension; z++)
+        {
+            for (int y = startY; y < startY + SectionDimension; y++)
+            {
+                int row =
+                    (z * ChunkDimension + y) * ChunkDimension;
+                for (int x = startX;
+                    x < startX + SectionDimension;
+                    x++)
+                {
+                    int cell = row + x;
+                    int blockId = cells[cell].BlockId;
+                    if (!TransparentById[blockId])
+                    {
+                        continue;
+                    }
+
+                    int typeIndex = TypeIndexById[blockId];
+                    int maskIndex = maskSlots[typeIndex];
+                    int local =
+                        ((z - startZ) * SectionDimension
+                            + x - startX)
+                        * SectionDimension
+                        + y - startY;
+                    destination[
+                        maskIndex * TransparentMaskWordsPerId
+                        + (local >> 6)] |=
+                        1UL << (local & 63);
                 }
             }
         }

@@ -320,6 +320,7 @@ internal sealed class SafePressureSession :
                     sectionStates = RentBuffer(
                         _sectionStates,
                         totalSectionStateWords);
+                    masks = _masks.Rent(Math.Max(1, totalMaskWords));
                     _transientBudget.CompletePhase();
                     for (int batchIndex = 0;
                         batchIndex < batchCount;
@@ -356,11 +357,13 @@ internal sealed class SafePressureSession :
                             Slice(
                                 sectionStates,
                                 slot.SectionStateWordOffset,
-                                slot.Shape.SectionStateWordCount));
+                                slot.Shape.SectionStateWordCount),
+                            masks.AsSpan(
+                                slot.MaskOffset,
+                                slot.Shape.TransparentMaskWords));
                     }
 
                     faces = _faces.Rent(Math.Max(1, totalRecords));
-                    masks = _masks.Rent(Math.Max(1, totalMaskWords));
                     for (int batchIndex = 0; batchIndex < batchCount; batchIndex++)
                     {
                         BatchSlot slot = _slots[batchIndex];
@@ -376,14 +379,6 @@ internal sealed class SafePressureSession :
                             faces.AsSpan(
                                 slot.RecordOffset,
                                 Math.Max(1, slot.Shape.RecordCount)));
-                        PressureWorkContract.BuildTransparentMasks(
-                            chunkCells,
-                            _sections.AsSpan(
-                                checked(batchIndex * VoxelMath.SectionsPerChunk),
-                                VoxelMath.SectionsPerChunk),
-                            masks.AsSpan(
-                                slot.MaskOffset,
-                                slot.Shape.TransparentMaskWords));
                     }
 
                     peakLiveLogicalBytes = Math.Max(
@@ -418,7 +413,15 @@ internal sealed class SafePressureSession :
                             _slots[batchIndex] = slot with
                             {
                                 SectionEvidenceHash =
-                                    retainedSectionEvidence
+                                    retainedSectionEvidence,
+                                MaskEvidenceHash =
+                                    PressureWorkContract
+                                        .HashTransparentMasks(
+                                            slot.ChunkId,
+                                            masks.AsSpan(
+                                                slot.MaskOffset,
+                                                slot.Shape
+                                                    .TransparentMaskWords))
                             };
                         }
                     }
@@ -1131,6 +1134,7 @@ internal sealed class SafePressureSession :
             slot.Shape.SectionStateWordCount,
             PressureWorkContract.CombineChunkEvidence(
                 slot.SectionEvidenceHash,
+                slot.MaskEvidenceHash,
                 output.CompleteHash),
             ExactVerificationPassed: true);
 
@@ -1179,6 +1183,7 @@ internal sealed class SafePressureSession :
         int SectionStateWordOffset,
         long CumulativeDemand,
         string SectionEvidenceHash = "",
+        string MaskEvidenceHash = "",
         PressureOutputEvidence Output = default,
         PressureChunkEvidence Evidence = default);
 

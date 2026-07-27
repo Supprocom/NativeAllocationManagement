@@ -933,6 +933,271 @@ public sealed class VoxelSharedContractTests
     }
 
     [Fact]
+    public void TransparentMasksUseTheSectionRepresentationCoordinateOrder()
+    {
+        const int x = 1;
+        const int y = 2;
+        const int z = 3;
+        const ushort transparentBlockId = 257;
+        int cellIndex =
+            (z * VoxelMath.ChunkDimension + y)
+                * VoxelMath.ChunkDimension
+            + x;
+        int localIndex =
+            (z * VoxelMath.SectionDimension + x)
+                * VoxelMath.SectionDimension
+            + y;
+        VoxelCell[] cells = new VoxelCell[VoxelMath.CellsPerChunk];
+        ushort[] materials = new ushort[VoxelMath.CellsPerChunk];
+        short[] densities = new short[VoxelMath.CellsPerChunk];
+        cells[cellIndex].BlockId = transparentBlockId;
+        materials[cellIndex] = transparentBlockId;
+        ulong[] fromCells =
+            new ulong[VoxelMath.TransparentMaskWordsPerId];
+        ulong[] fromArrays =
+            new ulong[VoxelMath.TransparentMaskWordsPerId];
+
+        Assert.Equal(
+            1,
+            VoxelMath.BuildTransparentMasks(
+                cells,
+                sectionIndex: 0,
+                fromCells));
+        Assert.Equal(
+            1,
+            VoxelMath.BuildTransparentMasks(
+                materials,
+                densities,
+                sectionIndex: 0,
+                fromArrays));
+        Assert.Equal(fromCells, fromArrays);
+        Assert.Equal(
+            1UL << (localIndex & 63),
+            fromCells[localIndex >> 6]);
+        Assert.Equal(1, fromCells.Count(static value => value != 0));
+    }
+
+    [Fact]
+    public void TransparentMaskSlotsFollowStableMaterialOrder()
+    {
+        (int Index, ushort Id)[] transparentTypes =
+            VoxelMath.BlockTypes
+                .Select(
+                    static (type, index) =>
+                        (Index: index, Id: checked((ushort)type.Id)))
+                .Where(
+                    static type =>
+                        VoxelMath.TransparentById[type.Id])
+                .Take(2)
+                .ToArray();
+        Assert.Equal(2, transparentTypes.Length);
+        (int lowerIndex, ushort lowerId) = transparentTypes[0];
+        (int higherIndex, ushort higherId) =
+            transparentTypes[1];
+        VoxelCell[] cells = new VoxelCell[VoxelMath.CellsPerChunk];
+        cells[0].BlockId = higherId;
+        cells[1].BlockId = lowerId;
+        ulong transparentTypeMask =
+            (1UL << lowerIndex) | (1UL << higherIndex);
+        ulong[] masks = new ulong[
+            2 * VoxelMath.TransparentMaskWordsPerId];
+
+        Assert.Equal(
+            2,
+            VoxelMath.BuildTransparentMasks(
+                cells,
+                sectionIndex: 0,
+                transparentTypeMask,
+                masks));
+
+        Assert.Equal(1UL << VoxelMath.SectionDimension, masks[0]);
+        Assert.Equal(
+            1UL,
+            masks[VoxelMath.TransparentMaskWordsPerId]);
+        Assert.Equal(2, masks.Count(static value => value != 0));
+    }
+
+    [Fact]
+    public void SeparateAndFusedSectionBuildersProduceIdenticalData()
+    {
+        VoxelCell[] cells = new VoxelCell[VoxelMath.CellsPerChunk];
+        SectionSummary[] summaries =
+            new SectionSummary[VoxelMath.SectionsPerChunk];
+        PressureWorkContract.GenerateCells(17, 0, cells);
+        PressureChunkShape shape =
+            PressureWorkContract.DeriveChunkShape(cells, summaries);
+
+        SectionPrerenderDescriptor[] separateDescriptors =
+            new SectionPrerenderDescriptor[
+                shape.SectionDescriptorCount];
+        ushort[] separateValues =
+            new ushort[shape.SectionValueCount];
+        uint[] separateWords =
+            new uint[shape.SectionWordCount];
+        ulong[] separateStates =
+            new ulong[shape.SectionStateWordCount];
+        ulong[] separateMasks =
+            new ulong[shape.TransparentMaskWords];
+        PressureWorkContract.BuildSectionRepresentations(
+            cells,
+            summaries,
+            separateDescriptors,
+            separateValues,
+            separateWords,
+            separateStates);
+        PressureWorkContract.BuildTransparentMasks(
+            cells,
+            summaries,
+            separateMasks);
+
+        SectionPrerenderDescriptor[] fusedDescriptors =
+            new SectionPrerenderDescriptor[
+                shape.SectionDescriptorCount];
+        ushort[] fusedValues =
+            new ushort[shape.SectionValueCount];
+        uint[] fusedWords =
+            new uint[shape.SectionWordCount];
+        ulong[] fusedStates =
+            new ulong[shape.SectionStateWordCount];
+        ulong[] fusedMasks =
+            new ulong[shape.TransparentMaskWords];
+        PressureWorkContract.BuildSectionRepresentations(
+            cells,
+            summaries,
+            fusedDescriptors,
+            fusedValues,
+            fusedWords,
+            fusedStates,
+            fusedMasks);
+
+        Assert.Equal(separateDescriptors, fusedDescriptors);
+        Assert.Equal(separateValues, fusedValues);
+        Assert.Equal(separateWords, fusedWords);
+        Assert.Equal(separateStates, fusedStates);
+        Assert.Equal(separateMasks, fusedMasks);
+        Assert.All(
+            summaries,
+            static summary =>
+                Assert.Equal(
+                    summary.TransparentIds,
+                    VoxelMath.BlockTypes
+                        .Select(
+                            static (_, index) => index)
+                        .Count(
+                            index =>
+                                (summary.TransparentTypeMask
+                                    & (1UL << index)) != 0)));
+    }
+
+    [Fact]
+    public void SectionBuilderCoversEveryVisibleCellAndMaskBit()
+    {
+        const int seed = 17;
+        const int chunkId = 0;
+        VoxelCell[] cells = new VoxelCell[VoxelMath.CellsPerChunk];
+        SectionSummary[] summaries =
+            new SectionSummary[VoxelMath.SectionsPerChunk];
+        PressureWorkContract.GenerateCells(seed, chunkId, cells);
+        PressureChunkShape shape =
+            PressureWorkContract.DeriveChunkShape(cells, summaries);
+        SectionPrerenderDescriptor[] descriptors =
+            new SectionPrerenderDescriptor[shape.SectionDescriptorCount];
+        ushort[] values = new ushort[shape.SectionValueCount];
+        uint[] words = new uint[shape.SectionWordCount];
+        ulong[] states = new ulong[shape.SectionStateWordCount];
+        FaceRecord[] records =
+            new FaceRecord[Math.Max(1, shape.RecordCount)];
+        ulong[] masks = new ulong[shape.TransparentMaskWords];
+        PressureWorkContract.BuildSectionRepresentations(
+            cells,
+            summaries,
+            descriptors,
+            values,
+            words,
+            states,
+            masks);
+
+        PressureWorkContract.PopulateFaceRecords(
+            cells,
+            descriptors,
+            shape,
+            records);
+
+        HashSet<int> recordCells = [];
+        for (int index = 0; index < shape.RecordCount; index++)
+        {
+            FaceRecord record = records[index];
+            Assert.True(recordCells.Add(record.CellIndex));
+            Assert.Equal(cells[record.CellIndex].BlockId, record.BlockId);
+            Assert.Equal(cells[record.CellIndex].FaceMask, record.Mask);
+            Assert.Equal(
+                index >= shape.OpaqueRecordCount,
+                VoxelMath.TransparentById[record.BlockId]);
+        }
+
+        Assert.Equal(
+            cells.Count(static cell => cell.FaceMask != 0),
+            recordCells.Count);
+        int maskOffset = 0;
+        Span<ulong> union =
+            stackalloc ulong[
+                PressureWorkContract.OccupancyWordsPerSection];
+        for (int sectionIndex = 0;
+            sectionIndex < descriptors.Length;
+            sectionIndex++)
+        {
+            SectionSummary summary = summaries[sectionIndex];
+            SectionPrerenderDescriptor descriptor =
+                descriptors[sectionIndex];
+            union.Clear();
+            for (int maskIndex = 0;
+                maskIndex < summary.TransparentIds;
+                maskIndex++)
+            {
+                ReadOnlySpan<ulong> mask = masks.AsSpan(
+                    maskOffset
+                        + maskIndex
+                            * VoxelMath.TransparentMaskWordsPerId,
+                    VoxelMath.TransparentMaskWordsPerId);
+                Assert.Contains(mask.ToArray(), static value => value != 0);
+                for (int word = 0; word < mask.Length; word++)
+                {
+                    Assert.Equal(0UL, union[word] & mask[word]);
+                    union[word] |= mask[word];
+                }
+            }
+
+            if (summary.TransparentCount > 0)
+            {
+                Assert.Equal(
+                    states.AsSpan(
+                        descriptor.TransparentBitsOffset,
+                        PressureWorkContract
+                            .OccupancyWordsPerSection).ToArray(),
+                    union.ToArray());
+            }
+            else
+            {
+                Assert.DoesNotContain(
+                    union.ToArray(),
+                    static value => value != 0);
+            }
+
+            maskOffset += checked(
+                summary.TransparentIds
+                    * VoxelMath.TransparentMaskWordsPerId);
+        }
+
+        Assert.Equal(masks.Length, maskOffset);
+        string maskHash =
+            PressureWorkContract.HashTransparentMasks(chunkId, masks);
+        masks[0] ^= 1;
+        Assert.NotEqual(
+            maskHash,
+            PressureWorkContract.HashTransparentMasks(chunkId, masks));
+    }
+
+    [Fact]
     public void CanonicalPressureStreamContainsDistinctChunkAndSectionClasses()
     {
         VoxelCell[] cells = new VoxelCell[VoxelMath.CellsPerChunk];
@@ -1083,6 +1348,7 @@ public sealed class VoxelSharedContractTests
         ushort[] values = new ushort[shape.SectionValueCount];
         uint[] words = new uint[shape.SectionWordCount];
         ulong[] states = new ulong[shape.SectionStateWordCount];
+        ulong[] masks = new ulong[shape.TransparentMaskWords];
 
         string evidence =
             PressureWorkContract.BuildAndVerifySectionRepresentations(
@@ -1092,7 +1358,8 @@ public sealed class VoxelSharedContractTests
                 descriptors,
                 values,
                 words,
-                states);
+                states,
+                masks);
         Assert.Equal(64, evidence.Length);
         Assert.Equal(
             evidence,
@@ -1178,13 +1445,16 @@ public sealed class VoxelSharedContractTests
             new uint[shape.SectionWordCount];
         ulong[] expectedStates =
             new ulong[shape.SectionStateWordCount];
+        ulong[] expectedMasks =
+            new ulong[shape.TransparentMaskWords];
         PressureWorkContract.BuildSectionRepresentations(
             cells,
             summaries,
             expectedDescriptors,
             expectedValues,
             expectedWords,
-            expectedStates);
+            expectedStates,
+            expectedMasks);
 
         SectionPrerenderDescriptor[] actualDescriptors =
             new SectionPrerenderDescriptor[
@@ -1194,6 +1464,8 @@ public sealed class VoxelSharedContractTests
         uint[][] words =
             new uint[VoxelMath.SectionsPerChunk][];
         ulong[][] states =
+            new ulong[VoxelMath.SectionsPerChunk][];
+        ulong[][] masks =
             new ulong[VoxelMath.SectionsPerChunk][];
         int valueCursor = 0;
         int wordCursor = 0;
@@ -1210,6 +1482,9 @@ public sealed class VoxelSharedContractTests
             values[section] = new ushort[valueLength];
             words[section] = new uint[wordLength];
             states[section] = new ulong[stateLength];
+            masks[section] = new ulong[
+                summaries[section].TransparentIds
+                    * VoxelMath.TransparentMaskWordsPerId];
             actualDescriptors[section] =
                 PressureWorkContract.BuildSectionRepresentation(
                     cells,
@@ -1218,6 +1493,7 @@ public sealed class VoxelSharedContractTests
                     values[section],
                     words[section],
                     states[section],
+                    masks[section],
                     ref valueCursor,
                     ref wordCursor,
                     ref stateCursor);
@@ -1233,6 +1509,9 @@ public sealed class VoxelSharedContractTests
         Assert.Equal(
             expectedStates,
             states.SelectMany(static range => range));
+        Assert.Equal(
+            expectedMasks,
+            masks.SelectMany(static range => range));
 
         valueCursor = 0;
         wordCursor = 0;

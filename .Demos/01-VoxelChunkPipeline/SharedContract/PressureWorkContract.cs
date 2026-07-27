@@ -728,13 +728,78 @@ public static class PressureWorkContract
             states);
     }
 
+    public static string BuildAndVerifySectionRepresentations(
+        int chunkId,
+        ReadOnlySpan<VoxelCell> cells,
+        ReadOnlySpan<SectionSummary> summaries,
+        Span<SectionPrerenderDescriptor> descriptors,
+        Span<ushort> values,
+        Span<uint> words,
+        Span<ulong> states,
+        Span<ulong> transparentMasks)
+    {
+        BuildSectionRepresentations(
+            cells,
+            summaries,
+            descriptors,
+            values,
+            words,
+            states,
+            transparentMasks);
+        return VerifyAndHashSectionRepresentations(
+            chunkId,
+            cells,
+            summaries,
+            descriptors,
+            values,
+            words,
+            states);
+    }
+
     public static void BuildSectionRepresentations(
         ReadOnlySpan<VoxelCell> cells,
         ReadOnlySpan<SectionSummary> summaries,
         Span<SectionPrerenderDescriptor> descriptors,
         Span<ushort> values,
         Span<uint> words,
-        Span<ulong> states)
+        Span<ulong> states) =>
+        BuildSectionRepresentationsCore(
+            cells,
+            summaries,
+            descriptors,
+            values,
+            words,
+            states,
+            [],
+            buildTransparentMasks: false);
+
+    public static void BuildSectionRepresentations(
+        ReadOnlySpan<VoxelCell> cells,
+        ReadOnlySpan<SectionSummary> summaries,
+        Span<SectionPrerenderDescriptor> descriptors,
+        Span<ushort> values,
+        Span<uint> words,
+        Span<ulong> states,
+        Span<ulong> transparentMasks) =>
+        BuildSectionRepresentationsCore(
+            cells,
+            summaries,
+            descriptors,
+            values,
+            words,
+            states,
+            transparentMasks,
+            buildTransparentMasks: true);
+
+    private static void BuildSectionRepresentationsCore(
+        ReadOnlySpan<VoxelCell> cells,
+        ReadOnlySpan<SectionSummary> summaries,
+        Span<SectionPrerenderDescriptor> descriptors,
+        Span<ushort> values,
+        Span<uint> words,
+        Span<ulong> states,
+        Span<ulong> transparentMasks,
+        bool buildTransparentMasks)
     {
         ValidateSectionRepresentationRanges(
             cells,
@@ -746,6 +811,30 @@ public static class PressureWorkContract
         int valueCursor = 0;
         int wordCursor = 0;
         int stateCursor = 0;
+        int maskCursor = 0;
+        int expectedMaskWords = 0;
+        if (buildTransparentMasks)
+        {
+            for (int sectionIndex = 0;
+                sectionIndex < summaries.Length;
+                sectionIndex++)
+            {
+                expectedMaskWords = checked(
+                    expectedMaskWords
+                    + summaries[sectionIndex].TransparentIds
+                        * VoxelMath.TransparentMaskWordsPerId);
+            }
+
+            if (transparentMasks.Length != expectedMaskWords)
+            {
+                throw new ArgumentException(
+                    "The transparent-mask range does not match the classified sections.",
+                    nameof(transparentMasks));
+            }
+
+            transparentMasks.Clear();
+        }
+
         states.Clear();
         for (int sectionIndex = 0;
             sectionIndex < VoxelMath.SectionsPerChunk;
@@ -755,6 +844,11 @@ public static class PressureWorkContract
             int valueLength = SectionValueCount(summary);
             int wordLength = SectionWordCount(summary);
             int stateLength = SectionStateWordCount(summary);
+            int maskLength = buildTransparentMasks
+                ? checked(
+                    summary.TransparentIds
+                        * VoxelMath.TransparentMaskWordsPerId)
+                : 0;
             int stateStart = stateCursor;
             SpanSectionInitializationBuffer<ushort> valueBuffer = new(
                 values.Slice(valueCursor, valueLength));
@@ -770,16 +864,21 @@ public static class PressureWorkContract
                 ref valueBuffer,
                 ref wordBuffer,
                 states.Slice(stateStart, stateLength),
+                transparentMasks.Slice(maskCursor, maskLength),
                 clearStates: false,
+                clearTransparentMasks: false,
                 ref valueCursor,
                 ref wordCursor,
                 ref stateCursor);
             descriptors[sectionIndex] = descriptor;
+            maskCursor = checked(maskCursor + maskLength);
         }
 
         if (valueCursor != values.Length
             || wordCursor != words.Length
-            || stateCursor != states.Length)
+            || stateCursor != states.Length
+            || (buildTransparentMasks
+                && maskCursor != transparentMasks.Length))
         {
             throw new InvalidDataException(
                 "Section prerender layout did not fill its exact typed ranges.");
@@ -808,7 +907,40 @@ public static class PressureWorkContract
             ref valueBuffer,
             ref wordBuffer,
             states,
+            [],
             clearStates: true,
+            clearTransparentMasks: false,
+            ref valueCursor,
+            ref wordCursor,
+            ref stateCursor);
+    }
+
+    public static SectionPrerenderDescriptor BuildSectionRepresentation(
+        ReadOnlySpan<VoxelCell> cells,
+        int sectionIndex,
+        SectionSummary summary,
+        Span<ushort> values,
+        Span<uint> words,
+        Span<ulong> states,
+        Span<ulong> transparentMasks,
+        ref int valueCursor,
+        ref int wordCursor,
+        ref int stateCursor)
+    {
+        SpanSectionInitializationBuffer<ushort> valueBuffer = new(values);
+        SpanSectionInitializationBuffer<uint> wordBuffer = new(words);
+        return BuildSectionRepresentation<
+            SpanSectionInitializationBuffer<ushort>,
+            SpanSectionInitializationBuffer<uint>>(
+            cells,
+            sectionIndex,
+            summary,
+            ref valueBuffer,
+            ref wordBuffer,
+            states,
+            transparentMasks,
+            clearStates: true,
+            clearTransparentMasks: true,
             ref valueCursor,
             ref wordCursor,
             ref stateCursor);
@@ -823,7 +955,9 @@ public static class PressureWorkContract
         ref TValueBuffer values,
         ref TWordBuffer words,
         Span<ulong> states,
+        Span<ulong> transparentMasks,
         bool clearStates,
+        bool clearTransparentMasks,
         ref int valueCursor,
         ref int wordCursor,
         ref int stateCursor)
@@ -860,12 +994,28 @@ public static class PressureWorkContract
             relative,
             ref values,
             ref words);
-        PopulateSectionStateWords(
-            cells,
-            sectionIndex,
-            relative,
-            states,
-            clearStates);
+        if (transparentMasks.IsEmpty)
+        {
+            PopulateSectionStateWords(
+                cells,
+                sectionIndex,
+                relative,
+                states,
+                clearStates);
+        }
+        else
+        {
+            PopulateSectionStateWordsAndMasks(
+                cells,
+                sectionIndex,
+                summary,
+                relative,
+                states,
+                transparentMasks,
+                clearStates,
+                clearTransparentMasks);
+        }
+
         values.Complete();
         words.Complete();
         return descriptor with
@@ -1069,12 +1219,30 @@ public static class PressureWorkContract
 
     public static string CombineChunkEvidence(
         string sectionEvidenceHash,
+        string transparentMaskEvidenceHash,
         string outputEvidenceHash)
     {
         using CanonicalHashAccumulator hash = new();
-        hash.AddString("voxel-pressure-chunk-v2");
+        hash.AddString("voxel-pressure-chunk-v3");
         hash.AddString(sectionEvidenceHash);
+        hash.AddString(transparentMaskEvidenceHash);
         hash.AddString(outputEvidenceHash);
+        return hash.Complete();
+    }
+
+    public static string HashTransparentMasks(
+        int chunkId,
+        ReadOnlySpan<ulong> masks)
+    {
+        using CanonicalHashAccumulator hash = new();
+        hash.AddString("voxel-transparent-masks-v1");
+        hash.AddInt32(chunkId);
+        hash.AddInt32(masks.Length);
+        foreach (ulong value in masks)
+        {
+            hash.AddInt64(unchecked((long)value));
+        }
+
         return hash.Complete();
     }
 
@@ -1106,7 +1274,10 @@ public static class PressureWorkContract
                 continue;
             }
 
-            FaceRecord record = VoxelMath.CreateFaceRecord(cell, cells[cell].BlockId, mask);
+            FaceRecord record = VoxelMath.CreateFaceRecord(
+                cell,
+                cells[cell].BlockId,
+                mask);
             ref readonly SectionPrerenderDescriptor section =
                 ref sections[cells[cell].Section];
             if (section.Kind == SectionRepresentationKind.Empty)
@@ -1126,7 +1297,9 @@ public static class PressureWorkContract
             };
             if (VoxelMath.TransparentById[record.BlockId])
             {
-                records[shape.OpaqueRecordCount + transparent++] = record;
+                records[
+                    shape.OpaqueRecordCount
+                    + transparent++] = record;
             }
             else
             {
@@ -1134,9 +1307,11 @@ public static class PressureWorkContract
             }
         }
 
-        if (opaque != shape.OpaqueRecordCount || transparent != shape.TransparentRecordCount)
+        if (opaque != shape.OpaqueRecordCount
+            || transparent != shape.TransparentRecordCount)
         {
-            throw new InvalidDataException("Face record materialization disagrees with pressure classification.");
+            throw new InvalidDataException(
+                "Face record materialization disagrees with pressure classification.");
         }
     }
 
@@ -1147,17 +1322,23 @@ public static class PressureWorkContract
     {
         int offset = 0;
         masks.Clear();
-        for (int section = 0; section < sectionSummaries.Length; section++)
+        for (int section = 0;
+            section < sectionSummaries.Length;
+            section++)
         {
             int expectedWords = checked(
-                sectionSummaries[section].TransparentIds * VoxelMath.TransparentMaskWordsPerId);
+                sectionSummaries[section].TransparentIds
+                    * VoxelMath.TransparentMaskWordsPerId);
             int written = VoxelMath.BuildTransparentMasks(
                 cells,
                 section,
+                sectionSummaries[section].TransparentTypeMask,
                 masks.Slice(offset, expectedWords));
-            if (written != sectionSummaries[section].TransparentIds)
+            if (written
+                != sectionSummaries[section].TransparentIds)
             {
-                throw new InvalidDataException("Transparent mask emission disagrees with pressure classification.");
+                throw new InvalidDataException(
+                    "Transparent mask emission disagrees with pressure classification.");
             }
 
             offset += expectedWords;
@@ -1165,7 +1346,8 @@ public static class PressureWorkContract
 
         if (offset != masks.Length)
         {
-            throw new InvalidDataException("Transparent mask materialization did not cover its exact logical range.");
+            throw new InvalidDataException(
+                "Transparent mask materialization did not fill its logical range.");
         }
     }
 
@@ -2407,6 +2589,100 @@ public static class PressureWorkContract
                 sectionIndex,
                 localIndex);
             bool empty = blockId == VoxelMath.AirBlockId;
+            bool transparent =
+                !empty && VoxelMath.TransparentById[blockId];
+            int occupancyOffset = empty
+                ? descriptor.EmptyBitsOffset
+                : transparent
+                    ? descriptor.TransparentBitsOffset
+                    : descriptor.OpaqueBitsOffset;
+            SetWordBit(
+                states,
+                occupancyOffset - start,
+                localIndex);
+            if (!empty)
+            {
+                SetBoundaryBits(
+                    states,
+                    transparent
+                        ? descriptor.TransparentFaceBitsOffset - start
+                        : descriptor.OpaqueFaceBitsOffset - start,
+                    localIndex);
+            }
+        }
+    }
+
+    private static void PopulateSectionStateWordsAndMasks(
+        ReadOnlySpan<VoxelCell> cells,
+        int sectionIndex,
+        SectionSummary summary,
+        SectionPrerenderDescriptor descriptor,
+        Span<ulong> states,
+        Span<ulong> transparentMasks,
+        bool clearStates,
+        bool clearTransparentMasks)
+    {
+        int start = FirstStateOffset(descriptor);
+        int length = SectionStateLength(descriptor);
+        if (states.Length != length)
+        {
+            throw new ArgumentException(
+                "The state output range does not match the section layout.",
+                nameof(states));
+        }
+
+        if (transparentMasks.Length
+            % VoxelMath.TransparentMaskWordsPerId != 0)
+        {
+            throw new ArgumentException(
+                "The transparent-mask output range is not complete.",
+                nameof(transparentMasks));
+        }
+
+        if (BitOperations.PopCount(summary.TransparentTypeMask)
+                * VoxelMath.TransparentMaskWordsPerId
+            != transparentMasks.Length)
+        {
+            throw new ArgumentException(
+                "The transparent-mask range does not match its material types.",
+                nameof(transparentMasks));
+        }
+
+        Span<int> transparentMaskSlots =
+            stackalloc int[VoxelMath.BlockTypes.Length];
+        transparentMaskSlots.Fill(-1);
+        int nextMaskSlot = 0;
+        for (int typeIndex = 0;
+            typeIndex < VoxelMath.BlockTypes.Length;
+            typeIndex++)
+        {
+            if ((summary.TransparentTypeMask
+                    & (1UL << typeIndex)) != 0)
+            {
+                transparentMaskSlots[typeIndex] =
+                    nextMaskSlot++;
+            }
+        }
+
+        if (clearStates)
+        {
+            states.Clear();
+        }
+
+        if (clearTransparentMasks)
+        {
+            transparentMasks.Clear();
+        }
+
+        for (int localIndex = 0;
+            localIndex < VoxelMath.CellsPerSection;
+            localIndex++)
+        {
+            ushort blockId = GetSectionBlockId(
+                cells,
+                sectionIndex,
+                localIndex);
+            bool empty = blockId == VoxelMath.AirBlockId;
             bool transparent = !empty && VoxelMath.TransparentById[blockId];
             int occupancyOffset = empty
                 ? descriptor.EmptyBitsOffset
@@ -2414,6 +2690,18 @@ public static class PressureWorkContract
                     ? descriptor.TransparentBitsOffset
                     : descriptor.OpaqueBitsOffset;
             SetWordBit(states, occupancyOffset - start, localIndex);
+            if (transparent)
+            {
+                int typeIndex = VoxelMath.TypeIndexById[blockId];
+                int maskIndex =
+                    transparentMaskSlots[typeIndex];
+                transparentMasks[
+                    maskIndex
+                        * VoxelMath.TransparentMaskWordsPerId
+                    + (localIndex >> 6)] |=
+                    1UL << (localIndex & 63);
+            }
+
             if (!empty)
             {
                 SetBoundaryBits(

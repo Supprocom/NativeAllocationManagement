@@ -207,4 +207,5 @@ public readonly record struct SectionSummary(
     int EmptyCount,
     int BitsPerIndex,
     bool HasDominantTransparentId,
-    bool HasResidualTransparentIds);
+    bool HasResidualTransparentIds,
+    ulong TransparentTypeMask);
