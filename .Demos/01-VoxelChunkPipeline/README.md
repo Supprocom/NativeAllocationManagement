@@ -32,9 +32,10 @@ not a simultaneous 2.5 GiB resident set and not synthetic garbage.
 
 The canonical evidence is ordered by chunk. Typed vertices and indices are
 checked against independently derived values. Retained descriptors and upload
-bytes are checked again at the GPU consumer boundary, including every encoded
-field and zero-filled byte. A SHA-256 stream includes every materialized typed
-value, descriptor, byte, length, partition boundary, and chunk boundary. Safe
+bytes are checked again at the GPU consumer boundary. This check includes
+every encoded field and zero-filled byte. A SHA-256 stream includes every
+logical typed value, descriptor, byte, length, partition boundary, and chunk
+boundary. The hash reconstructs aliased ranges in their canonical order. Safe
 C# and NAM must produce identical per-chunk evidence and the same final
 evidence stream.
 
@@ -79,18 +80,26 @@ the expected path.
 
 The NAM process keeps one persistent execution worker and its owners alive
 across warmup and every profile. Predictable types use exact typed size
-classes. The heterogeneous arena groups payload descriptors and upload bytes
-that share one generation boundary. The resident admission depth is the same
-fifteen chunks used by the managed path, while the public requested horizon
-remains twenty.
+classes. The heterogeneous arena groups output types that share one generation
+boundary. The resident admission depth is the same fifteen chunks used by the
+managed path. The public requested horizon remains twenty.
 
 The predeclared capacities are verified across 1024 canonical chunks. A batch
 contains at most fourteen thousand face records, thirty-six thousand visible
-faces, 1024 transparent-mask words, seven million upload bytes, and 7.5
-million retained descriptor-plus-upload bytes per chunk. The typed cell, face,
-mask, vertex, and index owners and the heterogeneous arena are sized from those
-bounds. Warmup establishes their backing, and later fixed-shape batches reuse
-the same physical segments without geometric regrowth.
+faces, 1024 transparent-mask words, and seven million logical upload bytes.
+The typed owners and heterogeneous arena use the verified physical bounds.
+Warmup establishes their backing. Later fixed-shape batches reuse the same
+physical segments without geometric regrowth.
+
+The workload uses a small set of immutable payload patterns. NAM copies this
+table into persistent native storage during warmup. Each face record identifies
+one stable pattern range. This design removes a repeated copy for each visible
+face. Vertices, indices, and payload descriptors remain unique scoped outputs.
+
+The pattern table and scoped outputs use the same stable native arena. A real
+native consumer can use these ranges without a managed staging copy. Exact
+verification reconstructs every logical upload byte from the aliased ranges.
+It then compares the result with the canonical Safe C# hash.
 
 `NativeLeaseOperations.Access` enters related same-owner views with one
 failure-atomic composite operation. Scoped arena recycling uses recorded

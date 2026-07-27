@@ -505,24 +505,21 @@ public sealed class VoxelSharedContractTests
             new int[VoxelMath.IndicesPerFace];
         PayloadSlice[] scatterSlices =
             new PayloadSlice[1];
-        byte[] scatterPayloads =
-            new byte[type.PayloadBytes];
-        PressureWorkContract.PackScatterStream(
-            seed,
+        byte[] scatterPatterns =
+            PressureWorkContract.PayloadPatternTable.ToArray();
+        PressureWorkContract.PackAliasedScatterStream(
             records,
             scatterVertices,
             scatterIndices,
-            scatterSlices,
-            scatterPayloads);
+            scatterSlices);
         PressureOutputEvidence scatterEvidence =
             PressureWorkContract.VerifyAndHashScatterOutput(
                 seed,
+                scatterPatterns,
                 records,
                 scatterVertices,
                 scatterIndices,
                 scatterSlices,
-                scatterPayloads,
-                [],
                 [],
                 [],
                 [],
@@ -530,44 +527,53 @@ public sealed class VoxelSharedContractTests
         Assert.Equal(evidence, scatterEvidence);
         PressureWorkContract.VerifyRetainedScatterOutput(
             scatterEvidence,
+            seed,
+            scatterPatterns,
             records,
             scatterVertices,
             scatterIndices,
             scatterSlices,
-            scatterPayloads,
-            [],
             [],
             [],
             [],
             []);
         PressureWorkContract.ConsumeScatterGpuUpload(
             scatterEvidence,
+            seed,
+            scatterPatterns,
             records,
             scatterVertices,
             scatterIndices,
             scatterSlices,
-            scatterPayloads,
-            [],
             [],
             [],
             [],
             []);
 
-        scatterPayloads[0] ^= 1;
+        int payloadSeed = unchecked(
+            seed
+            + records[0].CellIndex * 11
+            + records[0].BlockId * 37
+            + records[0].StageMask * 13);
+        int payloadPatternOffset =
+            PressureWorkContract.PayloadPatternOffset(
+                payloadSeed,
+                records[0].StageMask);
+        scatterPatterns[payloadPatternOffset] ^= 1;
         Assert.Throws<InvalidDataException>(
             () => PressureWorkContract.VerifyRetainedScatterOutput(
                 scatterEvidence,
+                seed,
+                scatterPatterns,
                 records,
                 scatterVertices,
                 scatterIndices,
                 scatterSlices,
-                scatterPayloads,
-                [],
                 [],
                 [],
                 [],
                 []));
-        scatterPayloads[0] ^= 1;
+        scatterPatterns[payloadPatternOffset] ^= 1;
         scatterVertices[0] = scatterVertices[0] with
         {
             X = scatterVertices[0].X + 1
@@ -575,12 +581,12 @@ public sealed class VoxelSharedContractTests
         Assert.Throws<InvalidDataException>(
             () => PressureWorkContract.VerifyRetainedScatterOutput(
                 scatterEvidence,
+                seed,
+                scatterPatterns,
                 records,
                 scatterVertices,
                 scatterIndices,
                 scatterSlices,
-                scatterPayloads,
-                [],
                 [],
                 [],
                 [],
@@ -593,12 +599,12 @@ public sealed class VoxelSharedContractTests
         Assert.Throws<InvalidDataException>(
             () => PressureWorkContract.VerifyRetainedScatterOutput(
                 scatterEvidence,
+                seed,
+                scatterPatterns,
                 records,
                 scatterVertices,
                 scatterIndices,
                 scatterSlices,
-                scatterPayloads,
-                [],
                 [],
                 [],
                 [],
@@ -611,12 +617,12 @@ public sealed class VoxelSharedContractTests
         Assert.Throws<InvalidDataException>(
             () => PressureWorkContract.VerifyRetainedScatterOutput(
                 scatterEvidence,
+                seed,
+                scatterPatterns,
                 records,
                 scatterVertices,
                 scatterIndices,
                 scatterSlices,
-                scatterPayloads,
-                [],
                 [],
                 [],
                 [],

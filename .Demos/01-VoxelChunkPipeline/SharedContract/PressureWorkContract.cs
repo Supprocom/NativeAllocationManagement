@@ -281,6 +281,21 @@ public static class PressureWorkContract
         1, 2, 2, 3,
         2, 3, 3, 4
     ];
+
+    public static int PayloadPatternTableBytes =>
+        PayloadPatterns.Length;
+
+    public static ReadOnlySpan<byte> PayloadPatternTable =>
+        PayloadPatterns;
+
+    public static int PayloadPatternOffset(
+        int seed,
+        int stageMask) =>
+        checked(
+            ((((stageMask & 0b1111) << 8)
+                + (seed & byte.MaxValue))
+            * MaximumPayloadBytes));
+
     public const int CanonicalResidentCellCapacity = 655_360;
     public const int CanonicalResidentFaceRecordCapacity = 429_588;
     public const int CanonicalResidentTransparentMaskWordCapacity = 30_720;
@@ -1265,18 +1280,15 @@ public static class PressureWorkContract
         return enabledStageBytes;
     }
 
-    public static int PackScatterStream(
-        int seed,
+    public static int PackAliasedScatterStream(
         ReadOnlySpan<FaceRecord> records,
         Span<Vertex> vertices,
         Span<int> indices,
-        Span<PayloadSlice> slices,
-        Span<byte> payloads)
+        Span<PayloadSlice> slices)
     {
         int vertexCount = 0;
         int indexCount = 0;
         int sliceCount = 0;
-        int payloadCount = 0;
         int enabledStageBytes = 0;
         Span<int> stageCursors = stackalloc int[5];
         for (int recordIndex = 0;
@@ -1287,11 +1299,6 @@ public static class PressureWorkContract
                 ref records[recordIndex];
             int stageClass = StageClassIndex(
                 record.StageBytes);
-            int payloadSeed = unchecked(
-                seed
-                + record.CellIndex * 11
-                + record.BlockId * 37
-                + record.StageMask * 13);
             uint remainingFaces =
                 unchecked((uint)record.Mask) & 0b11_1111u;
             while (remainingFaces != 0)
@@ -1305,15 +1312,9 @@ public static class PressureWorkContract
 
                 enabledStageBytes = checked(
                     enabledStageBytes
-                    + WritePayload(
-                        payloads.Slice(
-                            payloadCount,
-                            record.PayloadBytes),
+                    + CountEnabledPayloadBytes(
                         record.PayloadBytes,
-                        payloadSeed,
                         record.StageMask));
-                payloadCount = checked(
-                    payloadCount + record.PayloadBytes);
 
                 int vertexOffset = vertexCount;
                 WriteFaceVertices(
@@ -1343,11 +1344,10 @@ public static class PressureWorkContract
 
         if (vertexCount != vertices.Length
             || indexCount != indices.Length
-            || sliceCount != slices.Length
-            || payloadCount != payloads.Length)
+            || sliceCount != slices.Length)
         {
             throw new InvalidDataException(
-                "Scatter packing did not fill every output range.");
+                "Aliased scatter packing did not fill every output range.");
         }
 
         return enabledStageBytes;
@@ -1534,17 +1534,17 @@ public static class PressureWorkContract
 
     public static PressureOutputEvidence VerifyAndHashScatterOutput(
         int seed,
+        ReadOnlySpan<byte> payloadPatterns,
         ReadOnlySpan<FaceRecord> opaqueRecords,
         ReadOnlySpan<Vertex> opaqueVertices,
         ReadOnlySpan<int> opaqueIndices,
         ReadOnlySpan<PayloadSlice> opaqueSlices,
-        ReadOnlySpan<byte> opaquePayloads,
         ReadOnlySpan<FaceRecord> transparentRecords,
         ReadOnlySpan<Vertex> transparentVertices,
         ReadOnlySpan<int> transparentIndices,
-        ReadOnlySpan<PayloadSlice> transparentSlices,
-        ReadOnlySpan<byte> transparentPayloads)
+        ReadOnlySpan<PayloadSlice> transparentSlices)
     {
+        ValidatePayloadPatternTable(payloadPatterns);
         VerifyTypedStream(
             opaqueRecords,
             opaqueVertices,
@@ -1557,27 +1557,27 @@ public static class PressureWorkContract
             seed,
             opaqueRecords,
             opaqueSlices,
-            opaquePayloads);
+            payloadPatterns);
         VerifyScatterRetainedStream(
             seed,
             transparentRecords,
             transparentSlices,
-            transparentPayloads);
+            payloadPatterns);
         int opaqueUploadLength = SumStageLengths(
             opaqueSlices);
         int transparentUploadLength = SumStageLengths(
             transparentSlices);
         string complete = ComputeScatterOutputHash(
+            seed,
+            payloadPatterns,
             opaqueRecords,
             opaqueVertices,
             opaqueIndices,
             opaqueSlices,
-            opaquePayloads,
             transparentRecords,
             transparentVertices,
             transparentIndices,
-            transparentSlices,
-            transparentPayloads);
+            transparentSlices);
         return new PressureOutputEvidence(
             complete,
             opaqueVertices.Length,
@@ -1709,16 +1709,16 @@ public static class PressureWorkContract
 
     public static void ConsumeScatterGpuUpload(
         PressureOutputEvidence expected,
+        int seed,
+        ReadOnlySpan<byte> payloadPatterns,
         ReadOnlySpan<FaceRecord> opaqueRecords,
         ReadOnlySpan<Vertex> opaqueVertices,
         ReadOnlySpan<int> opaqueIndices,
         ReadOnlySpan<PayloadSlice> opaqueSlices,
-        ReadOnlySpan<byte> opaquePayloads,
         ReadOnlySpan<FaceRecord> transparentRecords,
         ReadOnlySpan<Vertex> transparentVertices,
         ReadOnlySpan<int> transparentIndices,
-        ReadOnlySpan<PayloadSlice> transparentSlices,
-        ReadOnlySpan<byte> transparentPayloads)
+        ReadOnlySpan<PayloadSlice> transparentSlices)
     {
         ValidateRetainedOutputLengths(
             expected,
@@ -1728,12 +1728,7 @@ public static class PressureWorkContract
             transparentVertices,
             transparentIndices,
             transparentSlices);
-        ValidateScatterPayloadLength(
-            opaqueRecords,
-            opaquePayloads);
-        ValidateScatterPayloadLength(
-            transparentRecords,
-            transparentPayloads);
+        ValidatePayloadPatternTable(payloadPatterns);
 
         long sink = 0;
         ConsumeDirectStageBuffer(
@@ -1742,8 +1737,10 @@ public static class PressureWorkContract
         ConsumeDirectStageBuffer(
             MemoryMarshal.AsBytes(opaqueIndices),
             ref sink);
-        ConsumeDirectStageBuffer(
-            opaquePayloads,
+        ConsumeAliasedPayloadPatterns(
+            seed,
+            opaqueRecords,
+            payloadPatterns,
             ref sink);
         ConsumeDirectStageBuffer(
             MemoryMarshal.AsBytes(transparentVertices),
@@ -1751,8 +1748,10 @@ public static class PressureWorkContract
         ConsumeDirectStageBuffer(
             MemoryMarshal.AsBytes(transparentIndices),
             ref sink);
-        ConsumeDirectStageBuffer(
-            transparentPayloads,
+        ConsumeAliasedPayloadPatterns(
+            seed,
+            transparentRecords,
+            payloadPatterns,
             ref sink);
         sink = unchecked(
             sink
@@ -1802,16 +1801,16 @@ public static class PressureWorkContract
 
     public static void VerifyRetainedScatterOutput(
         PressureOutputEvidence expected,
+        int seed,
+        ReadOnlySpan<byte> payloadPatterns,
         ReadOnlySpan<FaceRecord> opaqueRecords,
         ReadOnlySpan<Vertex> opaqueVertices,
         ReadOnlySpan<int> opaqueIndices,
         ReadOnlySpan<PayloadSlice> opaqueSlices,
-        ReadOnlySpan<byte> opaquePayloads,
         ReadOnlySpan<FaceRecord> transparentRecords,
         ReadOnlySpan<Vertex> transparentVertices,
         ReadOnlySpan<int> transparentIndices,
-        ReadOnlySpan<PayloadSlice> transparentSlices,
-        ReadOnlySpan<byte> transparentPayloads)
+        ReadOnlySpan<PayloadSlice> transparentSlices)
     {
         ValidateRetainedOutputLengths(
             expected,
@@ -1821,24 +1820,19 @@ public static class PressureWorkContract
             transparentVertices,
             transparentIndices,
             transparentSlices);
-        ValidateScatterPayloadLength(
-            opaqueRecords,
-            opaquePayloads);
-        ValidateScatterPayloadLength(
-            transparentRecords,
-            transparentPayloads);
+        ValidatePayloadPatternTable(payloadPatterns);
 
         string retainedHash = ComputeScatterOutputHash(
+            seed,
+            payloadPatterns,
             opaqueRecords,
             opaqueVertices,
             opaqueIndices,
             opaqueSlices,
-            opaquePayloads,
             transparentRecords,
             transparentVertices,
             transparentIndices,
-            transparentSlices,
-            transparentPayloads);
+            transparentSlices);
         if (!string.Equals(
             retainedHash,
             expected.CompleteHash,
@@ -1876,27 +1870,43 @@ public static class PressureWorkContract
         }
     }
 
-    private static void ValidateScatterPayloadLength(
-        ReadOnlySpan<FaceRecord> records,
-        ReadOnlySpan<byte> payloads)
+    private static void ValidatePayloadPatternTable(
+        ReadOnlySpan<byte> payloadPatterns)
     {
-        int expectedLength = 0;
+        if (payloadPatterns.Length
+            != PayloadPatternTableBytes)
+        {
+            throw new InvalidDataException(
+                "The aliased payload pattern table has an invalid length.");
+        }
+    }
+
+    private static void ConsumeAliasedPayloadPatterns(
+        int seed,
+        ReadOnlySpan<FaceRecord> records,
+        ReadOnlySpan<byte> payloadPatterns,
+        ref long sink)
+    {
         for (int recordIndex = 0;
             recordIndex < records.Length;
             recordIndex++)
         {
             ref readonly FaceRecord record =
                 ref records[recordIndex];
-            expectedLength = checked(
-                expectedLength
-                + VoxelMath.FaceCount(record.Mask)
-                    * record.PayloadBytes);
-        }
-
-        if (expectedLength != payloads.Length)
-        {
-            throw new InvalidDataException(
-                "The scatter payload length changed.");
+            int payloadSeed = unchecked(
+                seed
+                + record.CellIndex * 11
+                + record.BlockId * 37
+                + record.StageMask * 13);
+            ConsumeDirectStageBuffer(
+                GetPayloadPattern(
+                    payloadPatterns,
+                    record.PayloadBytes,
+                    payloadSeed,
+                    record.StageMask),
+                ref sink);
+            sink = unchecked(
+                sink + VoxelMath.FaceCount(record.Mask));
         }
     }
 
@@ -1994,16 +2004,16 @@ public static class PressureWorkContract
     }
 
     private static string ComputeScatterOutputHash(
+        int seed,
+        ReadOnlySpan<byte> payloadPatterns,
         ReadOnlySpan<FaceRecord> opaqueRecords,
         ReadOnlySpan<Vertex> opaqueVertices,
         ReadOnlySpan<int> opaqueIndices,
         ReadOnlySpan<PayloadSlice> opaqueSlices,
-        ReadOnlySpan<byte> opaquePayloads,
         ReadOnlySpan<FaceRecord> transparentRecords,
         ReadOnlySpan<Vertex> transparentVertices,
         ReadOnlySpan<int> transparentIndices,
-        ReadOnlySpan<PayloadSlice> transparentSlices,
-        ReadOnlySpan<byte> transparentPayloads)
+        ReadOnlySpan<PayloadSlice> transparentSlices)
     {
         using CanonicalHashAccumulator hash = new();
         hash.AddString("voxel-pressure-typed-output-v1");
@@ -2012,72 +2022,81 @@ public static class PressureWorkContract
         hash.AddPayloadSlices(opaqueSlices);
         AddScatterStageBuffers(
             hash,
+            seed,
+            payloadPatterns,
             opaqueRecords,
             opaqueVertices,
-            opaqueIndices,
-            opaquePayloads);
+            opaqueIndices);
         hash.AddVertices(transparentVertices);
         hash.AddInt32Values(transparentIndices);
         hash.AddPayloadSlices(transparentSlices);
         AddScatterStageBuffers(
             hash,
+            seed,
+            payloadPatterns,
             transparentRecords,
             transparentVertices,
-            transparentIndices,
-            transparentPayloads);
+            transparentIndices);
         return hash.Complete();
     }
 
     private static void AddScatterStageBuffers(
         CanonicalHashAccumulator hash,
+        int seed,
+        ReadOnlySpan<byte> payloadPatterns,
         ReadOnlySpan<FaceRecord> records,
         ReadOnlySpan<Vertex> vertices,
-        ReadOnlySpan<int> indices,
-        ReadOnlySpan<byte> payloads)
+        ReadOnlySpan<int> indices)
     {
         AddScatterStageBuffer(
             hash,
+            seed,
+            payloadPatterns,
             records,
             vertices,
             indices,
-            payloads,
             160);
         AddScatterStageBuffer(
             hash,
+            seed,
+            payloadPatterns,
             records,
             vertices,
             indices,
-            payloads,
             168);
         AddScatterStageBuffer(
             hash,
+            seed,
+            payloadPatterns,
             records,
             vertices,
             indices,
-            payloads,
             176);
         AddScatterStageBuffer(
             hash,
+            seed,
+            payloadPatterns,
             records,
             vertices,
             indices,
-            payloads,
             192);
         AddScatterStageBuffer(
             hash,
+            seed,
+            payloadPatterns,
             records,
             vertices,
             indices,
-            payloads,
             224);
     }
 
     private static void AddScatterStageBuffer(
         CanonicalHashAccumulator hash,
+        int seed,
+        ReadOnlySpan<byte> payloadPatterns,
         ReadOnlySpan<FaceRecord> records,
         ReadOnlySpan<Vertex> vertices,
         ReadOnlySpan<int> indices,
-        ReadOnlySpan<byte> payloads,
         int stageBytes)
     {
         long stageLength = 0;
@@ -2101,21 +2120,28 @@ public static class PressureWorkContract
             stackalloc byte[MaximumPressureStageBytesPerFace];
         zeroPadding.Clear();
         int faceOffset = 0;
-        int payloadOffset = 0;
         for (int recordIndex = 0;
             recordIndex < records.Length;
             recordIndex++)
         {
             ref readonly FaceRecord record =
                 ref records[recordIndex];
+            int payloadSeed = unchecked(
+                seed
+                + record.CellIndex * 11
+                + record.BlockId * 37
+                + record.StageMask * 13);
+            ReadOnlySpan<byte> payload =
+                GetPayloadPattern(
+                    payloadPatterns,
+                    record.PayloadBytes,
+                    payloadSeed,
+                    record.StageMask);
             uint remainingFaces =
                 unchecked((uint)record.Mask) & 0b11_1111u;
             while (remainingFaces != 0)
             {
                 remainingFaces &= remainingFaces - 1;
-                ReadOnlySpan<byte> payload = payloads.Slice(
-                    payloadOffset,
-                    record.PayloadBytes);
                 if (record.StageBytes == stageBytes)
                 {
                     hash.AppendByteSequencePart(payload);
@@ -2150,14 +2176,11 @@ public static class PressureWorkContract
                         zeroPadding[..paddingLength]);
                 }
 
-                payloadOffset = checked(
-                    payloadOffset + record.PayloadBytes);
                 faceOffset++;
             }
         }
 
-        if (payloadOffset != payloads.Length
-            || checked(
+        if (checked(
                 faceOffset * VoxelMath.VerticesPerFace)
                 != vertices.Length
             || checked(
@@ -3521,10 +3544,9 @@ public static class PressureWorkContract
         int seed,
         ReadOnlySpan<FaceRecord> records,
         ReadOnlySpan<PayloadSlice> slices,
-        ReadOnlySpan<byte> payloads)
+        ReadOnlySpan<byte> payloadPatterns)
     {
         int sliceCursor = 0;
-        int payloadCursor = 0;
         Span<int> stageCursors = stackalloc int[5];
         for (int recordIndex = 0;
             recordIndex < records.Length;
@@ -3537,6 +3559,12 @@ public static class PressureWorkContract
                 + record.CellIndex * 11
                 + record.BlockId * 37
                 + record.StageMask * 13);
+            ReadOnlySpan<byte> payload =
+                GetPayloadPattern(
+                    payloadPatterns,
+                    record.PayloadBytes,
+                    payloadSeed,
+                    record.StageMask);
             uint remainingFaces =
                 unchecked((uint)record.Mask) & 0b11_1111u;
             while (remainingFaces != 0)
@@ -3571,9 +3599,7 @@ public static class PressureWorkContract
                                 payloadSeed + slot * 17)
                             & 0xFF)
                         : (byte)0;
-                    if ((uint)payloadCursor
-                            >= (uint)payloads.Length
-                        || payloads[payloadCursor++] != expected)
+                    if (payload[slot] != expected)
                     {
                         throw new InvalidDataException(
                             "A scatter payload byte is not canonical.");
@@ -3586,8 +3612,7 @@ public static class PressureWorkContract
             }
         }
 
-        if (sliceCursor != slices.Length
-            || payloadCursor != payloads.Length)
+        if (sliceCursor != slices.Length)
         {
             throw new InvalidDataException(
                 "Scatter output has a missing or trailing value.");
@@ -3642,13 +3667,23 @@ public static class PressureWorkContract
         int seed,
         int stageMask)
     {
-        int enabledBits = stageMask & 0b1111;
-        int patternOffset = checked(
-            ((enabledBits << 8) + (seed & byte.MaxValue))
-            * MaximumPayloadBytes);
+        int patternOffset = PayloadPatternOffset(
+            seed,
+            stageMask);
         PayloadPatterns.AsSpan(
             patternOffset,
             length).CopyTo(destination);
+        return CountEnabledPayloadBytes(
+            length,
+            stageMask);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int CountEnabledPayloadBytes(
+        int length,
+        int stageMask)
+    {
+        int enabledBits = stageMask & 0b1111;
         int completeGroups = length >> 2;
         int remainderMask = enabledBits
             & ((1 << (length & 3)) - 1);
@@ -3656,6 +3691,16 @@ public static class PressureWorkContract
             completeGroups * EnabledByteCounts[enabledBits]
             + EnabledByteCounts[remainderMask]);
     }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static ReadOnlySpan<byte> GetPayloadPattern(
+        ReadOnlySpan<byte> payloadPatterns,
+        int length,
+        int seed,
+        int stageMask) =>
+        payloadPatterns.Slice(
+            PayloadPatternOffset(seed, stageMask),
+            length);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void WriteFaceVertices(
