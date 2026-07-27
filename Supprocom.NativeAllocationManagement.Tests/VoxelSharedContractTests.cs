@@ -184,6 +184,40 @@ public sealed class VoxelSharedContractTests
             "current.Value >= previous.Value",
             pressureHarness,
             StringComparison.Ordinal);
+        int profileRound = pressureHarness.IndexOf(
+            "for (int profileOrdinal = 0;",
+            StringComparison.Ordinal);
+        int safeStart = pressureHarness.IndexOf(
+            "await DockerWorker.StartAsync(",
+            profileRound,
+            StringComparison.Ordinal);
+        int sampleRound = pressureHarness.IndexOf(
+            "for (int sampleIndex = 0;",
+            profileRound,
+            StringComparison.Ordinal);
+        Assert.True(profileRound >= 0);
+        Assert.True(safeStart > profileRound);
+        Assert.True(sampleRound > safeStart);
+        Assert.Contains(
+            "crossProfileProcessState\"] = \"none\"",
+            pressureHarness,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "ProfileIsolationPassed(",
+            pressureHarness,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "profileIsolation",
+            pressureHarness,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "int warmupPercent = MaximumProfilePercent;",
+            pressureHarness,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "options.ProfilePercents.Reverse()",
+            pressureHarness,
+            StringComparison.Ordinal);
         Assert.DoesNotContain(
             "consumes every upload byte",
             pressureHarness,

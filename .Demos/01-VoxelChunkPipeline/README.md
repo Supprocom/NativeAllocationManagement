@@ -159,15 +159,24 @@ dotnet .Demos/01-VoxelChunkPipeline/Harness/bin/Release/net10.0/VoxelChunkPipeli
 
 ## Constrained execution
 
-The runtime harness starts one persistent Safe C# container and one persistent
-NAM container. They receive equal 256 MiB memory and swap limits, swappiness
-zero, equal PID limits, the same CPU set, server GC, four GC heaps, and the
-same 90 percent GC heap hard limit. No CFS CPU quota is applied. The harness
-runs the persistent workers sequentially and alternates the first worker.
+The runtime harness starts one Safe C# container and one NAM container for
+each profile. They receive equal 256 MiB memory and swap limits. They also
+receive swappiness zero, equal PID limits, the same CPU set, server GC, and
+four GC heaps. Both use the same 90 percent GC heap hard limit. No CFS CPU
+quota is applied. The harness runs each pair sequentially. It alternates the
+first implementation across samples.
 
 The predeclared profiles are 50, 100, 200, 300, 400, 500, 600, 700, 800, 900,
 and 1000 percent of the binary cgroup cap. Fifty and one hundred percent are
-control profiles. Every implementation and profile receives an explicit
+control profiles. Each profile starts a new Safe container and a new NAM
+container. Each pair receives the same fixed maximum-demand warmup before
+measurement. The harness destroys both containers before it starts the next
+profile. Thus, allocator, pool, CLR, JIT, thread, and cgroup state cannot pass
+from one profile to another. Container startup and warmup are outside the
+profile timer. The artifact records their elapsed time and container names.
+The final gate fails if a container name occurs in more than one profile.
+
+Every implementation and profile receives an explicit
 outcome such as `Completed`, `DeadlineExceeded`, `OutOfMemory`,
 `IncorrectOutput`, `Crash`, or `HarnessFailure`. A failed outcome remains in
 the raw artifact with its last completed chunk, logical bytes, pipeline stage,

@@ -8,6 +8,7 @@ namespace Supprocom.NativeAllocationManagement.Demos.VoxelChunkPipeline.Harness;
 
 internal static class PressureMatrixHarness
 {
+    private const int MaximumProfilePercent = 1000;
     private static readonly int[] ProfilePercents =
     [
         50,
@@ -42,29 +43,18 @@ internal static class PressureMatrixHarness
             TimeSpan.FromSeconds(20))).StandardOutput.Trim();
 
         List<string> commands = [];
-        await using DockerWorker safe = await DockerWorker.StartAsync(
-            options,
-            "SafeCSharp",
-            options.SafeCpuSet,
-            imageId,
-            commands);
-        await using DockerWorker nam = await DockerWorker.StartAsync(
-            options,
-            "NAM",
-            options.NamCpuSet,
-            imageId,
-            commands);
-
-        await Task.WhenAll(
-            safe.WarmAsync(options),
-            nam.WarmAsync(options));
-
-        List<PressureProfilePair> profiles = new(options.ProfilePercents.Count);
+        List<PressureProfilePair> profiles = new(
+            options.ProfilePercents.Count);
         double totalMeasuredMilliseconds = 0;
+        double totalInitializationMilliseconds = 0;
         int pairOrdinal = 0;
-        foreach (int percent in options.ProfilePercents)
+        for (int profileOrdinal = 0;
+            profileOrdinal < options.ProfilePercents.Count;
+            profileOrdinal++)
         {
-            long target = checked(options.CgroupCapBytes * percent / 100);
+            int percent = options.ProfilePercents[profileOrdinal];
+            long target = checked(
+                options.CgroupCapBytes * percent / 100);
             PressureProfileRequest request = new(
                 percent,
                 options.CgroupCapBytes,
@@ -73,6 +63,42 @@ internal static class PressureMatrixHarness
                 options.Seed,
                 options.RetentionDepth,
                 options.ProgressEveryChunks);
+            DateTime initializationStartedUtc = DateTime.UtcNow;
+            long initializationStart = Stopwatch.GetTimestamp();
+            await using DockerWorker safe =
+                await DockerWorker.StartAsync(
+                    options,
+                    "SafeCSharp",
+                    options.SafeCpuSet,
+                    imageId,
+                    commands);
+            await using DockerWorker nam =
+                await DockerWorker.StartAsync(
+                    options,
+                    "NAM",
+                    options.NamCpuSet,
+                    imageId,
+                    commands);
+            await Task.WhenAll(
+                safe.WarmAsync(options),
+                nam.WarmAsync(options));
+            double initializationMilliseconds =
+                Stopwatch.GetElapsedTime(
+                    initializationStart).TotalMilliseconds;
+            totalInitializationMilliseconds +=
+                initializationMilliseconds;
+            PressureProfileInitialization initialization = new(
+                profileOrdinal,
+                initializationStartedUtc,
+                initializationMilliseconds,
+                safe.ContainerName,
+                nam.ContainerName,
+                DockerWorker.WarmupPassCount,
+                MaximumProfilePercent,
+                checked(
+                    options.CgroupCapBytes
+                    * MaximumProfilePercent
+                    / 100));
             List<PressurePairedObservation> observations = new(
                 options.SamplesPerProfile);
             for (int sampleIndex = 0;
@@ -136,20 +162,9 @@ internal static class PressureMatrixHarness
                 percent,
                 options.CgroupCapBytes,
                 target,
+                initialization,
                 observations,
                 statistics));
-        }
-
-        if (!safe.IsAlive || safe.RequiresRestart)
-        {
-            await safe.RestartAsync(options, commands);
-            await safe.WarmAsync(options);
-        }
-
-        if (!nam.IsAlive || nam.RequiresRestart)
-        {
-            await nam.RestartAsync(options, commands);
-            await nam.WarmAsync(options);
         }
 
         int verificationPercent = options.ProfilePercents.Max();
@@ -164,10 +179,46 @@ internal static class PressureMatrixHarness
             options.RetentionDepth,
             int.MaxValue,
             ExecutionMode: PressureExecutionMode.Verification);
+        DateTime verificationInitializationStartedUtc = DateTime.UtcNow;
+        long verificationInitializationStart =
+            Stopwatch.GetTimestamp();
+        await using DockerWorker safeVerificationWorker =
+            await DockerWorker.StartAsync(
+                options,
+                "SafeCSharp",
+                options.SafeCpuSet,
+                imageId,
+                commands);
+        await using DockerWorker namVerificationWorker =
+            await DockerWorker.StartAsync(
+                options,
+                "NAM",
+                options.NamCpuSet,
+                imageId,
+                commands);
+        await Task.WhenAll(
+            safeVerificationWorker.WarmAsync(options),
+            namVerificationWorker.WarmAsync(options));
+        double verificationInitializationMilliseconds =
+            Stopwatch.GetElapsedTime(
+                verificationInitializationStart).TotalMilliseconds;
+        PressureProfileInitialization verificationInitialization = new(
+            options.ProfilePercents.Count,
+            verificationInitializationStartedUtc,
+            verificationInitializationMilliseconds,
+            safeVerificationWorker.ContainerName,
+            namVerificationWorker.ContainerName,
+            DockerWorker.WarmupPassCount,
+            verificationPercent,
+            verificationTarget);
         Task<PressureImplementationObservation> safeVerificationTask =
-            safe.VerifyProfileAsync(verificationRequest, options);
+            safeVerificationWorker.VerifyProfileAsync(
+                verificationRequest,
+                options);
         Task<PressureImplementationObservation> namVerificationTask =
-            nam.VerifyProfileAsync(verificationRequest, options);
+            namVerificationWorker.VerifyProfileAsync(
+                verificationRequest,
+                options);
         await Task.WhenAll(safeVerificationTask, namVerificationTask);
         PressureImplementationObservation safeVerification =
             await safeVerificationTask;
@@ -176,6 +227,7 @@ internal static class PressureMatrixHarness
         PressureVerificationPair verification = new(
             verificationPercent,
             verificationTarget,
+            verificationInitialization,
             safeVerification,
             namVerification,
             ExactParity(
@@ -183,6 +235,9 @@ internal static class PressureMatrixHarness
                 namVerification.ChildResult));
 
         DateTime completedUtc = DateTime.UtcNow;
+        bool profileIsolation = ProfileIsolationPassed(
+            profiles,
+            verification);
         bool measuredParity = profiles.All(profile =>
         {
             return profile.Observations.All(observation =>
@@ -212,16 +267,19 @@ internal static class PressureMatrixHarness
             startedUtc,
             completedUtc,
             totalMeasuredMilliseconds,
+            totalInitializationMilliseconds,
             Stopwatch.GetElapsedTime(endToEndStart).TotalMilliseconds,
             profiles.Count(ProfileCompleted),
             profiles.Count(profile => !ProfileCompleted(profile)),
+            profileIsolation,
             exactParity,
             profiles.All(profile => profile.Statistics.DeadlineGatePassed),
             profiles.Where(profile => profile.ProfilePercent >= 200)
                 .All(profile => profile.Statistics.PressureQualified),
             namScalingGate,
             performanceGate,
-            exactParity
+            profileIsolation
+                && exactParity
                 && namScalingGate
                 && profiles.All(profile => profile.Statistics.GatePassed));
         Dictionary<string, string> hostConfiguration = new(StringComparer.Ordinal)
@@ -236,6 +294,9 @@ internal static class PressureMatrixHarness
             ["cpuQuota"] = "none",
             ["pairExecution"] =
                 "sequential with alternating implementation order",
+            ["profileInitialization"] =
+                "fresh container pair and fixed maximum-demand warmup per profile",
+            ["crossProfileProcessState"] = "none",
             ["memorySwapPolicy"] = "memory-swap equals memory; swappiness 0",
             ["gcServer"] = "1",
             ["gcHeapCount"] = "4",
@@ -274,6 +335,7 @@ internal static class PressureMatrixHarness
                 "The host samples Docker and cgroup metrics outside each worker.",
                 "The child does not run a benchmark timer or scan allocator statistics during processing.",
                 "Measured child results contain no per-chunk evidence.",
+                "Each profile uses a new container pair and a fixed warmup before measurement.",
                 "Each measured profile materializes every output and completes its mapped handoff.",
                 "One exact maximum-demand run follows measurement. It reads every output byte."
             ]);
@@ -304,6 +366,83 @@ internal static class PressureMatrixHarness
                     == PressureProfileOutcome.Completed
                 && observation.Safe.CorrectnessPassed
                 && observation.Nam.CorrectnessPassed);
+
+    private static bool ProfileIsolationPassed(
+        IReadOnlyList<PressureProfilePair> profiles,
+        PressureVerificationPair verification)
+    {
+        Dictionary<string, int> containerOwners =
+            new(StringComparer.Ordinal);
+        foreach (PressureProfilePair profile in profiles)
+        {
+            if (!RegisterContainer(
+                    containerOwners,
+                    profile.Initialization.SafeContainerName,
+                    profile.ProfilePercent)
+                || !RegisterContainer(
+                    containerOwners,
+                    profile.Initialization.NamContainerName,
+                    profile.ProfilePercent))
+            {
+                return false;
+            }
+
+            foreach (PressurePairedObservation observation
+                in profile.Observations)
+            {
+                if (!RegisterContainer(
+                        containerOwners,
+                        observation.Safe.Isolation.ContainerName,
+                        profile.ProfilePercent)
+                    || !RegisterContainer(
+                        containerOwners,
+                        observation.Nam.Isolation.ContainerName,
+                        profile.ProfilePercent))
+                {
+                    return false;
+                }
+            }
+        }
+
+        int verificationOwner = -verification.ProfilePercent;
+        return RegisterContainer(
+                containerOwners,
+                verification.Initialization.SafeContainerName,
+                verificationOwner)
+            && RegisterContainer(
+                containerOwners,
+                verification.Initialization.NamContainerName,
+                verificationOwner)
+            && RegisterContainer(
+                containerOwners,
+                verification.Safe.Isolation.ContainerName,
+                verificationOwner)
+            && RegisterContainer(
+                containerOwners,
+                verification.Nam.Isolation.ContainerName,
+                verificationOwner);
+    }
+
+    private static bool RegisterContainer(
+        IDictionary<string, int> containerOwners,
+        string containerName,
+        int owner)
+    {
+        if (string.IsNullOrWhiteSpace(containerName))
+        {
+            return false;
+        }
+
+        if (containerOwners.TryGetValue(
+                containerName,
+                out int existingOwner))
+        {
+            return existingOwner == owner;
+        }
+
+        containerOwners.Add(containerName, owner);
+        return true;
+    }
 
     private static PressurePairedStatistics SummarizeProfile(
         int percent,
@@ -715,6 +854,7 @@ internal static class PressureMatrixHarness
 
     private sealed class DockerWorker : IAsyncDisposable
     {
+        internal const int WarmupPassCount = 4;
         private readonly object _sampleGate = new();
         private readonly List<RawHostSample> _samples = [];
         private readonly string _implementation;
@@ -765,7 +905,7 @@ internal static class PressureMatrixHarness
 
         internal async Task WarmAsync(Options options)
         {
-            int warmupPercent = options.ProfilePercents.Max();
+            int warmupPercent = MaximumProfilePercent;
             long warmupDemand = checked(
                 options.CgroupCapBytes * warmupPercent / 100);
             PressureProfileRequest request = new(
@@ -777,7 +917,7 @@ internal static class PressureMatrixHarness
                 options.RetentionDepth,
                 int.MaxValue,
                 Warmup: true);
-            for (int pass = 0; pass < 4; pass++)
+            for (int pass = 0; pass < WarmupPassCount; pass++)
             {
                 PressureImplementationObservation observation =
                     await RunProfileCoreAsync(

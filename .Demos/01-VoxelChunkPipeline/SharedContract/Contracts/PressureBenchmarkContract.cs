@@ -98,16 +98,28 @@ public readonly record struct PressurePairedObservation(
     PressureImplementationObservation Nam,
     bool StructuralParityPassed);
 
+public readonly record struct PressureProfileInitialization(
+    int SequenceOrdinal,
+    DateTime StartedUtc,
+    double ElapsedMilliseconds,
+    string SafeContainerName,
+    string NamContainerName,
+    int WarmupPasses,
+    int WarmupProfilePercent,
+    long WarmupCumulativeDemandBytes);
+
 public readonly record struct PressureProfilePair(
     int ProfilePercent,
     long CgroupCapBytes,
     long RequestedCumulativeDemandBytes,
+    PressureProfileInitialization Initialization,
     IReadOnlyList<PressurePairedObservation> Observations,
     PressurePairedStatistics Statistics);
 
 public readonly record struct PressureVerificationPair(
     int ProfilePercent,
     long RequestedCumulativeDemandBytes,
+    PressureProfileInitialization Initialization,
     PressureImplementationObservation Safe,
     PressureImplementationObservation Nam,
     bool ExactParityPassed);
@@ -116,9 +128,11 @@ public readonly record struct PressureMatrixSummary(
     DateTime StartedUtc,
     DateTime CompletedUtc,
     double TotalMatrixMeasuredElapsedMilliseconds,
+    double TotalProfileInitializationElapsedMilliseconds,
     double TotalEndToEndElapsedMilliseconds,
     int CompletedProfiles,
     int FailedProfiles,
+    bool ProfileIsolationPassed,
     bool ExactParityPassed,
     bool DeadlineGatePassed,
     bool PressureQualificationPassed,
