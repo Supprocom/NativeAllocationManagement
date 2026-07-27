@@ -173,6 +173,10 @@ public sealed class VoxelSharedContractTests
             pressureHarness,
             StringComparison.Ordinal);
         Assert.Contains(
+            ">= 1000 => 2.00",
+            pressureHarness,
+            StringComparison.Ordinal);
+        Assert.Contains(
             "/ 800.0 * 0.25",
             pressureHarness,
             StringComparison.Ordinal);
@@ -211,8 +215,20 @@ public sealed class VoxelSharedContractTests
             pressureHarness,
             StringComparison.Ordinal);
         Assert.Contains(
-            "int warmupPercent = MaximumProfilePercent;",
+            "int warmupPercent = WarmupProfilePercent;",
             pressureHarness,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "private const int WarmupProfilePercent = 1000;",
+            pressureHarness,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "cycleOwners[cyclePosition]",
+            File.ReadAllText(
+                Path.Combine(
+                    demoRoot,
+                    "SharedContract",
+                    "WorkerLocalPressureSession.cs")),
             StringComparison.Ordinal);
         Assert.DoesNotContain(
             "options.ProfilePercents.Reverse()",
@@ -270,6 +286,10 @@ public sealed class VoxelSharedContractTests
 
         string runner = File.ReadAllText(
             Path.Combine(demoRoot, "Pressure", "run-constrained.ps1"));
+        Assert.Contains(
+            "[string]$Profiles = \"50,100,200,500,1000,10000\"",
+            runner,
+            StringComparison.Ordinal);
         int compilation = runner.IndexOf(
             "\"--compile-gate\"",
             StringComparison.Ordinal);
@@ -1353,7 +1373,7 @@ public sealed class VoxelSharedContractTests
         PressureChunkPlanEntry[] largest =
             PressureWorkContract.CreateCanonicalChunkPlan(
                 PressureWorkContract.CanonicalPressureSeed,
-                capBytes * 10,
+                capBytes * 100,
                 minimumChunks: 0);
         PressureChunkPlanEntry[] firstCycle =
             largest[..cycleLength];
@@ -1369,14 +1389,9 @@ public sealed class VoxelSharedContractTests
                 50,
                 100,
                 200,
-                300,
-                400,
                 500,
-                600,
-                700,
-                800,
-                900,
-                1000
+                1000,
+                10000
             })
         {
             int cycleCount = percent / 50;

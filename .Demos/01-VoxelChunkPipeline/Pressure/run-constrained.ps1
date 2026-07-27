@@ -4,7 +4,7 @@ param(
     [string]$Image = "",
     [string]$OutputPath = "",
     [string]$CompilationOutputPath = "",
-    [string]$Profiles = "50,100,200,300,400,500,600,700,800,900,1000",
+    [string]$Profiles = "50,100,200,500,1000,10000",
     [long]$CapBytes = 268435456,
     [int]$DeadlineMilliseconds = 6000,
     [int]$RetentionDepth = 20,

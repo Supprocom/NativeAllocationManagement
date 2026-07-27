@@ -8,20 +8,15 @@ namespace Supprocom.NativeAllocationManagement.Demos.VoxelChunkPipeline.Harness;
 
 internal static class PressureMatrixHarness
 {
-    private const int MaximumProfilePercent = 1000;
+    private const int WarmupProfilePercent = 1000;
     private static readonly int[] ProfilePercents =
     [
         50,
         100,
         200,
-        300,
-        400,
         500,
-        600,
-        700,
-        800,
-        900,
-        1000
+        1000,
+        10000
     ];
 
     internal static async Task<int> RunAsync(string[] args)
@@ -94,10 +89,10 @@ internal static class PressureMatrixHarness
                 safe.ContainerName,
                 nam.ContainerName,
                 DockerWorker.WarmupPassCount,
-                MaximumProfilePercent,
+                WarmupProfilePercent,
                 checked(
                     options.CgroupCapBytes
-                    * MaximumProfilePercent
+                    * WarmupProfilePercent
                     / 100));
             List<PressurePairedObservation> observations = new(
                 options.SamplesPerProfile);
@@ -755,6 +750,7 @@ internal static class PressureMatrixHarness
         {
             <= 100 => 1.50,
             200 => 1.75,
+            >= 1000 => 2.00,
             _ => 1.75 + (percent - 200) / 800.0 * 0.25
         };
 
@@ -907,7 +903,7 @@ internal static class PressureMatrixHarness
 
         internal async Task WarmAsync(Options options)
         {
-            int warmupPercent = MaximumProfilePercent;
+            int warmupPercent = WarmupProfilePercent;
             long warmupDemand = checked(
                 options.CgroupCapBytes * warmupPercent / 100);
             PressureProfileRequest request = new(
@@ -1843,7 +1839,7 @@ internal static class PressureMatrixHarness
                 || profiles.Distinct().Count() != profiles.Length)
             {
                 throw new ArgumentException(
-                    "Profiles must be a unique subset of 50,100,200,...,1000.");
+                    "Profiles must be a unique subset of 50,100,200,500,1000,10000.");
             }
 
             return profiles;

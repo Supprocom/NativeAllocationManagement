@@ -26,14 +26,19 @@ command area. Alignment and command padding are zero-filled and verified.
 Each chunk contributes its complete cell storage, face records, transparent
 masks, vertices, indices, payload descriptors, and upload bytes to cumulative
 logical allocator demand. A profile ends only after that demand reaches the
-requested percentage of the 256 MiB cgroup cap. Thus 1000 percent means about
-2.5 GiB of real pipeline allocation requests turned through bounded storage,
-not a simultaneous 2.5 GiB resident set and not synthetic garbage.
+requested percentage of the 256 MiB cgroup cap. Thus, 1000 percent means about
+2.5 GiB of real pipeline allocation requests through bounded storage. The
+10000-percent profile means about 25 GiB of requests. These values do not
+specify simultaneous resident storage, and they do not include synthetic
+garbage.
 
 The workload repeats one fixed 16-chunk heterogeneous cycle. The cycle contains
 all eight chunk archetypes and every section representation kind. Each
 50-percent step adds one complete cycle. Thus every profile has the same type
 mix and logical work per byte. Later profiles change only cumulative turnover.
+
+Each cycle uses the same worker assignment. Thus, a larger turnover profile
+cannot create a new worker-local batch shape after warmup.
 
 The separate exact verification creates canonical evidence in chunk order.
 Typed vertices and indices are checked against independently derived values.
@@ -172,14 +177,22 @@ The child then waits. The host records the start time and sends
 records the stop time when it receives `ProcessingCompleted`. This handshake
 prevents pipe buffering from hiding processing time.
 
-The predeclared profiles are 50, 100, 200, 300, 400, 500, 600, 700, 800, 900,
-and 1000 percent of the binary cgroup cap. Fifty and one hundred percent are
-control profiles. Each profile starts a new Safe container and a new NAM
-container. Each pair receives the same fixed maximum-demand warmup before
-measurement. The harness destroys both containers before it starts the next
-profile. Thus, allocator, pool, CLR, JIT, thread, and cgroup state cannot pass
-from one profile to another. Container startup and warmup are outside the
-profile timer. The artifact records their elapsed time and container names.
+The predeclared profiles are 50, 100, 200, 500, 1000, and 10000 percent of the
+binary cgroup cap. Fifty and one hundred percent are control profiles.
+
+Each profile starts a new Safe container and a new NAM container. Each pair
+receives the same fixed 1000-percent warmup before measurement.
+
+The 1000-percent warmup reaches all allocation shapes and stable capacities.
+The 10000-percent profile adds turnover but does not add an allocation shape.
+
+The harness destroys both containers before it starts the next profile. Thus,
+allocator, pool, CLR, JIT, thread, and cgroup state cannot pass between
+profiles.
+
+Container startup and warmup are outside the profile timer. The artifact
+records their elapsed time and container names.
+
 The final gate fails if a container name occurs in more than one profile.
 
 Every implementation and profile receives an explicit
@@ -202,8 +215,9 @@ against each predeclared worker plan.
 
 Both controls must complete with exact parity. Their mean paired NAM speedup
 must be at least 1.50. The 200-percent profile requires at least 1.75.
-Later profiles use progressive minimums that reach 2.00 at 1000 percent. Each
-lower 95-percent confidence bound must remain above 1.00.
+The 500-percent profile uses a progressive minimum. The 1000-percent and
+10000-percent profiles require at least 2.00. Each lower 95-percent confidence
+bound must remain above 1.00.
 
 The matrix also requires NAM mean milliseconds per realized GiB to decrease
 at each later profile. A flat or increasing NAM cost fails the scaling gate.

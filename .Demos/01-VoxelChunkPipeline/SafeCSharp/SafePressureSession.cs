@@ -851,12 +851,10 @@ internal sealed class SafePressureSession :
     {
         if (_capacityPlan is { } current)
         {
-            if (current.Seed != request.Seed
-                || current.PlannedDemandBytes
-                    < request.RequestedCumulativeDemandBytes)
+            if (current.Seed != request.Seed)
             {
                 throw new InvalidOperationException(
-                    "The managed worker requires an equal warmup plan.");
+                    "The managed worker requires a compatible warmup plan.");
             }
 
             return new SafeAdmissionPlan(
@@ -1197,8 +1195,6 @@ internal sealed class SafePressureSession :
             Seed = request.Seed;
             RetentionDepth = retentionDepth;
             RetentionBudgetBytes = retainedBudgetBytes;
-            PlannedDemandBytes =
-                request.RequestedCumulativeDemandBytes;
             CellCapacity = checked(
                 retentionDepth * VoxelMath.CellsPerChunk);
         }
@@ -1206,8 +1202,6 @@ internal sealed class SafePressureSession :
         internal int Seed { get; }
 
         internal int RetentionDepth { get; }
-
-        internal long PlannedDemandBytes { get; }
 
         internal long RetentionBudgetBytes { get; }
 

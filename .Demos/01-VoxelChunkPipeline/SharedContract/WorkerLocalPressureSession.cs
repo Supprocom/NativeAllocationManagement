@@ -398,6 +398,14 @@ public sealed class WorkerLocalPressureSession : IPressureProfileSession
         int workerCount = Math.Min(
             maximumWorkerCount,
             plan.Count);
+        int cycleLength =
+            PressureWorkContract.CanonicalPressureCycleLength;
+        if (plan.Count % cycleLength != 0)
+        {
+            throw new InvalidOperationException(
+                "The canonical pressure plan must contain complete cycles.");
+        }
+
         WorkerPartition[] partitions = new WorkerPartition[
             workerCount];
         for (int index = 0; index < workerCount; index++)
@@ -405,29 +413,59 @@ public sealed class WorkerLocalPressureSession : IPressureProfileSession
             partitions[index] = new WorkerPartition();
         }
 
-        foreach (PressureChunkPlanEntry entry in plan)
+        int[] cycleOwners = new int[cycleLength];
+        for (int cyclePosition = 0;
+            cyclePosition < cycleLength;
+            cyclePosition++)
         {
-            int selected = 0;
-            for (int index = 1;
-                index < partitions.Length;
-                index++)
+            int selected = SelectPartition(partitions);
+            cycleOwners[cyclePosition] = selected;
+            partitions[selected].Add(plan[cyclePosition]);
+        }
+
+        for (int index = cycleLength;
+            index < plan.Count;
+            index++)
+        {
+            int cyclePosition = index % cycleLength;
+            PressureChunkPlanEntry template = plan[cyclePosition];
+            PressureChunkPlanEntry entry = plan[index];
+            if (entry.LogicalDemandBytes
+                    != template.LogicalDemandBytes
+                || entry.EstimatedWorkUnits
+                    != template.EstimatedWorkUnits
+                || entry.Shape != template.Shape)
             {
-                if (partitions[index].EstimatedWorkUnits
-                        < partitions[selected].EstimatedWorkUnits
-                    || (partitions[index].EstimatedWorkUnits
-                            == partitions[selected].EstimatedWorkUnits
-                        && partitions[index].LogicalDemandBytes
-                            < partitions[selected]
-                                .LogicalDemandBytes))
-                {
-                    selected = index;
-                }
+                throw new InvalidOperationException(
+                    "The canonical pressure cycle changed its shape.");
             }
 
-            partitions[selected].Add(entry);
+            partitions[cycleOwners[cyclePosition]].Add(entry);
         }
 
         return partitions;
+    }
+
+    private static int SelectPartition(
+        IReadOnlyList<WorkerPartition> partitions)
+    {
+        int selected = 0;
+        for (int index = 1;
+            index < partitions.Count;
+            index++)
+        {
+            if (partitions[index].EstimatedWorkUnits
+                    < partitions[selected].EstimatedWorkUnits
+                || (partitions[index].EstimatedWorkUnits
+                        == partitions[selected].EstimatedWorkUnits
+                    && partitions[index].LogicalDemandBytes
+                        < partitions[selected].LogicalDemandBytes))
+            {
+                selected = index;
+            }
+        }
+
+        return selected;
     }
 
     private PressureProfileResult Aggregate(
