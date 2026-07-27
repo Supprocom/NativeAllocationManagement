@@ -58,6 +58,7 @@ public sealed class VoxelSharedContractTests
             typeof(PressureImplementationObservation),
             typeof(PressurePairedStatistics),
             typeof(PressureProfilePair),
+            typeof(PressureVerificationPair),
             typeof(PressureMatrixSummary),
             typeof(PressureMatrixReport)
         ];
@@ -333,6 +334,8 @@ public sealed class VoxelSharedContractTests
         PressureVerificationPair verification = new(
             10000,
             capBytes * 100,
+            1000,
+            capBytes * 10,
             initialization,
             default,
             default,
@@ -374,9 +377,33 @@ public sealed class VoxelSharedContractTests
             VoxelJson.Options);
 
         Assert.Equal(10000, roundTrip.Verification.ProfilePercent);
+        Assert.Equal(1000, roundTrip.Verification.WarmupProfilePercent);
+        Assert.Equal(capBytes * 10, roundTrip.Verification.WarmupCumulativeDemandBytes);
         Assert.Equal(1000, roundTrip.Verification.Initialization.WarmupProfilePercent);
         Assert.Equal(capBytes * 10, roundTrip.Verification.Initialization.WarmupCumulativeDemandBytes);
         Assert.Equal(capBytes * 100, roundTrip.Verification.RequestedCumulativeDemandBytes);
+    }
+
+    [Fact]
+    public void PressureQualificationIsInformationalAndDoesNotBlockTheGate()
+    {
+        PressureMatrixSummary summary = new(
+            DateTime.UnixEpoch,
+            DateTime.UnixEpoch,
+            0,
+            0,
+            0,
+            1,
+            0,
+            true,
+            true,
+            true,
+            false,
+            true,
+            true);
+
+        Assert.False(summary.PressureQualificationPassed);
+        Assert.True(summary.GatePassed);
     }
 
     [Fact]

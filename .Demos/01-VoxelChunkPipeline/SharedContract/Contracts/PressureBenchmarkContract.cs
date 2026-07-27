@@ -119,6 +119,8 @@ public readonly record struct PressureProfilePair(
 public readonly record struct PressureVerificationPair(
     int ProfilePercent,
     long RequestedCumulativeDemandBytes,
+    int WarmupProfilePercent,
+    long WarmupCumulativeDemandBytes,
     PressureProfileInitialization Initialization,
     PressureImplementationObservation Safe,
     PressureImplementationObservation Nam,

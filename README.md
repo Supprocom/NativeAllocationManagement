@@ -25,6 +25,10 @@ Both implementations process equal inputs and outputs. The safe C#
 implementation uses pooling, exact sizing, bounded retention, and proactive
 memory admission.
 
+The matrix records constrained-memory qualification as an informational result.
+The result confirms the equal binary cap, no swap, and cumulative demand.
+It does not require a garbage collection or a resident-memory threshold.
+
 These estimates are specific to the included workload and test system. The
 [voxel pipeline guide](.Demos/01-VoxelChunkPipeline/README.md) gives the
 method, commands, and current evidence.

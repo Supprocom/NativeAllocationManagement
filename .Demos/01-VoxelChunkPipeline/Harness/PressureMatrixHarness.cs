@@ -271,6 +271,11 @@ internal static class PressureMatrixHarness
         PressureVerificationPair verification = new(
             verificationPercent,
             verificationTarget,
+            WarmupProfilePercent,
+            checked(
+                options.CgroupCapBytes
+                * WarmupProfilePercent
+                / 100),
             verificationInitialization,
             safeVerification,
             namVerification,
@@ -360,7 +365,9 @@ internal static class PressureMatrixHarness
             ["exactVerification"] =
                 "maximum deterministic prefix after all measured profiles",
             ["gcHeapHardLimitPercent"] = options.GcHeapHardLimitPercent.ToString(
-                CultureInfo.InvariantCulture)
+                CultureInfo.InvariantCulture),
+            ["pressureQualification"] =
+                "informational constrained-memory check; it requires the equal binary cap, no swap, and at least 2x cumulative demand; it does not require GC collections or a resident-peak threshold"
         };
         PressureMatrixReport report = new(
             commit,

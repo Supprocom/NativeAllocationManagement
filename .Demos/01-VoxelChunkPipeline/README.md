@@ -26,6 +26,10 @@ very memory-constrained environment. Higher-turnover runs exceed 110 percent.
 These values are workload and system estimates. Use the included command to
 measure the result on the applicable target system.
 
+The matrix records constrained-memory qualification as an informational result.
+The result confirms the equal binary cap, no swap, and cumulative demand.
+It does not require a garbage collection or a resident-memory threshold.
+
 ## Equal work
 
 `SharedContract` defines the input, output, workload, protocol, and result
