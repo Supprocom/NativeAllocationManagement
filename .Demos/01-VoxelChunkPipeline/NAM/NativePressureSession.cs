@@ -478,17 +478,8 @@ internal sealed class NativePressureSession :
 
     private void RecordCompletedBatch(NativeProfileState state)
     {
-        for (int batchIndex = 0;
-            batchIndex < _context.BatchCount;
-            batchIndex++)
-        {
-            BatchSlot slot = _slots[batchIndex];
-            state.RecordPack(
-                _context,
-                slot,
-                slot.Shape);
-            _slots[batchIndex] = default;
-        }
+        state.RecordPack(_context);
+        _slots.AsSpan(0, _context.BatchCount).Clear();
     }
 
     private static OutputCapacityPlan CreateNativeCapacityPlan(
@@ -684,16 +675,8 @@ internal sealed class NativePressureSession :
         }
 
         internal void RecordPack(
-            NativeBatchContext context,
-            BatchSlot slot,
-            PressureChunkShape shape)
+            NativeBatchContext context)
         {
-            long vertexBytes = checked(
-                (long)Math.Max(1, shape.VertexCount)
-                * VoxelMath.VertexBytes);
-            long indexBytes = checked(
-                (long)Math.Max(1, shape.IndexCount)
-                * VoxelMath.IndexBytes);
             PeakLiveLogicalBytes = Math.Max(
                 PeakLiveLogicalBytes,
                 checked(
@@ -702,14 +685,14 @@ internal sealed class NativePressureSession :
                         * VoxelMath.VoxelCellBytes
                     + (long)context.TotalRecords
                         * VoxelMath.FaceRecordBytes
-                    + vertexBytes
-                    + indexBytes
+                    + (long)context.TotalVertices
+                        * VoxelMath.VertexBytes
+                    + (long)context.TotalIndices
+                        * VoxelMath.IndexBytes
                     + (long)context.TotalFaces
                         * VoxelMath.PayloadSliceBytes
                     + context.TotalUploadBytes));
-            LastStage = slot.ChunkId == LastChunkId
-                ? VoxelPipelineStage.GpuUpload
-                : VoxelPipelineStage.Prerender;
+            LastStage = VoxelPipelineStage.GpuUpload;
         }
     }
 
