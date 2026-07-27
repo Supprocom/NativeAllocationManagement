@@ -79,6 +79,8 @@ public readonly record struct PressurePairedStatistics(
     double? MeanSpeedup,
     double? ConfidenceLower95,
     double? ConfidenceUpper95,
+    double? SafeMeanMillisecondsPerGiB,
+    double? NamMeanMillisecondsPerGiB,
     double? SafeP95MillisecondsPerGiB,
     double? SafeP99MillisecondsPerGiB,
     double? NamP95MillisecondsPerGiB,
@@ -120,6 +122,7 @@ public readonly record struct PressureMatrixSummary(
     bool ExactParityPassed,
     bool DeadlineGatePassed,
     bool PressureQualificationPassed,
+    bool NamScalingGatePassed,
     bool PerformanceGatePassed,
     bool GatePassed);
 

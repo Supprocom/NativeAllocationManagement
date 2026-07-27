@@ -162,6 +162,33 @@ public sealed class VoxelSharedContractTests
         Assert.DoesNotContain("NaN", failedJson, StringComparison.Ordinal);
         Assert.DoesNotContain("Infinity", failedJson, StringComparison.Ordinal);
 
+        string pressureHarness = File.ReadAllText(
+            Path.Combine(demoRoot, "Harness", "PressureMatrixHarness.cs"));
+        Assert.Contains(
+            "<= 100 => 1.50",
+            pressureHarness,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "200 => 1.75",
+            pressureHarness,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "/ 800.0 * 0.25",
+            pressureHarness,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "NamScalingGatePassed(profiles)",
+            pressureHarness,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "current.Value >= previous.Value",
+            pressureHarness,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "consumes every upload byte",
+            pressureHarness,
+            StringComparison.Ordinal);
+
         string runner = File.ReadAllText(
             Path.Combine(demoRoot, "Pressure", "run-constrained.ps1"));
         int compilation = runner.IndexOf(
@@ -194,6 +221,12 @@ public sealed class VoxelSharedContractTests
             "01-VoxelChunkPipeline",
             "NAM",
             "NativePressureSession.cs"));
+        string sharedSource = File.ReadAllText(Path.Combine(
+            root,
+            ".Demos",
+            "01-VoxelChunkPipeline",
+            "SharedContract",
+            "PressureWorkContract.cs"));
 
         Assert.Contains(
             "PressureWorkContract.CanonicalRetainedArraysPerPoolBucket",
@@ -236,6 +269,10 @@ public sealed class VoxelSharedContractTests
             "PackAliasedScatterStream(",
             safeSource,
             StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "ConsumeGpuUpload(",
+            safeSource,
+            StringComparison.Ordinal);
         Assert.Contains(
             "CreateNativeCapacityPlan(",
             nativeSource,
@@ -273,12 +310,32 @@ public sealed class VoxelSharedContractTests
             nativeSource,
             StringComparison.Ordinal);
         Assert.Contains(
+            "CompleteMappedHandoff(",
+            nativeSource,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "ConsumeGpuUpload(",
+            nativeSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
             "outputCapacity.EnsureFits(_context)",
             nativeSource,
             StringComparison.Ordinal);
         Assert.DoesNotContain(
             "PressureWorkContract.CanonicalArenaReservationBytes",
             nativeSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "PressureChunkShape shape) =>",
+            sharedSource,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "_measurementConsumerSink",
+            sharedSource,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "ConsumeGpuUpload(",
+            sharedSource,
             StringComparison.Ordinal);
     }
 
@@ -528,27 +585,38 @@ public sealed class VoxelSharedContractTests
                 [],
                 stages,
                 emptyStages);
+        GpuStageShape stageShape = default;
+        stageShape = stageShape.Add(
+            stageBytes,
+            faceCount: 1,
+            payloadBytesPerFace: type.PayloadBytes,
+            opaque: true);
+        PressureChunkShape shape = new(
+            OpaqueRecordCount: 1,
+            TransparentRecordCount: 0,
+            OpaqueFaceCount: 1,
+            TransparentFaceCount: 0,
+            stageShape,
+            TransparentMaskCount: 0,
+            TransparentMaskWords: 0,
+            EmptySections: 0,
+            UniformSections: 0,
+            ExpandedSections: 0,
+            PackedSections: 0,
+            MultiPackedSections: 0,
+            DominantTransparentSections: 0,
+            ResidualTransparentSections: 0,
+            SectionDescriptorCount: 0,
+            SectionValueCount: 0,
+            SectionWordCount: 0,
+            SectionStateWordCount: 0);
+        Assert.Equal(
+            evidence with
+            {
+                CompleteHash = string.Empty
+            },
+            PressureWorkContract.DescribeOutput(shape));
         PressureWorkContract.VerifyRetainedOutput(
-            evidence,
-            vertices,
-            indices,
-            slices,
-            [],
-            [],
-            [],
-            stages,
-            emptyStages);
-        PressureWorkContract.ConsumeGpuUpload(
-            evidence,
-            vertices,
-            indices,
-            slices,
-            [],
-            [],
-            [],
-            stages,
-            emptyStages);
-        PressureWorkContract.ConsumeDirectGpuUpload(
             evidence,
             vertices,
             indices,
@@ -586,18 +654,6 @@ public sealed class VoxelSharedContractTests
                 []);
         Assert.Equal(evidence, scatterEvidence);
         PressureWorkContract.VerifyRetainedScatterOutput(
-            scatterEvidence,
-            seed,
-            scatterPatterns,
-            records,
-            scatterVertices,
-            scatterIndices,
-            scatterSlices,
-            [],
-            [],
-            [],
-            []);
-        PressureWorkContract.ConsumeScatterGpuUpload(
             scatterEvidence,
             seed,
             scatterPatterns,

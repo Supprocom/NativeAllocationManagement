@@ -204,6 +204,10 @@ internal static class PressureMatrixHarness
             });
         });
         bool exactParity = measuredParity && verification.ExactParityPassed;
+        bool namScalingGate = NamScalingGatePassed(profiles);
+        bool performanceGate = namScalingGate
+            && profiles.All(
+                profile => profile.Statistics.PerformanceGatePassed);
         PressureMatrixSummary summary = new(
             startedUtc,
             completedUtc,
@@ -215,8 +219,11 @@ internal static class PressureMatrixHarness
             profiles.All(profile => profile.Statistics.DeadlineGatePassed),
             profiles.Where(profile => profile.ProfilePercent >= 200)
                 .All(profile => profile.Statistics.PressureQualified),
-            profiles.All(profile => profile.Statistics.PerformanceGatePassed),
-            exactParity && profiles.All(profile => profile.Statistics.GatePassed));
+            namScalingGate,
+            performanceGate,
+            exactParity
+                && namScalingGate
+                && profiles.All(profile => profile.Statistics.GatePassed));
         Dictionary<string, string> hostConfiguration = new(StringComparer.Ordinal)
         {
             ["os"] = Environment.OSVersion.ToString(),
@@ -241,7 +248,7 @@ internal static class PressureMatrixHarness
             ["samplesPerProfile"] = options.SamplesPerProfile.ToString(
                 CultureInfo.InvariantCulture),
             ["measurementEvidence"] =
-                "structural lengths and complete upload consumption",
+                "structural lengths and completed mapped handoff",
             ["exactVerification"] =
                 "maximum deterministic prefix after all measured profiles",
             ["gcHeapHardLimitPercent"] = options.GcHeapHardLimitPercent.ToString(
@@ -266,8 +273,8 @@ internal static class PressureMatrixHarness
             [
                 "The host samples Docker and cgroup metrics outside each worker.",
                 "The child does not run a benchmark timer or scan allocator statistics during processing.",
-                "Each measured profile consumes every upload byte. It records only structural evidence.",
-                "One exact maximum-demand run follows measurement. Its deterministic prefix covers all lower profiles."
+                "Each measured profile materializes every output and completes its mapped handoff.",
+                "One exact maximum-demand run follows measurement. It reads every output byte."
             ]);
         string? directory = Path.GetDirectoryName(options.OutputPath);
         if (!string.IsNullOrEmpty(directory))
@@ -362,27 +369,28 @@ internal static class PressureMatrixHarness
             upper = mean.Value + halfWidth;
         }
 
-        double gibibytes = checked(
-            options.CgroupCapBytes * percent / 100)
-            / (double)(1L << 30);
         double[] safeRates = observations
             .Where(
                 static observation =>
                     IsCompleted(observation.Safe))
             .Select(
-                observation =>
-                    observation.Safe.ProfileElapsedMilliseconds!.Value
-                    / gibibytes)
+                static observation =>
+                    MillisecondsPerGiB(observation.Safe))
             .ToArray();
         double[] namRates = observations
             .Where(
                 static observation =>
                     IsCompleted(observation.Nam))
             .Select(
-                observation =>
-                    observation.Nam.ProfileElapsedMilliseconds!.Value
-                    / gibibytes)
+                static observation =>
+                    MillisecondsPerGiB(observation.Nam))
             .ToArray();
+        double? safeMeanRate = safeRates.Length == 0
+            ? null
+            : safeRates.Average();
+        double? namMeanRate = namRates.Length == 0
+            ? null
+            : namRates.Average();
         double? safeP95 = Percentile(
             safeRates,
             0.95);
@@ -479,6 +487,8 @@ internal static class PressureMatrixHarness
             mean,
             lower,
             upper,
+            safeMeanRate,
+            namMeanRate,
             safeP95,
             safeP99,
             namP95,
@@ -489,6 +499,33 @@ internal static class PressureMatrixHarness
             performanceGate,
             gate,
             interpretation);
+    }
+
+    private static double MillisecondsPerGiB(
+        PressureImplementationObservation observation) =>
+        observation.ProfileElapsedMilliseconds!.Value
+        / (observation.RealizedCumulativeDemandBytes
+            / (double)(1L << 30));
+
+    private static bool NamScalingGatePassed(
+        IReadOnlyList<PressureProfilePair> profiles)
+    {
+        double? previous = null;
+        foreach (PressureProfilePair profile in profiles.OrderBy(
+            static profile => profile.ProfilePercent))
+        {
+            double? current =
+                profile.Statistics.NamMeanMillisecondsPerGiB;
+            if (!current.HasValue
+                || previous.HasValue && current.Value >= previous.Value)
+            {
+                return false;
+            }
+
+            previous = current;
+        }
+
+        return previous.HasValue;
     }
 
     private static bool IsCompleted(
@@ -544,9 +581,9 @@ internal static class PressureMatrixHarness
     private static double RequiredSpeedup(int percent) =>
         percent switch
         {
-            <= 100 => 1.10,
-            200 => 1.20,
-            _ => 1.20 + (percent - 200) / 100 * 0.02
+            <= 100 => 1.50,
+            200 => 1.75,
+            _ => 1.75 + (percent - 200) / 800.0 * 0.25
         };
 
     private static double StandardDeviation(IReadOnlyList<double> values)

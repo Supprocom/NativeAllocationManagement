@@ -200,8 +200,6 @@ public readonly record struct PressureChunkShape(
 
 public static class PressureWorkContract
 {
-    private static long _measurementConsumerSink;
-
     private static readonly int[] RegionArchetypes =
     [
         6,
@@ -1580,174 +1578,25 @@ public static class PressureWorkContract
     }
 
     public static PressureOutputEvidence DescribeOutput(
-        ReadOnlySpan<Vertex> opaqueVertices,
-        ReadOnlySpan<int> opaqueIndices,
-        ReadOnlySpan<PayloadSlice> opaqueSlices,
-        ReadOnlySpan<Vertex> transparentVertices,
-        ReadOnlySpan<int> transparentIndices,
-        ReadOnlySpan<PayloadSlice> transparentSlices,
-        GpuStageBuffers opaqueStages,
-        GpuStageBuffers transparentStages)
-    {
-        return
+        PressureChunkShape shape) =>
         new(
             string.Empty,
-            opaqueVertices.Length,
-            opaqueIndices.Length,
-            opaqueSlices.Length,
-            SumStageLengths(opaqueSlices),
-            transparentVertices.Length,
-            transparentIndices.Length,
-            transparentSlices.Length,
-            SumStageLengths(transparentSlices));
-    }
-
-    public static PressureOutputEvidence DescribeScatterOutput(
-        ReadOnlySpan<Vertex> opaqueVertices,
-        ReadOnlySpan<int> opaqueIndices,
-        ReadOnlySpan<PayloadSlice> opaqueSlices,
-        ReadOnlySpan<Vertex> transparentVertices,
-        ReadOnlySpan<int> transparentIndices,
-        ReadOnlySpan<PayloadSlice> transparentSlices) =>
-        new(
-            string.Empty,
-            opaqueVertices.Length,
-            opaqueIndices.Length,
-            opaqueSlices.Length,
-            SumStageLengths(opaqueSlices),
-            transparentVertices.Length,
-            transparentIndices.Length,
-            transparentSlices.Length,
-            SumStageLengths(transparentSlices));
-
-    public static void ConsumeGpuUpload(
-        PressureOutputEvidence expected,
-        ReadOnlySpan<Vertex> opaqueVertices,
-        ReadOnlySpan<int> opaqueIndices,
-        ReadOnlySpan<PayloadSlice> opaqueSlices,
-        ReadOnlySpan<Vertex> transparentVertices,
-        ReadOnlySpan<int> transparentIndices,
-        ReadOnlySpan<PayloadSlice> transparentSlices,
-        GpuStageBuffers opaqueStages,
-        GpuStageBuffers transparentStages)
-    {
-        ValidateRetainedOutputLengths(
-            expected,
-            opaqueVertices,
-            opaqueIndices,
-            opaqueSlices,
-            transparentVertices,
-            transparentIndices,
-            transparentSlices);
-
-        long sink = 0;
-        ConsumeStageBuffer(
-            MemoryMarshal.AsBytes(opaqueVertices),
-            ref sink);
-        ConsumeStageBuffer(
-            MemoryMarshal.AsBytes(opaqueIndices),
-            ref sink);
-        ConsumeStages(opaqueStages, ref sink);
-        ConsumeStageBuffer(
-            MemoryMarshal.AsBytes(transparentVertices),
-            ref sink);
-        ConsumeStageBuffer(
-            MemoryMarshal.AsBytes(transparentIndices),
-            ref sink);
-        ConsumeStages(transparentStages, ref sink);
-        Volatile.Write(ref _measurementConsumerSink, sink);
-    }
-
-    public static void ConsumeDirectGpuUpload(
-        PressureOutputEvidence expected,
-        ReadOnlySpan<Vertex> opaqueVertices,
-        ReadOnlySpan<int> opaqueIndices,
-        ReadOnlySpan<PayloadSlice> opaqueSlices,
-        ReadOnlySpan<Vertex> transparentVertices,
-        ReadOnlySpan<int> transparentIndices,
-        ReadOnlySpan<PayloadSlice> transparentSlices,
-        GpuStageBuffers opaqueStages,
-        GpuStageBuffers transparentStages)
-    {
-        ValidateRetainedOutputLengths(
-            expected,
-            opaqueVertices,
-            opaqueIndices,
-            opaqueSlices,
-            transparentVertices,
-            transparentIndices,
-            transparentSlices);
-
-        long sink = 0;
-        ConsumeDirectStageBuffer(
-            MemoryMarshal.AsBytes(opaqueVertices),
-            ref sink);
-        ConsumeDirectStageBuffer(
-            MemoryMarshal.AsBytes(opaqueIndices),
-            ref sink);
-        ConsumeDirectStages(opaqueStages, ref sink);
-        ConsumeDirectStageBuffer(
-            MemoryMarshal.AsBytes(transparentVertices),
-            ref sink);
-        ConsumeDirectStageBuffer(
-            MemoryMarshal.AsBytes(transparentIndices),
-            ref sink);
-        ConsumeDirectStages(transparentStages, ref sink);
-        Volatile.Write(ref _measurementConsumerSink, sink);
-    }
-
-    public static void ConsumeScatterGpuUpload(
-        PressureOutputEvidence expected,
-        int seed,
-        ReadOnlySpan<byte> payloadPatterns,
-        ReadOnlySpan<FaceRecord> opaqueRecords,
-        ReadOnlySpan<Vertex> opaqueVertices,
-        ReadOnlySpan<int> opaqueIndices,
-        ReadOnlySpan<PayloadSlice> opaqueSlices,
-        ReadOnlySpan<FaceRecord> transparentRecords,
-        ReadOnlySpan<Vertex> transparentVertices,
-        ReadOnlySpan<int> transparentIndices,
-        ReadOnlySpan<PayloadSlice> transparentSlices)
-    {
-        ValidateRetainedOutputLengths(
-            expected,
-            opaqueVertices,
-            opaqueIndices,
-            opaqueSlices,
-            transparentVertices,
-            transparentIndices,
-            transparentSlices);
-        ValidatePayloadPatternTable(payloadPatterns);
-
-        long sink = 0;
-        ConsumeDirectStageBuffer(
-            MemoryMarshal.AsBytes(opaqueVertices),
-            ref sink);
-        ConsumeDirectStageBuffer(
-            MemoryMarshal.AsBytes(opaqueIndices),
-            ref sink);
-        ConsumeAliasedPayloadPatterns(
-            seed,
-            opaqueRecords,
-            payloadPatterns,
-            ref sink);
-        ConsumeDirectStageBuffer(
-            MemoryMarshal.AsBytes(transparentVertices),
-            ref sink);
-        ConsumeDirectStageBuffer(
-            MemoryMarshal.AsBytes(transparentIndices),
-            ref sink);
-        ConsumeAliasedPayloadPatterns(
-            seed,
-            transparentRecords,
-            payloadPatterns,
-            ref sink);
-        sink = unchecked(
-            sink
-            + expected.OpaqueUploadLength
-            + expected.TransparentUploadLength);
-        Volatile.Write(ref _measurementConsumerSink, sink);
-    }
+            checked(
+                shape.OpaqueFaceCount
+                * VoxelMath.VerticesPerFace),
+            checked(
+                shape.OpaqueFaceCount
+                * VoxelMath.IndicesPerFace),
+            shape.OpaqueFaceCount,
+            shape.OpaqueUploadBytes,
+            checked(
+                shape.TransparentFaceCount
+                * VoxelMath.VerticesPerFace),
+            checked(
+                shape.TransparentFaceCount
+                * VoxelMath.IndicesPerFace),
+            shape.TransparentFaceCount,
+            shape.TransparentUploadBytes);
 
     public static void VerifyRetainedOutput(
         PressureOutputEvidence expected,
@@ -1868,57 +1717,6 @@ public static class PressureWorkContract
             throw new InvalidDataException(
                 "The aliased payload pattern table has an invalid length.");
         }
-    }
-
-    private static void ConsumeAliasedPayloadPatterns(
-        int seed,
-        ReadOnlySpan<FaceRecord> records,
-        ReadOnlySpan<byte> payloadPatterns,
-        ref long sink)
-    {
-        for (int recordIndex = 0;
-            recordIndex < records.Length;
-            recordIndex++)
-        {
-            ref readonly FaceRecord record =
-                ref records[recordIndex];
-            int payloadSeed = unchecked(
-                seed
-                + record.CellIndex * 11
-                + record.BlockId * 37
-                + record.StageMask * 13);
-            ConsumeDirectStageBuffer(
-                GetPayloadPattern(
-                    payloadPatterns,
-                    record.PayloadBytes,
-                    payloadSeed,
-                    record.StageMask),
-                ref sink);
-            sink = unchecked(
-                sink + VoxelMath.FaceCount(record.Mask));
-        }
-    }
-
-    private static void ConsumeStages(
-        GpuStageBuffers stages,
-        ref long sink)
-    {
-        ConsumeStageBuffer(stages.GetAllBytes(160), ref sink);
-        ConsumeStageBuffer(stages.GetAllBytes(168), ref sink);
-        ConsumeStageBuffer(stages.GetAllBytes(176), ref sink);
-        ConsumeStageBuffer(stages.GetAllBytes(192), ref sink);
-        ConsumeStageBuffer(stages.GetAllBytes(224), ref sink);
-    }
-
-    private static void ConsumeDirectStages(
-        GpuStageBuffers stages,
-        ref long sink)
-    {
-        ConsumeDirectStageBuffer(stages.GetAllBytes(160), ref sink);
-        ConsumeDirectStageBuffer(stages.GetAllBytes(168), ref sink);
-        ConsumeDirectStageBuffer(stages.GetAllBytes(176), ref sink);
-        ConsumeDirectStageBuffer(stages.GetAllBytes(192), ref sink);
-        ConsumeDirectStageBuffer(stages.GetAllBytes(224), ref sink);
     }
 
     private static int SumStageLengths(
@@ -2228,45 +2026,6 @@ public static class PressureWorkContract
         hash.AddBytes(stages.GetAllBytes(176));
         hash.AddBytes(stages.GetAllBytes(192));
         hash.AddBytes(stages.GetAllBytes(224));
-    }
-
-    private static void ConsumeStageBuffer(
-        ReadOnlySpan<byte> upload,
-        ref long sink)
-    {
-        Span<byte> staging = stackalloc byte[4_096];
-        int offset = 0;
-        while (offset < upload.Length)
-        {
-            int length = Math.Min(staging.Length, upload.Length - offset);
-            upload.Slice(offset, length).CopyTo(staging);
-            sink = unchecked(
-                sink * 1_000_003
-                + staging[0]
-                + ((long)staging[length - 1] << 8)
-                + length);
-            offset += length;
-        }
-    }
-
-    private static void ConsumeDirectStageBuffer(
-        ReadOnlySpan<byte> upload,
-        ref long sink)
-    {
-        const int transferBlockBytes = 4_096;
-        int offset = 0;
-        while (offset < upload.Length)
-        {
-            int length = Math.Min(
-                transferBlockBytes,
-                upload.Length - offset);
-            sink = unchecked(
-                sink * 1_000_003
-                + upload[offset]
-                + ((long)upload[offset + length - 1] << 8)
-                + length);
-            offset += length;
-        }
     }
 
     public static string ComputeProfileEvidenceHash(IReadOnlyList<PressureChunkEvidence> chunks)

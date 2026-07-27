@@ -1303,24 +1303,7 @@ internal sealed class NativePressureSession :
                         opaqueStages,
                         transparentStages)
                     : PressureWorkContract.DescribeOutput(
-                        chunkVertices.Slice(0, opaqueVertices),
-                        chunkIndices.Slice(0, opaqueIndices),
-                        allSlices.Slice(
-                            slot.SliceOffset,
-                            shape.OpaqueFaceCount),
-                        chunkVertices.Slice(
-                            opaqueVertices,
-                            shape.VertexCount - opaqueVertices),
-                        chunkIndices.Slice(
-                            opaqueIndices,
-                            shape.IndexCount - opaqueIndices),
-                        allSlices.Slice(
-                            checked(
-                                slot.SliceOffset
-                                + shape.OpaqueFaceCount),
-                            shape.TransparentFaceCount),
-                        opaqueStages,
-                        transparentStages);
+                        shape);
                 PressureChunkEvidence evidence = new(
                     slot.ChunkId,
                     PressureWorkContract.SourceInputBytesPerChunk,
@@ -1350,14 +1333,14 @@ internal sealed class NativePressureSession :
                 };
             }
 
-            Consume(
+            CompleteMappedHandoff(
                 allVertices,
                 allIndices,
                 allSlices,
                 allStages);
         }
 
-        private void Consume(
+        private void CompleteMappedHandoff(
             scoped Span<Vertex> allVertices,
             scoped Span<int> allIndices,
             scoped Span<PayloadSlice> allSlices,
@@ -1366,62 +1349,32 @@ internal sealed class NativePressureSession :
             for (int batchIndex = 0; batchIndex < BatchCount; batchIndex++)
             {
                 BatchSlot retained = _slots[batchIndex];
-                PressureChunkShape retainedShape = retained.Shape;
-                GpuStageBuffers opaqueStages = allStages.Slice(
-                    retainedShape.GpuStages,
-                    retained.Stage160Offset,
-                    retained.Stage168Offset,
-                    retained.Stage176Offset,
-                    retained.Stage192Offset,
-                    retained.Stage224Offset,
-                    opaque: true);
-                GpuStageBuffers transparentStages = allStages.Slice(
-                    retainedShape.GpuStages,
-                    retained.Stage160Offset,
-                    retained.Stage168Offset,
-                    retained.Stage176Offset,
-                    retained.Stage192Offset,
-                    retained.Stage224Offset,
-                    opaque: false);
-                int opaqueVertexCount = checked(
-                    retainedShape.OpaqueFaceCount
-                        * VoxelMath.VerticesPerFace);
-                int opaqueIndexCount = checked(
-                    retainedShape.OpaqueFaceCount
-                        * VoxelMath.IndicesPerFace);
                 if (ExactVerification)
                 {
+                    PressureChunkShape retainedShape = retained.Shape;
+                    GpuStageBuffers opaqueStages = allStages.Slice(
+                        retainedShape.GpuStages,
+                        retained.Stage160Offset,
+                        retained.Stage168Offset,
+                        retained.Stage176Offset,
+                        retained.Stage192Offset,
+                        retained.Stage224Offset,
+                        opaque: true);
+                    GpuStageBuffers transparentStages = allStages.Slice(
+                        retainedShape.GpuStages,
+                        retained.Stage160Offset,
+                        retained.Stage168Offset,
+                        retained.Stage176Offset,
+                        retained.Stage192Offset,
+                        retained.Stage224Offset,
+                        opaque: false);
+                    int opaqueVertexCount = checked(
+                        retainedShape.OpaqueFaceCount
+                            * VoxelMath.VerticesPerFace);
+                    int opaqueIndexCount = checked(
+                        retainedShape.OpaqueFaceCount
+                            * VoxelMath.IndicesPerFace);
                     PressureWorkContract.VerifyRetainedOutput(
-                        retained.Output,
-                        allVertices.Slice(
-                            retained.VertexOffset,
-                            opaqueVertexCount),
-                        allIndices.Slice(
-                            retained.IndexOffset,
-                            opaqueIndexCount),
-                        allSlices.Slice(
-                            retained.SliceOffset,
-                            retainedShape.OpaqueFaceCount),
-                        allVertices.Slice(
-                            retained.VertexOffset
-                                + opaqueVertexCount,
-                            retainedShape.VertexCount
-                                - opaqueVertexCount),
-                        allIndices.Slice(
-                            retained.IndexOffset
-                                + opaqueIndexCount,
-                            retainedShape.IndexCount
-                                - opaqueIndexCount),
-                        allSlices.Slice(
-                            retained.SliceOffset
-                                + retainedShape.OpaqueFaceCount,
-                            retainedShape.TransparentFaceCount),
-                        opaqueStages,
-                        transparentStages);
-                }
-                else
-                {
-                    PressureWorkContract.ConsumeGpuUpload(
                         retained.Output,
                         allVertices.Slice(
                             retained.VertexOffset,

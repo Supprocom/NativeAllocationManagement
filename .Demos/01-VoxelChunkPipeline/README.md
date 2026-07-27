@@ -72,7 +72,7 @@ while cumulative demand remains
     rent each exact typed output from a worker-local pool
     render and prerender every unique output
     transfer the five GPU stage ranges into mapped storage
-    verify and consume outputs in canonical order
+    complete the mapped handoff
     return every buffer at its true consumer boundary
 ```
 
@@ -141,10 +141,9 @@ dotnet .Demos/01-VoxelChunkPipeline/Harness/bin/Release/net10.0/VoxelChunkPipeli
 
 The runtime harness starts one persistent Safe C# container and one persistent
 NAM container. They receive equal 256 MiB memory and swap limits, swappiness
-zero, equal PID limits, disjoint equal CPU sets, server GC, four GC heaps, and
-the same 90 percent GC heap hard limit. No CFS CPU quota is applied. The
-containers run concurrently so each implementation receives its own full
-six-second deadline without doubling matrix wall time.
+zero, equal PID limits, the same CPU set, server GC, four GC heaps, and the
+same 90 percent GC heap hard limit. No CFS CPU quota is applied. The harness
+runs the persistent workers sequentially and alternates the first worker.
 
 The predeclared profiles are 50, 100, 200, 300, 400, 500, 600, 700, 800, 900,
 and 1000 percent of the binary cgroup cap. Fifty and one hundred percent are
@@ -156,18 +155,24 @@ exception or exit information, and available GC and cgroup state.
 
 Elapsed processing time is measured by the host between child boundary
 messages. The child does not run a benchmark stopwatch and does not call
-`GetStatistics()` or scan owners during processing. Fixed four-chunk consumer
-checkpoints are timestamped when the host receives them; their protocol cost is
-included for both implementations. Owner and runtime snapshots occur outside
-the processing boundary. Docker CPU and resident samples are polled externally,
-and cgroup `memory.current`, `memory.peak`, `memory.events`, and `memory.stat`
-are captured at profile boundaries.
+`GetStatistics()` or scan owners during processing. The child sends one
+completion boundary after it completes the mapped handoff. Owner and runtime
+snapshots occur outside the processing boundary. Docker CPU and resident
+samples are polled externally. The harness captures cgroup state at profile
+boundaries.
 
 Both controls must complete with exact parity. Their mean paired NAM speedup
-must be at least 1.00, their lower 95 percent confidence bound must be at least
-0.98, and their p95 and p99 normalized latency may not materially regress.
-From 200 through 1000 percent, a pair that completes must have mean NAM speedup
-of at least 1.05 and a lower bound above 1.00.
+must be at least 1.50. The 200-percent profile requires at least 1.75.
+Later profiles use progressive minimums that reach 2.00 at 1000 percent. Each
+lower 95-percent confidence bound must remain above 1.00.
+
+The matrix also requires NAM mean milliseconds per realized GiB to decrease
+at each later profile. A flat or increasing NAM cost fails the scaling gate.
+
+Measured profiles do not scan output bytes for benchmark evidence. The Safe
+path completes its checked mapped transfer. The NAM path completes a direct
+handoff of its mapped ranges. A separate maximum-demand run reads and verifies
+every typed value and output byte.
 
 A pressure profile also requires a Safe C# Gen2 collection, managed allocation
 turnover above the effective heap limit, and resident evidence from either an

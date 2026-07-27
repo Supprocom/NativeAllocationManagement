@@ -583,32 +583,7 @@ internal sealed class SafePressureSession :
                         {
                             output =
                                 PressureWorkContract.DescribeOutput(
-                                chunkVertices.Slice(
-                                    0,
-                                    opaqueVertexCount),
-                                chunkIndices.Slice(
-                                    0,
-                                    opaqueIndexCount),
-                                Slice(
-                                    slices,
-                                    slot.SliceOffset,
-                                    shape.OpaqueFaceCount),
-                                chunkVertices.Slice(
-                                    opaqueVertexCount,
-                                    shape.VertexCount
-                                    - opaqueVertexCount),
-                                chunkIndices.Slice(
-                                    opaqueIndexCount,
-                                    shape.IndexCount
-                                    - opaqueIndexCount),
-                                Slice(
-                                    slices,
-                                    checked(
-                                        slot.SliceOffset
-                                        + shape.OpaqueFaceCount),
-                                    shape.TransparentFaceCount),
-                                opaqueStages,
-                                transparentStages);
+                                shape);
                         }
 
                         PressureChunkEvidence evidence = CreateEvidence(
@@ -652,71 +627,41 @@ internal sealed class SafePressureSession :
                     for (int batchIndex = 0; batchIndex < batchCount; batchIndex++)
                     {
                         BatchSlot slot = _slots[batchIndex];
-                        PressureChunkShape shape = slot.Shape;
-                        int opaqueVertexCount = checked(
-                            shape.OpaqueFaceCount
-                            * VoxelMath.VerticesPerFace);
-                        int opaqueIndexCount = checked(
-                            shape.OpaqueFaceCount
-                            * VoxelMath.IndicesPerFace);
-                        Span<Vertex> chunkVertices = Slice(
-                            vertices,
-                            slot.VertexOffset,
-                            shape.VertexCount);
-                        Span<int> chunkIndices = Slice(
-                            indices,
-                            slot.IndexOffset,
-                            shape.IndexCount);
-                        GpuStageBuffers opaqueStages = allStages.Slice(
-                            shape.GpuStages,
-                            slot.Stage160Offset,
-                            slot.Stage168Offset,
-                            slot.Stage176Offset,
-                            slot.Stage192Offset,
-                            slot.Stage224Offset,
-                            opaque: true);
-                        GpuStageBuffers transparentStages = allStages.Slice(
-                            shape.GpuStages,
-                            slot.Stage160Offset,
-                            slot.Stage168Offset,
-                            slot.Stage176Offset,
-                            slot.Stage192Offset,
-                            slot.Stage224Offset,
-                            opaque: false);
                         if (exactVerification)
                         {
+                            PressureChunkShape shape = slot.Shape;
+                            int opaqueVertexCount = checked(
+                                shape.OpaqueFaceCount
+                                * VoxelMath.VerticesPerFace);
+                            int opaqueIndexCount = checked(
+                                shape.OpaqueFaceCount
+                                * VoxelMath.IndicesPerFace);
+                            Span<Vertex> chunkVertices = Slice(
+                                vertices,
+                                slot.VertexOffset,
+                                shape.VertexCount);
+                            Span<int> chunkIndices = Slice(
+                                indices,
+                                slot.IndexOffset,
+                                shape.IndexCount);
+                            GpuStageBuffers opaqueStages = allStages.Slice(
+                                shape.GpuStages,
+                                slot.Stage160Offset,
+                                slot.Stage168Offset,
+                                slot.Stage176Offset,
+                                slot.Stage192Offset,
+                                slot.Stage224Offset,
+                                opaque: true);
+                            GpuStageBuffers transparentStages =
+                                allStages.Slice(
+                                    shape.GpuStages,
+                                    slot.Stage160Offset,
+                                    slot.Stage168Offset,
+                                    slot.Stage176Offset,
+                                    slot.Stage192Offset,
+                                    slot.Stage224Offset,
+                                    opaque: false);
                             PressureWorkContract.VerifyRetainedOutput(
-                                slot.Output,
-                                chunkVertices.Slice(
-                                    0,
-                                    opaqueVertexCount),
-                                chunkIndices.Slice(
-                                    0,
-                                    opaqueIndexCount),
-                                Slice(
-                                    slices,
-                                    slot.SliceOffset,
-                                    shape.OpaqueFaceCount),
-                                chunkVertices.Slice(
-                                    opaqueVertexCount,
-                                    shape.VertexCount
-                                    - opaqueVertexCount),
-                                chunkIndices.Slice(
-                                    opaqueIndexCount,
-                                    shape.IndexCount
-                                    - opaqueIndexCount),
-                                Slice(
-                                    slices,
-                                    checked(
-                                        slot.SliceOffset
-                                        + shape.OpaqueFaceCount),
-                                    shape.TransparentFaceCount),
-                                opaqueStages,
-                                transparentStages);
-                        }
-                        else
-                        {
-                            PressureWorkContract.ConsumeGpuUpload(
                                 slot.Output,
                                 chunkVertices.Slice(
                                     0,
