@@ -12,20 +12,17 @@ optimizations?
 
 ## Current estimates
 
-The 50-percent control profile estimates that NAM is 53.82 percent faster in a
+The control profiles estimate that NAM is approximately 50 percent faster in a
 non-memory-constrained environment.
 
-The 1000-percent profile estimates that NAM is 111.83 percent faster in a very
-memory-constrained environment.
+The constrained profiles estimate that NAM is more than 110 percent faster in
+a very memory-constrained environment. The advantage continues to increase
+with cumulative memory turnover.
 
-A separate 10000-percent pilot measured a 139.71 percent improvement. This
-pilot processed 25.07 GiB of realized logical demand in each implementation.
-
-| Profile | Safe-to-NAM ratio | Estimated improvement |
-|---:|---:|---:|
-| 50% | 1.5382x | 53.82% |
-| 1000% | 2.1183x | 111.83% |
-| 10000% pilot | 2.3971x | 139.71% |
+| Environment | Estimated improvement |
+|---|---:|
+| Non-memory-constrained | Approximately 50% |
+| Very memory-constrained | More than 110% |
 
 These values are workload and system estimates. Use the included command to
 measure the result on the applicable target system.
