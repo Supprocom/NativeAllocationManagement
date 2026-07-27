@@ -355,6 +355,8 @@ internal static class PressureMatrixHarness
                 "predeclared plan and terminal completion without per-chunk evidence",
             ["measurementBoundary"] =
                 "host starts before BeginProcessing and stops at ProcessingCompleted",
+            ["cgroupPeakTelemetry"] =
+                "one reset after warmup per worker, then cumulative peak reads",
             ["exactVerification"] =
                 "maximum deterministic prefix after all measured profiles",
             ["gcHeapHardLimitPercent"] = options.GcHeapHardLimitPercent.ToString(
@@ -883,6 +885,7 @@ internal static class PressureMatrixHarness
         private Task<string>? _statsErrorReader;
         private Task<string>? _stderrReader;
         private int _restart;
+        private bool _peakResetAttempted;
 
         private DockerWorker(string implementation, string cpuSet, string imageId)
         {
@@ -978,6 +981,7 @@ internal static class PressureMatrixHarness
 
         private async Task StartProcessAsync(Options options, List<string> commands)
         {
+            _peakResetAttempted = false;
             string suffix = _restart == 0 ? "initial" : $"restart-{_restart}";
             ContainerName = $"nam-voxel-{_implementation.ToLowerInvariant()}-{suffix}-{Guid.NewGuid():N}";
             string assembly = _implementation == "NAM"
@@ -1350,8 +1354,9 @@ internal static class PressureMatrixHarness
             PrepareCgroupProfileAsync()
         {
             bool reset = false;
-            if (IsAlive)
+            if (IsAlive && !_peakResetAttempted)
             {
+                _peakResetAttempted = true;
                 try
                 {
                     CommandResult result = await RunCommandAsync(
