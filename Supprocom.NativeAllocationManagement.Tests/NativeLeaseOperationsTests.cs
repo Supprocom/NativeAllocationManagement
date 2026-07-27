@@ -1103,6 +1103,12 @@ public sealed class NativeLeaseOperationsTests
                 second,
                 third,
                 fourth,
+                static (_, _, _, four) => four[0]++);
+            NativeLeaseOperations.Access(
+                first,
+                second,
+                third,
+                fourth,
                 fifth,
                 static (one, two, three, four, five) =>
                 {
@@ -1115,9 +1121,10 @@ public sealed class NativeLeaseOperationsTests
             NativeMemoryTestHooks.SetBeforeOperationEntry(null);
         }
 
-        Assert.Equal(3, admissions);
+        Assert.Equal(4, admissions);
         Assert.Equal(5, first[0]);
-        Assert.Equal(17, third[0]);
+        Assert.Equal(18, third[0]);
+        Assert.Equal(5, fourth[0]);
 
         bool callbackFailed = false;
         try

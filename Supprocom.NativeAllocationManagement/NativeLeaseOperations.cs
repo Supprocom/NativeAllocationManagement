@@ -1177,6 +1177,77 @@ public static class NativeLeaseOperations
             TFourth> action)
     {
         ArgumentNullException.ThrowIfNull(action);
+        NativeOwnerKernel firstKernel =
+            first.KernelForComposite;
+        NativeGeneration firstGeneration =
+            first.GenerationStateForComposite;
+        long generationNumber =
+            first.GenerationForComposite;
+        if (ReferenceEquals(
+                firstKernel,
+                second.KernelForComposite)
+            && ReferenceEquals(
+                firstKernel,
+                third.KernelForComposite)
+            && ReferenceEquals(
+                firstKernel,
+                fourth.KernelForComposite)
+            && generationNumber
+                == second.GenerationForComposite
+            && generationNumber
+                == third.GenerationForComposite
+            && generationNumber
+                == fourth.GenerationForComposite
+            && ReferenceEquals(
+                firstGeneration,
+                second.GenerationStateForComposite)
+            && ReferenceEquals(
+                firstGeneration,
+                third.GenerationStateForComposite)
+            && ReferenceEquals(
+                firstGeneration,
+                fourth.GenerationStateForComposite))
+        {
+            NativeCompositeAllocationBuffer allocations =
+                default;
+            allocations[0] =
+                first.AllocationStateForComposite;
+            allocations[1] =
+                second.AllocationStateForComposite;
+            allocations[2] =
+                third.AllocationStateForComposite;
+            allocations[3] =
+                fourth.AllocationStateForComposite;
+            Span<long> allocationIds = stackalloc long[4]
+            {
+                first.AllocationIdForComposite,
+                second.AllocationIdForComposite,
+                third.AllocationIdForComposite,
+                fourth.AllocationIdForComposite
+            };
+            NativeCompositeOperationToken directToken =
+                firstKernel.EnterCompositeOperation(
+                    firstGeneration,
+                    allocations,
+                    generationNumber,
+                    allocationIds,
+                    nameof(Access));
+            try
+            {
+                action(
+                    directToken.GetView<TFirst>(0),
+                    directToken.GetView<TSecond>(1),
+                    directToken.GetView<TThird>(2),
+                    directToken.GetView<TFourth>(3));
+            }
+            finally
+            {
+                directToken.Dispose();
+            }
+
+            return;
+        }
+
         NativeMultiOwnerOperationEntryBuffer entries = default;
         entries[0] = new(
             first.KernelForComposite,
