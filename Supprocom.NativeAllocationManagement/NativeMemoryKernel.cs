@@ -3288,8 +3288,7 @@ internal sealed class NativeOwnerKernel
         for (int index = 0; index < count; index++)
         {
             NativeBumpBatchRequest request = requests[index];
-            if (request.ContainsReferences
-                || request.ByteLength == 0)
+            if (request.ContainsReferences)
             {
                 return false;
             }

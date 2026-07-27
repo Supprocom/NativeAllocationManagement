@@ -562,6 +562,103 @@ public sealed class NativeLeaseOperationsTests
     }
 
     [Fact]
+    public void UnmanagedSpanGroupBatchesAnEmptyRange()
+    {
+        NativeMemoryTestHooks.Reset();
+        using NativeArena arena = new(
+            preAllocateBytes: 4096,
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        ArenaLease<int> source = arena.Scratch<int>(
+            1,
+            static writer => writer.Write(12));
+
+        InitializeAndVerify(source, arena);
+        arena.RecycleScoped();
+        long visitsBefore =
+            NativeMemoryTestHooks.Snapshot().BumpTraversalVisitCount;
+        InitializeAndVerify(source, arena);
+        long visitsAfter =
+            NativeMemoryTestHooks.Snapshot().BumpTraversalVisitCount;
+
+        Assert.Equal(1L, visitsAfter - visitsBefore);
+        arena.RecycleScoped();
+        Assert.Equal(1, arena.CurrentAllocationRecordCountForTest);
+
+        bool failed = false;
+        try
+        {
+            scoped ArenaLease<int> first;
+            scoped ArenaLease<long> second;
+            scoped ArenaLease<uint> third;
+            scoped ArenaLease<byte> empty;
+            NativeLeaseOperations.InitializeScoped(
+                source,
+                arena,
+                1,
+                1,
+                1,
+                0,
+                static (input, one, two, three, four) =>
+                {
+                    one[0] = input[0];
+                    two[0] = input[0];
+                    three[0] = checked((uint)input[0]);
+                    Assert.Equal(0, four.Length);
+                    throw new InvalidOperationException(
+                        "Expected failure.");
+                },
+                out first,
+                out second,
+                out third,
+                out empty);
+        }
+        catch (InvalidOperationException)
+        {
+            failed = true;
+        }
+
+        Assert.True(failed);
+        Assert.Equal(1, arena.CurrentAllocationRecordCountForTest);
+        InitializeAndVerify(source, arena);
+        arena.RecycleScoped();
+        Assert.Equal(1, arena.CurrentAllocationRecordCountForTest);
+
+        static void InitializeAndVerify(
+            scoped ArenaLease<int> source,
+            NativeArena arena)
+        {
+            scoped ArenaLease<int> first;
+            scoped ArenaLease<long> second;
+            scoped ArenaLease<uint> third;
+            scoped ArenaLease<byte> empty;
+            NativeLeaseOperations.InitializeScoped(
+                source,
+                arena,
+                2,
+                1,
+                1,
+                0,
+                static (input, one, two, three, four) =>
+                {
+                    one.Fill(input[0]);
+                    two[0] = input[0] + 1;
+                    three[0] = checked((uint)(input[0] + 2));
+                    Assert.Equal(0, four.Length);
+                },
+                out first,
+                out second,
+                out third,
+                out empty);
+
+            Assert.Equal(12, first[0]);
+            Assert.Equal(12, first[1]);
+            Assert.Equal(13, second[0]);
+            Assert.Equal(14u, third[0]);
+            Assert.Equal(0, empty.Length);
+        }
+    }
+
+    [Fact]
     public void UnmanagedSpanGroupFailureRestoresAllReservations()
     {
         NativeMemoryTestHooks.Reset();
