@@ -1418,6 +1418,89 @@ public static class NativeLeaseOperations
         NativeLeaseQuintupleAction<TFirst, TSecond, TThird, TFourth, TFifth> action)
     {
         ArgumentNullException.ThrowIfNull(action);
+        NativeOwnerKernel firstKernel =
+            first.KernelForComposite;
+        NativeGeneration firstGeneration =
+            first.GenerationStateForComposite;
+        long generationNumber =
+            first.GenerationForComposite;
+        if (ReferenceEquals(
+                firstKernel,
+                second.KernelForComposite)
+            && ReferenceEquals(
+                firstKernel,
+                third.KernelForComposite)
+            && ReferenceEquals(
+                firstKernel,
+                fourth.KernelForComposite)
+            && ReferenceEquals(
+                firstKernel,
+                fifth.KernelForComposite)
+            && generationNumber
+                == second.GenerationForComposite
+            && generationNumber
+                == third.GenerationForComposite
+            && generationNumber
+                == fourth.GenerationForComposite
+            && generationNumber
+                == fifth.GenerationForComposite
+            && ReferenceEquals(
+                firstGeneration,
+                second.GenerationStateForComposite)
+            && ReferenceEquals(
+                firstGeneration,
+                third.GenerationStateForComposite)
+            && ReferenceEquals(
+                firstGeneration,
+                fourth.GenerationStateForComposite)
+            && ReferenceEquals(
+                firstGeneration,
+                fifth.GenerationStateForComposite))
+        {
+            NativeCompositeAllocationBuffer allocations =
+                default;
+            allocations[0] =
+                first.AllocationStateForComposite;
+            allocations[1] =
+                second.AllocationStateForComposite;
+            allocations[2] =
+                third.AllocationStateForComposite;
+            allocations[3] =
+                fourth.AllocationStateForComposite;
+            allocations[4] =
+                fifth.AllocationStateForComposite;
+            Span<long> allocationIds = stackalloc long[5]
+            {
+                first.AllocationIdForComposite,
+                second.AllocationIdForComposite,
+                third.AllocationIdForComposite,
+                fourth.AllocationIdForComposite,
+                fifth.AllocationIdForComposite
+            };
+            NativeCompositeOperationToken directToken =
+                firstKernel.EnterCompositeOperation(
+                    firstGeneration,
+                    allocations,
+                    generationNumber,
+                    allocationIds,
+                    nameof(Access));
+            try
+            {
+                action(
+                    directToken.GetView<TFirst>(0),
+                    directToken.GetView<TSecond>(1),
+                    directToken.GetView<TThird>(2),
+                    directToken.GetView<TFourth>(3),
+                    directToken.GetView<TFifth>(4));
+            }
+            finally
+            {
+                directToken.Dispose();
+            }
+
+            return;
+        }
+
         NativeMultiOwnerOperationEntryBuffer entries = default;
         entries[0] = new(
             first.KernelForComposite,
@@ -1468,7 +1551,10 @@ public static class NativeLeaseOperations
         }
     }
 
-    /// <summary>Enters seven arena leases for one bounded callback.</summary>
+    /// <summary>
+    /// Enters seven arena leases for one bounded callback. Same-owner leases use
+    /// one failure-atomic composite admission.
+    /// </summary>
     public static void Access<
         TFirst,
         TSecond,
@@ -1494,6 +1580,113 @@ public static class NativeLeaseOperations
             TSeventh> action)
     {
         ArgumentNullException.ThrowIfNull(action);
+        NativeOwnerKernel firstKernel =
+            first.KernelForComposite;
+        NativeGeneration firstGeneration =
+            first.GenerationStateForComposite;
+        long generationNumber =
+            first.GenerationForComposite;
+        if (ReferenceEquals(
+                firstKernel,
+                second.KernelForComposite)
+            && ReferenceEquals(
+                firstKernel,
+                third.KernelForComposite)
+            && ReferenceEquals(
+                firstKernel,
+                fourth.KernelForComposite)
+            && ReferenceEquals(
+                firstKernel,
+                fifth.KernelForComposite)
+            && ReferenceEquals(
+                firstKernel,
+                sixth.KernelForComposite)
+            && ReferenceEquals(
+                firstKernel,
+                seventh.KernelForComposite)
+            && generationNumber
+                == second.GenerationForComposite
+            && generationNumber
+                == third.GenerationForComposite
+            && generationNumber
+                == fourth.GenerationForComposite
+            && generationNumber
+                == fifth.GenerationForComposite
+            && generationNumber
+                == sixth.GenerationForComposite
+            && generationNumber
+                == seventh.GenerationForComposite
+            && ReferenceEquals(
+                firstGeneration,
+                second.GenerationStateForComposite)
+            && ReferenceEquals(
+                firstGeneration,
+                third.GenerationStateForComposite)
+            && ReferenceEquals(
+                firstGeneration,
+                fourth.GenerationStateForComposite)
+            && ReferenceEquals(
+                firstGeneration,
+                fifth.GenerationStateForComposite)
+            && ReferenceEquals(
+                firstGeneration,
+                sixth.GenerationStateForComposite)
+            && ReferenceEquals(
+                firstGeneration,
+                seventh.GenerationStateForComposite))
+        {
+            NativeCompositeAllocationBuffer allocations =
+                default;
+            allocations[0] =
+                first.AllocationStateForComposite;
+            allocations[1] =
+                second.AllocationStateForComposite;
+            allocations[2] =
+                third.AllocationStateForComposite;
+            allocations[3] =
+                fourth.AllocationStateForComposite;
+            allocations[4] =
+                fifth.AllocationStateForComposite;
+            allocations[5] =
+                sixth.AllocationStateForComposite;
+            allocations[6] =
+                seventh.AllocationStateForComposite;
+            Span<long> allocationIds = stackalloc long[7]
+            {
+                first.AllocationIdForComposite,
+                second.AllocationIdForComposite,
+                third.AllocationIdForComposite,
+                fourth.AllocationIdForComposite,
+                fifth.AllocationIdForComposite,
+                sixth.AllocationIdForComposite,
+                seventh.AllocationIdForComposite
+            };
+            NativeCompositeOperationToken directToken =
+                firstKernel.EnterCompositeOperation(
+                    firstGeneration,
+                    allocations,
+                    generationNumber,
+                    allocationIds,
+                    nameof(Access));
+            try
+            {
+                action(
+                    directToken.GetView<TFirst>(0),
+                    directToken.GetView<TSecond>(1),
+                    directToken.GetView<TThird>(2),
+                    directToken.GetView<TFourth>(3),
+                    directToken.GetView<TFifth>(4),
+                    directToken.GetView<TSixth>(5),
+                    directToken.GetView<TSeventh>(6));
+            }
+            finally
+            {
+                directToken.Dispose();
+            }
+
+            return;
+        }
+
         NativeMultiOwnerOperationEntryBuffer entries = default;
         entries[0] = new(
             first.KernelForComposite,
