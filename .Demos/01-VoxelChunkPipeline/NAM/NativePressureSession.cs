@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Runtime.InteropServices;
 using Supprocom.NativeAllocationManagement;
 using Supprocom.NativeAllocationManagement.Demos.VoxelChunkPipeline.SharedContract;
 
@@ -113,7 +112,7 @@ internal sealed class NativePressureSession :
                     CreateNativeCapacityPlan(
                         item.Request,
                         out int nativeRetentionDepth);
-                using AlignedMappedBuffer mappedUpload =
+                using MappedGpuBuffer mappedUpload =
                     new(outputCapacity.RequiredPhaseArenaCapacity);
                 long sectionAdmissionCapacity =
                     outputCapacity.SectionAdmissionCapacityBytes;
@@ -1724,50 +1723,6 @@ internal sealed class NativePressureSession :
             }
 
             Completion.TrySetResult(Result);
-        }
-    }
-
-    private sealed class AlignedMappedBuffer : SafeBuffer
-    {
-        private const nuint Alignment = 64;
-        private nint _allocation;
-
-        internal AlignedMappedBuffer(nuint byteLength)
-            : base(ownsHandle: true)
-        {
-            ArgumentOutOfRangeException.ThrowIfZero(byteLength);
-            nuint allocationLength = checked(
-                byteLength + Alignment - 1);
-            nint allocation = Marshal.AllocHGlobal(
-                checked((nint)allocationLength));
-            try
-            {
-                nuint rawAddress = unchecked((nuint)allocation);
-                nuint alignedAddress =
-                    checked(rawAddress + Alignment - 1)
-                    & ~(Alignment - 1);
-                _allocation = allocation;
-                SetHandle(unchecked((nint)alignedAddress));
-                Initialize(checked((ulong)byteLength));
-            }
-            catch
-            {
-                Marshal.FreeHGlobal(allocation);
-                throw;
-            }
-        }
-
-        protected override bool ReleaseHandle()
-        {
-            nint allocation = Interlocked.Exchange(
-                ref _allocation,
-                0);
-            if (allocation != 0)
-            {
-                Marshal.FreeHGlobal(allocation);
-            }
-
-            return true;
         }
     }
 

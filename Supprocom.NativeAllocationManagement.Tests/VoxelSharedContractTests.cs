@@ -233,7 +233,7 @@ public sealed class VoxelSharedContractTests
             nativeSource,
             StringComparison.Ordinal);
         Assert.Contains(
-            "AlignedMappedBuffer",
+            "MappedGpuBuffer",
             nativeSource,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -390,6 +390,30 @@ public sealed class VoxelSharedContractTests
         Assert.Equal(176, Unsafe.SizeOf<GpuStage176>());
         Assert.Equal(192, Unsafe.SizeOf<GpuStage192>());
         Assert.Equal(224, Unsafe.SizeOf<GpuStage224>());
+    }
+
+    [Fact]
+    public void MappedGpuBufferSupportsSafeStreamAccess()
+    {
+        byte[] expected = new byte[4096];
+        for (int index = 0; index < expected.Length; index++)
+        {
+            expected[index] = unchecked((byte)(index * 17));
+        }
+
+        using MappedGpuBuffer buffer = new(
+            checked((nuint)expected.Length));
+        using UnmanagedMemoryStream stream =
+            buffer.OpenStream();
+        stream.Write(expected);
+        stream.Position = 0;
+        byte[] actual = new byte[expected.Length];
+        stream.ReadExactly(actual);
+
+        Assert.Equal(expected, actual);
+        Assert.Equal(
+            checked((ulong)expected.Length),
+            buffer.ByteLength);
     }
 
     [Theory]
