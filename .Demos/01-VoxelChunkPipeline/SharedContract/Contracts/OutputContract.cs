@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Text.Json.Serialization;
 
 namespace Supprocom.NativeAllocationManagement.Demos.VoxelChunkPipeline.SharedContract;
@@ -14,6 +16,215 @@ public readonly record struct FaceRecord(
 public readonly record struct Vertex(int X, int Y, int Z, int Face, int Corner, int BlockId);
 
 public readonly record struct PayloadSlice(int Offset, int Length, int Alignment, int StageMask, int BlockId, int CellIndex);
+
+[InlineArray(160)]
+public struct GpuStage160
+{
+    private byte _element0;
+}
+
+[InlineArray(168)]
+public struct GpuStage168
+{
+    private byte _element0;
+}
+
+[InlineArray(176)]
+public struct GpuStage176
+{
+    private byte _element0;
+}
+
+[InlineArray(192)]
+public struct GpuStage192
+{
+    private byte _element0;
+}
+
+[InlineArray(224)]
+public struct GpuStage224
+{
+    private byte _element0;
+}
+
+public ref struct GpuStageBuffers
+{
+    public GpuStageBuffers(
+        Span<GpuStage160> stage160,
+        Span<GpuStage168> stage168,
+        Span<GpuStage176> stage176,
+        Span<GpuStage192> stage192,
+        Span<GpuStage224> stage224)
+    {
+        Stage160 = stage160;
+        Stage168 = stage168;
+        Stage176 = stage176;
+        Stage192 = stage192;
+        Stage224 = stage224;
+    }
+
+    public Span<GpuStage160> Stage160 { get; }
+
+    public Span<GpuStage168> Stage168 { get; }
+
+    public Span<GpuStage176> Stage176 { get; }
+
+    public Span<GpuStage192> Stage192 { get; }
+
+    public Span<GpuStage224> Stage224 { get; }
+
+    public long ByteLength => checked(
+        (long)Stage160.Length * 160
+        + (long)Stage168.Length * 168
+        + (long)Stage176.Length * 176
+        + (long)Stage192.Length * 192
+        + (long)Stage224.Length * 224);
+
+    public Span<byte> GetStage(int stageBytes, int byteOffset)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(byteOffset);
+        return stageBytes switch
+        {
+            160 => GetStageBytes(Stage160, byteOffset, 160),
+            168 => GetStageBytes(Stage168, byteOffset, 168),
+            176 => GetStageBytes(Stage176, byteOffset, 176),
+            192 => GetStageBytes(Stage192, byteOffset, 192),
+            224 => GetStageBytes(Stage224, byteOffset, 224),
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(stageBytes),
+                stageBytes,
+                "The GPU stage size is not registered.")
+        };
+    }
+
+    public Span<byte> GetAllBytes(int stageBytes) =>
+        stageBytes switch
+        {
+            160 => MemoryMarshal.AsBytes(Stage160),
+            168 => MemoryMarshal.AsBytes(Stage168),
+            176 => MemoryMarshal.AsBytes(Stage176),
+            192 => MemoryMarshal.AsBytes(Stage192),
+            224 => MemoryMarshal.AsBytes(Stage224),
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(stageBytes),
+                stageBytes,
+                "The GPU stage size is not registered.")
+        };
+
+    public int Count(int stageBytes) =>
+        stageBytes switch
+        {
+            160 => Stage160.Length,
+            168 => Stage168.Length,
+            176 => Stage176.Length,
+            192 => Stage192.Length,
+            224 => Stage224.Length,
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(stageBytes),
+                stageBytes,
+                "The GPU stage size is not registered.")
+        };
+
+    public GpuStageBuffers Slice(
+        GpuStageShape shape,
+        int stage160Offset,
+        int stage168Offset,
+        int stage176Offset,
+        int stage192Offset,
+        int stage224Offset,
+        bool opaque)
+    {
+        int opaqueOffset160 =
+            opaque ? 0 : shape.OpaqueStage160Count;
+        int opaqueOffset168 =
+            opaque ? 0 : shape.OpaqueStage168Count;
+        int opaqueOffset176 =
+            opaque ? 0 : shape.OpaqueStage176Count;
+        int opaqueOffset192 =
+            opaque ? 0 : shape.OpaqueStage192Count;
+        int opaqueOffset224 =
+            opaque ? 0 : shape.OpaqueStage224Count;
+        return new GpuStageBuffers(
+            Stage160.Slice(
+                checked(stage160Offset + opaqueOffset160),
+                opaque
+                    ? shape.OpaqueStage160Count
+                    : shape.TransparentCountFor(160)),
+            Stage168.Slice(
+                checked(stage168Offset + opaqueOffset168),
+                opaque
+                    ? shape.OpaqueStage168Count
+                    : shape.TransparentCountFor(168)),
+            Stage176.Slice(
+                checked(stage176Offset + opaqueOffset176),
+                opaque
+                    ? shape.OpaqueStage176Count
+                    : shape.TransparentCountFor(176)),
+            Stage192.Slice(
+                checked(stage192Offset + opaqueOffset192),
+                opaque
+                    ? shape.OpaqueStage192Count
+                    : shape.TransparentCountFor(192)),
+            Stage224.Slice(
+                checked(stage224Offset + opaqueOffset224),
+                opaque
+                    ? shape.OpaqueStage224Count
+                    : shape.TransparentCountFor(224)));
+    }
+
+    private static Span<byte> GetStageBytes<T>(
+        Span<T> values,
+        int byteOffset,
+        int stageBytes)
+        where T : unmanaged
+    {
+        if (byteOffset % stageBytes != 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(byteOffset),
+                "The GPU stage offset is not aligned to its record size.");
+        }
+
+        int index = byteOffset / stageBytes;
+        if ((uint)index >= (uint)values.Length)
+        {
+            throw new ArgumentOutOfRangeException(nameof(byteOffset));
+        }
+
+        return MemoryMarshal.AsBytes(values.Slice(index, 1));
+    }
+}
+
+public readonly record struct SectionPrerenderDescriptor(
+    int SectionIndex,
+    SectionRepresentationKind Kind,
+    ushort UniformBlockId,
+    int OpaqueCount,
+    int TransparentCount,
+    int EmptyCount,
+    int BitsPerIndex,
+    int ValueOffset,
+    int ValueLength,
+    int PackedWordOffset,
+    int PackedWordLength,
+    int TransparentTileOffset,
+    int TransparentTileLength,
+    int OpaqueBitsOffset,
+    int TransparentBitsOffset,
+    int EmptyBitsOffset,
+    int OpaqueFaceBitsOffset,
+    int TransparentFaceBitsOffset,
+    bool HasBounds,
+    byte MinX,
+    byte MinY,
+    byte MinZ,
+    byte MaxX,
+    byte MaxY,
+    byte MaxZ,
+    int SectionBaseX,
+    int SectionBaseY,
+    int SectionBaseZ,
+    int ContentTag);
 
 public struct VoxelCell
 {

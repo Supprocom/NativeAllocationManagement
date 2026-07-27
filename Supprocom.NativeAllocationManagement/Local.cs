@@ -7,14 +7,18 @@ public readonly ref struct Local<T>
     private readonly NativeOwnerKernel? _kernel;
     private readonly long _generation;
     private readonly long _allocationId;
+    private readonly NativeGeneration? _generationState;
+    private readonly NativeAllocation? _allocationState;
 
-    internal Local(NativeOwnerKernel kernel, long generation, long allocationId, int length, int capacity)
+    internal Local(
+        NativeOwnerKernel kernel,
+        NativeRegionAllocation allocation)
     {
         _kernel = kernel;
-        _generation = generation;
-        _allocationId = allocationId;
-        _ = length;
-        _ = capacity;
+        _generation = allocation.Generation;
+        _allocationId = allocation.AllocationId;
+        _generationState = allocation.GenerationState;
+        _allocationState = allocation.AllocationState;
     }
 
     /// <summary>Gets the logical element count.</summary>
@@ -55,7 +59,7 @@ public readonly ref struct Local<T>
     /// <summary>Zeroes the logical range while holding one native operation token.</summary>
     public void Clear()
     {
-        NativeOperationToken token = GetKernel(nameof(Clear)).EnterOperation(_generation, _allocationId, nameof(Clear));
+        NativeOperationToken token = EnterOperation(nameof(Clear));
         try
         {
             token.GetView<T>().Clear();
@@ -75,7 +79,7 @@ public readonly ref struct Local<T>
             throw new ArgumentException("The source length must equal the local logical length.", nameof(source));
         }
 
-        NativeOperationToken token = GetKernel(nameof(CopyFrom)).EnterOperation(_generation, _allocationId, nameof(CopyFrom));
+        NativeOperationToken token = EnterOperation(nameof(CopyFrom));
         try
         {
             token.GetView<T>().CopyFrom(source);
@@ -95,7 +99,7 @@ public readonly ref struct Local<T>
             throw new ArgumentException("The destination must contain at least the local logical length.", nameof(destination));
         }
 
-        NativeOperationToken token = GetKernel(nameof(CopyTo)).EnterOperation(_generation, _allocationId, nameof(CopyTo));
+        NativeOperationToken token = EnterOperation(nameof(CopyTo));
         try
         {
             token.GetView<T>().CopyTo(destination);
@@ -110,7 +114,7 @@ public readonly ref struct Local<T>
     public void Access(NativeLeaseAction<T> action)
     {
         ArgumentNullException.ThrowIfNull(action);
-        NativeOperationToken token = GetKernel(nameof(Access)).EnterOperation(_generation, _allocationId, nameof(Access));
+        NativeOperationToken token = EnterOperation(nameof(Access));
         try
         {
             action(token.GetView<T>());
@@ -125,7 +129,7 @@ public readonly ref struct Local<T>
     public TResult Read<TResult>(NativeLeaseFunc<T, TResult> action)
     {
         ArgumentNullException.ThrowIfNull(action);
-        NativeOperationToken token = GetKernel(nameof(Read)).EnterOperation(_generation, _allocationId, nameof(Read));
+        NativeOperationToken token = EnterOperation(nameof(Read));
         try
         {
             return action(token.GetView<T>());
@@ -140,13 +144,39 @@ public readonly ref struct Local<T>
     {
         NativeHandleMetadata metadata = GetMetadata(operation);
         ValidateIndex(index, metadata.Length);
-        return GetKernel(operation).EnterOperation(_generation, _allocationId, operation);
+        return EnterOperation(operation);
     }
 
     private NativeOwnerKernel GetKernel(string operation) =>
         _kernel ?? throw new NativeAllocationUninitializedException(nameof(Local<T>), operation);
 
-    private NativeHandleMetadata GetMetadata(string operation) => GetKernel(operation).ValidateHandle(_generation, _allocationId, operation);
+    private NativeGeneration GetGenerationState(string operation) =>
+        _generationState
+        ?? throw new NativeAllocationUninitializedException(
+            nameof(Local<T>),
+            operation);
+
+    private NativeAllocation GetAllocationState(string operation) =>
+        _allocationState
+        ?? throw new NativeAllocationUninitializedException(
+            nameof(Local<T>),
+            operation);
+
+    private NativeOperationToken EnterOperation(string operation) =>
+        GetKernel(operation).EnterOperation(
+            GetGenerationState(operation),
+            GetAllocationState(operation),
+            _generation,
+            _allocationId,
+            operation);
+
+    private NativeHandleMetadata GetMetadata(string operation) =>
+        GetKernel(operation).ValidateHandle(
+            GetGenerationState(operation),
+            GetAllocationState(operation),
+            _generation,
+            _allocationId,
+            operation);
 
     private static void ValidateIndex(int index, int length)
     {

@@ -16,7 +16,7 @@ public sealed class ArenaAnalyzerContractTests
                 public static void Run()
                 {
                     using NativeArena arena = new();
-                    { ArenaLease<int> values = arena.Scratch<int>(4); values[0] = 1; }
+                    { ArenaLease<int> values = arena.Scratch<int>(4, static writer => writer.Fill(default!)); values[0] = 1; }
                     arena.ReleaseLeasesToNativeMemory();
                 }
             }
@@ -35,7 +35,7 @@ public sealed class ArenaAnalyzerContractTests
                 public static void Run()
                 {
                     NativeArena arena = new();
-                    ArenaLease<int> values = arena.Scratch<int>(1);
+                    ArenaLease<int> values = arena.Scratch<int>(1, static writer => writer.Fill(default!));
                     arena.ReleaseLeasesToNativeMemory();
                 }
             }
@@ -65,7 +65,7 @@ public sealed class ArenaAnalyzerContractTests
                 public static void Run()
                 {
                     NativeArena arena = new();
-                    { scoped ArenaLease<int> values = arena.ScratchScoped<int>(2); values[0] = 1; }
+                    { scoped ArenaLease<int> values = arena.ScratchScoped<int>(2, static writer => writer.Fill(default!)); values[0] = 1; }
                     arena.RecycleScoped();
                     arena.Dispose();
                 }
@@ -82,7 +82,7 @@ public sealed class ArenaAnalyzerContractTests
                 public static void Run()
                 {
                     using NativeArena arena = new();
-                    { scoped ArenaLease<int> values = arena.ScratchScoped<int>(2); values[0] = 1; }
+                    { scoped ArenaLease<int> values = arena.ScratchScoped<int>(2, static writer => writer.Fill(default!)); values[0] = 1; }
                 }
             }
             """);
@@ -96,7 +96,7 @@ public sealed class ArenaAnalyzerContractTests
                 public static void Run()
                 {
                     NativeArena arena = new();
-                    scoped ArenaLease<int> values = arena.Scratch<int>(2);
+                    scoped ArenaLease<int> values = arena.Scratch<int>(2, static writer => writer.Fill(default!));
                     arena.Dispose();
                 }
             }
@@ -109,7 +109,7 @@ public sealed class ArenaAnalyzerContractTests
             public static class Sample
             {
                 public static ArenaLease<int> Run(NativeArena arena)
-                    => arena.ScratchScoped<int>(2);
+                    => arena.ScratchScoped<int>(2, static writer => writer.Fill(default!));
             }
             """);
         Assert.Contains("NAM1018", AnalyzerContractTests.NativeDiagnostics(escaped));
@@ -130,8 +130,8 @@ public sealed class ArenaAnalyzerContractTests
                     {
                         try
                         {
-                            { scoped Pooled<int> first = pool.LeaseScoped(2); first[0] = index; }
-                            { scoped Pooled<int> second = pool.LeaseScoped(2); second[0] = index + 1; }
+                            { scoped Pooled<int> first = pool.LeaseScoped(2, static writer => writer.Fill(default!)); first[0] = index; }
+                            { scoped Pooled<int> second = pool.LeaseScoped(2, static writer => writer.Fill(default!)); second[0] = index + 1; }
                         }
                         finally
                         {
@@ -158,7 +158,7 @@ public sealed class ArenaAnalyzerContractTests
                 {
                     using (NativeRegion region = new())
                     {
-                        Local<int> values = region.Lease<int>(2);
+                        Local<int> values = region.Lease<int>(2, static writer => writer.Fill(default!));
                         values[0] = 1;
                     }
                 }
@@ -174,7 +174,7 @@ public sealed class ArenaAnalyzerContractTests
                 public static void Run()
                 {
                     using NativeRegion region = new();
-                    Local<int> values = region.Lease<int>(2);
+                    Local<int> values = region.Lease<int>(2, static writer => writer.Fill(default!));
                     values[0] = 1;
                 }
             }
@@ -196,7 +196,7 @@ public sealed class ArenaAnalyzerContractTests
                 {
                     NativeArena arena = new(doNotLeaseOnDeclaration: true);
                     if (activate) arena.LeaseFromMemory();
-                    ArenaLease<int> values = arena.Scratch<int>(1);
+                    ArenaLease<int> values = arena.Scratch<int>(1, static writer => writer.Fill(default!));
                     arena.Dispose();
                 }
             }
@@ -215,11 +215,11 @@ public sealed class ArenaAnalyzerContractTests
                 public static void Run()
                 {
                     NativePool<int> pool = new();
-                    { scoped Pooled<int> pooled = pool.LeaseScoped(2); pooled[0] = 1; }
+                    { scoped Pooled<int> pooled = pool.LeaseScoped(2, static writer => writer.Fill(default!)); pooled[0] = 1; }
                     pool.RecycleScoped();
                     using (NativeRegion region = new())
                     {
-                        { scoped Local<int> local = region.LeaseScoped<int>(2); local[0] = 1; }
+                        { scoped Local<int> local = region.LeaseScoped<int>(2, static writer => writer.Fill(default!)); local[0] = 1; }
                         region.RecycleScoped();
                     }
                     pool.Dispose();
@@ -236,7 +236,7 @@ public sealed class ArenaAnalyzerContractTests
                 public static void Run()
                 {
                     NativePool<int> pool = new();
-                    Pooled<int> value = pool.LeaseScoped(1);
+                    Pooled<int> value = pool.LeaseScoped(1, static writer => writer.Fill(default!));
                     value.Dispose();
                     pool.Dispose();
                 }
@@ -260,7 +260,7 @@ public sealed class ArenaAnalyzerContractTests
                     NativeArena arena = new();
                     try
                     {
-                        { scoped ArenaLease<int> values = arena.ScratchScoped<int>(2); values[0] = 1; }
+                        { scoped ArenaLease<int> values = arena.ScratchScoped<int>(2, static writer => writer.Fill(default!)); values[0] = 1; }
                     }
                     finally
                     {
@@ -280,7 +280,7 @@ public sealed class ArenaAnalyzerContractTests
                 public static void Run()
                 {
                     NativeArena arena = new();
-                    { scoped ArenaLease<int> outer = arena.ScratchScoped<int>(1); { scoped ArenaLease<int> inner = arena.ScratchScoped<int>(1); } arena.RecycleScoped(); }
+                    { scoped ArenaLease<int> outer = arena.ScratchScoped<int>(1, static writer => writer.Fill(default!)); { scoped ArenaLease<int> inner = arena.ScratchScoped<int>(1, static writer => writer.Fill(default!)); } arena.RecycleScoped(); }
                     arena.RecycleScoped();
                     arena.Dispose();
                 }
@@ -302,7 +302,7 @@ public sealed class ArenaAnalyzerContractTests
                     NativeArena arena = new();
                     if (condition)
                     {
-                        { scoped ArenaLease<int> value = arena.ScratchScoped<int>(1); }
+                        { scoped ArenaLease<int> value = arena.ScratchScoped<int>(1, static writer => writer.Fill(default!)); }
                     }
                     arena.RecycleScoped();
                     arena.Dispose();
@@ -327,7 +327,7 @@ public sealed class ArenaAnalyzerContractTests
                 {
                     using (NativeRegion region = new())
                     {
-                        Local<int> value = region.Lease<int>(1);
+                        Local<int> value = region.Lease<int>(1, static writer => writer.Fill(default!));
                         region.ReturnMemoryToGarbageCollector();
                     }
                 }
@@ -349,7 +349,7 @@ public sealed class ArenaAnalyzerContractTests
                 public static void Run()
                 {
                     NativePool<int> pool = new();
-                    Pooled<int> value = pool.Rent(1);
+                    Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!));
                     value.Access(_ => pool.Dispose());
                 }
             }
@@ -370,7 +370,7 @@ public sealed class ArenaAnalyzerContractTests
             {
                 public static void Run(NativeArena arena)
                 {
-                    scoped ArenaLease<int> value = arena.ScratchScoped<int>(1);
+                    scoped ArenaLease<int> value = arena.ScratchScoped<int>(1, static writer => writer.Fill(default!));
                     arena.RecycleScoped();
                 }
             }
@@ -388,7 +388,7 @@ public sealed class ArenaAnalyzerContractTests
                 private static NativeArena Arena = new();
                 public static void Run()
                 {
-                    scoped ArenaLease<int> value = Arena.ScratchScoped<int>(1);
+                    scoped ArenaLease<int> value = Arena.ScratchScoped<int>(1, static writer => writer.Fill(default!));
                     Arena.RecycleScoped();
                 }
             }
@@ -407,7 +407,7 @@ public sealed class ArenaAnalyzerContractTests
                 {
                     NativeArena arena = new();
                     NativeArena alias = arena;
-                    scoped ArenaLease<int> value = alias.ScratchScoped<int>(1);
+                    scoped ArenaLease<int> value = alias.ScratchScoped<int>(1, static writer => writer.Fill(default!));
                     alias.RecycleScoped();
                     arena.Dispose();
                 }
@@ -428,7 +428,7 @@ public sealed class ArenaAnalyzerContractTests
                     NativeArena arena = new();
                     Action work = () =>
                     {
-                        scoped ArenaLease<int> value = arena.ScratchScoped<int>(1);
+                        scoped ArenaLease<int> value = arena.ScratchScoped<int>(1, static writer => writer.Fill(default!));
                         arena.RecycleScoped();
                     };
                     work();

@@ -100,7 +100,7 @@ public sealed class RuntimeConcurrencyCoverageTests
             {
                 Task worker = Task.Run(() =>
                 {
-                    Pooled<int> lease = pool.Rent(1);
+                    Pooled<int> lease = pool.Rent(1, static writer => writer.Fill(default!));
                     try
                     {
                         lease.Access(static span => span[0] = 5);
@@ -149,7 +149,7 @@ public sealed class RuntimeConcurrencyCoverageTests
                 {
                     Task worker = Task.Run(() =>
                     {
-                        Pooled<int> lease = pool.Rent(4);
+                        Pooled<int> lease = pool.Rent(4, static writer => writer.Fill(default!));
                         try
                         {
                             lease.Access(static span => span[0] = 1);
@@ -189,7 +189,7 @@ public sealed class RuntimeConcurrencyCoverageTests
                 {
                     Task worker = Task.Run(() =>
                     {
-                        ArenaLease<int> lease = arena.Scratch<int>(4);
+                        ArenaLease<int> lease = arena.Scratch<int>(4, static writer => writer.Fill(default!));
                         lease.Access(static span => span[0] = 2);
                     });
 
@@ -255,7 +255,7 @@ public sealed class RuntimeConcurrencyCoverageTests
 
             if (leaseException is null)
             {
-                Pooled<int> lease = pool.Rent(1);
+                Pooled<int> lease = pool.Rent(1, static writer => writer.Fill(default!));
                 Assert.Equal(0, lease[0]);
                 lease.Dispose();
             }
@@ -311,7 +311,7 @@ public sealed class RuntimeConcurrencyCoverageTests
             {
                 try
                 {
-                    Pooled<int> lease = pool.Rent(1);
+                    Pooled<int> lease = pool.Rent(1, static writer => writer.Fill(default!));
                     lease.Dispose();
                 }
                 catch (NativeAllocationDisposedException)
@@ -329,9 +329,9 @@ public sealed class RuntimeConcurrencyCoverageTests
         NativePool<int> pool = new();
         NativePool<int> localAlias = pool;
         FieldOwner holder = new(pool);
-        Pooled<int> localLease = localAlias.Rent(1);
+        Pooled<int> localLease = localAlias.Rent(1, static writer => writer.Fill(default!));
         Pooled<int> copiedLease = localLease;
-        Pooled<int> fieldLease = holder.Pool.Rent(1);
+        Pooled<int> fieldLease = holder.Pool.Rent(1, static writer => writer.Fill(default!));
 
         try
         {
@@ -354,7 +354,7 @@ public sealed class RuntimeConcurrencyCoverageTests
         for (int iteration = 0; iteration < 32; iteration++)
         {
             NativePool<int> pool = new(initialCapacity: 2);
-            Pooled<int> stale = pool.Rent(1);
+            Pooled<int> stale = pool.Rent(1, static writer => writer.Fill(default!));
             using Barrier barrier = new(3);
             Exception? returnException = null;
             Exception? disposeException = null;
@@ -403,7 +403,7 @@ public sealed class RuntimeConcurrencyCoverageTests
         foreach (NativeMemoryReturn policy in Enum.GetValues<NativeMemoryReturn>())
         {
             NativeRegion operationRegion = new(16, policy);
-            Local<int> operationLocal = operationRegion.Lease<int>(1);
+            Local<int> operationLocal = operationRegion.Lease<int>(1, static writer => writer.Fill(default!));
             NativeAllocationInUseException? inUse = null;
             NativeMemoryTestHooks.SetOperationEnteredWithAllocation((operation, kernel, _, _) =>
             {
@@ -460,7 +460,7 @@ public sealed class RuntimeConcurrencyCoverageTests
             }
 
             NativeRegion returnRegion = new(16, policy);
-            Local<int> returnLocal = returnRegion.Lease<int>(1);
+            Local<int> returnLocal = returnRegion.Lease<int>(1, static writer => writer.Fill(default!));
             NativeMemoryTestHooks.SetBeforeOperationEntryWithKernel((operation, kernel) =>
             {
                 if (operation == nameof(Local<int>.Access))
@@ -524,11 +524,11 @@ public sealed class RuntimeConcurrencyCoverageTests
             {
                 pool.ReturnMemoryToGarbageCollector();
                 Assert.Equal(NativeOwnerLifecycle.Returned, pool.CurrentLifecycle);
-                Assert.Throws<NativeAllocationReturnedException>(() => pool.Rent(1));
+                Assert.Throws<NativeAllocationReturnedException>(() => pool.Rent(1, static writer => writer.Fill(default!)));
 
                 NativeMemoryTestHooks.SetOperationEntered(null);
                 pool.LeaseFromMemory();
-                Pooled<int> current = pool.Rent(1);
+                Pooled<int> current = pool.Rent(1, static writer => writer.Fill(default!));
                 current[0] = 17;
                 Assert.Equal(17, current[0]);
                 current.Dispose();
@@ -564,7 +564,7 @@ public sealed class RuntimeConcurrencyCoverageTests
         {
             Task worker = Task.Run(() =>
             {
-                ArenaLease<int> lease = arena.Scratch<int>(2);
+                ArenaLease<int> lease = arena.Scratch<int>(2, static writer => writer.Fill(default!));
                 ExecuteArenaOperation(lease, operation);
             });
 
@@ -648,7 +648,7 @@ public sealed class RuntimeConcurrencyCoverageTests
             {
                 try
                 {
-                    ExecuteArenaOperation(arena.Scratch<int>(2), operation);
+                    ExecuteArenaOperation(arena.Scratch<int>(2, static writer => writer.Fill(default!)), operation);
                     return (Exception?)null;
                 }
                 catch (Exception exception)
@@ -773,7 +773,7 @@ public sealed class RuntimeConcurrencyCoverageTests
 
     private static void ExecuteOperation(NativePool<int> pool, string operation)
     {
-        Pooled<int> lease = pool.Rent(2);
+        Pooled<int> lease = pool.Rent(2, static writer => writer.Fill(default!));
         try
         {
             switch (operation)
@@ -851,7 +851,7 @@ public sealed class RuntimeConcurrencyCoverageTests
         {
             Task<Exception?> worker = Task.Run(() =>
             {
-                Pooled<int> lease = pool.Rent(2);
+                Pooled<int> lease = pool.Rent(2, static writer => writer.Fill(default!));
                 try
                 {
                     ExecuteOperation(pool, operation);

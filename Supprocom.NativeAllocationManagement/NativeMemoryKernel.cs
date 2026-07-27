@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
@@ -31,14 +32,184 @@ public enum NativeOwnerLifecycle
 
 internal enum NativeAllocationLifecycle
 {
+    Initializing,
     Active,
     Returning,
     Returned
 }
 
-internal readonly record struct NativePoolLease(long Generation, long AllocationId, int Length, int Capacity);
+internal static class NativeOperationAdmission
+{
+    private const int ClosedBit = int.MinValue;
+    private const int CountMask = int.MaxValue;
 
-internal readonly record struct NativeRegionAllocation(long Generation, long AllocationId, int Length, int Capacity);
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static bool TryEnter(ref int state)
+    {
+        int entered = Interlocked.Increment(ref state);
+        if (entered > 0)
+        {
+            return true;
+        }
+
+        Interlocked.Decrement(ref state);
+        if (entered == ClosedBit)
+        {
+            throw new InvalidOperationException(
+                "The native operation count reached its limit.");
+        }
+
+        return false;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static int Exit(ref int state)
+    {
+        int exited = Interlocked.Decrement(ref state);
+        int count = exited & CountMask;
+        if (count == CountMask)
+        {
+            Interlocked.Increment(ref state);
+            throw new InvalidOperationException(
+                "The native operation count is already zero.");
+        }
+
+        return count;
+    }
+
+    internal static int Close(ref int state) =>
+        Interlocked.Or(ref state, ClosedBit) & CountMask;
+
+    internal static void Open(ref int state)
+    {
+        while (true)
+        {
+            int observed = Volatile.Read(ref state);
+            int opened = observed & CountMask;
+            if (observed == opened
+                || Interlocked.CompareExchange(
+                    ref state,
+                    opened,
+                    observed)
+                == observed)
+            {
+                return;
+            }
+        }
+    }
+
+    internal static void Reset(ref int state) =>
+        Volatile.Write(ref state, 0);
+
+    internal static int Count(ref int state) =>
+        Volatile.Read(ref state) & CountMask;
+}
+
+internal readonly record struct NativePoolLease(
+    long AllocationId,
+    NativeAllocation AllocationState)
+{
+    internal long Generation =>
+        AllocationState.GenerationState.Number;
+
+    internal int Length => AllocationState.Length;
+
+    internal int Capacity => AllocationState.Capacity;
+
+    internal NativeGeneration GenerationState =>
+        AllocationState.GenerationState;
+}
+
+internal readonly record struct NativeRegionAllocation(
+    long AllocationId,
+    NativeAllocation AllocationState)
+{
+    internal long Generation =>
+        AllocationState.GenerationState.Number;
+
+    internal int Length => AllocationState.Length;
+
+    internal int Capacity => AllocationState.Capacity;
+
+    internal NativeGeneration GenerationState =>
+        AllocationState.GenerationState;
+}
+
+internal readonly struct NativeBumpInitialization
+{
+    internal NativeBumpInitialization(
+        NativeAllocation allocation,
+        NativeBumpSegment? createdSegment,
+        nuint originalCursor,
+        bool cursorCaptured,
+        bool scoped,
+        bool startedScope)
+    {
+        Allocation = allocation;
+        CreatedSegment = createdSegment;
+        OriginalCursor = originalCursor;
+        CursorCaptured = cursorCaptured;
+        Scoped = scoped;
+        StartedScope = startedScope;
+    }
+
+    internal NativeGeneration Generation =>
+        Allocation.GenerationState;
+
+    internal NativeAllocation Allocation { get; }
+
+    internal NativeRegionAllocation Lease =>
+        new(Allocation.Id, Allocation);
+
+    internal NativeBumpSegment? BumpSegment =>
+        Allocation.BumpSegment;
+
+    internal NativeBumpSegment? CreatedSegment { get; }
+
+    internal nuint OriginalCursor { get; }
+
+    internal bool CursorCaptured { get; }
+
+    internal bool Scoped { get; }
+
+    internal bool StartedScope { get; }
+}
+
+internal readonly record struct NativeBumpInitializationGroup(
+    NativeBumpInitialization First,
+    NativeBumpInitialization Second,
+    NativeBumpInitialization Third,
+    NativeBumpInitialization Fourth,
+    bool UsesSingleInitializationAdmission = false);
+
+internal readonly record struct NativeBumpInitializationOctet(
+    NativeBumpInitializationGroup First,
+    NativeBumpInitializationGroup Second,
+    bool UsesSingleInitializationAdmission = false);
+
+internal readonly record struct NativeBumpBatchRequest(
+    int Length,
+    nuint ByteLength,
+    nuint Alignment,
+    bool ContainsReferences);
+
+[InlineArray(8)]
+internal struct NativeBumpBatchRequestBuffer
+{
+    private NativeBumpBatchRequest _element0;
+}
+
+[InlineArray(8)]
+internal struct NativeBumpCursorBuffer
+{
+    private nuint _element0;
+}
+
+[InlineArray(8)]
+internal struct NativeBumpInitializationBuffer
+{
+    private NativeBumpInitialization _element0;
+}
 
 internal readonly record struct NativeHandleMetadata(int Length, int Capacity);
 
@@ -53,7 +224,10 @@ internal readonly record struct NativeMemoryTestMetrics(
     long BumpTraversalVisitCount,
     long ReusedNativeSegmentCount,
     long ReclaimedRangeReuseCount = 0,
-    long ReclaimedRangeReuseBytes = 0)
+    long ReclaimedRangeReuseBytes = 0,
+    long StorageClearCount = 0,
+    long StorageClearBytes = 0,
+    long WrittenClearBytes = 0)
 {
     internal long RetainedNativeBytes => OutstandingNativeBytes - DetachedNativeBytes;
 }
@@ -101,6 +275,44 @@ public static class NativeMemoryDiagnostics
 
 internal static class NativeMemoryTestHooks
 {
+    private sealed class NativeHotMetrics
+    {
+        internal long Epoch = long.MinValue;
+        internal long BumpTraversalVisitCount;
+        internal long ReusedNativeSegmentCount;
+        internal long ReclaimedRangeReuseCount;
+        internal long ReclaimedRangeReuseBytes;
+        internal long StorageClearCount;
+        internal long StorageClearBytes;
+        internal long WrittenClearBytes;
+
+        internal void Reset(long epoch)
+        {
+            BumpTraversalVisitCount = 0;
+            ReusedNativeSegmentCount = 0;
+            ReclaimedRangeReuseCount = 0;
+            ReclaimedRangeReuseBytes = 0;
+            StorageClearCount = 0;
+            StorageClearBytes = 0;
+            WrittenClearBytes = 0;
+            Volatile.Write(ref Epoch, epoch);
+        }
+    }
+
+    private readonly record struct NativeHotMetricsSnapshot(
+        long BumpTraversalVisitCount,
+        long ReusedNativeSegmentCount,
+        long ReclaimedRangeReuseCount,
+        long ReclaimedRangeReuseBytes,
+        long StorageClearCount,
+        long StorageClearBytes,
+        long WrittenClearBytes);
+
+    private static readonly ConcurrentBag<NativeHotMetrics> HotMetrics = [];
+
+    [ThreadStatic]
+    private static NativeHotMetrics? _threadHotMetrics;
+
     private static long _allocationCount;
     private static long _zeroedAllocationCount;
     private static long _freeCount;
@@ -109,10 +321,6 @@ internal static class NativeMemoryTestHooks
     private static long _peakOutstandingNativeBytes;
     private static long _detachedNativeBytes;
     private static long _retiredNativeBytes;
-    private static long _bumpTraversalVisitCount;
-    private static long _reusedNativeSegmentCount;
-    private static long _reclaimedRangeReuseCount;
-    private static long _reclaimedRangeReuseBytes;
     private static long _metricsEpoch;
     private static int _forcedFailures;
     private static int _forcedClearFailures;
@@ -127,6 +335,7 @@ internal static class NativeMemoryTestHooks
     private static Action<string, NativeOwnerKernel>? _beforeOperationEntryWithKernel;
     private static Action<string, NativeOwnerKernel, long, long>? _operationEnteredWithAllocation;
     private static Action<string, NativeGenerationOwner>? _operationEnteredWithGenerationOwner;
+    private static int _operationHooksEnabled;
 
     internal static void Reset()
     {
@@ -139,10 +348,6 @@ internal static class NativeMemoryTestHooks
         Interlocked.Exchange(ref _peakOutstandingNativeBytes, 0);
         Interlocked.Exchange(ref _detachedNativeBytes, 0);
         Interlocked.Exchange(ref _retiredNativeBytes, 0);
-        Interlocked.Exchange(ref _bumpTraversalVisitCount, 0);
-        Interlocked.Exchange(ref _reusedNativeSegmentCount, 0);
-        Interlocked.Exchange(ref _reclaimedRangeReuseCount, 0);
-        Interlocked.Exchange(ref _reclaimedRangeReuseBytes, 0);
         Interlocked.Exchange(ref _forcedFailures, 0);
         Interlocked.Exchange(ref _forcedClearFailures, 0);
         Interlocked.Exchange(ref _forcedCommitBoundary, 0);
@@ -156,6 +361,7 @@ internal static class NativeMemoryTestHooks
         Volatile.Write(ref _beforeOperationEntryWithKernel, null);
         Volatile.Write(ref _operationEnteredWithAllocation, null);
         Volatile.Write(ref _operationEnteredWithGenerationOwner, null);
+        Volatile.Write(ref _operationHooksEnabled, 0);
     }
 
     internal static long CurrentMetricsEpoch => Volatile.Read(ref _metricsEpoch);
@@ -245,6 +451,11 @@ internal static class NativeMemoryTestHooks
 
     internal static void CheckCommitBoundary(string operation, string boundary)
     {
+        if (Volatile.Read(ref _forcedCommitBoundary) == 0)
+        {
+            return;
+        }
+
         int ordinal = Interlocked.Increment(ref _commitBoundary);
         if (Volatile.Read(ref _forcedCommitBoundary) == ordinal
             && Interlocked.CompareExchange(ref _forcedCommitBoundary, 0, ordinal) == ordinal)
@@ -255,6 +466,11 @@ internal static class NativeMemoryTestHooks
 
     internal static void CheckPostCommitBoundary(string operation, string boundary)
     {
+        if (Volatile.Read(ref _forcedPostCommitBoundary) == 0)
+        {
+            return;
+        }
+
         int ordinal = Interlocked.Increment(ref _postCommitBoundary);
         if (Volatile.Read(ref _forcedPostCommitBoundary) == ordinal
             && Interlocked.CompareExchange(ref _forcedPostCommitBoundary, 0, ordinal) == ordinal)
@@ -327,53 +543,202 @@ internal static class NativeMemoryTestHooks
         Interlocked.Add(ref _retiredNativeBytes, add ? bytes : -bytes);
     }
 
-    internal static NativeMemoryTestMetrics Snapshot() => new(
-        Volatile.Read(ref _allocationCount),
-        Volatile.Read(ref _zeroedAllocationCount),
-        Volatile.Read(ref _freeCount),
-        Volatile.Read(ref _detachedGenerationCount),
-        Volatile.Read(ref _outstandingNativeBytes),
-        Volatile.Read(ref _detachedNativeBytes),
-         Volatile.Read(ref _retiredNativeBytes),
-         Volatile.Read(ref _bumpTraversalVisitCount),
-         Volatile.Read(ref _reusedNativeSegmentCount),
-         Volatile.Read(ref _reclaimedRangeReuseCount),
-         Volatile.Read(ref _reclaimedRangeReuseBytes));
-
-    internal static NativeMemoryStatistics SnapshotPublic() => new(
-        Volatile.Read(ref _outstandingNativeBytes),
-        Volatile.Read(ref _peakOutstandingNativeBytes),
-         Volatile.Read(ref _detachedNativeBytes),
-         Volatile.Read(ref _retiredNativeBytes),
-         Volatile.Read(ref _reusedNativeSegmentCount),
-         Volatile.Read(ref _reclaimedRangeReuseCount),
-         Volatile.Read(ref _reclaimedRangeReuseBytes));
-
-    internal static void RecordBumpTraversalVisit() => Interlocked.Increment(ref _bumpTraversalVisitCount);
-
-    internal static void RecordReusedNativeSegment() => Interlocked.Increment(ref _reusedNativeSegmentCount);
-
-    internal static void RecordReclaimedRangeReuse(nuint byteLength)
+    internal static NativeMemoryTestMetrics Snapshot()
     {
-        Interlocked.Increment(ref _reclaimedRangeReuseCount);
-        Interlocked.Add(ref _reclaimedRangeReuseBytes, checked((long)byteLength));
+        NativeHotMetricsSnapshot hot = SnapshotHotMetrics();
+        return new NativeMemoryTestMetrics(
+            Volatile.Read(ref _allocationCount),
+            Volatile.Read(ref _zeroedAllocationCount),
+            Volatile.Read(ref _freeCount),
+            Volatile.Read(ref _detachedGenerationCount),
+            Volatile.Read(ref _outstandingNativeBytes),
+            Volatile.Read(ref _detachedNativeBytes),
+            Volatile.Read(ref _retiredNativeBytes),
+            hot.BumpTraversalVisitCount,
+            hot.ReusedNativeSegmentCount,
+            hot.ReclaimedRangeReuseCount,
+            hot.ReclaimedRangeReuseBytes,
+            hot.StorageClearCount,
+            hot.StorageClearBytes,
+            hot.WrittenClearBytes);
     }
 
-    internal static void SetOperationEntered(Action<string>? callback) => Volatile.Write(ref _operationEntered, callback);
+    internal static NativeMemoryStatistics SnapshotPublic()
+    {
+        NativeHotMetricsSnapshot hot = SnapshotHotMetrics();
+        return new NativeMemoryStatistics(
+            Volatile.Read(ref _outstandingNativeBytes),
+            Volatile.Read(ref _peakOutstandingNativeBytes),
+            Volatile.Read(ref _detachedNativeBytes),
+            Volatile.Read(ref _retiredNativeBytes),
+            hot.ReusedNativeSegmentCount,
+            hot.ReclaimedRangeReuseCount,
+            hot.ReclaimedRangeReuseBytes);
+    }
 
-    internal static void SetBeforeOperationEntry(Action<string>? callback) => Volatile.Write(ref _beforeOperationEntry, callback);
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static void RecordBumpTraversalVisit()
+    {
+        CurrentHotMetrics().BumpTraversalVisitCount++;
+    }
 
-    internal static void SetBeforeOperationEntryWithKernel(Action<string, NativeOwnerKernel>? callback) =>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static void RecordReusedNativeSegment()
+    {
+        CurrentHotMetrics().ReusedNativeSegmentCount++;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static void RecordReclaimedRangeReuse(nuint byteLength)
+    {
+        RecordReclaimedRangeReuse(1, byteLength);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static void RecordReclaimedRangeReuse(
+        int rangeCount,
+        nuint byteLength)
+    {
+        NativeHotMetrics metrics = CurrentHotMetrics();
+        metrics.ReclaimedRangeReuseCount = checked(
+            metrics.ReclaimedRangeReuseCount
+            + rangeCount);
+        metrics.ReclaimedRangeReuseBytes = checked(
+            metrics.ReclaimedRangeReuseBytes
+            + (long)byteLength);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static void RecordStorageClear(
+        nuint byteLength,
+        nuint writtenBytes)
+    {
+        NativeHotMetrics metrics = CurrentHotMetrics();
+        metrics.StorageClearCount++;
+        metrics.StorageClearBytes = checked(
+            metrics.StorageClearBytes
+            + (long)byteLength);
+        metrics.WrittenClearBytes = checked(
+            metrics.WrittenClearBytes
+            + (long)writtenBytes);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static NativeHotMetrics CurrentHotMetrics()
+    {
+        long epoch = CurrentMetricsEpoch;
+        NativeHotMetrics? metrics = _threadHotMetrics;
+        if (metrics is null)
+        {
+            metrics = new NativeHotMetrics();
+            HotMetrics.Add(metrics);
+            _threadHotMetrics = metrics;
+        }
+
+        if (Volatile.Read(ref metrics.Epoch) != epoch)
+        {
+            metrics.Reset(epoch);
+        }
+
+        return metrics;
+    }
+
+    private static NativeHotMetricsSnapshot SnapshotHotMetrics()
+    {
+        long epoch = CurrentMetricsEpoch;
+        long bumpTraversalVisitCount = 0;
+        long reusedNativeSegmentCount = 0;
+        long reclaimedRangeReuseCount = 0;
+        long reclaimedRangeReuseBytes = 0;
+        long storageClearCount = 0;
+        long storageClearBytes = 0;
+        long writtenClearBytes = 0;
+        foreach (NativeHotMetrics metrics in HotMetrics)
+        {
+            if (Volatile.Read(ref metrics.Epoch) != epoch)
+            {
+                continue;
+            }
+
+            bumpTraversalVisitCount = checked(
+                bumpTraversalVisitCount
+                + Volatile.Read(
+                    ref metrics.BumpTraversalVisitCount));
+            reusedNativeSegmentCount = checked(
+                reusedNativeSegmentCount
+                + Volatile.Read(
+                    ref metrics.ReusedNativeSegmentCount));
+            reclaimedRangeReuseCount = checked(
+                reclaimedRangeReuseCount
+                + Volatile.Read(
+                    ref metrics.ReclaimedRangeReuseCount));
+            reclaimedRangeReuseBytes = checked(
+                reclaimedRangeReuseBytes
+                + Volatile.Read(
+                    ref metrics.ReclaimedRangeReuseBytes));
+            storageClearCount = checked(
+                storageClearCount
+                + Volatile.Read(ref metrics.StorageClearCount));
+            storageClearBytes = checked(
+                storageClearBytes
+                + Volatile.Read(ref metrics.StorageClearBytes));
+            writtenClearBytes = checked(
+                writtenClearBytes
+                + Volatile.Read(ref metrics.WrittenClearBytes));
+        }
+
+        return new NativeHotMetricsSnapshot(
+            bumpTraversalVisitCount,
+            reusedNativeSegmentCount,
+            reclaimedRangeReuseCount,
+            reclaimedRangeReuseBytes,
+            storageClearCount,
+            storageClearBytes,
+            writtenClearBytes);
+    }
+
+    internal static bool HasForcedCommitBoundary => Volatile.Read(ref _forcedCommitBoundary) != 0;
+
+    internal static bool OperationHooksEnabled =>
+        Volatile.Read(ref _operationHooksEnabled) != 0;
+
+    internal static void SetOperationEntered(Action<string>? callback)
+    {
+        Volatile.Write(ref _operationEntered, callback);
+        RefreshOperationHooksEnabled();
+    }
+
+    internal static void SetBeforeOperationEntry(Action<string>? callback)
+    {
+        Volatile.Write(ref _beforeOperationEntry, callback);
+        RefreshOperationHooksEnabled();
+    }
+
+    internal static void SetBeforeOperationEntryWithKernel(Action<string, NativeOwnerKernel>? callback)
+    {
         Volatile.Write(ref _beforeOperationEntryWithKernel, callback);
+        RefreshOperationHooksEnabled();
+    }
 
-    internal static void SetOperationEnteredWithAllocation(Action<string, NativeOwnerKernel, long, long>? callback) =>
+    internal static void SetOperationEnteredWithAllocation(Action<string, NativeOwnerKernel, long, long>? callback)
+    {
         Volatile.Write(ref _operationEnteredWithAllocation, callback);
+        RefreshOperationHooksEnabled();
+    }
 
-    internal static void SetOperationEnteredWithGenerationOwner(Action<string, NativeGenerationOwner>? callback) =>
+    internal static void SetOperationEnteredWithGenerationOwner(Action<string, NativeGenerationOwner>? callback)
+    {
         Volatile.Write(ref _operationEnteredWithGenerationOwner, callback);
+        RefreshOperationHooksEnabled();
+    }
 
     internal static void NotifyBeforeOperationEntry(string operation, NativeOwnerKernel kernel)
     {
+        if (Volatile.Read(ref _operationHooksEnabled) == 0)
+        {
+            return;
+        }
+
         Volatile.Read(ref _beforeOperationEntry)?.Invoke(operation);
         Volatile.Read(ref _beforeOperationEntryWithKernel)?.Invoke(operation, kernel);
     }
@@ -385,23 +750,67 @@ internal static class NativeMemoryTestHooks
         long generation,
         long allocationId)
     {
+        if (Volatile.Read(ref _operationHooksEnabled) == 0)
+        {
+            return;
+        }
+
         Volatile.Read(ref _operationEntered)?.Invoke(operation);
         Volatile.Read(ref _operationEnteredWithAllocation)?.Invoke(operation, kernel, generation, allocationId);
         Volatile.Read(ref _operationEnteredWithGenerationOwner)?.Invoke(operation, generationOwner);
+    }
+
+    private static void RefreshOperationHooksEnabled()
+    {
+        bool enabled = Volatile.Read(ref _operationEntered) is not null
+            || Volatile.Read(ref _beforeOperationEntry) is not null
+            || Volatile.Read(ref _beforeOperationEntryWithKernel) is not null
+            || Volatile.Read(ref _operationEnteredWithAllocation) is not null
+            || Volatile.Read(ref _operationEnteredWithGenerationOwner) is not null;
+        Volatile.Write(ref _operationHooksEnabled, enabled ? 1 : 0);
+    }
+
+}
+
+internal static class NativeStorageClear
+{
+    internal static void Clear(IntPtr pointer, nuint byteLength)
+    {
+        if (byteLength == 0)
+        {
+            return;
+        }
+
+        unsafe
+        {
+            NativeMemory.Clear((void*)pointer, byteLength);
+        }
+
+        NativeMemoryTestHooks.RecordStorageClear(byteLength, byteLength);
     }
 }
 
 internal sealed class NativeSegment
 {
+    internal const nuint Alignment = 64;
     private IntPtr _pointer;
+    private SafeBuffer? _externalBuffer;
     private int _detached;
     private readonly long _metricsEpoch;
+    private readonly bool _ownsNativeMemory;
 
-    private NativeSegment(IntPtr pointer, nuint byteLength, long metricsEpoch)
+    private NativeSegment(
+        IntPtr pointer,
+        nuint byteLength,
+        long metricsEpoch,
+        bool ownsNativeMemory,
+        SafeBuffer? externalBuffer = null)
     {
         _pointer = pointer;
         ByteLength = byteLength;
         _metricsEpoch = metricsEpoch;
+        _ownsNativeMemory = ownsNativeMemory;
+        _externalBuffer = externalBuffer;
     }
 
     internal nuint ByteLength { get; }
@@ -410,14 +819,24 @@ internal sealed class NativeSegment
 
     internal IntPtr Pointer => Volatile.Read(ref _pointer);
 
-    internal void MarkDetached() => Volatile.Write(ref _detached, 1);
+    internal bool MarkDetached()
+    {
+        if (!_ownsNativeMemory)
+        {
+            return false;
+        }
 
-    internal static NativeSegment AllocateZeroed(
+        Volatile.Write(ref _detached, 1);
+        return true;
+    }
+
+    internal static NativeSegment Allocate(
         nuint byteLength,
         string ownerKind,
         long generation,
         string operation,
-        NativeOwnerLifecycle currentLifecycle)
+        NativeOwnerLifecycle currentLifecycle,
+        bool zeroed)
     {
         if (byteLength == 0)
         {
@@ -433,18 +852,91 @@ internal sealed class NativeSegment
         {
             unsafe
             {
-                IntPtr pointer = (IntPtr)NativeMemory.AllocZeroed(byteLength);
+                IntPtr pointer = (IntPtr)NativeMemory.AlignedAlloc(
+                    byteLength,
+                    Alignment);
                 if (pointer == IntPtr.Zero)
                 {
                     throw new NativeAllocationFailedException(byteLength, ownerKind, generation, operation, currentLifecycle);
                 }
 
-                return new NativeSegment(pointer, byteLength, NativeMemoryTestHooks.RecordAllocation(byteLength, zeroed: true));
+                if (zeroed)
+                {
+                    NativeMemory.Clear(
+                        (void*)pointer,
+                        byteLength);
+                }
+
+                return new NativeSegment(
+                    pointer,
+                    byteLength,
+                    NativeMemoryTestHooks.RecordAllocation(
+                        byteLength,
+                        zeroed),
+                    ownsNativeMemory: true);
             }
         }
         catch (OutOfMemoryException exception)
         {
             throw new NativeAllocationFailedException(byteLength, ownerKind, generation, operation, currentLifecycle, exception);
+        }
+    }
+
+    internal static NativeSegment Borrow(
+        SafeBuffer buffer,
+        nuint byteOffset,
+        nuint byteLength)
+    {
+        ArgumentNullException.ThrowIfNull(buffer);
+        ArgumentOutOfRangeException.ThrowIfZero(byteLength);
+
+        bool referenceAdded = false;
+        try
+        {
+            buffer.DangerousAddRef(ref referenceAdded);
+            ulong availableBytes = buffer.ByteLength;
+            ulong requestedOffset = checked((ulong)byteOffset);
+            ulong requestedLength = checked((ulong)byteLength);
+            if (requestedOffset > availableBytes
+                || requestedLength > availableBytes - requestedOffset)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(byteLength),
+                    "The external memory range exceeds the safe buffer.");
+            }
+
+            nint baseAddress = buffer.DangerousGetHandle();
+            if (baseAddress == 0 || baseAddress == -1)
+            {
+                throw new ArgumentException(
+                    "The external memory buffer has an invalid address.",
+                    nameof(buffer));
+            }
+
+            nint address = checked(
+                baseAddress + checked((nint)byteOffset));
+            if (unchecked((nuint)address) % Alignment != 0)
+            {
+                throw new ArgumentException(
+                    $"The external memory address must use {Alignment}-byte alignment.",
+                    nameof(byteOffset));
+            }
+
+            return new NativeSegment(
+                address,
+                byteLength,
+                metricsEpoch: 0,
+                ownsNativeMemory: false,
+                externalBuffer: buffer);
+        }
+        catch
+        {
+            if (referenceAdded)
+            {
+                buffer.DangerousRelease();
+            }
+
+            throw;
         }
     }
 
@@ -456,9 +948,17 @@ internal sealed class NativeSegment
             return;
         }
 
+        SafeBuffer? externalBuffer =
+            Interlocked.Exchange(ref _externalBuffer, null);
+        if (externalBuffer is not null)
+        {
+            externalBuffer.DangerousRelease();
+            return;
+        }
+
         unsafe
         {
-            NativeMemory.Free((void*)pointer);
+            NativeMemory.AlignedFree((void*)pointer);
         }
 
         NativeMemoryTestHooks.RecordFree(ByteLength, Volatile.Read(ref _detached) != 0, _metricsEpoch);
@@ -522,6 +1022,11 @@ internal sealed class NativeReferenceRootTable
     internal void ReserveForClear(int slotCount)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(slotCount);
+        if (slotCount == 0)
+        {
+            return;
+        }
+
         lock (_gate)
         {
             _availableIds.EnsureCapacity(checked(_availableIds.Count + slotCount));
@@ -564,6 +1069,46 @@ internal sealed class NativeReferenceRootTable
             if (previousId != 0 && _roots.Remove(previousId))
             {
                 _availableIds.Push(previousId);
+            }
+        }
+    }
+
+    internal void SetInitial<T>(
+        NativeSegment segment,
+        nuint offsetBytes,
+        T value)
+    {
+        lock (_gate)
+        {
+            if (value is null)
+            {
+                WriteSlot(segment, offsetBytes, 0);
+                return;
+            }
+
+            _roots.EnsureCapacity(checked(_roots.Count + 1));
+            bool reusedId = _availableIds.Count != 0;
+            long id = reusedId
+                ? _availableIds.Peek()
+                : checked(_nextId + 1);
+            _roots.Add(id, value);
+            try
+            {
+                WriteSlot(segment, offsetBytes, checked((nuint)id));
+            }
+            catch
+            {
+                _roots.Remove(id);
+                throw;
+            }
+
+            if (reusedId)
+            {
+                _availableIds.Pop();
+            }
+            else
+            {
+                _nextId = id;
             }
         }
     }
@@ -710,7 +1255,35 @@ internal sealed class NativeBumpSegment
 
     internal nuint ReclaimedRangeEnd { get; set; }
 
+    internal long PendingScopeEpoch { get; set; } = -1;
+
+    internal nuint PendingScopeRangeStart { get; set; }
+
+    internal nuint PendingScopeRangeEnd { get; set; }
+
     internal bool IsCompletelyIdle => LowCursor == 0 && HighCursor == Segment.ByteLength;
+
+    internal void BeginPendingScopeRange(long scopeEpoch, nuint start, nuint end)
+    {
+        PendingScopeEpoch = scopeEpoch;
+        PendingScopeRangeStart = start;
+        PendingScopeRangeEnd = end;
+    }
+
+    internal void ExtendPendingScopeRange(nuint start)
+    {
+        if (start < PendingScopeRangeStart)
+        {
+            PendingScopeRangeStart = start;
+        }
+    }
+
+    internal void ClearPendingScopeRange()
+    {
+        PendingScopeEpoch = -1;
+        PendingScopeRangeStart = 0;
+        PendingScopeRangeEnd = 0;
+    }
 
     internal void MarkReclaimedRange(long scopeEpoch, nuint start, nuint end)
     {
@@ -740,7 +1313,12 @@ internal sealed class NativeBumpSegment
 
 internal sealed class NativeAllocation
 {
+    private long _id;
+    private long _scopeEpoch;
+    private int _lifecycle;
+
     internal NativeAllocation(
+        NativeGeneration generationState,
         long id,
         NativeSlab? slab,
         NativeBumpSegment? bumpSegment,
@@ -752,10 +1330,13 @@ internal sealed class NativeAllocation
         bool scoped,
         long scopeEpoch)
     {
+        GenerationState = generationState;
         Reset(id, slab, bumpSegment, offsetBytes, length, capacity, storageBytes, referenceRoots, scoped, scopeEpoch);
     }
 
-    internal long Id { get; private set; }
+    internal NativeGeneration GenerationState { get; }
+
+    internal long Id => Volatile.Read(ref _id);
 
     internal NativeSlab? Slab { get; private set; }
 
@@ -775,11 +1356,23 @@ internal sealed class NativeAllocation
 
     internal bool IsScoped { get; private set; }
 
-    internal long ScopeEpoch { get; private set; }
+    internal long ScopeEpoch => Volatile.Read(ref _scopeEpoch);
 
-    internal NativeAllocationLifecycle Lifecycle { get; set; }
+    internal void SetScopeEpochForTest(long value) =>
+        Volatile.Write(ref _scopeEpoch, value);
 
-    internal int ActiveOperations { get; set; }
+    internal NativeAllocationLifecycle Lifecycle
+    {
+        get => (NativeAllocationLifecycle)Volatile.Read(ref _lifecycle);
+        set => Volatile.Write(ref _lifecycle, (int)value);
+    }
+
+    private int _operationAdmission;
+
+    internal int ActiveOperations =>
+        NativeOperationAdmission.Count(ref _operationAdmission);
+
+    internal int InitializedLength { get; set; }
 
     internal void Reset(
         long id,
@@ -793,7 +1386,7 @@ internal sealed class NativeAllocation
         bool scoped,
         long scopeEpoch)
     {
-        Id = id;
+        Volatile.Write(ref _id, 0);
         Slab = slab;
         BumpSegment = bumpSegment;
         OffsetBytes = offsetBytes;
@@ -802,10 +1395,26 @@ internal sealed class NativeAllocation
         StorageBytes = storageBytes;
         ReferenceRoots = referenceRoots;
         IsScoped = scoped;
-        ScopeEpoch = scopeEpoch;
+        Volatile.Write(ref _scopeEpoch, scopeEpoch);
         Lifecycle = NativeAllocationLifecycle.Active;
-        ActiveOperations = 0;
+        NativeOperationAdmission.Reset(ref _operationAdmission);
+        InitializedLength = 0;
+        Volatile.Write(ref _id, id);
     }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal bool TryEnterOperation() =>
+        NativeOperationAdmission.TryEnter(ref _operationAdmission);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal int ExitOperation() =>
+        NativeOperationAdmission.Exit(ref _operationAdmission);
+
+    internal int CloseOperationAdmission() =>
+        NativeOperationAdmission.Close(ref _operationAdmission);
+
+    internal void OpenOperationAdmission() =>
+        NativeOperationAdmission.Open(ref _operationAdmission);
 
     internal T GetValue<T>(int index)
     {
@@ -877,6 +1486,38 @@ internal sealed class NativeAllocation
         }
     }
 
+    internal void SetInitialValue<T>(int index, T value)
+    {
+        if (ReferenceRoots is not null)
+        {
+            ReferenceRoots.SetInitial(
+                Segment ?? throw new InvalidOperationException("A reference allocation has no native segment."),
+                NativeReferenceRootTable.ComputeSlotOffset(
+                    OffsetBytes,
+                    index,
+                    checked((int)(StorageBytes / (nuint)IntPtr.Size))),
+                value);
+            return;
+        }
+
+        SetValue(index, value);
+    }
+
+    internal void ClearInitializedReferences()
+    {
+        if (ReferenceRoots is null
+            || Segment is null
+            || InitializedLength == 0)
+        {
+            return;
+        }
+
+        ReferenceRoots.ClearRange(
+            Segment,
+            OffsetBytes,
+            InitializedLength);
+    }
+
     internal void ClearValues(bool reservedRootCapacity = false)
     {
         if (ReferenceRoots is not null && Segment is not null && StorageBytes != 0)
@@ -890,6 +1531,8 @@ internal sealed class NativeAllocation
             {
                 ReferenceRoots.ClearRange(Segment, OffsetBytes, slotCount);
             }
+
+            return;
         }
 
         if (StorageBytes == 0 || Segment is null)
@@ -899,13 +1542,31 @@ internal sealed class NativeAllocation
 
         unsafe
         {
-            NativeMemory.Clear((byte*)Segment.Pointer + checked((nint)OffsetBytes), StorageBytes);
+            NativeStorageClear.Clear(
+                (IntPtr)((byte*)Segment.Pointer + checked((nint)OffsetBytes)),
+                StorageBytes);
         }
     }
 
     internal void Fill<T>(T value)
     {
-        for (int index = 0; index < Length; index++)
+        FillFrom(0, value);
+    }
+
+    internal void FillFrom<T>(int start, T value)
+    {
+        if (start == Length)
+        {
+            return;
+        }
+
+        if (ReferenceRoots is null)
+        {
+            AsSpan<T>()[start..].Fill(value);
+            return;
+        }
+
+        for (int index = start; index < Length; index++)
         {
             SetValue(index, value);
         }
@@ -913,9 +1574,27 @@ internal sealed class NativeAllocation
 
     internal void CopyFrom<T>(ReadOnlySpan<T> source)
     {
-        for (int index = 0; index < Length; index++)
+        CopyFrom(0, source);
+    }
+
+    internal void CopyFrom<T>(
+        int start,
+        ReadOnlySpan<T> source)
+    {
+        if (source.IsEmpty)
         {
-            SetValue(index, source[index]);
+            return;
+        }
+
+        if (ReferenceRoots is null)
+        {
+            source.CopyTo(AsSpan<T>()[start..]);
+            return;
+        }
+
+        for (int index = 0; index < source.Length; index++)
+        {
+            SetValue(start + index, source[index]);
         }
     }
 
@@ -1007,8 +1686,12 @@ internal sealed class NativeGenerationOwner
 
             foreach (NativeSegment segment in _segments)
             {
-                segment.MarkDetached();
-                NativeMemoryTestHooks.RecordDetachedBytes(segment.ByteLength, segment.MetricsEpoch);
+                if (segment.MarkDetached())
+                {
+                    NativeMemoryTestHooks.RecordDetachedBytes(
+                        segment.ByteLength,
+                        segment.MetricsEpoch);
+                }
             }
         }
 
@@ -1052,6 +1735,9 @@ internal sealed class NativeGenerationOwner
 
 internal sealed class NativeGeneration
 {
+    private long _scopeEpoch;
+    private int _memoryDetached;
+
     internal NativeGeneration(long number)
     {
         Number = number;
@@ -1064,10 +1750,7 @@ internal sealed class NativeGeneration
 
     internal Dictionary<long, NativeAllocation> Allocations { get; } = new();
 
-    // Scoped leases are short-lived metadata records. Reusing the record after
-    // its allocation ID has been retired avoids a managed object allocation on
-    // every safe native lease while preserving stale-handle invalidation through
-    // the monotonically increasing ID.
+    // Ordinary leases reuse these records after an individual return.
     internal List<NativeAllocation> ReusableAllocations { get; } = [];
 
     internal NativeReferenceRootTable ReferenceRoots { get; } = new();
@@ -1082,21 +1765,40 @@ internal sealed class NativeGeneration
 
     internal int ScopedBumpTraversalIndex { get; set; } = -1;
 
-    internal int ActiveOperations { get; set; }
+    private int _operationAdmission;
+
+    internal int ActiveOperations =>
+        NativeOperationAdmission.Count(ref _operationAdmission);
 
     internal int LeaseReturnsInProgress { get; set; }
 
+    internal int InitializationsInProgress { get; set; }
+
     internal long RetiredNativeBytes { get; set; }
 
-    internal long ScopeEpoch { get; set; }
+    internal long ScopeEpoch
+    {
+        get => Volatile.Read(ref _scopeEpoch);
+        set => Volatile.Write(ref _scopeEpoch, value);
+    }
 
-    internal List<NativeAllocation> ScopedPending { get; } = [];
+    // This bank keeps one record for each position in the largest scoped batch.
+    internal List<NativeAllocation> ScopedAllocationBank { get; } = [];
 
-    internal Dictionary<NativeBumpSegment, nuint> ScopedBaseline { get; } = new();
+    internal int ScopedRecordCount { get; set; }
+
+    // Only reference roots and pool slabs need work during a scoped reset.
+    internal List<NativeAllocation> ScopedCleanupPending { get; } = [];
+
+    internal List<NativeBumpSegment> ScopedTouchedSegments { get; } = [];
 
     internal bool ScopedBaselineActive { get; set; }
 
-    internal bool MemoryDetached { get; set; }
+    internal bool MemoryDetached
+    {
+        get => Volatile.Read(ref _memoryDetached) != 0;
+        set => Volatile.Write(ref _memoryDetached, value ? 1 : 0);
+    }
 
     // These arrays are prepared before the generation can become retired. Retired
     // cleanup must never allocate a snapshot while it is draining or quarantining.
@@ -1107,6 +1809,20 @@ internal sealed class NativeGeneration
     internal bool IsQuarantined { get; set; }
 
     internal int RetiredSegmentCount => checked(RetiredSlabs.Length + RetiredBumps.Length);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal bool TryEnterOperation() =>
+        NativeOperationAdmission.TryEnter(ref _operationAdmission);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal int ExitOperation() =>
+        NativeOperationAdmission.Exit(ref _operationAdmission);
+
+    internal int CloseOperationAdmission() =>
+        NativeOperationAdmission.Close(ref _operationAdmission);
+
+    internal void OpenOperationAdmission() =>
+        NativeOperationAdmission.Open(ref _operationAdmission);
 
     internal void AddSlabOrdered(NativeSlab slab)
     {
@@ -1159,18 +1875,21 @@ internal ref struct NativeOperationToken
     private readonly NativeGeneration _generationState;
     private readonly NativeGenerationOwner _generationOwner;
     private readonly NativeAllocation _allocation;
+    private readonly bool _allocationEntered;
     private readonly string _operation;
 
     internal NativeOperationToken(
         NativeOwnerKernel kernel,
         NativeGeneration generation,
         NativeAllocation allocation,
+        bool allocationEntered,
         string operation)
     {
         _kernel = kernel;
         _generationState = generation;
         _generationOwner = generation.Owner;
         _allocation = allocation;
+        _allocationEntered = allocationEntered;
         _operation = operation;
     }
 
@@ -1189,8 +1908,252 @@ internal ref struct NativeOperationToken
         }
 
         _kernel = null;
-        kernel.ExitOperation(_generationState, _allocation, _operation);
+        kernel.ExitOperation(
+            _generationState,
+            _allocation,
+            _allocationEntered,
+            _operation);
         GC.KeepAlive(_generationOwner);
+    }
+}
+
+[InlineArray(8)]
+internal struct NativeCompositeAllocationBuffer
+{
+    internal const int Capacity = 8;
+    private NativeAllocation? _element0;
+}
+
+internal ref struct NativeCompositeOperationToken
+{
+    private NativeOwnerKernel? _kernel;
+    private readonly NativeGeneration _generationState;
+    private readonly NativeGenerationOwner _generationOwner;
+    private NativeCompositeAllocationBuffer _allocations;
+    private readonly int _count;
+    private readonly bool _allocationsEntered;
+
+    internal NativeCompositeOperationToken(
+        NativeOwnerKernel kernel,
+        NativeGeneration generation,
+        NativeCompositeAllocationBuffer allocations,
+        int count,
+        bool allocationsEntered)
+    {
+        _kernel = kernel;
+        _generationState = generation;
+        _generationOwner = generation.Owner;
+        _allocations = allocations;
+        _count = count;
+        _allocationsEntered = allocationsEntered;
+    }
+
+    internal NativeLeaseView<T> GetView<T>(int index)
+    {
+        if ((uint)index >= (uint)_count)
+        {
+            throw new ArgumentOutOfRangeException(nameof(index));
+        }
+
+        return new NativeLeaseView<T>(
+            _allocations[index]
+                ?? throw new InvalidOperationException("The composite native operation has no allocation at this index."));
+    }
+
+    public void Dispose()
+    {
+        NativeOwnerKernel? kernel = _kernel;
+        if (kernel is null)
+        {
+            return;
+        }
+
+        _kernel = null;
+        kernel.ExitCompositeOperation(
+            _generationState,
+            ref _allocations,
+            _count,
+            _allocationsEntered);
+        GC.KeepAlive(_generationOwner);
+    }
+}
+
+internal readonly record struct NativeMultiOwnerOperationEntry(
+    NativeOwnerKernel Kernel,
+    NativeGeneration Generation,
+    NativeAllocation Allocation,
+    long GenerationNumber,
+    long AllocationId);
+
+[InlineArray(NativeCompositeAllocationBuffer.Capacity)]
+internal struct NativeMultiOwnerOperationEntryBuffer
+{
+    private NativeMultiOwnerOperationEntry _element0;
+}
+
+[InlineArray(NativeCompositeAllocationBuffer.Capacity)]
+internal struct NativeMultiOwnerOperationMap
+{
+    private byte _element0;
+}
+
+internal ref struct NativeMultiOwnerOperationToken
+{
+    private NativeCompositeOperationToken _group0;
+    private NativeCompositeOperationToken _group1;
+    private NativeCompositeOperationToken _group2;
+    private NativeCompositeOperationToken _group3;
+    private NativeCompositeOperationToken _group4;
+    private NativeCompositeOperationToken _group5;
+    private NativeCompositeOperationToken _group6;
+    private NativeCompositeOperationToken _group7;
+    private NativeMultiOwnerOperationMap _groupByEntry;
+    private NativeMultiOwnerOperationMap _indexByEntry;
+    private int _groupCount;
+    private int _entryCount;
+
+    internal NativeMultiOwnerOperationToken(
+        ref NativeMultiOwnerOperationEntryBuffer entries,
+        int count,
+        string operation)
+    {
+        this = default;
+        if ((uint)(count - 1)
+            >= NativeCompositeAllocationBuffer.Capacity)
+        {
+            throw new ArgumentOutOfRangeException(nameof(count));
+        }
+
+        _entryCount = count;
+        int assignedMask = 0;
+        Span<long> allocationIds =
+            stackalloc long[
+                NativeCompositeAllocationBuffer.Capacity];
+        try
+        {
+            while (assignedMask != (1 << count) - 1)
+            {
+                int firstIndex = 0;
+                while ((assignedMask & (1 << firstIndex)) != 0)
+                {
+                    firstIndex++;
+                }
+
+                NativeMultiOwnerOperationEntry first =
+                    entries[firstIndex];
+                NativeCompositeAllocationBuffer allocations =
+                    default;
+                int allocationCount = 0;
+                for (int index = firstIndex;
+                    index < count;
+                    index++)
+                {
+                    if ((assignedMask & (1 << index)) != 0)
+                    {
+                        continue;
+                    }
+
+                    NativeMultiOwnerOperationEntry candidate =
+                        entries[index];
+                    if (!ReferenceEquals(
+                            first.Kernel,
+                            candidate.Kernel)
+                        || !ReferenceEquals(
+                            first.Generation,
+                            candidate.Generation)
+                        || first.GenerationNumber
+                            != candidate.GenerationNumber)
+                    {
+                        continue;
+                    }
+
+                    allocations[allocationCount] =
+                        candidate.Allocation;
+                    allocationIds[allocationCount] =
+                        candidate.AllocationId;
+                    _groupByEntry[index] =
+                        checked((byte)_groupCount);
+                    _indexByEntry[index] =
+                        checked((byte)allocationCount);
+                    allocationCount++;
+                    assignedMask |= 1 << index;
+                }
+
+                NativeCompositeOperationToken token =
+                    first.Kernel.EnterCompositeOperation(
+                        first.Generation,
+                        allocations,
+                        first.GenerationNumber,
+                        allocationIds[..allocationCount],
+                        operation);
+                switch (_groupCount)
+                {
+                    case 0: _group0 = token; break;
+                    case 1: _group1 = token; break;
+                    case 2: _group2 = token; break;
+                    case 3: _group3 = token; break;
+                    case 4: _group4 = token; break;
+                    case 5: _group5 = token; break;
+                    case 6: _group6 = token; break;
+                    case 7: _group7 = token; break;
+                    default:
+                        throw new ArgumentOutOfRangeException(
+                            nameof(count));
+                }
+
+                _groupCount++;
+            }
+        }
+        catch
+        {
+            Dispose();
+            throw;
+        }
+    }
+
+    internal NativeLeaseView<T> GetView<T>(int entryIndex)
+    {
+        if ((uint)entryIndex >= (uint)_entryCount)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(entryIndex));
+        }
+
+        int allocationIndex = _indexByEntry[entryIndex];
+        return _groupByEntry[entryIndex] switch
+        {
+            0 => _group0.GetView<T>(allocationIndex),
+            1 => _group1.GetView<T>(allocationIndex),
+            2 => _group2.GetView<T>(allocationIndex),
+            3 => _group3.GetView<T>(allocationIndex),
+            4 => _group4.GetView<T>(allocationIndex),
+            5 => _group5.GetView<T>(allocationIndex),
+            6 => _group6.GetView<T>(allocationIndex),
+            7 => _group7.GetView<T>(allocationIndex),
+            _ => throw new InvalidOperationException(
+                "The native operation group is not valid.")
+        };
+    }
+
+    public void Dispose()
+    {
+        while (_groupCount > 0)
+        {
+            _groupCount--;
+            switch (_groupCount)
+            {
+                case 0: _group0.Dispose(); break;
+                case 1: _group1.Dispose(); break;
+                case 2: _group2.Dispose(); break;
+                case 3: _group3.Dispose(); break;
+                case 4: _group4.Dispose(); break;
+                case 5: _group5.Dispose(); break;
+                case 6: _group6.Dispose(); break;
+                case 7: _group7.Dispose(); break;
+            }
+        }
+
+        _entryCount = 0;
     }
 }
 
@@ -1198,11 +2161,10 @@ internal sealed class NativeOwnerKernel
 {
     private const nuint DefaultBumpSegmentBytes = 4096;
 
-    private readonly object _gate = new();
+    private readonly Lock _gate = new();
     private readonly NativeOwnerKind _kind;
     private readonly string _ownerKind;
     private readonly NativeMemoryReturn _returnMemoryOnDispose;
-    private readonly Type? _elementType;
     private readonly int _storageElementSize;
     private readonly nuint _initialReservation;
     private readonly bool _containsReferences;
@@ -1252,7 +2214,15 @@ internal sealed class NativeOwnerKernel
             long requestedBytes = 0;
             foreach (NativeAllocation allocation in current.Allocations.Values)
             {
-                requestedBytes = checked(requestedBytes + (long)allocation.StorageBytes);
+                if (!IsCurrentAllocation(current, allocation))
+                {
+                    continue;
+                }
+
+                long allocationBytes = _kind == NativeOwnerKind.Pool
+                    ? checked((long)allocation.Length * _storageElementSize)
+                    : checked((long)allocation.StorageBytes);
+                requestedBytes = checked(requestedBytes + allocationBytes);
             }
 
             long retainedBytes = 0;
@@ -1266,6 +2236,15 @@ internal sealed class NativeOwnerKernel
                 retainedBytes = checked(retainedBytes + (long)bump.Segment.ByteLength);
             }
 
+            int availableSegmentCount = current.AvailableSlabs.Count;
+            foreach (NativeBumpSegment bump in current.BumpSegments)
+            {
+                if (bump.IsCompletelyIdle)
+                {
+                    availableSegmentCount++;
+                }
+            }
+
             return new(
                 _lifecycle,
                 current.Number,
@@ -1273,7 +2252,7 @@ internal sealed class NativeOwnerKernel
                 retainedBytes,
                 SumRetiredBytesLocked(),
                 current.Slabs.Count + current.BumpSegments.Count,
-                current.AvailableSlabs.Count,
+                availableSegmentCount,
                 CountRetiredSegmentsLocked(),
                 _trimmedBytes,
                 _trimCallCount,
@@ -1317,7 +2296,22 @@ internal sealed class NativeOwnerKernel
     {
         lock (_gate)
         {
-            return _current?.Allocations.Count ?? 0;
+            NativeGeneration? current = _current;
+            if (current is null)
+            {
+                return 0;
+            }
+
+            int count = 0;
+            foreach (NativeAllocation allocation in current.Allocations.Values)
+            {
+                if (IsCurrentAllocation(current, allocation))
+                {
+                    count++;
+                }
+            }
+
+            return count;
         }
     }
 
@@ -1415,6 +2409,22 @@ internal sealed class NativeOwnerKernel
         {
             NativeGeneration generation = EnsureActiveLocked("SetScopeEpochForTest");
             generation.ScopeEpoch = value;
+            foreach (NativeAllocation allocation in generation.Allocations.Values)
+            {
+                if (allocation.IsScoped
+                    && allocation.Lifecycle == NativeAllocationLifecycle.Active)
+                {
+                    allocation.SetScopeEpochForTest(value);
+                }
+            }
+
+            foreach (NativeBumpSegment segment in generation.ScopedTouchedSegments)
+            {
+                if (segment.PendingScopeEpoch >= 0)
+                {
+                    segment.PendingScopeEpoch = value;
+                }
+            }
         }
     }
 
@@ -1448,7 +2458,6 @@ internal sealed class NativeOwnerKernel
         NativeOwnerKind kind,
         string ownerKind,
         NativeMemoryReturn returnMemoryOnDispose,
-        Type? elementType,
         int storageElementSize,
         nuint initialReservation,
         bool containsReferences,
@@ -1457,7 +2466,6 @@ internal sealed class NativeOwnerKernel
         _kind = kind;
         _ownerKind = ownerKind;
         _returnMemoryOnDispose = returnMemoryOnDispose;
-        _elementType = elementType;
         _storageElementSize = storageElementSize;
         _initialReservation = initialReservation;
         _containsReferences = containsReferences;
@@ -1484,7 +2492,6 @@ internal sealed class NativeOwnerKernel
 
     internal static NativeOwnerKernel CreatePool(
         int initialCapacity,
-        Type elementType,
         int storageElementSize,
         string ownerKind,
         NativeMemoryReturn returnMemoryOnDispose,
@@ -1498,7 +2505,6 @@ internal sealed class NativeOwnerKernel
             NativeOwnerKind.Pool,
             ownerKind,
             returnMemoryOnDispose,
-            elementType,
             storageElementSize,
             (nuint)initialCapacity,
             containsReferences,
@@ -1517,7 +2523,6 @@ internal sealed class NativeOwnerKernel
             NativeOwnerKind.Region,
             ownerKind,
             returnMemoryOnDispose,
-            elementType: null,
             storageElementSize: 0,
             preAllocateBytes,
             containsReferences,
@@ -1535,14 +2540,49 @@ internal sealed class NativeOwnerKernel
             NativeOwnerKind.Arena,
             ownerKind,
             returnMemoryOnDispose,
-            elementType: null,
             storageElementSize: 0,
             preAllocateBytes,
             containsReferences: false,
             doNotLeaseOnDeclaration);
     }
 
-    internal NativePoolLease Rent(int length, bool scoped)
+    internal NativePoolLease RentInitialized<T>(
+        int length,
+        bool scoped,
+        NativeLeaseInitializer<T> initializer)
+    {
+        ArgumentNullException.ThrowIfNull(initializer);
+        (NativeGeneration Generation, NativeAllocation Allocation, NativePoolLease Lease)
+            reservation = BeginPoolInitialization(length, scoped);
+        int initializedLength = 0;
+        try
+        {
+            NativeLeaseWriter<T> writer = new(
+                reservation.Allocation,
+                ref initializedLength);
+            initializer(writer);
+            reservation.Allocation.InitializedLength = initializedLength;
+            CompleteInitialization(
+                reservation.Generation,
+                reservation.Allocation,
+                scoped);
+            return reservation.Lease;
+        }
+        catch
+        {
+            reservation.Allocation.InitializedLength = initializedLength;
+            AbortPoolInitialization(
+                reservation.Generation,
+                reservation.Allocation);
+            throw;
+        }
+    }
+
+    private (
+        NativeGeneration Generation,
+        NativeAllocation Allocation,
+        NativePoolLease Lease)
+        BeginPoolInitialization(int length, bool scoped)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(length);
         lock (_gate)
@@ -1567,6 +2607,27 @@ internal sealed class NativeOwnerKernel
 
             long allocationId = NextAllocationIdLocked();
             long epoch = scoped ? BeginScopedLocked(generation) : generation.ScopeEpoch;
+            generation.Allocations.EnsureCapacity(checked(generation.Allocations.Count + 1));
+            if (scoped)
+            {
+                generation.ScopedAllocationBank.EnsureCapacity(
+                    checked(generation.ScopedAllocationBank.Count + 1));
+                generation.ScopedCleanupPending.EnsureCapacity(
+                    checked(generation.ScopedCleanupPending.Count + 1));
+            }
+
+            if (!scoped)
+            {
+                generation.ReusableAllocations.EnsureCapacity(
+                    checked(generation.ReusableAllocations.Count + 1));
+            }
+
+            if (slab is not null)
+            {
+                generation.AvailableSlabs.EnsureCapacity(
+                    checked(generation.AvailableSlabs.Count + 1));
+            }
+
             NativeAllocation allocation = RentAllocationLocked(
                 generation,
                 allocationId,
@@ -1575,11 +2636,21 @@ internal sealed class NativeOwnerKernel
                 offsetBytes: 0,
                 length,
                 slab?.Capacity ?? 0,
-                storageBytes: slab is null ? 0 : checked((nuint)slab.Capacity * (nuint)_storageElementSize),
+                storageBytes: slab is null
+                    ? 0
+                    : checked((nuint)length * (nuint)_storageElementSize),
                 referenceRoots: _containsReferences ? generation.ReferenceRoots : null,
                 scoped,
                 epoch);
+            allocation.Lifecycle = NativeAllocationLifecycle.Initializing;
             generation.Allocations.Add(allocationId, allocation);
+            if (scoped)
+            {
+                generation.ScopedRecordCount =
+                    checked(generation.ScopedRecordCount + 1);
+            }
+
+            generation.InitializationsInProgress++;
             if (slab is not null)
             {
                 if (slab.HasBeenUsed)
@@ -1590,205 +2661,1959 @@ internal sealed class NativeOwnerKernel
                 slab.HasBeenUsed = true;
             }
 
-            if (scoped)
-            {
-                generation.ScopedPending.Add(allocation);
-            }
-
-            return new NativePoolLease(generation.Number, allocationId, length, allocation.Capacity);
+            return (
+                generation,
+                allocation,
+                new NativePoolLease(
+                    allocationId,
+                    allocation));
         }
     }
 
-    internal NativeRegionAllocation LeaseBump(int length, int elementSize, nuint alignment, bool scoped, Type elementType)
+    private void CompleteInitialization(
+        NativeGeneration generation,
+        NativeAllocation allocation,
+        bool scoped)
     {
-        ArgumentOutOfRangeException.ThrowIfNegative(length);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(elementSize);
-        ArgumentOutOfRangeException.ThrowIfZero(alignment);
-        nuint byteLength = CalculateByteLength(length, elementSize, scoped ? "scoped allocation" : "allocation");
+        if (allocation.InitializedLength != allocation.Length)
+        {
+            throw new InvalidOperationException(
+                "The native lease initializer did not write all logical elements.");
+        }
 
         lock (_gate)
         {
-            NativeGeneration generation = EnsureActiveLocked(scoped ? "LeaseScoped" : "Lease");
-            if (_kind is not (NativeOwnerKind.Region or NativeOwnerKind.Arena))
+            if (!ReferenceEquals(generation, _current)
+                || _lifecycle != NativeOwnerLifecycle.Active
+                || allocation.Lifecycle
+                    != NativeAllocationLifecycle.Initializing)
             {
-                throw CreateStateException("Lease", "This owner does not expose heterogeneous allocations.", 0);
+                throw CreateStateException(
+                    "Initialize",
+                    "The owner changed before the initializer completed.",
+                    allocation.Id);
             }
 
-            bool startedScope = scoped && !generation.ScopedBaselineActive;
-            long epoch = scoped ? BeginScopedLocked(generation) : generation.ScopeEpoch;
-            NativeBumpSegment? bumpSegment = null;
-            NativeBumpSegment? createdSegment = null;
-            nuint originalCursor = 0;
-            bool cursorCaptured = false;
-            nuint offset = 0;
+            allocation.Lifecycle = NativeAllocationLifecycle.Active;
+            allocation.InitializedLength = 0;
+            if (scoped
+                && (allocation.ReferenceRoots is not null
+                    || allocation.Slab is not null))
+            {
+                generation.ScopedCleanupPending.Add(allocation);
+            }
+
+            generation.InitializationsInProgress--;
+        }
+    }
+
+    private void AbortPoolInitialization(
+        NativeGeneration generation,
+        NativeAllocation allocation)
+    {
+        lock (_gate)
+        {
+            if (allocation.Lifecycle
+                != NativeAllocationLifecycle.Initializing)
+            {
+                return;
+            }
+
+            allocation.ClearInitializedReferences();
+            allocation.Lifecycle = NativeAllocationLifecycle.Returned;
+            allocation.InitializedLength = 0;
+            generation.Allocations.Remove(allocation.Id);
+            if (allocation.IsScoped)
+            {
+                ReleaseLastScopedRecordLocked(generation, allocation);
+            }
+            else
+            {
+                generation.ReusableAllocations.Add(allocation);
+            }
+
+            if (allocation.Slab is not null && allocation.Length > 0)
+            {
+                generation.AddAvailableSlabOrdered(allocation.Slab);
+            }
+
+            generation.InitializationsInProgress--;
+        }
+    }
+
+    internal NativeRegionAllocation LeaseBumpInitialized<T>(
+        int length,
+        int elementSize,
+        nuint alignment,
+        bool scoped,
+        bool containsReferences,
+        NativeLeaseInitializer<T> initializer)
+    {
+        ArgumentNullException.ThrowIfNull(initializer);
+        NativeBumpInitialization reservation = BeginBumpInitialization(
+            length,
+            elementSize,
+            alignment,
+            scoped,
+            containsReferences);
+        int initializedLength = 0;
+        try
+        {
+            NativeLeaseWriter<T> writer = new(
+                reservation.Allocation,
+                ref initializedLength);
+            initializer(writer);
+            reservation.Allocation.InitializedLength = initializedLength;
+            CompleteBumpInitialization(reservation);
+            return reservation.Lease;
+        }
+        catch
+        {
+            reservation.Allocation.InitializedLength = initializedLength;
+            AbortBumpInitialization(reservation);
+            throw;
+        }
+    }
+
+    internal NativeBumpInitializationGroup BeginBumpInitializationGroup(
+        int firstLength,
+        int firstElementSize,
+        nuint firstAlignment,
+        bool firstContainsReferences,
+        int secondLength,
+        int secondElementSize,
+        nuint secondAlignment,
+        bool secondContainsReferences,
+        int thirdLength,
+        int thirdElementSize,
+        nuint thirdAlignment,
+        bool thirdContainsReferences,
+        int fourthLength,
+        int fourthElementSize,
+        nuint fourthAlignment,
+        bool fourthContainsReferences,
+        bool continueExistingGroup = false,
+        bool useSingleInitializationAdmission = true,
+        NativeGeneration? sourceGeneration = null,
+        NativeAllocation? sourceAllocation = null,
+        long sourceGenerationNumber = 0,
+        long sourceAllocationId = 0)
+    {
+        NativeBumpBatchRequestBuffer requests = default;
+        requests[0] = CreateBumpBatchRequest(
+            firstLength,
+            firstElementSize,
+            firstAlignment,
+            firstContainsReferences);
+        requests[1] = CreateBumpBatchRequest(
+            secondLength,
+            secondElementSize,
+            secondAlignment,
+            secondContainsReferences);
+        requests[2] = CreateBumpBatchRequest(
+            thirdLength,
+            thirdElementSize,
+            thirdAlignment,
+            thirdContainsReferences);
+        requests[3] = CreateBumpBatchRequest(
+            fourthLength,
+            fourthElementSize,
+            fourthAlignment,
+            fourthContainsReferences);
+
+        if (_gate.IsHeldByCurrentThread)
+        {
+            return BeginBumpInitializationGroupLocked(
+                ref requests,
+                firstLength,
+                firstElementSize,
+                firstAlignment,
+                firstContainsReferences,
+                secondLength,
+                secondElementSize,
+                secondAlignment,
+                secondContainsReferences,
+                thirdLength,
+                thirdElementSize,
+                thirdAlignment,
+                thirdContainsReferences,
+                fourthLength,
+                fourthElementSize,
+                fourthAlignment,
+                fourthContainsReferences,
+                continueExistingGroup,
+                useSingleInitializationAdmission,
+                sourceGeneration,
+                sourceAllocation,
+                sourceGenerationNumber,
+                sourceAllocationId);
+        }
+
+        lock (_gate)
+        {
+            return BeginBumpInitializationGroupLocked(
+                ref requests,
+                firstLength,
+                firstElementSize,
+                firstAlignment,
+                firstContainsReferences,
+                secondLength,
+                secondElementSize,
+                secondAlignment,
+                secondContainsReferences,
+                thirdLength,
+                thirdElementSize,
+                thirdAlignment,
+                thirdContainsReferences,
+                fourthLength,
+                fourthElementSize,
+                fourthAlignment,
+                fourthContainsReferences,
+                continueExistingGroup,
+                useSingleInitializationAdmission,
+                sourceGeneration,
+                sourceAllocation,
+                sourceGenerationNumber,
+                sourceAllocationId);
+        }
+    }
+
+    private NativeBumpInitializationGroup
+        BeginBumpInitializationGroupLocked(
+            ref NativeBumpBatchRequestBuffer requests,
+            int firstLength,
+            int firstElementSize,
+            nuint firstAlignment,
+            bool firstContainsReferences,
+            int secondLength,
+            int secondElementSize,
+            nuint secondAlignment,
+            bool secondContainsReferences,
+            int thirdLength,
+            int thirdElementSize,
+            nuint thirdAlignment,
+            bool thirdContainsReferences,
+            int fourthLength,
+            int fourthElementSize,
+            nuint fourthAlignment,
+            bool fourthContainsReferences,
+            bool continueExistingGroup,
+            bool useSingleInitializationAdmission,
+            NativeGeneration? sourceGeneration,
+            NativeAllocation? sourceAllocation,
+            long sourceGenerationNumber,
+            long sourceAllocationId)
+    {
+        NativeGeneration generation =
+            EnsureActiveLocked("InitializeScoped");
+        ValidateInitializationSourceLocked(
+            generation,
+            sourceGeneration,
+            sourceAllocation,
+            sourceGenerationNumber,
+            sourceAllocationId);
+        if (useSingleInitializationAdmission
+            && !continueExistingGroup
+            && TryBeginBumpInitializationBatchLocked(
+                generation,
+                ref requests,
+                4,
+                out NativeBumpInitializationBuffer reservations))
+        {
+            return new NativeBumpInitializationGroup(
+                reservations[0],
+                reservations[1],
+                reservations[2],
+                reservations[3],
+                UsesSingleInitializationAdmission: true);
+        }
+
+        int expectedInitializations =
+            continueExistingGroup ? 4 : 0;
+        if (generation.InitializationsInProgress
+            != expectedInitializations)
+        {
+            throw CreateInUseException(
+                "InitializeScoped",
+                generation.Number,
+                0,
+                generation.ActiveOperations,
+                "A different native lease initializer is active.");
+        }
+
+        NativeBumpInitialization first = default;
+        NativeBumpInitialization second = default;
+        NativeBumpInitialization third = default;
+        NativeBumpInitialization fourth = default;
+        int reservationCount = 0;
+        try
+        {
+            first = BeginBumpInitializationLocked(
+                firstLength,
+                firstAlignment,
+                scoped: true,
+                firstContainsReferences,
+                allowExistingInitialization: true,
+                CalculateByteLength(
+                    firstLength,
+                    firstElementSize,
+                    "scoped allocation"));
+            reservationCount = 1;
+            second = BeginBumpInitializationLocked(
+                secondLength,
+                secondAlignment,
+                scoped: true,
+                secondContainsReferences,
+                allowExistingInitialization: true,
+                CalculateByteLength(
+                    secondLength,
+                    secondElementSize,
+                    "scoped allocation"));
+            reservationCount = 2;
+            third = BeginBumpInitializationLocked(
+                thirdLength,
+                thirdAlignment,
+                scoped: true,
+                thirdContainsReferences,
+                allowExistingInitialization: true,
+                CalculateByteLength(
+                    thirdLength,
+                    thirdElementSize,
+                    "scoped allocation"));
+            reservationCount = 3;
+            fourth = BeginBumpInitializationLocked(
+                fourthLength,
+                fourthAlignment,
+                scoped: true,
+                fourthContainsReferences,
+                allowExistingInitialization: true,
+                CalculateByteLength(
+                    fourthLength,
+                    fourthElementSize,
+                    "scoped allocation"));
+            reservationCount = 4;
+
+            generation.ScopedTouchedSegments.EnsureCapacity(
+                checked(generation.ScopedTouchedSegments.Count + 4));
+            int referenceAllocationCount =
+                (firstContainsReferences ? 1 : 0)
+                + (secondContainsReferences ? 1 : 0)
+                + (thirdContainsReferences ? 1 : 0)
+                + (fourthContainsReferences ? 1 : 0);
+            generation.ScopedCleanupPending.EnsureCapacity(
+                checked(
+                    generation.ScopedCleanupPending.Count
+                    + referenceAllocationCount));
+            return new NativeBumpInitializationGroup(
+                first,
+                second,
+                third,
+                fourth);
+        }
+        catch
+        {
+            if (reservationCount >= 4)
+            {
+                AbortBumpInitialization(fourth);
+            }
+
+            if (reservationCount >= 3)
+            {
+                AbortBumpInitialization(third);
+            }
+
+            if (reservationCount >= 2)
+            {
+                AbortBumpInitialization(second);
+            }
+
+            if (reservationCount >= 1)
+            {
+                AbortBumpInitialization(first);
+            }
+
+            throw;
+        }
+    }
+
+    private void ValidateInitializationSourceLocked(
+        NativeGeneration current,
+        NativeGeneration? sourceGeneration,
+        NativeAllocation? sourceAllocation,
+        long sourceGenerationNumber,
+        long sourceAllocationId)
+    {
+        if (sourceGeneration is null || sourceAllocation is null)
+        {
+            return;
+        }
+
+        if (!ReferenceEquals(current, sourceGeneration)
+            || !IsDirectHandleActive(
+                current,
+                sourceAllocation,
+                sourceGenerationNumber,
+                sourceAllocationId))
+        {
+            throw CreateReturnedException(
+                "InitializeScoped",
+                sourceGenerationNumber,
+                _generation,
+                sourceAllocationId,
+                "The source handle is stale.");
+        }
+
+    }
+
+    internal NativeBumpInitializationOctet BeginBumpInitializationOctet(
+        int firstLength,
+        int firstElementSize,
+        nuint firstAlignment,
+        bool firstContainsReferences,
+        int secondLength,
+        int secondElementSize,
+        nuint secondAlignment,
+        bool secondContainsReferences,
+        int thirdLength,
+        int thirdElementSize,
+        nuint thirdAlignment,
+        bool thirdContainsReferences,
+        int fourthLength,
+        int fourthElementSize,
+        nuint fourthAlignment,
+        bool fourthContainsReferences,
+        int fifthLength,
+        int fifthElementSize,
+        nuint fifthAlignment,
+        bool fifthContainsReferences,
+        int sixthLength,
+        int sixthElementSize,
+        nuint sixthAlignment,
+        bool sixthContainsReferences,
+        int seventhLength,
+        int seventhElementSize,
+        nuint seventhAlignment,
+        bool seventhContainsReferences,
+        int eighthLength,
+        int eighthElementSize,
+        nuint eighthAlignment,
+        bool eighthContainsReferences,
+        NativeGeneration? sourceGeneration = null,
+        NativeAllocation? sourceAllocation = null,
+        long sourceGenerationNumber = 0,
+        long sourceAllocationId = 0)
+    {
+        NativeBumpBatchRequestBuffer requests = default;
+        requests[0] = CreateBumpBatchRequest(
+            firstLength,
+            firstElementSize,
+            firstAlignment,
+            firstContainsReferences);
+        requests[1] = CreateBumpBatchRequest(
+            secondLength,
+            secondElementSize,
+            secondAlignment,
+            secondContainsReferences);
+        requests[2] = CreateBumpBatchRequest(
+            thirdLength,
+            thirdElementSize,
+            thirdAlignment,
+            thirdContainsReferences);
+        requests[3] = CreateBumpBatchRequest(
+            fourthLength,
+            fourthElementSize,
+            fourthAlignment,
+            fourthContainsReferences);
+        requests[4] = CreateBumpBatchRequest(
+            fifthLength,
+            fifthElementSize,
+            fifthAlignment,
+            fifthContainsReferences);
+        requests[5] = CreateBumpBatchRequest(
+            sixthLength,
+            sixthElementSize,
+            sixthAlignment,
+            sixthContainsReferences);
+        requests[6] = CreateBumpBatchRequest(
+            seventhLength,
+            seventhElementSize,
+            seventhAlignment,
+            seventhContainsReferences);
+        requests[7] = CreateBumpBatchRequest(
+            eighthLength,
+            eighthElementSize,
+            eighthAlignment,
+            eighthContainsReferences);
+
+        lock (_gate)
+        {
+            NativeGeneration current = EnsureActiveLocked(
+                "InitializeScoped",
+                sourceGenerationNumber,
+                sourceAllocationId);
+            ValidateInitializationSourceLocked(
+                current,
+                sourceGeneration,
+                sourceAllocation,
+                sourceGenerationNumber,
+                sourceAllocationId);
+
+            if (TryBeginBumpInitializationOctetLocked(
+                    current,
+                    ref requests,
+                    out NativeBumpInitializationOctet octet))
+            {
+                return octet;
+            }
+
+            NativeBumpInitializationGroup first =
+                BeginBumpInitializationGroup(
+                    firstLength,
+                    firstElementSize,
+                    firstAlignment,
+                    firstContainsReferences,
+                    secondLength,
+                    secondElementSize,
+                    secondAlignment,
+                    secondContainsReferences,
+                    thirdLength,
+                    thirdElementSize,
+                    thirdAlignment,
+                    thirdContainsReferences,
+                    fourthLength,
+                    fourthElementSize,
+                    fourthAlignment,
+                    fourthContainsReferences,
+                    useSingleInitializationAdmission: false);
             try
             {
-                if (byteLength > 0)
-                {
-                    bumpSegment = FindBumpSpaceLocked(generation, byteLength, alignment, scoped);
-                    if (bumpSegment is null)
-                    {
-                        nuint segmentBytes = ChooseBumpSegmentBytes(
-                            generation,
-                            checked(byteLength + alignment - 1));
-                        generation.BumpSegments.EnsureCapacity(checked(generation.BumpSegments.Count + 1));
-                        generation.Owner.PrepareAddSegmentCapacity(1);
-                        NativeSegment segment = NativeSegment.AllocateZeroed(
-                            segmentBytes,
-                            _ownerKind,
-                            generation.Number,
-                            scoped ? "scoped growth" : "allocation growth",
-                            _lifecycle);
-                        createdSegment = new NativeBumpSegment(segment, NextSegmentOrdinalLocked());
-                        bumpSegment = createdSegment;
-                        AppendBumpSegmentLocked(generation, createdSegment);
-                        generation.Owner.AddSegment(segment);
-                        _freshSegmentAllocationCount++;
-                    }
-
-                    if (scoped)
-                    {
-                        originalCursor = bumpSegment.HighCursor;
-                        cursorCaptured = true;
-                        nuint unaligned = checked(bumpSegment.HighCursor - byteLength);
-                        offset = AlignDown(unaligned, alignment);
-                        bumpSegment.HighCursor = offset;
-                    }
-                    else
-                    {
-                        originalCursor = bumpSegment.LowCursor;
-                        cursorCaptured = true;
-                        offset = AlignUp(bumpSegment.LowCursor, alignment);
-                        bumpSegment.LowCursor = checked(offset + byteLength);
-                    }
-                }
-
-                long allocationId = NextAllocationIdLocked();
-                NativeAllocation allocation = RentAllocationLocked(
-                    generation,
-                    allocationId,
-                    slab: null,
-                    bumpSegment,
-                    offset,
-                    length,
-                    length,
-                    byteLength,
-                    referenceRoots: ContainsReferences(elementType) && length > 0
-                        ? generation.ReferenceRoots
-                        : null,
-                    scoped,
-                    epoch);
-                generation.Allocations.Add(allocationId, allocation);
-
-                if (scoped)
-                {
-                    generation.ScopedPending.Add(allocation);
-                }
-
-                if (scoped && bumpSegment is not null)
-                {
-                    nuint reclaimedBytes = bumpSegment.ReclaimedOverlap(
-                        offset,
-                        byteLength,
-                        generation.ScopeEpoch);
-                    if (reclaimedBytes != 0)
-                    {
-                        NativeMemoryTestHooks.RecordReclaimedRangeReuse(reclaimedBytes);
-                    }
-                }
-
-                return new NativeRegionAllocation(generation.Number, allocationId, length, length);
+                NativeBumpInitializationGroup second =
+                    BeginBumpInitializationGroup(
+                        fifthLength,
+                        fifthElementSize,
+                        fifthAlignment,
+                        fifthContainsReferences,
+                        sixthLength,
+                        sixthElementSize,
+                        sixthAlignment,
+                        sixthContainsReferences,
+                        seventhLength,
+                        seventhElementSize,
+                        seventhAlignment,
+                        seventhContainsReferences,
+                        eighthLength,
+                        eighthElementSize,
+                        eighthAlignment,
+                        eighthContainsReferences,
+                        continueExistingGroup: true,
+                        useSingleInitializationAdmission: false);
+                return new NativeBumpInitializationOctet(
+                    first,
+                    second);
             }
             catch
             {
-                if (createdSegment is not null)
-                {
-                    generation.BumpSegments.Remove(createdSegment);
-                    generation.Owner.RemoveSegment(createdSegment.Segment);
-                    createdSegment.Segment.FreeNow();
-                    ResetBumpTraversal(generation);
-                }
-                else if (bumpSegment is not null && cursorCaptured)
-                {
-                    if (scoped)
-                    {
-                        bumpSegment.HighCursor = originalCursor;
-                    }
-                    else
-                    {
-                        bumpSegment.LowCursor = originalCursor;
-                    }
-                }
-
-                if (startedScope && generation.ScopedPending.Count == 0)
-                {
-                    generation.ScopedBaselineActive = false;
-                    generation.ScopedBaseline.Clear();
-                }
-
+                AbortBumpInitializationGroup(first);
                 throw;
             }
         }
     }
 
-    internal NativeHandleMetadata ValidateHandle(long generationNumber, long allocationId, string operation)
+    private static NativeBumpBatchRequest CreateBumpBatchRequest(
+        int length,
+        int elementSize,
+        nuint alignment,
+        bool containsReferences)
     {
-        lock (_gate)
+        ValidateBumpInitializationArguments(
+            length,
+            elementSize,
+            alignment);
+        return new NativeBumpBatchRequest(
+            length,
+            CalculateByteLength(
+                length,
+                elementSize,
+                "scoped allocation"),
+            alignment,
+            containsReferences);
+    }
+
+    private bool TryBeginBumpInitializationOctetLocked(
+        NativeGeneration generation,
+        ref NativeBumpBatchRequestBuffer requests,
+        out NativeBumpInitializationOctet octet)
+    {
+        octet = default;
+        if (!TryBeginBumpInitializationBatchLocked(
+                generation,
+                ref requests,
+                8,
+                out NativeBumpInitializationBuffer reservations))
         {
-            NativeAllocation allocation = GetActiveAllocationLocked(generationNumber, allocationId, operation);
-            return new NativeHandleMetadata(allocation.Length, allocation.Capacity);
+            return false;
+        }
+
+        octet = new NativeBumpInitializationOctet(
+            new NativeBumpInitializationGroup(
+                reservations[0],
+                reservations[1],
+                reservations[2],
+                reservations[3]),
+            new NativeBumpInitializationGroup(
+                reservations[4],
+                reservations[5],
+                reservations[6],
+                reservations[7]),
+            UsesSingleInitializationAdmission: true);
+        return true;
+    }
+
+    private bool TryBeginBumpInitializationBatchLocked(
+        NativeGeneration generation,
+        ref NativeBumpBatchRequestBuffer requests,
+        int count,
+        out NativeBumpInitializationBuffer reservations)
+    {
+        reservations = default;
+        int firstRecordIndex = generation.ScopedRecordCount;
+        if (_kind is not (NativeOwnerKind.Region or NativeOwnerKind.Arena)
+            || generation.InitializationsInProgress != 0
+            || firstRecordIndex
+                > generation.ScopedAllocationBank.Count - count)
+        {
+            return false;
+        }
+
+        for (int index = 0; index < count; index++)
+        {
+            NativeBumpBatchRequest request = requests[index];
+            if (request.ContainsReferences
+                || request.ByteLength == 0)
+            {
+                return false;
+            }
+        }
+
+        NativeBumpCursorBuffer offsets = default;
+        NativeBumpCursorBuffer originalCursors = default;
+        NativeBumpSegment? segment =
+            FindScopedBumpBatchSpaceLocked(
+                generation,
+                ref requests,
+                ref offsets,
+                ref originalCursors,
+                count,
+                out nuint finalCursor);
+        if (segment is null)
+        {
+            return false;
+        }
+
+        long firstAllocationId =
+            checked(_nextAllocationId + 1);
+        long lastAllocationId =
+            checked(_nextAllocationId + count);
+        bool startedScope =
+            !generation.ScopedBaselineActive;
+        long scopeEpoch = BeginScopedLocked(generation);
+        if (segment.PendingScopeEpoch != scopeEpoch)
+        {
+            generation.ScopedTouchedSegments.EnsureCapacity(
+                checked(
+                    generation.ScopedTouchedSegments.Count
+                    + 1));
+        }
+
+        int initializedCount = 0;
+        try
+        {
+            for (int index = 0; index < count; index++)
+            {
+                NativeBumpBatchRequest request = requests[index];
+                long allocationId =
+                    checked(firstAllocationId + index);
+                NativeAllocation allocation =
+                    generation.ScopedAllocationBank[
+                        firstRecordIndex + index];
+                allocation.Reset(
+                    allocationId,
+                    slab: null,
+                    segment,
+                    offsets[index],
+                    request.Length,
+                    request.Length,
+                    request.ByteLength,
+                    referenceRoots: null,
+                    scoped: true,
+                    scopeEpoch);
+                allocation.Lifecycle =
+                    NativeAllocationLifecycle.Initializing;
+                reservations[index] =
+                    new NativeBumpInitialization(
+                        allocation,
+                        createdSegment: null,
+                        originalCursors[index],
+                        cursorCaptured: true,
+                        scoped: true,
+                        startedScope:
+                            startedScope && index == 0);
+                initializedCount++;
+            }
+
+            segment.HighCursor = finalCursor;
+            generation.ScopedRecordCount =
+                checked(firstRecordIndex + count);
+            generation.InitializationsInProgress =
+                checked(
+                    generation.InitializationsInProgress
+                    + 1);
+            _nextAllocationId = lastAllocationId;
+            return true;
+        }
+        catch
+        {
+            for (int index = 0;
+                index < initializedCount;
+                index++)
+            {
+                NativeAllocation allocation =
+                    generation.ScopedAllocationBank[
+                        firstRecordIndex + index];
+                allocation.Lifecycle =
+                    NativeAllocationLifecycle.Returned;
+                allocation.InitializedLength = 0;
+            }
+
+            if (startedScope)
+            {
+                generation.ScopedBaselineActive = false;
+                ClearScopedRangesLocked(generation);
+            }
+
+            throw;
         }
     }
 
-    internal NativeOperationToken EnterOperation(long generationNumber, long allocationId, string operation)
+    private static NativeBumpSegment?
+        FindScopedBumpBatchSpaceLocked(
+            NativeGeneration generation,
+            ref NativeBumpBatchRequestBuffer requests,
+            ref NativeBumpCursorBuffer offsets,
+            ref NativeBumpCursorBuffer originalCursors,
+            int count,
+            out nuint finalCursor)
     {
-        NativeMemoryTestHooks.NotifyBeforeOperationEntry(operation, this);
-        NativeOperationToken token;
-        NativeGenerationOwner generationOwner;
-        lock (_gate)
+        finalCursor = 0;
+        if (generation.BumpSegments.Count == 0)
         {
-            NativeGeneration generation = EnsureActiveLocked(operation, generationNumber, allocationId);
-            NativeAllocation allocation = GetActiveAllocationLocked(generationNumber, allocationId, operation, generation);
-            generation.ActiveOperations++;
-            allocation.ActiveOperations++;
-            generationOwner = generation.Owner;
-            token = new NativeOperationToken(this, generation, allocation, operation);
+            return null;
         }
 
-        NativeMemoryTestHooks.NotifyOperationEntered(operation, this, generationOwner, generationNumber, allocationId);
-        return token;
-    }
-
-    internal void ExitOperation(NativeGeneration generation, NativeAllocation allocation, string operation)
-    {
-        lock (_gate)
+        int start = Math.Min(
+            Math.Max(generation.ScopedBumpTraversalIndex, 0),
+            generation.BumpSegments.Count - 1);
+        for (int segmentIndex = start;
+            segmentIndex >= 0;
+            segmentIndex--)
         {
-            if (allocation.ActiveOperations > 0)
+            NativeMemoryTestHooks.RecordBumpTraversalVisit();
+            NativeBumpSegment segment =
+                generation.BumpSegments[segmentIndex];
+            nuint cursor = segment.HighCursor;
+            bool fits = cursor >= segment.LowCursor;
+            for (int index = 0;
+                fits && index < count;
+                index++)
             {
-                allocation.ActiveOperations--;
-            }
-
-            if (generation.ActiveOperations > 0)
-            {
-                generation.ActiveOperations--;
-            }
-
-            if (generation.MemoryDetached)
-            {
-                if (generation.ActiveOperations == 0)
+                NativeBumpBatchRequest request = requests[index];
+                if (request.ByteLength
+                    > cursor - segment.LowCursor)
                 {
-                    DrainDetachedGenerationLocked(generation);
+                    fits = false;
+                    break;
                 }
 
+                nuint candidate = AlignDown(
+                    cursor - request.ByteLength,
+                    request.Alignment);
+                if (candidate < segment.LowCursor)
+                {
+                    fits = false;
+                    break;
+                }
+
+                originalCursors[index] = cursor;
+                offsets[index] = candidate;
+                cursor = candidate;
+            }
+
+            if (!fits)
+            {
+                continue;
+            }
+
+            generation.ScopedBumpTraversalIndex =
+                segmentIndex;
+            finalCursor = cursor;
+            return segment;
+        }
+
+        generation.ScopedBumpTraversalIndex = -1;
+        return null;
+    }
+
+    private NativeBumpInitialization BeginBumpInitialization(
+        int length,
+        int elementSize,
+        nuint alignment,
+        bool scoped,
+        bool containsReferences,
+        bool allowExistingInitialization = false)
+    {
+        ValidateBumpInitializationArguments(
+            length,
+            elementSize,
+            alignment);
+        nuint byteLength = CalculateByteLength(length, elementSize, scoped ? "scoped allocation" : "allocation");
+
+        if (_gate.IsHeldByCurrentThread)
+        {
+            return BeginBumpInitializationLocked(
+                length,
+                alignment,
+                scoped,
+                containsReferences,
+                allowExistingInitialization,
+                byteLength);
+        }
+
+        lock (_gate)
+        {
+            return BeginBumpInitializationLocked(
+                length,
+                alignment,
+                scoped,
+                containsReferences,
+                allowExistingInitialization,
+                byteLength);
+        }
+    }
+
+    private static void ValidateBumpInitializationArguments(
+        int length,
+        int elementSize,
+        nuint alignment)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(length);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(elementSize);
+        ArgumentOutOfRangeException.ThrowIfZero(alignment);
+    }
+
+    private NativeBumpInitialization BeginBumpInitializationLocked(
+        int length,
+        nuint alignment,
+        bool scoped,
+        bool containsReferences,
+        bool allowExistingInitialization,
+        nuint byteLength)
+    {
+        NativeGeneration generation = EnsureActiveLocked(
+            scoped ? "LeaseScoped" : "Lease");
+        if (_kind is not (NativeOwnerKind.Region or NativeOwnerKind.Arena))
+        {
+            throw CreateStateException("Lease", "This owner does not expose heterogeneous allocations.", 0);
+        }
+
+        if (generation.InitializationsInProgress != 0
+            && !allowExistingInitialization)
+        {
+            throw CreateInUseException(
+                scoped ? "LeaseScoped" : "Lease",
+                generation.Number,
+                0,
+                generation.ActiveOperations,
+                "A native lease initializer is already active.");
+        }
+
+        bool startedScope = scoped && !generation.ScopedBaselineActive;
+        long epoch = scoped ? BeginScopedLocked(generation) : generation.ScopeEpoch;
+        NativeBumpSegment? bumpSegment = null;
+        NativeBumpSegment? createdSegment = null;
+        nuint originalCursor = 0;
+        bool cursorCaptured = false;
+        nuint offset = 0;
+        try
+        {
+            bool reuseRegisteredScopedRecord =
+                scoped
+                && generation.ScopedRecordCount
+                    < generation.ScopedAllocationBank.Count;
+            if (!reuseRegisteredScopedRecord)
+            {
+                generation.Allocations.EnsureCapacity(
+                    checked(generation.Allocations.Count + 1));
+            }
+
+            if (scoped)
+            {
+                if (!reuseRegisteredScopedRecord)
+                {
+                    generation.ScopedAllocationBank.EnsureCapacity(
+                        checked(
+                            generation.ScopedAllocationBank.Count
+                            + 1));
+                }
+
+                if (containsReferences)
+                {
+                    generation.ScopedCleanupPending.EnsureCapacity(
+                        checked(generation.ScopedCleanupPending.Count + 1));
+                }
+            }
+
+            if (byteLength > 0)
+            {
+                bumpSegment = FindBumpSpaceLocked(generation, byteLength, alignment, scoped);
+                if (bumpSegment is null)
+                {
+                    nuint segmentBytes = ChooseBumpSegmentBytes(
+                        generation,
+                        RequiredFreshBumpBytes(byteLength, alignment));
+                    generation.BumpSegments.EnsureCapacity(checked(generation.BumpSegments.Count + 1));
+                    generation.Owner.PrepareAddSegmentCapacity(1);
+                    NativeSegment segment = NativeSegment.Allocate(
+                        segmentBytes,
+                        _ownerKind,
+                        generation.Number,
+                        scoped ? "scoped growth" : "allocation growth",
+                        _lifecycle,
+                        zeroed: false);
+                    createdSegment = new NativeBumpSegment(segment, NextSegmentOrdinalLocked());
+                    bumpSegment = createdSegment;
+                    AppendBumpSegmentLocked(generation, createdSegment);
+                    generation.Owner.AddSegment(segment);
+                    _freshSegmentAllocationCount++;
+                }
+
+                if (scoped)
+                {
+                    if (bumpSegment.PendingScopeEpoch != generation.ScopeEpoch)
+                    {
+                        generation.ScopedTouchedSegments.EnsureCapacity(
+                            checked(generation.ScopedTouchedSegments.Count + 1));
+                    }
+
+                    originalCursor = bumpSegment.HighCursor;
+                    cursorCaptured = true;
+                    nuint unaligned = checked(bumpSegment.HighCursor - byteLength);
+                    offset = AlignDown(unaligned, alignment);
+                    bumpSegment.HighCursor = offset;
+                }
+                else
+                {
+                    originalCursor = bumpSegment.LowCursor;
+                    cursorCaptured = true;
+                    offset = AlignUp(bumpSegment.LowCursor, alignment);
+                    bumpSegment.LowCursor = checked(offset + byteLength);
+                }
+            }
+
+            long allocationId = NextAllocationIdLocked();
+            NativeAllocation allocation = RentAllocationLocked(
+                generation,
+                allocationId,
+                slab: null,
+                bumpSegment,
+                offset,
+                length,
+                length,
+                byteLength,
+                referenceRoots: containsReferences && length > 0
+                    ? generation.ReferenceRoots
+                    : null,
+                scoped,
+                epoch,
+                preserveScopedRegistration:
+                    reuseRegisteredScopedRecord);
+            allocation.Lifecycle = NativeAllocationLifecycle.Initializing;
+            if (!reuseRegisteredScopedRecord)
+            {
+                generation.Allocations.Add(
+                    allocationId,
+                    allocation);
+            }
+
+            if (scoped)
+            {
+                generation.ScopedRecordCount =
+                    checked(generation.ScopedRecordCount + 1);
+            }
+
+            generation.InitializationsInProgress++;
+
+            return new NativeBumpInitialization(
+                allocation,
+                createdSegment,
+                originalCursor,
+                cursorCaptured,
+                scoped,
+                startedScope);
+        }
+        catch
+        {
+            if (createdSegment is not null)
+            {
+                generation.BumpSegments.Remove(createdSegment);
+                generation.Owner.RemoveSegment(createdSegment.Segment);
+                createdSegment.Segment.FreeNow();
+                ResetBumpTraversal(generation);
+            }
+            else if (bumpSegment is not null && cursorCaptured)
+            {
+                if (scoped)
+                {
+                    bumpSegment.HighCursor = originalCursor;
+                }
+                else
+                {
+                    bumpSegment.LowCursor = originalCursor;
+                }
+            }
+
+            if (startedScope && generation.ScopedRecordCount == 0)
+            {
+                generation.ScopedBaselineActive = false;
+                ClearScopedRangesLocked(generation);
+            }
+
+            throw;
+        }
+    }
+
+    private void CompleteBumpInitialization(
+        NativeBumpInitialization reservation)
+    {
+        ValidateInitializedLength(reservation);
+
+        lock (_gate)
+        {
+            ValidateBumpInitializationLocked(reservation);
+            PublishBumpInitializationLocked(reservation);
+        }
+    }
+
+    internal void CompleteBumpInitializationGroup(
+        NativeBumpInitializationGroup group)
+    {
+        ValidateInitializedLength(group.First);
+        ValidateInitializedLength(group.Second);
+        ValidateInitializedLength(group.Third);
+        ValidateInitializedLength(group.Fourth);
+
+        if (group.UsesSingleInitializationAdmission)
+        {
+            lock (_gate)
+            {
+                ValidateBumpInitializationLocked(group.First);
+                NativeBumpInitializationBuffer reservations =
+                    default;
+                CopyBumpInitializationGroup(
+                    ref reservations,
+                    0,
+                    group);
+                PublishFastBumpInitializationBatchLocked(
+                    ref reservations,
+                    4);
+            }
+
+            return;
+        }
+
+        lock (_gate)
+        {
+            ValidateBumpInitializationLocked(group.First);
+            ValidateBumpInitializationLocked(group.Second);
+            ValidateBumpInitializationLocked(group.Third);
+            ValidateBumpInitializationLocked(group.Fourth);
+
+            PublishBumpInitializationLocked(group.First);
+            PublishBumpInitializationLocked(group.Second);
+            PublishBumpInitializationLocked(group.Third);
+            PublishBumpInitializationLocked(group.Fourth);
+        }
+    }
+
+    internal void CompleteBumpInitializationOctet(
+        in NativeBumpInitializationOctet octet)
+    {
+        NativeBumpInitializationGroup first = octet.First;
+        NativeBumpInitializationGroup second = octet.Second;
+        ValidateInitializedLength(first.First);
+        ValidateInitializedLength(first.Second);
+        ValidateInitializedLength(first.Third);
+        ValidateInitializedLength(first.Fourth);
+        ValidateInitializedLength(second.First);
+        ValidateInitializedLength(second.Second);
+        ValidateInitializedLength(second.Third);
+        ValidateInitializedLength(second.Fourth);
+
+        if (octet.UsesSingleInitializationAdmission)
+        {
+            lock (_gate)
+            {
+                ValidateBumpInitializationLocked(
+                    first.First);
+                NativeBumpInitializationBuffer reservations =
+                    default;
+                CopyBumpInitializationGroup(
+                    ref reservations,
+                    0,
+                    first);
+                CopyBumpInitializationGroup(
+                    ref reservations,
+                    4,
+                    second);
+                PublishFastBumpInitializationBatchLocked(
+                    ref reservations,
+                    8);
+            }
+
+            return;
+        }
+
+        lock (_gate)
+        {
+            ValidateBumpInitializationLocked(first.First);
+            ValidateBumpInitializationLocked(first.Second);
+            ValidateBumpInitializationLocked(first.Third);
+            ValidateBumpInitializationLocked(first.Fourth);
+            ValidateBumpInitializationLocked(second.First);
+            ValidateBumpInitializationLocked(second.Second);
+            ValidateBumpInitializationLocked(second.Third);
+            ValidateBumpInitializationLocked(second.Fourth);
+
+            PublishBumpInitializationLocked(first.First);
+            PublishBumpInitializationLocked(first.Second);
+            PublishBumpInitializationLocked(first.Third);
+            PublishBumpInitializationLocked(first.Fourth);
+            PublishBumpInitializationLocked(second.First);
+            PublishBumpInitializationLocked(second.Second);
+            PublishBumpInitializationLocked(second.Third);
+            PublishBumpInitializationLocked(second.Fourth);
+        }
+    }
+
+    private static void CopyBumpInitializationGroup(
+        ref NativeBumpInitializationBuffer reservations,
+        int offset,
+        NativeBumpInitializationGroup group)
+    {
+        reservations[offset] = group.First;
+        reservations[offset + 1] = group.Second;
+        reservations[offset + 2] = group.Third;
+        reservations[offset + 3] = group.Fourth;
+    }
+
+    private static void PublishFastBumpInitializationBatchLocked(
+        ref NativeBumpInitializationBuffer reservations,
+        int count)
+    {
+        NativeBumpInitialization first = reservations[0];
+        NativeGeneration generation = first.Generation;
+        NativeBumpSegment segment =
+            first.BumpSegment
+            ?? throw new InvalidOperationException(
+                "The native batch has no backing segment.");
+        NativeAllocation last =
+            reservations[count - 1].Allocation;
+        TrackScopedRangeLocked(
+            generation,
+            segment,
+            last.OffsetBytes,
+            first.OriginalCursor);
+
+        int reclaimedRangeCount = 0;
+        nuint reclaimedRangeBytes = 0;
+        for (int index = 0; index < count; index++)
+        {
+            NativeAllocation allocation =
+                reservations[index].Allocation;
+            nuint reclaimedBytes = segment.ReclaimedOverlap(
+                allocation.OffsetBytes,
+                allocation.StorageBytes,
+                generation.ScopeEpoch);
+            if (reclaimedBytes == 0)
+            {
+                continue;
+            }
+
+            reclaimedRangeCount++;
+            reclaimedRangeBytes = checked(
+                reclaimedRangeBytes + reclaimedBytes);
+        }
+
+        if (reclaimedRangeCount != 0)
+        {
+            NativeMemoryTestHooks.RecordReclaimedRangeReuse(
+                reclaimedRangeCount,
+                reclaimedRangeBytes);
+        }
+
+        for (int index = 0; index < count; index++)
+        {
+            NativeAllocation allocation =
+                reservations[index].Allocation;
+            allocation.Lifecycle =
+                NativeAllocationLifecycle.Active;
+            allocation.InitializedLength = 0;
+        }
+
+        generation.InitializationsInProgress--;
+    }
+
+    private static void ValidateInitializedLength(
+        NativeBumpInitialization reservation)
+    {
+        NativeAllocation allocation = reservation.Allocation;
+        if (allocation.InitializedLength != allocation.Length)
+        {
+            throw new InvalidOperationException(
+                "The native lease initializer did not write all logical elements.");
+        }
+    }
+
+    private void ValidateBumpInitializationLocked(
+        NativeBumpInitialization reservation)
+    {
+        NativeGeneration generation = reservation.Generation;
+        NativeAllocation allocation = reservation.Allocation;
+        if (!ReferenceEquals(generation, _current)
+            || _lifecycle != NativeOwnerLifecycle.Active
+            || allocation.Lifecycle
+                != NativeAllocationLifecycle.Initializing)
+        {
+            throw CreateStateException(
+                "Initialize",
+                "The owner changed before the initializer completed.",
+                allocation.Id);
+        }
+    }
+
+    private static void PublishBumpInitializationLocked(
+        NativeBumpInitialization reservation)
+    {
+        NativeGeneration generation = reservation.Generation;
+        NativeAllocation allocation = reservation.Allocation;
+        if (reservation.Scoped
+            && reservation.BumpSegment is not null)
+        {
+            TrackScopedRangeLocked(
+                generation,
+                reservation.BumpSegment,
+                allocation.OffsetBytes,
+                reservation.OriginalCursor);
+            nuint reclaimedBytes =
+                reservation.BumpSegment.ReclaimedOverlap(
+                    allocation.OffsetBytes,
+                    allocation.StorageBytes,
+                    generation.ScopeEpoch);
+            if (reclaimedBytes != 0)
+            {
+                NativeMemoryTestHooks.RecordReclaimedRangeReuse(
+                    reclaimedBytes);
+            }
+        }
+
+        allocation.Lifecycle = NativeAllocationLifecycle.Active;
+        allocation.InitializedLength = 0;
+        if (reservation.Scoped
+            && allocation.ReferenceRoots is not null)
+        {
+            generation.ScopedCleanupPending.Add(allocation);
+        }
+
+        generation.InitializationsInProgress--;
+    }
+
+    internal void AbortBumpInitializationGroup(
+        NativeBumpInitializationGroup group)
+    {
+        if (group.UsesSingleInitializationAdmission)
+        {
+            NativeBumpInitializationBuffer reservations =
+                default;
+            CopyBumpInitializationGroup(
+                ref reservations,
+                0,
+                group);
+            AbortFastBumpInitializationBatch(
+                ref reservations,
+                4);
+            return;
+        }
+
+        AbortBumpInitialization(group.Fourth);
+        AbortBumpInitialization(group.Third);
+        AbortBumpInitialization(group.Second);
+        AbortBumpInitialization(group.First);
+    }
+
+    internal void AbortBumpInitializationOctet(
+        in NativeBumpInitializationOctet octet)
+    {
+        if (octet.UsesSingleInitializationAdmission)
+        {
+            NativeBumpInitializationBuffer reservations =
+                default;
+            CopyBumpInitializationGroup(
+                ref reservations,
+                0,
+                octet.First);
+            CopyBumpInitializationGroup(
+                ref reservations,
+                4,
+                octet.Second);
+            AbortFastBumpInitializationBatch(
+                ref reservations,
+                8);
+            return;
+        }
+
+        AbortBumpInitializationGroup(octet.Second);
+        AbortBumpInitializationGroup(octet.First);
+    }
+
+    private void AbortFastBumpInitializationBatch(
+        ref NativeBumpInitializationBuffer reservations,
+        int count)
+    {
+        lock (_gate)
+        {
+            NativeBumpInitialization first = reservations[0];
+            NativeGeneration generation = first.Generation;
+            if (first.Allocation.Lifecycle
+                != NativeAllocationLifecycle.Initializing)
+            {
                 return;
             }
 
-            if (generation != _current
-                && generation.ActiveOperations == 0
-                && _retiredGenerations.Contains(generation))
+            for (int index = count - 1; index >= 0; index--)
             {
-                DrainRetiredGenerationLocked(generation);
+                NativeAllocation allocation =
+                    reservations[index].Allocation;
+                allocation.ClearInitializedReferences();
+                allocation.Lifecycle =
+                    NativeAllocationLifecycle.Returned;
+                allocation.InitializedLength = 0;
             }
+
+            generation.ScopedRecordCount = checked(
+                generation.ScopedRecordCount - count);
+            if (first.BumpSegment is not null)
+            {
+                first.BumpSegment.HighCursor =
+                    first.OriginalCursor;
+            }
+
+            if (first.StartedScope
+                && generation.ScopedRecordCount == 0)
+            {
+                generation.ScopedBaselineActive = false;
+                ClearScopedRangesLocked(generation);
+            }
+
+            generation.InitializationsInProgress--;
+        }
+    }
+
+    private void AbortBumpInitialization(
+        NativeBumpInitialization reservation)
+    {
+        lock (_gate)
+        {
+            NativeGeneration generation = reservation.Generation;
+            NativeAllocation allocation = reservation.Allocation;
+            if (allocation.Lifecycle
+                != NativeAllocationLifecycle.Initializing)
+            {
+                return;
+            }
+
+            allocation.ClearInitializedReferences();
+            allocation.Lifecycle = NativeAllocationLifecycle.Returned;
+            allocation.InitializedLength = 0;
+            if (reservation.Scoped)
+            {
+                ReleaseLastScopedRecordLocked(generation, allocation);
+            }
+            else
+            {
+                generation.Allocations.Remove(allocation.Id);
+                generation.ReusableAllocations.Add(allocation);
+            }
+
+            if (reservation.CreatedSegment is not null)
+            {
+                generation.BumpSegments.Remove(
+                    reservation.CreatedSegment);
+                generation.Owner.RemoveSegment(
+                    reservation.CreatedSegment.Segment);
+                reservation.CreatedSegment.Segment.FreeNow();
+                ResetBumpTraversal(generation);
+            }
+            else if (reservation.BumpSegment is not null
+                && reservation.CursorCaptured)
+            {
+                if (reservation.Scoped)
+                {
+                    reservation.BumpSegment.HighCursor =
+                        reservation.OriginalCursor;
+                }
+                else
+                {
+                    reservation.BumpSegment.LowCursor =
+                        reservation.OriginalCursor;
+                }
+            }
+
+            generation.InitializationsInProgress--;
+            if (reservation.StartedScope
+                && generation.ScopedRecordCount == 0)
+            {
+                generation.ScopedBaselineActive = false;
+                ClearScopedRangesLocked(generation);
+            }
+        }
+    }
+
+    internal NativeHandleMetadata ValidateHandle(
+        NativeGeneration generation,
+        NativeAllocation allocation,
+        long generationNumber,
+        long allocationId,
+        string operation)
+    {
+        NativeOperationToken token = EnterOperationCore(
+            generation,
+            allocation,
+            generationNumber,
+            allocationId,
+            operation,
+            notifyHooks: false);
+        try
+        {
+            return new NativeHandleMetadata(
+                allocation.Length,
+                allocation.Capacity);
+        }
+        finally
+        {
+            token.Dispose();
+        }
+    }
+
+    internal NativeOperationToken EnterOperation(
+        NativeGeneration generation,
+        NativeAllocation allocation,
+        long generationNumber,
+        long allocationId,
+        string operation) =>
+        EnterOperationCore(
+            generation,
+            allocation,
+            generationNumber,
+            allocationId,
+            operation,
+            notifyHooks: true);
+
+    private NativeOperationToken EnterOperationCore(
+        NativeGeneration generation,
+        NativeAllocation allocation,
+        long generationNumber,
+        long allocationId,
+        string operation,
+        bool notifyHooks)
+    {
+        if (notifyHooks)
+        {
+            NativeMemoryTestHooks.NotifyBeforeOperationEntry(
+                operation,
+                this);
+        }
+
+        NativeOperationToken token;
+        bool enterAllocation = _kind == NativeOwnerKind.Pool;
+        if (IsDirectHandleActive(
+                generation,
+                allocation,
+                generationNumber,
+                allocationId)
+            && generation.TryEnterOperation())
+        {
+            if (!enterAllocation)
+            {
+                if (IsDirectHandleActive(
+                        generation,
+                        allocation,
+                        generationNumber,
+                        allocationId))
+                {
+                    token = new NativeOperationToken(
+                        this,
+                        generation,
+                        allocation,
+                        allocationEntered: false,
+                        operation);
+                    goto Entered;
+                }
+            }
+            else if (allocation.TryEnterOperation())
+            {
+                if (IsDirectHandleActive(
+                        generation,
+                        allocation,
+                        generationNumber,
+                        allocationId))
+                {
+                    token = new NativeOperationToken(
+                        this,
+                        generation,
+                        allocation,
+                        allocationEntered: true,
+                        operation);
+                    goto Entered;
+                }
+
+                allocation.ExitOperation();
+            }
+
+            ExitGenerationOperation(generation);
+        }
+
+        token = EnterOperationSlow(
+            generation,
+            allocation,
+            generationNumber,
+            allocationId,
+            operation);
+
+    Entered:
+        if (!notifyHooks)
+        {
+            return token;
+        }
+
+        try
+        {
+            NativeMemoryTestHooks.NotifyOperationEntered(
+                operation,
+                this,
+                generation.Owner,
+                generationNumber,
+                allocationId);
+        }
+        catch
+        {
+            token.Dispose();
+            throw;
+        }
+
+        return token;
+    }
+
+    private NativeOperationToken EnterOperationSlow(
+        NativeGeneration expectedGeneration,
+        NativeAllocation expectedAllocation,
+        long generationNumber,
+        long allocationId,
+        string operation)
+    {
+        lock (_gate)
+        {
+            NativeGeneration generation = EnsureActiveLocked(
+                operation,
+                generationNumber,
+                allocationId);
+            if (!ReferenceEquals(generation, expectedGeneration)
+                || !IsDirectHandleActive(
+                    generation,
+                    expectedAllocation,
+                    generationNumber,
+                    allocationId))
+            {
+                throw CreateReturnedException(
+                    operation,
+                    generationNumber,
+                    _generation,
+                    allocationId,
+                    "The handle metadata was reused by a later allocation.");
+            }
+
+            NativeAllocation allocation = expectedAllocation;
+            if (!generation.TryEnterOperation())
+            {
+                throw CreateInUseException(
+                    operation,
+                    generationNumber,
+                    allocationId,
+                    generation.ActiveOperations,
+                    "The generation does not accept a new native operation.");
+            }
+
+            if (_kind != NativeOwnerKind.Pool)
+            {
+                return new NativeOperationToken(
+                    this,
+                    generation,
+                    allocation,
+                    allocationEntered: false,
+                    operation);
+            }
+
+            if (allocation.TryEnterOperation())
+            {
+                return new NativeOperationToken(
+                    this,
+                    generation,
+                    allocation,
+                    allocationEntered: true,
+                    operation);
+            }
+
+            ExitGenerationOperation(generation);
+            throw CreateInUseException(
+                operation,
+                generationNumber,
+                allocationId,
+                allocation.ActiveOperations,
+                "The allocation does not accept a new native operation.");
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private bool IsDirectHandleActive(
+        NativeGeneration generation,
+        NativeAllocation allocation,
+        long generationNumber,
+        long allocationId) =>
+        ReferenceEquals(Volatile.Read(ref _current), generation)
+        && generation.Number == generationNumber
+        && allocation.Id == allocationId
+        && allocation.Lifecycle == NativeAllocationLifecycle.Active
+        && (!allocation.IsScoped
+            || allocation.ScopeEpoch == generation.ScopeEpoch);
+
+    internal NativeCompositeOperationToken EnterCompositeOperation(
+        NativeGeneration generation,
+        NativeCompositeAllocationBuffer allocations,
+        long generationNumber,
+        scoped ReadOnlySpan<long> allocationIds,
+        string operation)
+    {
+        if (allocationIds.IsEmpty || allocationIds.Length > NativeCompositeAllocationBuffer.Capacity)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(allocationIds),
+                $"A composite native operation requires between one and {NativeCompositeAllocationBuffer.Capacity} allocations.");
+        }
+
+        NativeMemoryTestHooks.NotifyBeforeOperationEntry(operation, this);
+        bool enterAllocations = _kind == NativeOwnerKind.Pool;
+        if (!TryEnterCompositeFast(
+                generation,
+                ref allocations,
+                generationNumber,
+                allocationIds,
+                enterAllocations))
+        {
+            EnterCompositeSlow(
+                generation,
+                ref allocations,
+                generationNumber,
+                allocationIds,
+                operation,
+                enterAllocations);
+        }
+
+        NativeCompositeOperationToken token = new(
+            this,
+            generation,
+            allocations,
+            allocationIds.Length,
+            enterAllocations);
+        if (!NativeMemoryTestHooks.OperationHooksEnabled)
+        {
+            return token;
+        }
+
+        try
+        {
+            for (int index = 0; index < allocationIds.Length; index++)
+            {
+                NativeMemoryTestHooks.NotifyOperationEntered(
+                    operation,
+                    this,
+                    generation.Owner,
+                    generationNumber,
+                    allocationIds[index]);
+            }
+        }
+        catch
+        {
+            token.Dispose();
+            throw;
+        }
+
+        return token;
+    }
+
+    private bool TryEnterCompositeFast(
+        NativeGeneration generation,
+        ref NativeCompositeAllocationBuffer allocations,
+        long generationNumber,
+        scoped ReadOnlySpan<long> allocationIds,
+        bool enterAllocations)
+    {
+        if (!generation.TryEnterOperation())
+        {
+            return false;
+        }
+
+        if (!enterAllocations)
+        {
+            for (int index = 0;
+                index < allocationIds.Length;
+                index++)
+            {
+                if (!IsDirectHandleActive(
+                        generation,
+                        allocations[index]!,
+                        generationNumber,
+                        allocationIds[index]))
+                {
+                    ExitGenerationOperation(generation);
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        int enteredCount = 0;
+        for (int index = 0; index < allocationIds.Length; index++)
+        {
+            NativeAllocation? allocation = allocations[index];
+            if (allocation is null)
+            {
+                ExitCompositeAdmissionFailure(
+                    generation,
+                    ref allocations,
+                    enteredCount);
+                return false;
+            }
+
+            if (!allocation.TryEnterOperation())
+            {
+                ExitCompositeAdmissionFailure(
+                    generation,
+                    ref allocations,
+                    enteredCount);
+                return false;
+            }
+
+            enteredCount++;
+            if (!IsDirectHandleActive(
+                    generation,
+                    allocation,
+                    generationNumber,
+                    allocationIds[index]))
+            {
+                ExitCompositeAdmissionFailure(
+                    generation,
+                    ref allocations,
+                    enteredCount);
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private void EnterCompositeSlow(
+        NativeGeneration expectedGeneration,
+        ref NativeCompositeAllocationBuffer allocations,
+        long generationNumber,
+        scoped ReadOnlySpan<long> allocationIds,
+        string operation,
+        bool enterAllocations)
+    {
+        lock (_gate)
+        {
+            NativeGeneration generation = EnsureActiveLocked(
+                operation,
+                generationNumber,
+                allocationIds[0]);
+            if (!ReferenceEquals(generation, expectedGeneration))
+            {
+                throw CreateReturnedException(
+                    operation,
+                    generationNumber,
+                    _generation,
+                    allocationIds[0],
+                    "The handle generation has already ended.");
+            }
+
+            for (int index = 0; index < allocationIds.Length; index++)
+            {
+                NativeAllocation? allocation =
+                    allocations[index];
+                if (allocation is null
+                    || !IsDirectHandleActive(
+                        generation,
+                        allocation,
+                        generationNumber,
+                        allocationIds[index]))
+                {
+                    throw CreateReturnedException(
+                        operation,
+                        generationNumber,
+                        _generation,
+                        allocationIds[index],
+                        "The handle metadata was reused by a later allocation.");
+                }
+            }
+
+            if (!generation.TryEnterOperation())
+            {
+                throw CreateInUseException(
+                    operation,
+                    generationNumber,
+                    allocationIds[0],
+                    generation.ActiveOperations,
+                    "The generation does not accept a composite native operation.");
+            }
+
+            if (!enterAllocations)
+            {
+                return;
+            }
+
+            int enteredCount = 0;
+            try
+            {
+                for (int index = 0;
+                    index < allocationIds.Length;
+                    index++)
+                {
+                    NativeAllocation allocation =
+                        allocations[index]!;
+                    if (!allocation.TryEnterOperation())
+                    {
+                        throw CreateInUseException(
+                            operation,
+                            generationNumber,
+                            allocationIds[index],
+                            allocation.ActiveOperations,
+                            "An allocation does not accept a composite native operation.");
+                    }
+
+                    enteredCount++;
+                }
+            }
+            catch
+            {
+                ExitCompositeAdmissionFailure(
+                    generation,
+                    ref allocations,
+                    enteredCount);
+                throw;
+            }
+        }
+    }
+
+    private void ExitCompositeAdmissionFailure(
+        NativeGeneration generation,
+        ref NativeCompositeAllocationBuffer allocations,
+        int enteredCount)
+    {
+        for (int index = enteredCount - 1; index >= 0; index--)
+        {
+            allocations[index]!.ExitOperation();
+        }
+
+        ExitGenerationOperation(generation);
+    }
+
+    internal void ExitOperation(
+        NativeGeneration generation,
+        NativeAllocation allocation,
+        bool allocationEntered,
+        string operation)
+    {
+        _ = operation;
+        if (allocationEntered)
+        {
+            allocation.ExitOperation();
+        }
+
+        ExitGenerationOperation(generation);
+    }
+
+    internal void ExitCompositeOperation(
+        NativeGeneration generation,
+        ref NativeCompositeAllocationBuffer allocations,
+        int count,
+        bool allocationsEntered)
+    {
+        for (int index = count - 1; index >= 0; index--)
+        {
+            NativeAllocation? allocation = allocations[index];
+            allocations[index] = null;
+            if (allocationsEntered && allocation is not null)
+            {
+                allocation.ExitOperation();
+            }
+        }
+
+        ExitGenerationOperation(generation);
+    }
+
+    private void ExitGenerationOperation(NativeGeneration generation)
+    {
+        int remaining = generation.ExitOperation();
+        if (remaining != 0
+            || (!generation.MemoryDetached
+                && ReferenceEquals(
+                    Volatile.Read(ref _current),
+                    generation)))
+        {
+            return;
+        }
+
+        lock (_gate)
+        {
+            FinishOperationExitLocked(generation);
+        }
+    }
+
+    private void FinishOperationExitLocked(NativeGeneration generation)
+    {
+        if (generation.MemoryDetached)
+        {
+            if (generation.ActiveOperations == 0)
+            {
+                DrainDetachedGenerationLocked(generation);
+            }
+
+            return;
+        }
+
+        if (generation != _current
+            && generation.ActiveOperations == 0
+            && _retiredGenerations.Contains(generation))
+        {
+            DrainRetiredGenerationLocked(generation);
         }
     }
 
@@ -1817,37 +4642,65 @@ internal sealed class NativeOwnerKernel
                 return;
             }
 
-            if (allocation.ActiveOperations != 0)
+            if (allocation.IsScoped
+                && allocation.ScopeEpoch != generation.ScopeEpoch)
             {
-                throw CreateInUseException("Pooled.Dispose", generation.Number, allocationId, allocation.ActiveOperations, "The lease has an active native operation. No storage was cleared or requeued.");
+                return;
             }
 
-            generation.ReusableAllocations.EnsureCapacity(checked(generation.ReusableAllocations.Count + 1));
+            if (!allocation.IsScoped)
+            {
+                generation.ReusableAllocations.EnsureCapacity(
+                    checked(generation.ReusableAllocations.Count + 1));
+            }
+
             if (allocation.Slab is not null && allocation.Length > 0)
             {
                 generation.AvailableSlabs.EnsureCapacity(checked(generation.AvailableSlabs.Count + 1));
             }
 
             allocation.ReferenceRoots?.ReserveForClear(ClearSlotCount(allocation));
+            int activeOperations =
+                allocation.CloseOperationAdmission();
+            if (activeOperations != 0)
+            {
+                allocation.OpenOperationAdmission();
+                throw CreateInUseException(
+                    "Pooled.Dispose",
+                    generation.Number,
+                    allocationId,
+                    activeOperations,
+                    "The lease has an active native operation. No storage was cleared or requeued.");
+            }
+
             allocation.Lifecycle = NativeAllocationLifecycle.Returning;
             generation.LeaseReturnsInProgress++;
             try
             {
-                EnsureNoInjectedClearFailureLocked("Pooled.Dispose", afterStateChange: true);
-                ClearAllocationStorage(allocation);
+                if (allocation.ReferenceRoots is not null)
+                {
+                    EnsureNoInjectedClearFailureLocked(
+                        "Pooled.Dispose",
+                        afterStateChange: true);
+                    ClearReferenceStorage(allocation);
+                }
+
                 if (allocation.Slab is not null && allocation.Length > 0)
                 {
                     generation.AddAvailableSlabOrdered(allocation.Slab);
                 }
 
                 allocation.Lifecycle = NativeAllocationLifecycle.Returned;
-                generation.ScopedPending.Remove(allocation);
                 generation.Allocations.Remove(allocation.Id);
-                generation.ReusableAllocations.Add(allocation);
+                if (!allocation.IsScoped)
+                {
+                    generation.ReusableAllocations.Add(allocation);
+                }
             }
             catch
             {
                 allocation.Lifecycle = NativeAllocationLifecycle.Active;
+                allocation.OpenOperationAdmission();
                 throw;
             }
             finally
@@ -1912,92 +4765,214 @@ internal sealed class NativeOwnerKernel
         lock (_gate)
         {
             NativeGeneration generation = EnsureActiveLocked("RecycleScoped");
-            if (generation.ScopedPending.Count == 0)
+            if (generation.ScopedRecordCount == 0
+                && generation.ScopedTouchedSegments.Count == 0)
             {
                 return;
             }
 
-            if (generation.ActiveOperations != 0 || generation.LeaseReturnsInProgress != 0)
+            int activeOperations =
+                generation.CloseOperationAdmission();
+            try
             {
-                throw CreateInUseException("RecycleScoped", generation.Number, 0, generation.ActiveOperations, "A scoped allocation is still entered by a native operation.");
-            }
-
-            long nextScopeEpoch = checked(generation.ScopeEpoch + 1);
-            EnsureNoInjectedClearFailureLocked("RecycleScoped");
-            PrepareGenerationClearLocked(
-                generation,
-                skipActiveOperations: false,
-                minimumAvailableSlabs: generation.ScopedPending.Count);
-            generation.ReusableAllocations.EnsureCapacity(
-                checked(generation.ReusableAllocations.Count + generation.ScopedPending.Count));
-            PreflightCommitBoundaries(
-                "RecycleScoped",
-                generation.ScopedPending.Count,
-                 slabTransferCount: 0,
-                 bumpTransferCount: 0);
-            foreach (NativeAllocation allocation in generation.ScopedPending)
-            {
-                if (allocation.Lifecycle != NativeAllocationLifecycle.Active)
+                if (activeOperations != 0
+                    || generation.LeaseReturnsInProgress != 0
+                    || generation.InitializationsInProgress != 0)
                 {
-                    continue;
+                    throw CreateInUseException(
+                        "RecycleScoped",
+                        generation.Number,
+                        0,
+                        activeOperations,
+                        "A scoped allocation is still entered by a native operation.");
                 }
 
-                ClearAllocationStorage(allocation);
-                allocation.Lifecycle = NativeAllocationLifecycle.Returned;
-                generation.Allocations.Remove(allocation.Id);
-                generation.ReusableAllocations.Add(allocation);
-                if (allocation.Slab is not null && allocation.Length > 0 && !generation.AvailableSlabs.Contains(allocation.Slab))
+                long nextScopeEpoch =
+                    checked(generation.ScopeEpoch + 1);
+                int referenceClearCount =
+                    PrepareScopedCleanupLocked(generation);
+                PreflightCommitBoundaries(
+                    "RecycleScoped",
+                    generation.ScopedRecordCount,
+                    slabTransferCount: 0,
+                    bumpTransferCount: 0);
+                if (referenceClearCount != 0)
                 {
-                    generation.AddAvailableSlabOrdered(allocation.Slab);
+                    EnsureNoInjectedClearFailureLocked(
+                        "RecycleScoped");
                 }
-            }
 
-            foreach (NativeBumpSegment segment in generation.BumpSegments)
-            {
-                nuint minimum = segment.Segment.ByteLength;
-                nuint maximum = 0;
-                bool hasScopedRange = false;
-                foreach (NativeAllocation allocation in generation.ScopedPending)
+                foreach (NativeAllocation allocation in
+                    generation.ScopedCleanupPending)
                 {
-                    if (allocation.BumpSegment != segment || allocation.Lifecycle != NativeAllocationLifecycle.Returned)
+                    if (!IsCurrentAllocation(
+                            generation,
+                            allocation))
                     {
                         continue;
                     }
 
-                    nuint end = checked(allocation.OffsetBytes + allocation.StorageBytes);
-                    minimum = minimum < allocation.OffsetBytes ? minimum : allocation.OffsetBytes;
-                    maximum = maximum > end ? maximum : end;
-                    hasScopedRange = true;
+                    ClearReferenceStorage(allocation);
+                    if (allocation.Slab is not null
+                        && allocation.Length > 0)
+                    {
+                        generation.AddAvailableSlabOrdered(
+                            allocation.Slab);
+                    }
                 }
 
-                if (hasScopedRange)
+                foreach (NativeBumpSegment segment in
+                    generation.ScopedTouchedSegments)
                 {
-                    segment.MarkReclaimedRange(nextScopeEpoch, minimum, maximum);
-                }
-            }
+                    if (segment.PendingScopeEpoch
+                        == generation.ScopeEpoch)
+                    {
+                        segment.MarkReclaimedRange(
+                            nextScopeEpoch,
+                            segment.PendingScopeRangeStart,
+                            segment.PendingScopeRangeEnd);
+                        segment.HighCursor =
+                            segment.PendingScopeRangeEnd;
+                    }
 
-            if (generation.ScopedBaselineActive)
+                    segment.ClearPendingScopeRange();
+                }
+
+                generation.ScopedCleanupPending.Clear();
+                generation.ScopedRecordCount = 0;
+                generation.ScopedBaselineActive = false;
+                generation.ScopedTouchedSegments.Clear();
+                generation.ScopeEpoch = nextScopeEpoch;
+                ResetBumpTraversal(generation);
+            }
+            finally
             {
-                foreach (KeyValuePair<NativeBumpSegment, nuint> baseline in generation.ScopedBaseline)
-                {
-                    baseline.Key.HighCursor = baseline.Value;
-                }
+                generation.OpenOperationAdmission();
             }
+        }
+    }
 
-            foreach (NativeBumpSegment segment in generation.BumpSegments)
+    internal nuint ReserveRetainedMemory(nuint byteLength)
+    {
+        ArgumentOutOfRangeException.ThrowIfZero(byteLength);
+        lock (_gate)
+        {
+            if (!CanTrimLocked("ReserveRetainedMemory"))
             {
-                if (!generation.ScopedBaseline.ContainsKey(segment)
-                    && !HasScopedAllocationOnSegment(generation, segment))
-                {
-                    segment.HighCursor = segment.Segment.ByteLength;
-                }
+                return 0;
             }
 
-            generation.ScopedPending.Clear();
-            generation.ScopedBaselineActive = false;
-            generation.ScopedBaseline.Clear();
-            generation.ScopeEpoch = nextScopeEpoch;
-            ResetBumpTraversal(generation);
+            if (_kind is not (NativeOwnerKind.Region or NativeOwnerKind.Arena))
+            {
+                throw CreateStateException(
+                    "ReserveRetainedMemory",
+                    "Only a heterogeneous owner can reserve a byte segment.",
+                    0);
+            }
+
+            NativeGeneration generation = _current!;
+            if (!TryCloseForMaintenanceLocked(generation))
+            {
+                return 0;
+            }
+
+            try
+            {
+                generation.BumpSegments.EnsureCapacity(
+                    checked(generation.BumpSegments.Count + 1));
+                generation.Owner.PrepareAddSegmentCapacity(1);
+                NativeSegment segment = NativeSegment.Allocate(
+                    byteLength,
+                    _ownerKind,
+                    generation.Number,
+                    "retained reservation",
+                    _lifecycle,
+                    zeroed: false);
+                NativeBumpSegment bump = new(
+                    segment,
+                    NextSegmentOrdinalLocked());
+                try
+                {
+                    AppendBumpSegmentLocked(generation, bump);
+                    generation.Owner.AddSegment(segment);
+                    _freshSegmentAllocationCount++;
+                    return byteLength;
+                }
+                catch
+                {
+                    generation.BumpSegments.Remove(bump);
+                    generation.Owner.RemoveSegment(segment);
+                    segment.FreeNow();
+                    ResetBumpTraversal(generation);
+                    throw;
+                }
+            }
+            finally
+            {
+                generation.OpenOperationAdmission();
+            }
+        }
+    }
+
+    internal nuint ReserveExternalMemory(
+        SafeBuffer buffer,
+        nuint byteOffset,
+        nuint byteLength)
+    {
+        ArgumentNullException.ThrowIfNull(buffer);
+        ArgumentOutOfRangeException.ThrowIfZero(byteLength);
+        lock (_gate)
+        {
+            if (!CanTrimLocked("ReserveExternalMemory"))
+            {
+                return 0;
+            }
+
+            if (_kind is not (NativeOwnerKind.Region or NativeOwnerKind.Arena))
+            {
+                throw CreateStateException(
+                    "ReserveExternalMemory",
+                    "Only a heterogeneous owner can reserve an external byte segment.",
+                    0);
+            }
+
+            NativeGeneration generation = _current!;
+            if (!TryCloseForMaintenanceLocked(generation))
+            {
+                return 0;
+            }
+
+            try
+            {
+                generation.BumpSegments.EnsureCapacity(
+                    checked(generation.BumpSegments.Count + 1));
+                generation.Owner.PrepareAddSegmentCapacity(1);
+                NativeSegment segment = NativeSegment.Borrow(
+                    buffer,
+                    byteOffset,
+                    byteLength);
+                NativeBumpSegment bump = new(
+                    segment,
+                    NextSegmentOrdinalLocked());
+                try
+                {
+                    AppendBumpSegmentLocked(generation, bump);
+                    generation.Owner.AddSegment(segment);
+                    return byteLength;
+                }
+                catch
+                {
+                    generation.BumpSegments.Remove(bump);
+                    generation.Owner.RemoveSegment(segment);
+                    segment.FreeNow();
+                    ResetBumpTraversal(generation);
+                    throw;
+                }
+            }
+            finally
+            {
+                generation.OpenOperationAdmission();
+            }
         }
     }
 
@@ -2010,10 +4985,24 @@ internal sealed class NativeOwnerKernel
                 return 0;
             }
 
-            nuint released = TrimRetainedMemoryLocked(null);
-            _trimCallCount++;
-            _trimmedBytes = checked(_trimmedBytes + (long)released);
-            return released;
+            NativeGeneration generation = _current!;
+            if (!TryCloseForMaintenanceLocked(generation))
+            {
+                return 0;
+            }
+
+            try
+            {
+                nuint released = TrimRetainedMemoryLocked(null);
+                _trimCallCount++;
+                _trimmedBytes =
+                    checked(_trimmedBytes + (long)released);
+                return released;
+            }
+            finally
+            {
+                generation.OpenOperationAdmission();
+            }
         }
     }
 
@@ -2031,18 +5020,32 @@ internal sealed class NativeOwnerKernel
                 return 0;
             }
 
-            nuint released = TrimRetainedMemoryLocked(bytesToRelease);
-            _trimCallCount++;
-            _trimmedBytes = checked(_trimmedBytes + (long)released);
-            return released;
+            NativeGeneration generation = _current!;
+            if (!TryCloseForMaintenanceLocked(generation))
+            {
+                return 0;
+            }
+
+            try
+            {
+                nuint released =
+                    TrimRetainedMemoryLocked(bytesToRelease);
+                _trimCallCount++;
+                _trimmedBytes =
+                    checked(_trimmedBytes + (long)released);
+                return released;
+            }
+            finally
+            {
+                generation.OpenOperationAdmission();
+            }
         }
     }
 
     internal nuint TrimRetainedMemoryByLeaseSize(
         int leaseLength,
         int elementSize,
-        nuint alignment,
-        Type elementType)
+        nuint alignment)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(leaseLength);
         ArgumentOutOfRangeException.ThrowIfZero(alignment);
@@ -2053,15 +5056,34 @@ internal sealed class NativeOwnerKernel
                 return 0;
             }
 
-            int effectiveElementSize = ContainsReferences(elementType) ? IntPtr.Size : elementSize;
-            nuint byteLength = CalculateByteLength(leaseLength, effectiveElementSize, "lease-sized trim");
-            nuint requested = _kind == NativeOwnerKind.Pool
-                ? byteLength
-                : ChooseBumpSegmentBytes(_current!, checked(byteLength + alignment - 1));
-            nuint released = TrimRetainedMemoryLocked(requested);
-            _trimCallCount++;
-            _trimmedBytes = checked(_trimmedBytes + (long)released);
-            return released;
+            NativeGeneration generation = _current!;
+            if (!TryCloseForMaintenanceLocked(generation))
+            {
+                return 0;
+            }
+
+            try
+            {
+                nuint byteLength = CalculateByteLength(
+                    leaseLength,
+                    elementSize,
+                    "lease-sized trim");
+                nuint requested = _kind == NativeOwnerKind.Pool
+                    ? byteLength
+                    : ChooseBumpSegmentBytes(
+                        generation,
+                        RequiredFreshBumpBytes(byteLength, alignment));
+                nuint released =
+                    TrimRetainedMemoryLocked(requested);
+                _trimCallCount++;
+                _trimmedBytes =
+                    checked(_trimmedBytes + (long)released);
+                return released;
+            }
+            finally
+            {
+                generation.OpenOperationAdmission();
+            }
         }
     }
 
@@ -2079,29 +5101,63 @@ internal sealed class NativeOwnerKernel
                 throw CreateInUseException("Dispose", _generation, 0, 0, "Another lifecycle transition is already using the owner gate.");
             }
 
-            EnsureOwnerWideIdleLocked("Dispose", "No current, retired, or quarantined generation was invalidated or freed.");
-
-            if (_lifecycle == NativeOwnerLifecycle.Unleased)
+            NativeGeneration? admissionGeneration = _current;
+            admissionGeneration?.CloseOperationAdmission();
+            try
             {
-                if (_returnMemoryOnDispose == NativeMemoryReturn.ToNativeMemory)
+                EnsureOwnerWideIdleLocked(
+                    "Dispose",
+                    "No current, retired, or quarantined generation was invalidated or freed.");
+
+                if (_lifecycle == NativeOwnerLifecycle.Unleased)
                 {
-                    ReleaseOwnerWideStorageLocked();
-                }
-                else
-                {
-                    DetachOwnerWideStorageLocked();
+                    if (_returnMemoryOnDispose == NativeMemoryReturn.ToNativeMemory)
+                    {
+                        ReleaseOwnerWideStorageLocked();
+                    }
+                    else
+                    {
+                        DetachOwnerWideStorageLocked();
+                    }
+
+                    _current = null;
+                    _retiredGenerations.Clear();
+                    _quarantinedGenerations.Clear();
+                    _lifecycle = NativeOwnerLifecycle.Disposed;
+                    GC.SuppressFinalize(this);
+                    return;
                 }
 
-                _current = null;
-                _retiredGenerations.Clear();
-                _quarantinedGenerations.Clear();
-                _lifecycle = NativeOwnerLifecycle.Disposed;
-                GC.SuppressFinalize(this);
-                return;
-            }
+                if (_lifecycle == NativeOwnerLifecycle.Returned)
+                {
+                    EnsureNoInjectedClearFailureLocked("Dispose");
+                    PrepareOwnerWideClearLocked(skipActiveOperations: false);
+                    PreflightCommitBoundaries(
+                        "Dispose",
+                        CountOwnerWideClearableAllocationsLocked(skipActiveOperations: false),
+                        slabTransferCount: 0,
+                        bumpTransferCount: 0);
+                    ClearOwnerWideAllocationsLocked(skipActiveOperations: false);
+                    _lifecycle = NativeOwnerLifecycle.Returning;
+                    InvalidateOwnerWideGenerationsLocked();
+                    if (_returnMemoryOnDispose == NativeMemoryReturn.ToNativeMemory)
+                    {
+                        ReleaseOwnerWideStorageLocked();
+                    }
+                    else
+                    {
+                        DetachOwnerWideStorageLocked();
+                    }
 
-            if (_lifecycle == NativeOwnerLifecycle.Returned)
-            {
+                    _current = null;
+                    _retiredGenerations.Clear();
+                    _quarantinedGenerations.Clear();
+                    _lifecycle = NativeOwnerLifecycle.Disposed;
+                    GC.SuppressFinalize(this);
+                    return;
+                }
+
+                long nextGenerationNumber = checked(_generation + 1);
                 EnsureNoInjectedClearFailureLocked("Dispose");
                 PrepareOwnerWideClearLocked(skipActiveOperations: false);
                 PreflightCommitBoundaries(
@@ -2122,39 +5178,23 @@ internal sealed class NativeOwnerKernel
                 }
 
                 _current = null;
+                _generation = nextGenerationNumber;
                 _retiredGenerations.Clear();
                 _quarantinedGenerations.Clear();
                 _lifecycle = NativeOwnerLifecycle.Disposed;
                 GC.SuppressFinalize(this);
-                return;
             }
-
-            long nextGenerationNumber = checked(_generation + 1);
-            EnsureNoInjectedClearFailureLocked("Dispose");
-            PrepareOwnerWideClearLocked(skipActiveOperations: false);
-            PreflightCommitBoundaries(
-                "Dispose",
-                CountOwnerWideClearableAllocationsLocked(skipActiveOperations: false),
-                slabTransferCount: 0,
-                bumpTransferCount: 0);
-            ClearOwnerWideAllocationsLocked(skipActiveOperations: false);
-            _lifecycle = NativeOwnerLifecycle.Returning;
-            InvalidateOwnerWideGenerationsLocked();
-            if (_returnMemoryOnDispose == NativeMemoryReturn.ToNativeMemory)
+            catch
             {
-                ReleaseOwnerWideStorageLocked();
-            }
-            else
-            {
-                DetachOwnerWideStorageLocked();
-            }
+                if (admissionGeneration is not null
+                    && ReferenceEquals(_current, admissionGeneration)
+                    && _lifecycle == NativeOwnerLifecycle.Active)
+                {
+                    admissionGeneration.OpenOperationAdmission();
+                }
 
-            _current = null;
-            _generation = nextGenerationNumber;
-            _retiredGenerations.Clear();
-            _quarantinedGenerations.Clear();
-            _lifecycle = NativeOwnerLifecycle.Disposed;
-            GC.SuppressFinalize(this);
+                throw;
+            }
         }
     }
 
@@ -2174,7 +5214,13 @@ internal sealed class NativeOwnerKernel
         {
             generation.BumpSegments.EnsureCapacity(checked(generation.BumpSegments.Count + 1));
             generation.Owner.PrepareAddSegmentCapacity(1);
-            NativeSegment segment = NativeSegment.AllocateZeroed(_initialReservation, _ownerKind, generation.Number, operation, observedLifecycle);
+            NativeSegment segment = NativeSegment.Allocate(
+                _initialReservation,
+                _ownerKind,
+                generation.Number,
+                operation,
+                observedLifecycle,
+                zeroed: false);
             NativeBumpSegment bump = new(segment, NextSegmentOrdinalLocked());
             AppendBumpSegmentLocked(generation, bump);
             generation.Owner.AddSegment(segment);
@@ -2186,7 +5232,13 @@ internal sealed class NativeOwnerKernel
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(capacity);
         nuint byteLength = CalculateByteLength(capacity, _storageElementSize, operation);
-        NativeSegment segment = NativeSegment.AllocateZeroed(byteLength, _ownerKind, generation.Number, operation, observedLifecycle);
+        NativeSegment segment = NativeSegment.Allocate(
+            byteLength,
+            _ownerKind,
+            generation.Number,
+            operation,
+            observedLifecycle,
+            zeroed: false);
         try
         {
             generation.Owner.AddSegment(segment);
@@ -2319,17 +5371,37 @@ internal sealed class NativeOwnerKernel
     {
         if (!generation.ScopedBaselineActive)
         {
-            generation.ScopedBaseline.EnsureCapacity(generation.BumpSegments.Count);
-            generation.ScopedBaseline.Clear();
-            foreach (NativeBumpSegment segment in generation.BumpSegments)
-            {
-                generation.ScopedBaseline.Add(segment, segment.HighCursor);
-            }
-
+            generation.ScopedTouchedSegments.Clear();
             generation.ScopedBaselineActive = true;
         }
 
         return generation.ScopeEpoch;
+    }
+
+    private static void TrackScopedRangeLocked(
+        NativeGeneration generation,
+        NativeBumpSegment segment,
+        nuint start,
+        nuint originalHighCursor)
+    {
+        if (segment.PendingScopeEpoch == generation.ScopeEpoch)
+        {
+            segment.ExtendPendingScopeRange(start);
+            return;
+        }
+
+        segment.BeginPendingScopeRange(generation.ScopeEpoch, start, originalHighCursor);
+        generation.ScopedTouchedSegments.Add(segment);
+    }
+
+    private static void ClearScopedRangesLocked(NativeGeneration generation)
+    {
+        foreach (NativeBumpSegment segment in generation.ScopedTouchedSegments)
+        {
+            segment.ClearPendingScopeRange();
+        }
+
+        generation.ScopedTouchedSegments.Clear();
     }
 
     private void ReturnMemory(NativeMemoryReturn policy, string operation)
@@ -2354,61 +5426,89 @@ internal sealed class NativeOwnerKernel
 
             bool tolerant = policy == NativeMemoryReturn.ToGarbageCollector;
             NativeGeneration generation = _current!;
-            if (tolerant)
+            generation.CloseOperationAdmission();
+            bool completed = false;
+            try
             {
-                EnsureOwnerWideLeaseReturnsIdleLocked(operation, "No individual lease return was left in progress.");
-            }
-            else
-            {
-                EnsureOwnerWideIdleLocked(operation, "No lease was invalidated, detached, or freed.");
-            }
-            long nextGenerationNumber = checked(_generation + 1);
-            EnsureNoInjectedClearFailureLocked(operation);
-            NativeSlab[] retiredSlabs = SnapshotRetiredSlabsLocked(generation, operation);
-            NativeBumpSegment[] retiredBumps = SnapshotRetiredBumpsLocked(generation, operation);
-            PrepareRetiredStorageLocked(
-                generation,
-                retiredSlabs,
-                retiredBumps,
-                operation,
-                reserveQuarantineSlot: tolerant && generation.ActiveOperations != 0);
-            if (tolerant && generation.ActiveOperations != 0)
-            {
-                _retiredGenerations.EnsureCapacity(checked(_retiredGenerations.Count + 1));
-            }
+                if (tolerant)
+                {
+                    EnsureOwnerWideLeaseReturnsIdleLocked(operation, "No individual lease return was left in progress.");
+                }
+                else
+                {
+                    EnsureOwnerWideIdleLocked(operation, "No lease was invalidated, detached, or freed.");
+                }
+                long nextGenerationNumber = checked(_generation + 1);
+                EnsureNoInjectedClearFailureLocked(operation);
+                NativeSlab[] retiredSlabs = SnapshotRetiredSlabsLocked(generation, operation);
+                NativeBumpSegment[] retiredBumps = SnapshotRetiredBumpsLocked(generation, operation);
+                PrepareRetiredStorageLocked(
+                    generation,
+                    retiredSlabs,
+                    retiredBumps,
+                    operation,
+                    reserveQuarantineSlot: tolerant && generation.ActiveOperations != 0);
+                if (tolerant && generation.ActiveOperations != 0)
+                {
+                    _retiredGenerations.EnsureCapacity(checked(_retiredGenerations.Count + 1));
+                }
 
-            if (!tolerant)
-            {
-                PrepareOwnerWideClearLocked(skipActiveOperations: false);
+                if (!tolerant)
+                {
+                    PrepareOwnerWideClearLocked(skipActiveOperations: false);
+                    PreflightCommitBoundaries(
+                        operation,
+                        CountOwnerWideClearableAllocationsLocked(skipActiveOperations: false),
+                        slabTransferCount: 0,
+                        bumpTransferCount: 0);
+                    ClearOwnerWideAllocationsLocked(skipActiveOperations: false);
+                    _lifecycle = NativeOwnerLifecycle.Returning;
+                    InvalidateOwnerWideGenerationsLocked();
+                    ReleaseOwnerWideStorageLocked();
+                    _current = null;
+                    _generation = nextGenerationNumber;
+                    _retiredGenerations.Clear();
+                    _quarantinedGenerations.Clear();
+                    _lifecycle = NativeOwnerLifecycle.Returned;
+                    completed = true;
+                    return;
+                }
+
+                bool deferAllCleanup =
+                    generation.ActiveOperations != 0;
                 PreflightCommitBoundaries(
                     operation,
-                    CountOwnerWideClearableAllocationsLocked(skipActiveOperations: false),
+                    deferAllCleanup
+                        ? 0
+                        : CountClearableAllocations(
+                            generation,
+                            skipActiveOperations: false),
                     slabTransferCount: 0,
                     bumpTransferCount: 0);
-                ClearOwnerWideAllocationsLocked(skipActiveOperations: false);
+                if (!deferAllCleanup)
+                {
+                    ClearGenerationAllocationsLocked(
+                        generation,
+                        skipActiveOperations: false);
+                }
+
                 _lifecycle = NativeOwnerLifecycle.Returning;
                 InvalidateOwnerWideGenerationsLocked();
-                ReleaseOwnerWideStorageLocked();
+                DetachOwnerWideStorageLocked();
                 _current = null;
                 _generation = nextGenerationNumber;
-                _retiredGenerations.Clear();
-                _quarantinedGenerations.Clear();
                 _lifecycle = NativeOwnerLifecycle.Returned;
-                return;
+                completed = true;
             }
-
-            PreflightCommitBoundaries(
-                operation,
-                CountClearableAllocations(generation, skipActiveOperations: true),
-                slabTransferCount: 0,
-                bumpTransferCount: 0);
-            ClearGenerationAllocationsLocked(generation, skipActiveOperations: true);
-            _lifecycle = NativeOwnerLifecycle.Returning;
-            InvalidateOwnerWideGenerationsLocked();
-            DetachOwnerWideStorageLocked();
-            _current = null;
-            _generation = nextGenerationNumber;
-            _lifecycle = NativeOwnerLifecycle.Returned;
+            finally
+            {
+                if (!completed
+                    && ReferenceEquals(_current, generation)
+                    && _lifecycle == NativeOwnerLifecycle.Active)
+                {
+                    generation.OpenOperationAdmission();
+                }
+            }
         }
     }
 
@@ -2423,128 +5523,168 @@ internal sealed class NativeOwnerKernel
             }
 
             NativeGeneration current = EnsureActiveLocked(operation);
-            if (current.LeaseReturnsInProgress != 0 || (policy == NativeMemoryReturn.ToNativeMemory && current.ActiveOperations != 0))
-            {
-                throw CreateInUseException(operation, current.Number, 0, current.ActiveOperations, "No lease generation was invalidated or reset.");
-            }
-
-            EnsureNoInjectedClearFailureLocked(operation);
-            bool tolerant = policy == NativeMemoryReturn.ToGarbageCollector;
-            long nextGenerationNumber = checked(current.Number + 1);
-            NativeSlab[] slabs = SnapshotRetiredSlabsLocked(current, operation);
-            NativeBumpSegment[] bumps = SnapshotRetiredBumpsLocked(current, operation);
-            NativeGeneration next = new(nextGenerationNumber);
+            current.CloseOperationAdmission();
+            bool completed = false;
             try
             {
-                int slabTransferCount = 0;
-                foreach (NativeSlab slab in slabs)
+                bool tolerant =
+                    policy == NativeMemoryReturn.ToGarbageCollector;
+                if (current.LeaseReturnsInProgress != 0
+                    || current.InitializationsInProgress != 0
+                    || (!tolerant
+                        && current.ActiveOperations != 0))
                 {
-                    if (!IsSegmentBusy(current, slab))
-                    {
-                        slabTransferCount++;
-                    }
+                    throw CreateInUseException(operation, current.Number, 0, current.ActiveOperations, "No lease generation was invalidated or reset.");
                 }
 
-                int bumpTransferCount = 0;
-                foreach (NativeBumpSegment bump in bumps)
+                EnsureNoInjectedClearFailureLocked(operation);
+                bool retainAllSegments =
+                    tolerant && current.ActiveOperations != 0;
+                long nextGenerationNumber = checked(current.Number + 1);
+                NativeSlab[] slabs = SnapshotRetiredSlabsLocked(current, operation);
+                NativeBumpSegment[] bumps = SnapshotRetiredBumpsLocked(current, operation);
+                NativeGeneration next = new(nextGenerationNumber);
+                try
                 {
-                    if (!IsSegmentBusy(current, bump))
+                    int slabTransferCount = 0;
+                    foreach (NativeSlab slab in slabs)
                     {
-                        bumpTransferCount++;
-                    }
-                }
-
-                NativeSlab[] retiredSlabs = CreateRetiredSlabSnapshot(slabs, slabTransferCount, current);
-                NativeBumpSegment[] retiredBumps = CreateRetiredBumpSnapshot(bumps, bumpTransferCount, current);
-                PrepareRetiredStorageLocked(
-                    current,
-                    retiredSlabs,
-                    retiredBumps,
-                    operation,
-                    reserveQuarantineSlot: tolerant && current.ActiveOperations != 0);
-                (int rejoinableSlabs, int rejoinableBumps) = CountPotentialRejoinSegmentsLocked(
-                    retiredSlabs,
-                    retiredBumps);
-                next.Slabs.EnsureCapacity(checked(slabTransferCount + rejoinableSlabs));
-                next.AvailableSlabs.EnsureCapacity(checked(slabTransferCount + rejoinableSlabs));
-                next.BumpSegments.EnsureCapacity(checked(bumpTransferCount + rejoinableBumps));
-                next.Owner.PrepareAddSegmentCapacity(
-                    checked(slabTransferCount + bumpTransferCount + rejoinableSlabs + rejoinableBumps));
-                if (current.ActiveOperations != 0)
-                {
-                    _retiredGenerations.EnsureCapacity(checked(_retiredGenerations.Count + 1));
-                }
-
-                PreflightCommitBoundaries(
-                    operation,
-                    CountClearableAllocations(current, skipActiveOperations: tolerant),
-                    slabTransferCount,
-                    bumpTransferCount);
-            }
-            catch
-            {
-                next.Owner.ReleaseToNative();
-                throw;
-            }
-
-            _lifecycle = NativeOwnerLifecycle.RollingOver;
-            try
-            {
-                ClearGenerationAllocationsLocked(current, skipActiveOperations: tolerant);
-
-                foreach (NativeSlab slab in slabs)
-                {
-                    if (!IsSegmentBusy(current, slab))
-                    {
-                        TransferSegmentLocked(current, next, slab.Segment);
-                        current.Slabs.Remove(slab);
-                        current.AvailableSlabs.Remove(slab);
-                        next.AddSlabOrdered(slab);
-                        next.AddAvailableSlabOrdered(slab);
-                    }
-                }
-
-                foreach (NativeBumpSegment bump in bumps)
-                {
-                    if (!IsSegmentBusy(current, bump))
-                    {
-                        bump.LowCursor = 0;
-                        bump.HighCursor = bump.Segment.ByteLength;
-                        TransferSegmentLocked(current, next, bump.Segment);
-                        current.BumpSegments.Remove(bump);
-                        next.AddBumpOrdered(bump);
-                    }
-                }
-
-                ResetBumpTraversal(next);
-
-                InvalidateGenerationLocked(current);
-                _current = next;
-                _generation = next.Number;
-                _lifecycle = NativeOwnerLifecycle.Active;
-                if (current.ActiveOperations != 0)
-                {
-                    current.RetiredNativeBytes = checked((long)GetBusySegmentBytes(current));
-                    if (current.RetiredNativeBytes != 0)
-                    {
-                        NativeMemoryTestHooks.RecordRetiredBytes((nuint)current.RetiredNativeBytes, add: true, metricsEpoch: current.Owner.MetricsEpoch);
+                        if (!retainAllSegments
+                            && !IsSegmentBusy(current, slab))
+                        {
+                            slabTransferCount++;
+                        }
                     }
 
-                    _retiredGenerations.Add(current);
+                    int bumpTransferCount = 0;
+                    foreach (NativeBumpSegment bump in bumps)
+                    {
+                        if (!retainAllSegments
+                            && !IsSegmentBusy(current, bump))
+                        {
+                            bumpTransferCount++;
+                        }
+                    }
+
+                    NativeSlab[] retiredSlabs = CreateRetiredSlabSnapshot(slabs, slabTransferCount, current);
+                    NativeBumpSegment[] retiredBumps = CreateRetiredBumpSnapshot(bumps, bumpTransferCount, current);
+                    PrepareRetiredStorageLocked(
+                        current,
+                        retiredSlabs,
+                        retiredBumps,
+                        operation,
+                        reserveQuarantineSlot: retainAllSegments);
+                    (int rejoinableSlabs, int rejoinableBumps) = CountPotentialRejoinSegmentsLocked(
+                        retiredSlabs,
+                        retiredBumps);
+                    next.Slabs.EnsureCapacity(checked(slabTransferCount + rejoinableSlabs));
+                    next.AvailableSlabs.EnsureCapacity(checked(slabTransferCount + rejoinableSlabs));
+                    next.BumpSegments.EnsureCapacity(checked(bumpTransferCount + rejoinableBumps));
+                    next.Owner.PrepareAddSegmentCapacity(
+                        checked(slabTransferCount + bumpTransferCount + rejoinableSlabs + rejoinableBumps));
+                    if (retainAllSegments)
+                    {
+                        _retiredGenerations.EnsureCapacity(checked(_retiredGenerations.Count + 1));
+                    }
+
+                    PreflightCommitBoundaries(
+                        operation,
+                        retainAllSegments
+                            ? 0
+                            : CountClearableAllocations(
+                                current,
+                                skipActiveOperations: false),
+                        slabTransferCount,
+                        bumpTransferCount);
                 }
-                else
-                {
-                    current.Owner.ReleaseToNative();
-                }
-            }
-            catch
-            {
-                _lifecycle = NativeOwnerLifecycle.Active;
-                if (!ReferenceEquals(_current, next))
+                catch
                 {
                     next.Owner.ReleaseToNative();
+                    throw;
                 }
-                throw;
+
+                _lifecycle = NativeOwnerLifecycle.RollingOver;
+                try
+                {
+                    if (!retainAllSegments)
+                    {
+                        ClearGenerationAllocationsLocked(
+                            current,
+                            skipActiveOperations: false);
+                    }
+
+                    foreach (NativeSlab slab in slabs)
+                    {
+                        if (!retainAllSegments
+                            && !IsSegmentBusy(current, slab))
+                        {
+                            TransferSegmentLocked(current, next, slab.Segment);
+                            current.Slabs.Remove(slab);
+                            current.AvailableSlabs.Remove(slab);
+                            next.AddSlabOrdered(slab);
+                            next.AddAvailableSlabOrdered(slab);
+                        }
+                    }
+
+                    foreach (NativeBumpSegment bump in bumps)
+                    {
+                        if (!retainAllSegments
+                            && !IsSegmentBusy(current, bump))
+                        {
+                            bump.LowCursor = 0;
+                            bump.HighCursor = bump.Segment.ByteLength;
+                            TransferSegmentLocked(current, next, bump.Segment);
+                            current.BumpSegments.Remove(bump);
+                            next.AddBumpOrdered(bump);
+                        }
+                    }
+
+                    ResetBumpTraversal(next);
+
+                    InvalidateGenerationLocked(current);
+                    _current = next;
+                    _generation = next.Number;
+                    _lifecycle = NativeOwnerLifecycle.Active;
+                    if (retainAllSegments)
+                    {
+                        current.RetiredNativeBytes =
+                            checked((long)GetGenerationSegmentBytes(current));
+                        if (current.RetiredNativeBytes != 0)
+                        {
+                            NativeMemoryTestHooks.RecordRetiredBytes((nuint)current.RetiredNativeBytes, add: true, metricsEpoch: current.Owner.MetricsEpoch);
+                        }
+
+                        _retiredGenerations.Add(current);
+                        if (current.ActiveOperations == 0)
+                        {
+                            DrainRetiredGenerationLocked(current);
+                        }
+                    }
+                    else
+                    {
+                        current.Owner.ReleaseToNative();
+                    }
+
+                    completed = true;
+                }
+                catch
+                {
+                    _lifecycle = NativeOwnerLifecycle.Active;
+                    if (!ReferenceEquals(_current, next))
+                    {
+                        next.Owner.ReleaseToNative();
+                    }
+                    throw;
+                }
+            }
+            finally
+            {
+                if (!completed
+                    && ReferenceEquals(_current, current)
+                    && _lifecycle == NativeOwnerLifecycle.Active)
+                {
+                    current.OpenOperationAdmission();
+                }
             }
         }
     }
@@ -2680,9 +5820,11 @@ internal sealed class NativeOwnerKernel
             }
 
             generation.Allocations.Clear();
-            generation.ScopedPending.Clear();
+            generation.ScopedAllocationBank.Clear();
+            generation.ScopedCleanupPending.Clear();
+            generation.ScopedRecordCount = 0;
             generation.ScopedBaselineActive = false;
-            generation.ScopedBaseline.Clear();
+            ClearScopedRangesLocked(generation);
             if (generation.RetiredNativeBytes != 0)
             {
                 NativeMemoryTestHooks.RecordRetiredBytes(
@@ -2797,9 +5939,11 @@ internal sealed class NativeOwnerKernel
         }
 
         generation.AvailableSlabs.Clear();
-        generation.ScopedPending.Clear();
+        generation.ScopedAllocationBank.Clear();
+        generation.ScopedCleanupPending.Clear();
+        generation.ScopedRecordCount = 0;
         generation.ScopedBaselineActive = false;
-        generation.ScopedBaseline.Clear();
+        ClearScopedRangesLocked(generation);
     }
 
     private NativeGeneration EnsureActiveLocked(string operation, long generationNumber = 0, long allocationId = 0)
@@ -2839,6 +5983,22 @@ internal sealed class NativeOwnerKernel
         return true;
     }
 
+    private static bool TryCloseForMaintenanceLocked(
+        NativeGeneration generation)
+    {
+        int activeOperations =
+            generation.CloseOperationAdmission();
+        if (activeOperations == 0
+            && generation.LeaseReturnsInProgress == 0
+            && generation.InitializationsInProgress == 0)
+        {
+            return true;
+        }
+
+        generation.OpenOperationAdmission();
+        return false;
+    }
+
     private void EnsureNotDisposedLocked(string operation, long allocationId)
     {
         if (_lifecycle == NativeOwnerLifecycle.Disposed)
@@ -2855,30 +6015,32 @@ internal sealed class NativeOwnerKernel
         }
     }
 
-    private NativeAllocation GetActiveAllocationLocked(long generationNumber, long allocationId, string operation, NativeGeneration? knownGeneration = null)
-    {
-        NativeGeneration generation = knownGeneration ?? EnsureActiveLocked(operation, generationNumber, allocationId);
-        if (generation.Number != generationNumber || !generation.Allocations.TryGetValue(allocationId, out NativeAllocation? allocation))
-        {
-            throw CreateReturnedException(operation, generationNumber, _generation, allocationId, "The handle belongs to an earlier or unpublished generation.");
-        }
-
-        if (allocation.Lifecycle != NativeAllocationLifecycle.Active)
-        {
-            throw CreateReturnedException(operation, generationNumber, _generation, allocationId, "The derived allocation has already ended.");
-        }
-
-        return allocation;
-    }
+    private static bool IsCurrentAllocation(
+        NativeGeneration generation,
+        NativeAllocation allocation) =>
+        allocation.Lifecycle == NativeAllocationLifecycle.Active
+        && (!allocation.IsScoped
+            || allocation.ScopeEpoch == generation.ScopeEpoch);
 
     private void ClearAllocationStorage(NativeAllocation allocation)
     {
-        allocation.ClearValues();
+        ClearReferenceStorage(allocation);
+    }
+
+    private static void ClearReferenceStorage(NativeAllocation allocation)
+    {
+        if (allocation.ReferenceRoots is not null)
+        {
+            allocation.ClearValues();
+        }
     }
 
     private void ClearAllocationStorageReserved(NativeAllocation allocation)
     {
-        allocation.ClearValues(reservedRootCapacity: true);
+        if (allocation.ReferenceRoots is not null)
+        {
+            allocation.ClearValues(reservedRootCapacity: true);
+        }
     }
 
     private static NativeSlab[] SnapshotRetiredSlabsLocked(NativeGeneration generation, string operation)
@@ -2906,6 +6068,11 @@ internal sealed class NativeOwnerKernel
         int transferCount,
         NativeGeneration generation)
     {
+        if (transferCount == 0)
+        {
+            return slabs;
+        }
+
         int retiredCount = checked(slabs.Length - transferCount);
         if (retiredCount == 0)
         {
@@ -2930,6 +6097,11 @@ internal sealed class NativeOwnerKernel
         int transferCount,
         NativeGeneration generation)
     {
+        if (transferCount == 0)
+        {
+            return bumps;
+        }
+
         int retiredCount = checked(bumps.Length - transferCount);
         if (retiredCount == 0)
         {
@@ -3007,11 +6179,10 @@ internal sealed class NativeOwnerKernel
 
     private void PrepareGenerationClearLocked(
         NativeGeneration generation,
-        bool skipActiveOperations,
-        int minimumAvailableSlabs = 0)
+        bool skipActiveOperations)
     {
         int slots = 0;
-        int availableSlabs = minimumAvailableSlabs;
+        int availableSlabs = 0;
         foreach (NativeAllocation allocation in generation.Allocations.Values)
         {
             if (!WillClear(allocation, skipActiveOperations))
@@ -3031,6 +6202,43 @@ internal sealed class NativeOwnerKernel
         {
             generation.AvailableSlabs.EnsureCapacity(checked(generation.AvailableSlabs.Count + availableSlabs));
         }
+    }
+
+    private static int PrepareScopedCleanupLocked(
+        NativeGeneration generation)
+    {
+        int slots = 0;
+        int availableSlabs = 0;
+        int referenceClearCount = 0;
+        foreach (NativeAllocation allocation in
+            generation.ScopedCleanupPending)
+        {
+            if (!IsCurrentAllocation(generation, allocation))
+            {
+                continue;
+            }
+
+            int allocationSlots = ClearSlotCount(allocation);
+            if (allocationSlots != 0)
+            {
+                slots = checked(slots + allocationSlots);
+                referenceClearCount++;
+            }
+
+            if (allocation.Slab is not null && allocation.Length > 0)
+            {
+                availableSlabs++;
+            }
+        }
+
+        generation.ReferenceRoots.ReserveForClear(slots);
+        if (availableSlabs != 0)
+        {
+            generation.AvailableSlabs.EnsureCapacity(
+                checked(generation.AvailableSlabs.Count + availableSlabs));
+        }
+
+        return referenceClearCount;
     }
 
     private static int CountClearableAllocations(NativeGeneration generation, bool skipActiveOperations)
@@ -3053,6 +6261,11 @@ internal sealed class NativeOwnerKernel
         int slabTransferCount,
         int bumpTransferCount)
     {
+        if (!NativeMemoryTestHooks.HasForcedCommitBoundary)
+        {
+            return;
+        }
+
         NativeMemoryTestHooks.BeginCommitSequence();
         for (int index = 0; index < clearCount; index++)
         {
@@ -3074,12 +6287,14 @@ internal sealed class NativeOwnerKernel
     {
         foreach (NativeAllocation allocation in generation.Allocations.Values)
         {
-            if (skipActiveOperations && allocation.ActiveOperations != 0)
+            if (allocation.ReferenceRoots is null
+                || (skipActiveOperations
+                    && allocation.ActiveOperations != 0))
             {
                 continue;
             }
 
-            ClearAllocationStorage(allocation);
+            ClearReferenceStorage(allocation);
         }
     }
 
@@ -3370,6 +6585,23 @@ internal sealed class NativeOwnerKernel
         return total;
     }
 
+    private static nuint GetGenerationSegmentBytes(
+        NativeGeneration generation)
+    {
+        nuint total = 0;
+        foreach (NativeSlab slab in generation.Slabs)
+        {
+            total = checked(total + slab.Segment.ByteLength);
+        }
+
+        foreach (NativeBumpSegment bump in generation.BumpSegments)
+        {
+            total = checked(total + bump.Segment.ByteLength);
+        }
+
+        return total;
+    }
+
     private static bool IsSegmentBusy(NativeGeneration generation, NativeSlab slab)
     {
         foreach (NativeAllocation allocation in generation.Allocations.Values)
@@ -3388,47 +6620,6 @@ internal sealed class NativeOwnerKernel
         foreach (NativeAllocation allocation in generation.Allocations.Values)
         {
             if (allocation.ActiveOperations != 0 && ReferenceEquals(allocation.BumpSegment, bump))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private static bool HasScopedAllocationOnSegment(NativeGeneration generation, NativeBumpSegment segment)
-    {
-        foreach (NativeAllocation allocation in generation.Allocations.Values)
-        {
-            if (allocation.IsScoped && ReferenceEquals(allocation.BumpSegment, segment))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private static bool ContainsReferences(Type type) => ContainsReferences(type, new HashSet<Type>());
-
-    private static bool ContainsReferences(Type type, HashSet<Type> visited)
-    {
-        if (!type.IsValueType)
-        {
-            return true;
-        }
-
-        if (type.IsPrimitive || type.IsEnum || !visited.Add(type))
-        {
-            return false;
-        }
-
-        foreach (System.Reflection.FieldInfo field in type.GetFields(
-            System.Reflection.BindingFlags.Instance |
-            System.Reflection.BindingFlags.Public |
-            System.Reflection.BindingFlags.NonPublic))
-        {
-            if (ContainsReferences(field.FieldType, visited))
             {
                 return true;
             }
@@ -3468,6 +6659,13 @@ internal sealed class NativeOwnerKernel
         return Math.Max(requiredBytes, Math.Max(DefaultBumpSegmentBytes, growth));
     }
 
+    private static nuint RequiredFreshBumpBytes(
+        nuint byteLength,
+        nuint alignment) =>
+        alignment <= NativeSegment.Alignment
+            ? byteLength
+            : checked(byteLength + alignment - 1);
+
     private static nuint AlignUp(nuint value, nuint alignment)
     {
         nuint remainder = value % alignment;
@@ -3476,7 +6674,7 @@ internal sealed class NativeOwnerKernel
 
     private static nuint AlignDown(nuint value, nuint alignment) => value - value % alignment;
 
-    private static NativeAllocation RentAllocationLocked(
+    private NativeAllocation RentAllocationLocked(
         NativeGeneration generation,
         long id,
         NativeSlab? slab,
@@ -3487,12 +6685,41 @@ internal sealed class NativeOwnerKernel
         nuint storageBytes,
         NativeReferenceRootTable? referenceRoots,
         bool scoped,
-        long scopeEpoch)
+        long scopeEpoch,
+        bool preserveScopedRegistration = false)
     {
+        if (scoped
+            && generation.ScopedRecordCount
+                < generation.ScopedAllocationBank.Count)
+        {
+            NativeAllocation scopedAllocation =
+                generation.ScopedAllocationBank[
+                    generation.ScopedRecordCount];
+            if (!preserveScopedRegistration)
+            {
+                generation.Allocations.Remove(
+                    scopedAllocation.Id);
+            }
+
+            scopedAllocation.Reset(
+                id,
+                slab,
+                bumpSegment,
+                offsetBytes,
+                length,
+                capacity,
+                storageBytes,
+                referenceRoots,
+                scoped: true,
+                scopeEpoch);
+            return scopedAllocation;
+        }
+
         NativeAllocation allocation;
         if (generation.ReusableAllocations.Count == 0)
         {
             allocation = new NativeAllocation(
+                generation,
                 id,
                 slab,
                 bumpSegment,
@@ -3522,7 +6749,28 @@ internal sealed class NativeOwnerKernel
                 scopeEpoch);
         }
 
+        if (scoped)
+        {
+            generation.ScopedAllocationBank.Add(allocation);
+        }
+
         return allocation;
+    }
+
+    private static void ReleaseLastScopedRecordLocked(
+        NativeGeneration generation,
+        NativeAllocation allocation)
+    {
+        int recordCount = generation.ScopedRecordCount;
+        if (recordCount == 0
+            || !ReferenceEquals(
+                generation.ScopedAllocationBank[recordCount - 1],
+                allocation))
+        {
+            return;
+        }
+
+        generation.ScopedRecordCount = recordCount - 1;
     }
 
     private long NextAllocationIdLocked() => checked(++_nextAllocationId);
@@ -3594,8 +6842,13 @@ internal sealed class NativeOwnerKernel
         }
 
         activeOperations = checked(activeOperations + generation.ActiveOperations);
-        leaseReturnsInProgress = checked(leaseReturnsInProgress + generation.LeaseReturnsInProgress);
-        if (generation.ActiveOperations == 0 && generation.LeaseReturnsInProgress == 0)
+        leaseReturnsInProgress = checked(
+            leaseReturnsInProgress
+            + generation.LeaseReturnsInProgress
+            + generation.InitializationsInProgress);
+        if (generation.ActiveOperations == 0
+            && generation.LeaseReturnsInProgress == 0
+            && generation.InitializationsInProgress == 0)
         {
             return;
         }

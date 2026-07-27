@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -26,10 +27,16 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         context.ConfigureGeneratedCodeAnalysis(GeneratedCodeAnalysisFlags.None);
         context.RegisterCompilationStartAction(startContext =>
         {
+            NativeSymbols symbols = new(startContext.Compilation);
+            if (!symbols.IsAvailable)
+            {
+                return;
+            }
+
             startContext.RegisterOperationBlockAction(blockContext =>
             {
                 blockContext.CancellationToken.ThrowIfCancellationRequested();
-                MethodFlowAnalyzer analyzer = new(blockContext);
+                MethodFlowAnalyzer analyzer = new(blockContext, symbols);
                 foreach (IOperation operationBlock in blockContext.OperationBlocks)
                 {
                     analyzer.AnalyzeOperationBlock(operationBlock);
@@ -44,11 +51,64 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     return;
                 }
 
-                MethodFlowAnalyzer analyzer = new(operationContext);
+                MethodFlowAnalyzer analyzer = new(operationContext, symbols);
                 analyzer.AnalyzeOperationBlock(anonymous.Body);
                 analyzer.Complete();
             }, OperationKind.AnonymousFunction);
         });
+    }
+
+    private sealed class NativeSymbols
+    {
+        private const string Namespace =
+            "Supprocom.NativeAllocationManagement.";
+
+        internal NativeSymbols(Compilation compilation)
+        {
+            Pool = compilation.GetTypeByMetadataName(
+                Namespace + "NativePool`1");
+            Region = compilation.GetTypeByMetadataName(
+                Namespace + "NativeRegion");
+            Arena = compilation.GetTypeByMetadataName(
+                Namespace + "NativeArena");
+            Pooled = compilation.GetTypeByMetadataName(
+                Namespace + "Pooled`1");
+            Local = compilation.GetTypeByMetadataName(
+                Namespace + "Local`1");
+            ArenaLease = compilation.GetTypeByMetadataName(
+                Namespace + "ArenaLease`1");
+        }
+
+        internal INamedTypeSymbol? Pool { get; }
+
+        internal INamedTypeSymbol? Region { get; }
+
+        internal INamedTypeSymbol? Arena { get; }
+
+        internal INamedTypeSymbol? Pooled { get; }
+
+        internal INamedTypeSymbol? Local { get; }
+
+        internal INamedTypeSymbol? ArenaLease { get; }
+
+        internal bool IsAvailable =>
+            Pool is not null
+            && Region is not null
+            && Arena is not null
+            && Pooled is not null
+            && Local is not null
+            && ArenaLease is not null;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static bool Is(
+            ITypeSymbol? candidate,
+            INamedTypeSymbol? expected)
+        {
+            return candidate is INamedTypeSymbol named
+                && SymbolEqualityComparer.Default.Equals(
+                    named.OriginalDefinition,
+                    expected);
+        }
     }
 
     private interface IFlowAnalysisContext
@@ -101,10 +161,15 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
     private sealed class MethodFlowAnalyzer : OperationWalker
     {
         private readonly IFlowAnalysisContext _context;
+        private readonly NativeSymbols _symbols;
         private readonly Dictionary<ISymbol, OwnerState> _owners = new(SymbolEqualityComparer.Default);
         private readonly Dictionary<ISymbol, HandleState> _handles = new(SymbolEqualityComparer.Default);
         private readonly Dictionary<string, LifecycleEffect> _lifecycleSummaries = new(StringComparer.Ordinal);
         private readonly HashSet<string> _lifecycleSummaryVisiting = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, bool> _nonRetainingOwnerParameters =
+            new(StringComparer.Ordinal);
+        private readonly HashSet<string> _nonRetainingOwnerParameterVisiting =
+            new(StringComparer.Ordinal);
         private readonly List<RegionScope> _regions = [];
         private readonly HashSet<OwnerState> _borrowedOwners = [];
         private readonly List<(ISymbol? OwnerSymbol, string HandleName)> _borrowScopes = [];
@@ -114,6 +179,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         private readonly HashSet<string> _reported = new(StringComparer.Ordinal);
         private readonly HashSet<ISymbol> _reportedScopedCompletions = new(SymbolEqualityComparer.Default);
         private readonly HashSet<ISymbol> _reportedRegionParameters = new(SymbolEqualityComparer.Default);
+        private readonly Dictionary<ControlFlowRegion, List<FinallyAnalysisCacheEntry>>
+            _finallyAnalysisCache = new();
         private int _closureDepth;
         private int _finallyProtectionDepth;
         private int _finallyDepth;
@@ -124,14 +191,20 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         private bool _hasAnalysisRoot;
         private bool _isStandaloneClosureAnalysis;
 
-        internal MethodFlowAnalyzer(OperationBlockAnalysisContext context)
+        internal MethodFlowAnalyzer(
+            OperationBlockAnalysisContext context,
+            NativeSymbols symbols)
         {
             _context = new OperationBlockContextAdapter(context);
+            _symbols = symbols;
         }
 
-        internal MethodFlowAnalyzer(OperationAnalysisContext context)
+        internal MethodFlowAnalyzer(
+            OperationAnalysisContext context,
+            NativeSymbols symbols)
         {
             _context = new OperationContextAdapter(context);
+            _symbols = symbols;
         }
 
         internal void AnalyzeOperationBlock(IOperation operationBlock)
@@ -142,6 +215,11 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             _hasAnalysisRoot = true;
             _isStandaloneClosureAnalysis = operationBlock.Parent is IAnonymousFunctionOperation;
             ReportRegionParameters();
+            RegisterOwnerParameters();
+            if (!ContainsNativeOwnership(operationBlock))
+            {
+                return;
+            }
 
             if (operationBlock is IMethodBodyOperation methodBody)
             {
@@ -164,6 +242,51 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             _cfgMode = false;
             Visit(operationBlock);
             _exitSnapshots.Add(CaptureSnapshot());
+        }
+
+        private void RegisterOwnerParameters()
+        {
+            if (_context.OwningSymbol is not IMethodSymbol method)
+            {
+                return;
+            }
+
+            foreach (IParameterSymbol parameter in method.Parameters
+                .Where(parameter => IsOwnerType(parameter.Type)))
+            {
+                if (_owners.ContainsKey(parameter))
+                {
+                    continue;
+                }
+
+                SyntaxNode syntax = parameter.DeclaringSyntaxReferences
+                    .FirstOrDefault()
+                    ?.GetSyntax(_context.CancellationToken)
+                    ?? method.DeclaringSyntaxReferences
+                        .First()
+                        .GetSyntax(_context.CancellationToken);
+                OwnerState owner = new(
+                    parameter,
+                    parameter.Type,
+                    IsNativeRegion(parameter.Type),
+                    IsNativeArena(parameter.Type),
+                    isUsing: false,
+                    isField: false,
+                    requiresDeterministicReturn: false,
+                    syntax)
+                {
+                    IsExternalReceiver = true,
+                    ScopedOwnerEligible = false
+                };
+                _owners.Add(parameter, owner);
+            }
+        }
+
+        private bool ContainsNativeOwnership(IOperation operationBlock)
+        {
+            return operationBlock.DescendantsAndSelf()
+                .Any(operation => IsOwnerType(operation.Type)
+                    || IsHandleType(operation.Type));
         }
 
         private void ReportRegionParameters()
@@ -252,11 +375,13 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         private void AnalyzeControlFlowGraph(ControlFlowGraph graph)
         {
             _context.CancellationToken.ThrowIfCancellationRequested();
+            _finallyAnalysisCache.Clear();
             BuildLocalLifetimeRegions(graph);
             BasicBlock entry = graph.Blocks.First(block => block.Kind == BasicBlockKind.Entry);
+            FlowSnapshot initial = CaptureSnapshot();
             Dictionary<BasicBlock, FlowSnapshot> entryStates = new();
             Dictionary<BasicBlock, FlowSnapshot> exitStates = new();
-            Queue<BasicBlock> work = new(graph.Blocks);
+            Queue<BasicBlock> work = new([entry]);
 
             _cfgMode = true;
             _suppressDiagnostics = true;
@@ -267,18 +392,18 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 FlowSnapshot incoming;
                 if (block == entry)
                 {
-                    incoming = EmptySnapshot();
+                    incoming = CloneSnapshot(initial);
                 }
                 else
                 {
                     FlowSnapshot[] predecessorStates = GraphPredecessors(graph, block)
                         .Where(branch => branch.Source is not null
                             && !IsFinallyBlock(graph, branch.Source)
-                            && exitStates.Keys.Any(candidate => candidate.Ordinal == branch.Source.Ordinal))
+                            && exitStates.ContainsKey(branch.Source))
                         .Select(branch => ApplyBranchTransfer(
                             graph,
                             branch,
-                            exitStates.First(pair => pair.Key.Ordinal == branch.Source!.Ordinal).Value,
+                            exitStates[branch.Source!],
                             emitDiagnostics: false))
                         .ToArray();
                     if (predecessorStates.Length == 0)
@@ -587,6 +712,24 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     ?? finallyRegion;
             }
 
+            if (_finallyAnalysisCache.TryGetValue(
+                finallyRegion,
+                out List<FinallyAnalysisCacheEntry>? cachedEntries))
+            {
+                FinallyAnalysisCacheEntry? cached = cachedEntries.FirstOrDefault(
+                    entry => SnapshotEquivalent(entry.Input, input));
+                if (cached is not null
+                    && (!emitDiagnostics || cached.DiagnosticsEmitted))
+                {
+                    return CloneSnapshot(cached.Output);
+                }
+            }
+            else
+            {
+                cachedEntries = [];
+                _finallyAnalysisCache.Add(finallyRegion, cachedEntries);
+            }
+
             BasicBlock[] blocks = graph.Blocks
                 .Where(block => ContainsBlock(finallyRegion, block.Ordinal))
                 .ToArray();
@@ -733,9 +876,44 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 }
             }
 
-            return exits.Count == 0
+            FlowSnapshot output = exits.Count == 0
                 ? input
                 : MergeSnapshotsForResult(exits.ToArray());
+            FinallyAnalysisCacheEntry? existing = cachedEntries.FirstOrDefault(
+                entry => SnapshotEquivalent(entry.Input, input));
+            if (existing is null)
+            {
+                cachedEntries.Add(new FinallyAnalysisCacheEntry(
+                    CloneSnapshot(input),
+                    CloneSnapshot(output),
+                    emitDiagnostics));
+            }
+            else
+            {
+                existing.Output = CloneSnapshot(output);
+                existing.DiagnosticsEmitted |= emitDiagnostics;
+            }
+
+            return output;
+        }
+
+        private sealed class FinallyAnalysisCacheEntry
+        {
+            internal FinallyAnalysisCacheEntry(
+                FlowSnapshot input,
+                FlowSnapshot output,
+                bool diagnosticsEmitted)
+            {
+                Input = input;
+                Output = output;
+                DiagnosticsEmitted = diagnosticsEmitted;
+            }
+
+            internal FlowSnapshot Input { get; }
+
+            internal FlowSnapshot Output { get; set; }
+
+            internal bool DiagnosticsEmitted { get; set; }
         }
 
         private FlowSnapshot ApplyFinallyRegionExit(
@@ -799,61 +977,12 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
         private static IEnumerable<ControlFlowBranch> GraphBranches(ControlFlowGraph graph, BasicBlock block)
         {
-            HashSet<ControlFlowBranch> branches = [];
-            if (block.ConditionalSuccessor is ControlFlowBranch conditional)
-            {
-                branches.Add(conditional);
-            }
-
-            if (block.FallThroughSuccessor is ControlFlowBranch fallThrough)
-            {
-                branches.Add(fallThrough);
-            }
-
-            foreach (BasicBlock candidate in graph.Blocks)
-            {
-                foreach (ControlFlowBranch branch in candidate.Predecessors
-                    .Where(branch => branch.Source is not null && branch.Source.Ordinal == block.Ordinal))
-                {
-                    branches.Add(branch);
-                }
-            }
-
-            foreach (ControlFlowBranch branch in branches)
-            {
-                yield return branch;
-            }
+            return ControlFlowTopology.For(graph).Branches(block);
         }
 
         private static IEnumerable<BasicBlock> GraphSuccessors(ControlFlowGraph graph, BasicBlock block)
         {
-            HashSet<int> destinationOrdinals = [];
-            if (block.ConditionalSuccessor?.Destination is BasicBlock conditional)
-            {
-                destinationOrdinals.Add(conditional.Ordinal);
-            }
-
-            if (block.FallThroughSuccessor?.Destination is BasicBlock fallThrough)
-            {
-                destinationOrdinals.Add(fallThrough.Ordinal);
-            }
-
-            foreach (BasicBlock candidate in graph.Blocks)
-            {
-                foreach (ControlFlowBranch branch in candidate.Predecessors)
-                {
-                    if (branch.Source is not null
-                        && branch.Source.Ordinal == block.Ordinal
-                        && branch.Destination is not null)
-                    {
-                        destinationOrdinals.Add(branch.Destination.Ordinal);
-                    }
-                }
-            }
-
-            return graph.Blocks
-                .Where(candidate => destinationOrdinals.Contains(candidate.Ordinal)
-                    && !IsFinallyBlock(graph, candidate));
+            return ControlFlowTopology.For(graph).Successors(block);
         }
 
         private static IEnumerable<ControlFlowBranch> GraphPredecessors(
@@ -861,42 +990,156 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             BasicBlock destination,
             bool includeFinallySources = false)
         {
-            HashSet<ControlFlowBranch> branches = [];
-            foreach (ControlFlowBranch branch in destination.Predecessors)
-            {
-                if (includeFinallySources
-                    || branch.Source is null
-                    || !IsFinallyBlock(graph, branch.Source))
-                {
-                    branches.Add(branch);
-                }
-            }
-
-            foreach (BasicBlock candidate in graph.Blocks)
-            {
-                foreach (ControlFlowBranch branch in GraphBranches(graph, candidate)
-                    .Where(branch => branch.Destination is not null
-                        && branch.Destination.Ordinal == destination.Ordinal
-                        && (includeFinallySources
-                            || branch.Source is null
-                            || !IsFinallyBlock(graph, branch.Source))))
-                {
-                    branches.Add(branch);
-                }
-            }
-
-            foreach (ControlFlowBranch branch in branches)
-            {
-                yield return branch;
-            }
+            return ControlFlowTopology.For(graph)
+                .Predecessors(destination, includeFinallySources);
         }
 
         private static bool IsFinallyBlock(ControlFlowGraph graph, BasicBlock block)
         {
-            return graph.Root.NestedRegions
-                .SelectMany(FlattenRegions)
-                .Where(region => region.Kind == ControlFlowRegionKind.Finally)
-                .Any(region => ContainsBlock(region, block.Ordinal));
+            return ControlFlowTopology.For(graph).IsFinallyBlock(block);
+        }
+
+        private sealed class ControlFlowTopology
+        {
+            private static readonly ConditionalWeakTable<
+                ControlFlowGraph,
+                ControlFlowTopology> Cache = new();
+
+            private readonly Dictionary<int, ControlFlowBranch[]> _branchesBySource;
+            private readonly Dictionary<int, ControlFlowBranch[]> _predecessorsByDestination;
+            private readonly Dictionary<int, BasicBlock[]> _successorsBySource;
+            private readonly HashSet<int> _finallyBlocks;
+
+            private ControlFlowTopology(ControlFlowGraph graph)
+            {
+                Dictionary<int, HashSet<ControlFlowBranch>> branchesBySource = [];
+                Dictionary<int, HashSet<ControlFlowBranch>> predecessorsByDestination = [];
+                Dictionary<int, BasicBlock> blocksByOrdinal = graph.Blocks.ToDictionary(
+                    static block => block.Ordinal);
+                foreach (BasicBlock block in graph.Blocks)
+                {
+                    Add(block.ConditionalSuccessor);
+                    Add(block.FallThroughSuccessor);
+                    foreach (ControlFlowBranch branch in block.Predecessors)
+                    {
+                        Add(branch);
+                    }
+                }
+
+                _branchesBySource = branchesBySource.ToDictionary(
+                    static pair => pair.Key,
+                    static pair => pair.Value.ToArray());
+                _predecessorsByDestination = predecessorsByDestination.ToDictionary(
+                    static pair => pair.Key,
+                    static pair => pair.Value.ToArray());
+                _finallyBlocks = [];
+                foreach (ControlFlowRegion region in FlattenRegions(graph.Root)
+                    .Where(static region => region.Kind == ControlFlowRegionKind.Finally))
+                {
+                    for (int ordinal = region.FirstBlockOrdinal;
+                        ordinal <= region.LastBlockOrdinal;
+                        ordinal++)
+                    {
+                        _finallyBlocks.Add(ordinal);
+                    }
+                }
+
+                _successorsBySource = [];
+                foreach (KeyValuePair<int, ControlFlowBranch[]> pair in _branchesBySource)
+                {
+                    _successorsBySource[pair.Key] = pair.Value
+                        .Where(static branch => branch.Destination is not null)
+                        .Select(static branch => branch.Destination!)
+                        .Where(destination => !_finallyBlocks.Contains(destination.Ordinal))
+                        .Distinct()
+                        .ToArray();
+                }
+
+                void Add(ControlFlowBranch? branch)
+                {
+                    if (branch is null)
+                    {
+                        return;
+                    }
+
+                    if (branch.Source is BasicBlock source)
+                    {
+                        if (!branchesBySource.TryGetValue(
+                            source.Ordinal,
+                            out HashSet<ControlFlowBranch>? sourceBranches))
+                        {
+                            sourceBranches = [];
+                            branchesBySource.Add(source.Ordinal, sourceBranches);
+                        }
+
+                        sourceBranches.Add(branch);
+                    }
+
+                    if (branch.Destination is BasicBlock destination
+                        && blocksByOrdinal.ContainsKey(destination.Ordinal))
+                    {
+                        if (!predecessorsByDestination.TryGetValue(
+                            destination.Ordinal,
+                            out HashSet<ControlFlowBranch>? destinationBranches))
+                        {
+                            destinationBranches = [];
+                            predecessorsByDestination.Add(
+                                destination.Ordinal,
+                                destinationBranches);
+                        }
+
+                        destinationBranches.Add(branch);
+                    }
+                }
+            }
+
+            internal static ControlFlowTopology For(ControlFlowGraph graph)
+            {
+                return Cache.GetValue(
+                    graph,
+                    static candidate => new ControlFlowTopology(candidate));
+            }
+
+            internal IEnumerable<ControlFlowBranch> Branches(BasicBlock source)
+            {
+                return _branchesBySource.TryGetValue(
+                    source.Ordinal,
+                    out ControlFlowBranch[]? branches)
+                    ? branches
+                    : [];
+            }
+
+            internal IEnumerable<BasicBlock> Successors(BasicBlock source)
+            {
+                return _successorsBySource.TryGetValue(
+                    source.Ordinal,
+                    out BasicBlock[]? successors)
+                    ? successors
+                    : [];
+            }
+
+            internal IEnumerable<ControlFlowBranch> Predecessors(
+                BasicBlock destination,
+                bool includeFinallySources)
+            {
+                if (!_predecessorsByDestination.TryGetValue(
+                    destination.Ordinal,
+                    out ControlFlowBranch[]? predecessors))
+                {
+                    return [];
+                }
+
+                return includeFinallySources
+                    ? predecessors
+                    : predecessors.Where(
+                        branch => branch.Source is null
+                            || !_finallyBlocks.Contains(branch.Source.Ordinal));
+            }
+
+            internal bool IsFinallyBlock(BasicBlock block)
+            {
+                return _finallyBlocks.Contains(block.Ordinal);
+            }
         }
 
         private static FlowSnapshot EmptySnapshot()
@@ -1411,6 +1654,10 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             {
                 RegisterHandle(operation);
             }
+            else if (IsScopedGroupInitialization(operation))
+            {
+                RegisterScopedGroupHandles(operation);
+            }
 
             if (borrowedOwner is not null)
             {
@@ -1652,7 +1899,11 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 else if (IsOwnerType(value.Type) && GetOwner(value) is OwnerState owner)
                 {
                     if (operation.Parent is IInvocationOperation invocation
-                        && GetLifecycleEffect(invocation.TargetMethod, operation.Parameter) is not LifecycleEffect.None)
+                        && (GetLifecycleEffect(invocation.TargetMethod, operation.Parameter)
+                                is not LifecycleEffect.None
+                            || IsNonRetainingOwnerParameter(
+                                invocation.TargetMethod,
+                                operation.Parameter)))
                     {
                         base.VisitArgument(operation);
                         return;
@@ -1903,6 +2154,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 target.Symbol,
                 operation.Type!,
                 isRegion,
+                IsNativeArena(operation.Type),
                 isUsing,
                 target.Symbol is IFieldSymbol,
                 requiresDeterministicReturn,
@@ -2025,6 +2277,74 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     operation.TargetMethod.Name);
             }
             _handles[target.Symbol] = handle;
+        }
+
+        private void RegisterScopedGroupHandles(
+            IInvocationOperation operation)
+        {
+            IArgumentOperation? ownerArgument = operation.Arguments
+                .FirstOrDefault(argument =>
+                    argument.Parameter?.Name == "arena");
+            OwnerState? owner = GetOwner(
+                Unwrap(ownerArgument?.Value));
+            if (owner is null
+                || !CheckOwnerActive(
+                    owner,
+                    operation.Syntax,
+                    operation.TargetMethod.Name))
+            {
+                return;
+            }
+
+            IArgumentOperation? sourceArgument = operation.Arguments
+                .FirstOrDefault(argument =>
+                    argument.Parameter?.Name == "source");
+            HandleState? source = GetHandle(
+                Unwrap(sourceArgument?.Value));
+            if (source is not null)
+            {
+                CheckHandleUse(
+                    source,
+                    sourceArgument!.Syntax,
+                    operation.TargetMethod.Name);
+            }
+
+            foreach (IArgumentOperation argument in operation.Arguments)
+            {
+                if (argument.Parameter?.RefKind != RefKind.Out
+                    || !IsHandleType(argument.Value.Type))
+                {
+                    continue;
+                }
+
+                IOperation? value = Unwrap(argument.Value);
+                ISymbol? symbol = value is null
+                    ? null
+                    : GetSymbol(value);
+                if (symbol is not ILocalSymbol)
+                {
+                    Report(
+                        NativeAllocationDiagnosticDescriptors
+                            .ScopedAcquisitionEscape,
+                        argument.Syntax,
+                        operation.TargetMethod.Name);
+                    continue;
+                }
+
+                HandleState handle = new(
+                    symbol,
+                    owner,
+                    owner.Generation,
+                    isUsing: false,
+                    argument.Syntax)
+                {
+                    GenerationRelation =
+                        owner.GenerationRelation,
+                    IsScoped = true
+                };
+                _handles[symbol] = handle;
+                owner.ScopedPending = true;
+            }
         }
 
         private void ProcessOwnerLifecycle(OwnerState owner, string name, SyntaxNode syntax)
@@ -2564,6 +2884,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 symbol,
                 type!,
                 IsNativeRegion(type),
+                IsNativeArena(type),
                 isUsing: false,
                 symbol is IFieldSymbol,
                 requiresDeterministicReturn: false,
@@ -2623,6 +2944,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 symbol: null,
                 operation.Type!,
                 IsNativeLocal(operation.Type),
+                isArena: false,
                 isUsing: false,
                 isField: false,
                 requiresDeterministicReturn: false,
@@ -3023,6 +3345,111 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             {
                 _lifecycleSummaryVisiting.Remove(cacheKey);
             }
+        }
+
+        private bool IsNonRetainingOwnerParameter(
+            IMethodSymbol method,
+            IParameterSymbol? parameter)
+        {
+            if (parameter is null
+                || IsNativeRegion(parameter.Type)
+                || method.DeclaringSyntaxReferences.Length != 1)
+            {
+                return false;
+            }
+
+            string cacheKey = method.ToDisplayString(
+                SymbolDisplayFormat.FullyQualifiedFormat)
+                + "|borrow|"
+                + parameter.Name;
+            if (_nonRetainingOwnerParameters.TryGetValue(
+                cacheKey,
+                out bool cached))
+            {
+                return cached;
+            }
+
+            if (!_nonRetainingOwnerParameterVisiting.Add(cacheKey))
+            {
+                return false;
+            }
+
+            try
+            {
+                SyntaxNode syntax = method.DeclaringSyntaxReferences[0]
+                    .GetSyntax(_context.CancellationToken);
+                SemanticModel model = _context.Compilation.GetSemanticModel(
+                    syntax.SyntaxTree);
+                IOperation? operation = model.GetOperation(
+                    syntax,
+                    _context.CancellationToken);
+                if (operation is null)
+                {
+                    _nonRetainingOwnerParameters[cacheKey] = false;
+                    return false;
+                }
+
+                bool result = operation.DescendantsAndSelf()
+                    .OfType<IParameterReferenceOperation>()
+                    .Where(reference => SymbolEqualityComparer.Default.Equals(
+                        reference.Parameter,
+                        parameter))
+                    .All(reference => IsNonRetainingOwnerReference(
+                        reference,
+                        syntax));
+                _nonRetainingOwnerParameters[cacheKey] = result;
+                return result;
+            }
+            finally
+            {
+                _nonRetainingOwnerParameterVisiting.Remove(cacheKey);
+            }
+        }
+
+        private bool IsNonRetainingOwnerReference(
+            IParameterReferenceOperation reference,
+            SyntaxNode methodSyntax)
+        {
+            for (IOperation? ancestor = reference.Parent;
+                ancestor is not null;
+                ancestor = ancestor.Parent)
+            {
+                if (ancestor is IAnonymousFunctionOperation
+                    or ILocalFunctionOperation)
+                {
+                    return false;
+                }
+
+                if (ancestor.Syntax == methodSyntax)
+                {
+                    break;
+                }
+            }
+
+            IOperation current = reference;
+            while (current.Parent is IConversionOperation
+                or IParenthesizedOperation)
+            {
+                current = current.Parent;
+            }
+
+            if (current.Parent is IInvocationOperation invocation
+                && ReferenceEquals(Unwrap(invocation.Instance), reference))
+            {
+                return true;
+            }
+
+            if (current.Parent is IPropertyReferenceOperation property
+                && ReferenceEquals(Unwrap(property.Instance), reference))
+            {
+                return true;
+            }
+
+            return current.Parent is IArgumentOperation argument
+                && argument.Parent is IInvocationOperation call
+                && IsNonRetainingOwnerParameter(
+                    call.TargetMethod,
+                    argument.Parameter);
         }
 
         private LifecycleEffect AnalyzeLifecycleSummary(IMethodSymbol method, IParameterSymbol parameter)
@@ -3464,7 +3891,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             return DeclarationActivation.Active;
         }
 
-        private static bool IsHandleCreatingInvocation(IOperation operation)
+        private bool IsHandleCreatingInvocation(IOperation operation)
         {
             return operation is IInvocationOperation invocation
                 && (((invocation.TargetMethod.Name is "Rent" or "LeaseScoped") && IsNativePool(invocation.TargetMethod.ContainingType))
@@ -3473,8 +3900,14 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         }
 
         private static bool IsNonRetainingCompositeLeaseOperation(IInvocationOperation operation) =>
-            operation.TargetMethod.Name == "Access"
+            (operation.TargetMethod.Name is "Access" or "InitializeScoped")
             && operation.TargetMethod.ContainingType.ToDisplayString() == "Supprocom.NativeAllocationManagement.NativeLeaseOperations";
+
+        private static bool IsScopedGroupInitialization(
+            IInvocationOperation operation) =>
+            operation.TargetMethod.Name == "InitializeScoped"
+            && operation.TargetMethod.ContainingType.ToDisplayString()
+                == "Supprocom.NativeAllocationManagement.NativeLeaseOperations";
 
         private static Target FindTarget(IOperation operation)
         {
@@ -3533,51 +3966,44 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             };
         }
 
-        private static bool IsOwnerType(ITypeSymbol? type)
+        private bool IsOwnerType(ITypeSymbol? type)
         {
             return IsNativePool(type) || IsNativeRegion(type) || IsNativeArena(type);
         }
 
-        private static bool IsHandleType(ITypeSymbol? type)
+        private bool IsHandleType(ITypeSymbol? type)
         {
             return IsNativePooled(type) || IsNativeLocal(type) || IsNativeArenaLease(type);
         }
 
-        private static bool IsNativePool(ITypeSymbol? type)
+        private bool IsNativePool(ITypeSymbol? type)
         {
-            return IsNamedType(type, "NativePool");
+            return NativeSymbols.Is(type, _symbols.Pool);
         }
 
-        private static bool IsNativeRegion(ITypeSymbol? type)
+        private bool IsNativeRegion(ITypeSymbol? type)
         {
-            return IsNamedType(type, "NativeRegion");
+            return NativeSymbols.Is(type, _symbols.Region);
         }
 
-        private static bool IsNativeArena(ITypeSymbol? type)
+        private bool IsNativeArena(ITypeSymbol? type)
         {
-            return IsNamedType(type, "NativeArena");
+            return NativeSymbols.Is(type, _symbols.Arena);
         }
 
-        private static bool IsNativePooled(ITypeSymbol? type)
+        private bool IsNativePooled(ITypeSymbol? type)
         {
-            return IsNamedType(type, "Pooled");
+            return NativeSymbols.Is(type, _symbols.Pooled);
         }
 
-        private static bool IsNativeLocal(ITypeSymbol? type)
+        private bool IsNativeLocal(ITypeSymbol? type)
         {
-            return IsNamedType(type, "Local");
+            return NativeSymbols.Is(type, _symbols.Local);
         }
 
-        private static bool IsNativeArenaLease(ITypeSymbol? type)
+        private bool IsNativeArenaLease(ITypeSymbol? type)
         {
-            return IsNamedType(type, "ArenaLease");
-        }
-
-        private static bool IsNamedType(ITypeSymbol? type, string name)
-        {
-            return type is INamedTypeSymbol named
-                && named.Name == name
-                && named.ContainingNamespace.ToDisplayString() == "Supprocom.NativeAllocationManagement";
+            return NativeSymbols.Is(type, _symbols.ArenaLease);
         }
 
         private bool IsUsingSyntax(SyntaxNode syntax, ISymbol? symbol)
@@ -3806,6 +4232,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 ISymbol? symbol,
                 ITypeSymbol type,
                 bool isRegion,
+                bool isArena,
                 bool isUsing,
                 bool isField,
                 bool requiresDeterministicReturn,
@@ -3815,7 +4242,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 Symbol = symbol;
                 Type = type;
                 IsRegion = isRegion;
-                IsArena = IsNativeArena(type);
+                IsArena = isArena;
                 IsUsing = isUsing;
                 IsField = isField;
                 RequiresDeterministicReturn = requiresDeterministicReturn;
@@ -3851,6 +4278,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     Symbol,
                     Type,
                     IsRegion,
+                    IsArena,
                     IsUsing,
                     IsField,
                     RequiresDeterministicReturn,

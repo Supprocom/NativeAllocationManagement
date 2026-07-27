@@ -190,15 +190,21 @@ public readonly record struct HandAuthoredInputFixture(
 
 public enum SectionRepresentationKind
 {
-    Empty,
-    Uniform,
-    Expanded,
-    Packed,
-    MultiPacked
+    Empty = 0,
+    Uniform = 1,
+    Expanded = 3,
+    Packed = 4,
+    MultiPacked = 5
 }
 
 public readonly record struct SectionSummary(
     SectionRepresentationKind Kind,
+    int DistinctIds,
     int TransparentIds,
+    ushort UniformBlockId,
+    int OpaqueCount,
+    int TransparentCount,
+    int EmptyCount,
+    int BitsPerIndex,
     bool HasDominantTransparentId,
     bool HasResidualTransparentIds);

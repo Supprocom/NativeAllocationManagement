@@ -20,6 +20,9 @@ public sealed class VoxelSharedContractTests
             typeof(FaceRecord),
             typeof(Vertex),
             typeof(PayloadSlice),
+            typeof(SectionRepresentationKind),
+            typeof(SectionSummary),
+            typeof(SectionPrerenderDescriptor),
             typeof(VoxelCell),
             typeof(OutputFixture),
             typeof(CanonicalOutputSummary),
@@ -35,13 +38,36 @@ public sealed class VoxelSharedContractTests
             typeof(CorrectnessReport),
             typeof(PairedSample),
             typeof(BenchmarkReport),
-            typeof(BenchmarkSummary)
+            typeof(BenchmarkSummary),
+            typeof(PressureProfileRequest),
+            typeof(PressureCommand),
+            typeof(PressureProgress),
+            typeof(PressureChunkEvidence),
+            typeof(PressureRuntimeSnapshot),
+            typeof(PressureProfileResult),
+            typeof(PressureEnvelope),
+            typeof(PressureOutputEvidence),
+            typeof(PressureChunkShape),
+            typeof(CompilationSample),
+            typeof(CompilationGateSummary),
+            typeof(CompilationGateReport),
+            typeof(PressureHostProgress),
+            typeof(PressureHostSample),
+            typeof(PressureEffectiveIsolation),
+            typeof(PressureImplementationObservation),
+            typeof(PressurePairedStatistics),
+            typeof(PressureProfilePair),
+            typeof(PressureMatrixSummary),
+            typeof(PressureMatrixReport)
         ];
 
         Assembly assembly = typeof(FaceRecord).Assembly;
         Assert.All(contractTypes, type => Assert.Same(assembly, type.Assembly));
         Assert.Equal(VoxelMath.FaceRecordBytes, Unsafe.SizeOf<FaceRecord>());
         Assert.Equal(7 * sizeof(int), VoxelMath.FaceRecordBytes);
+        Assert.Equal(
+            VoxelMath.SectionPrerenderDescriptorBytes,
+            Unsafe.SizeOf<SectionPrerenderDescriptor>());
         Assert.DoesNotContain(
             assembly.GetTypes(),
             type => type.Name == "NativeFaceOutput");
@@ -73,6 +99,151 @@ public sealed class VoxelSharedContractTests
                 Assert.DoesNotContain("record struct PipelineResult", source, StringComparison.Ordinal);
             }
         }
+    }
+
+    [Fact]
+    public void CompilationGateUsesConsumerBinariesAndBlocksBeforePressureExecution()
+    {
+        string root = FindRepositoryRoot();
+        string demoRoot = Path.Combine(root, ".Demos", "01-VoxelChunkPipeline");
+        string nativeProject = File.ReadAllText(
+            Path.Combine(demoRoot, "NAM", "NAM.csproj"));
+        Assert.Contains(
+            "CompilationBenchmark",
+            nativeProject,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "<Reference Include=\"Supprocom.NativeAllocationManagement\">",
+            nativeProject,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "<Analyzer Include=",
+            nativeProject,
+            StringComparison.Ordinal);
+        string compilationHarness = File.ReadAllText(
+            Path.Combine(demoRoot, "Harness", "CompilationGateHarness.cs"));
+        Assert.Contains(
+            "\"compilation-gate\"",
+            compilationHarness,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "\"-property:OutputPath=\"",
+            compilationHarness,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "\"-property:GenerateDependencyFile=false\"",
+            compilationHarness,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "\"-property:GenerateRuntimeConfigurationFiles=false\"",
+            compilationHarness,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "\"-property:UseAppHost=false\"",
+            compilationHarness,
+            StringComparison.Ordinal);
+
+        CompilationGateSummary failedSummary = new(
+            5,
+            1.10,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            false,
+            false,
+            false,
+            false);
+        string failedJson = System.Text.Json.JsonSerializer.Serialize(
+            failedSummary,
+            VoxelJson.Options);
+        Assert.DoesNotContain("NaN", failedJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("Infinity", failedJson, StringComparison.Ordinal);
+
+        string runner = File.ReadAllText(
+            Path.Combine(demoRoot, "Pressure", "run-constrained.ps1"));
+        int compilation = runner.IndexOf(
+            "\"--compile-gate\"",
+            StringComparison.Ordinal);
+        int publish = runner.IndexOf(
+            "\"publish\"",
+            StringComparison.Ordinal);
+        int pressure = runner.IndexOf(
+            "\"--pressure-matrix\"",
+            StringComparison.Ordinal);
+        Assert.True(compilation >= 0);
+        Assert.True(publish > compilation);
+        Assert.True(pressure > publish);
+    }
+
+    [Fact]
+    public void BothImplementationsSelectRuntimeCapacityWithinSharedBounds()
+    {
+        string root = FindRepositoryRoot();
+        string safeSource = File.ReadAllText(Path.Combine(
+            root,
+            ".Demos",
+            "01-VoxelChunkPipeline",
+            "SafeCSharp",
+            "SafePressureSession.cs"));
+        string nativeSource = File.ReadAllText(Path.Combine(
+            root,
+            ".Demos",
+            "01-VoxelChunkPipeline",
+            "NAM",
+            "NativePressureSession.cs"));
+
+        Assert.Contains(
+            "PressureWorkContract.CanonicalRetainedArraysPerPoolBucket",
+            safeSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "TrackedArrayPool<",
+            safeSource,
+            StringComparison.Ordinal);
+        Assert.Contains("CanAdmitBatch(", safeSource, StringComparison.Ordinal);
+        Assert.Contains(
+            "retainedBudgetBytes",
+            safeSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "PressureWorkContract.CanonicalResidentCellCapacity",
+            safeSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "PressureWorkContract.CanonicalResidentFaceRecordCapacity",
+            safeSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "CreateNativeCapacityPlan(",
+            nativeSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "request.CgroupCapBytes",
+            nativeSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "OutputCapacityPlan.Create(",
+            nativeSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "phaseArena.ReserveExternalMemory(",
+            nativeSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "AlignedMappedBuffer",
+            nativeSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "outputCapacity.EnsureFits(_context)",
+            nativeSource,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "PressureWorkContract.CanonicalArenaReservationBytes",
+            nativeSource,
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -209,6 +380,807 @@ public sealed class VoxelSharedContractTests
         Assert.Equal(new[] { 0, 1, 2, 3 }, fixture.TransparentVertices.Select(value => value.Corner).Distinct().OrderBy(value => value));
         Assert.Contains(fixture.OpaqueSlices, slice => slice.Alignment > 1 && slice.Length > slice.Alignment);
         Assert.Contains(fixture.TransparentSlices, slice => slice.StageMask != 0 && slice.BlockId > 255);
+    }
+
+    [Fact]
+    public void GpuStageInlineArraysHaveExactRecordSizes()
+    {
+        Assert.Equal(160, Unsafe.SizeOf<GpuStage160>());
+        Assert.Equal(168, Unsafe.SizeOf<GpuStage168>());
+        Assert.Equal(176, Unsafe.SizeOf<GpuStage176>());
+        Assert.Equal(192, Unsafe.SizeOf<GpuStage192>());
+        Assert.Equal(224, Unsafe.SizeOf<GpuStage224>());
+    }
+
+    [Theory]
+    [InlineData(256, 160)]
+    [InlineData(261, 168)]
+    [InlineData(257, 176)]
+    [InlineData(258, 192)]
+    [InlineData(259, 224)]
+    public void RetainedPressureVerificationRejectsChangedStageBytes(
+        int blockId,
+        int expectedStageBytes)
+    {
+        const int seed = 17;
+        BlockTypeDescriptor type = VoxelMath.BlockTypeForId(blockId);
+        int stageBytes = VoxelMath.AlignUp(
+            checked(
+                type.PayloadBytes
+                + VoxelMath.VerticesPerFace * VoxelMath.VertexBytes
+                + VoxelMath.IndicesPerFace * VoxelMath.IndexBytes
+                + PressureWorkContract.GpuCommandPaddingBytesPerFace),
+            type.Alignment);
+        Assert.Equal(expectedStageBytes, stageBytes);
+        FaceRecord[] records =
+        [
+            new FaceRecord(
+                0,
+                type.Id,
+                1,
+                type.PayloadBytes,
+                type.Alignment,
+                type.StageMask,
+                stageBytes)
+        ];
+        Vertex[] vertices = new Vertex[VoxelMath.VerticesPerFace];
+        int[] indices = new int[VoxelMath.IndicesPerFace];
+        PayloadSlice[] slices = new PayloadSlice[1];
+        GpuStage160[] stage160 =
+            stageBytes == 160 ? new GpuStage160[1] : [];
+        GpuStage168[] stage168 =
+            stageBytes == 168 ? new GpuStage168[1] : [];
+        GpuStage176[] stage176 =
+            stageBytes == 176 ? new GpuStage176[1] : [];
+        GpuStage192[] stage192 =
+            stageBytes == 192 ? new GpuStage192[1] : [];
+        GpuStage224[] stage224 =
+            stageBytes == 224 ? new GpuStage224[1] : [];
+        GpuStageBuffers stages = new(
+            stage160,
+            stage168,
+            stage176,
+            stage192,
+            stage224);
+        GpuStageBuffers emptyStages = new(
+            [],
+            [],
+            [],
+            [],
+            []);
+        PressureWorkContract.PackStream(
+            seed,
+            records,
+            vertices,
+            indices,
+            slices,
+            stages);
+        PressureOutputEvidence evidence =
+            PressureWorkContract.VerifyAndHashOutput(
+                seed,
+                records,
+                vertices,
+                indices,
+                slices,
+                [],
+                [],
+                [],
+                [],
+                stages,
+                emptyStages);
+        PressureWorkContract.VerifyRetainedOutput(
+            evidence,
+            vertices,
+            indices,
+            slices,
+            [],
+            [],
+            [],
+            stages,
+            emptyStages);
+        PressureWorkContract.ConsumeGpuUpload(
+            evidence,
+            vertices,
+            indices,
+            slices,
+            [],
+            [],
+            [],
+            stages,
+            emptyStages);
+        PressureWorkContract.ConsumeDirectGpuUpload(
+            evidence,
+            vertices,
+            indices,
+            slices,
+            [],
+            [],
+            [],
+            stages,
+            emptyStages);
+
+        Vertex[] scatterVertices =
+            new Vertex[VoxelMath.VerticesPerFace];
+        int[] scatterIndices =
+            new int[VoxelMath.IndicesPerFace];
+        PayloadSlice[] scatterSlices =
+            new PayloadSlice[1];
+        byte[] scatterPayloads =
+            new byte[type.PayloadBytes];
+        PressureWorkContract.PackScatterStream(
+            seed,
+            records,
+            scatterVertices,
+            scatterIndices,
+            scatterSlices,
+            scatterPayloads);
+        PressureOutputEvidence scatterEvidence =
+            PressureWorkContract.VerifyAndHashScatterOutput(
+                seed,
+                records,
+                scatterVertices,
+                scatterIndices,
+                scatterSlices,
+                scatterPayloads,
+                [],
+                [],
+                [],
+                [],
+                []);
+        Assert.Equal(evidence, scatterEvidence);
+        PressureWorkContract.VerifyRetainedScatterOutput(
+            scatterEvidence,
+            records,
+            scatterVertices,
+            scatterIndices,
+            scatterSlices,
+            scatterPayloads,
+            [],
+            [],
+            [],
+            [],
+            []);
+        PressureWorkContract.ConsumeScatterGpuUpload(
+            scatterEvidence,
+            records,
+            scatterVertices,
+            scatterIndices,
+            scatterSlices,
+            scatterPayloads,
+            [],
+            [],
+            [],
+            [],
+            []);
+
+        scatterPayloads[0] ^= 1;
+        Assert.Throws<InvalidDataException>(
+            () => PressureWorkContract.VerifyRetainedScatterOutput(
+                scatterEvidence,
+                records,
+                scatterVertices,
+                scatterIndices,
+                scatterSlices,
+                scatterPayloads,
+                [],
+                [],
+                [],
+                [],
+                []));
+        scatterPayloads[0] ^= 1;
+        scatterVertices[0] = scatterVertices[0] with
+        {
+            X = scatterVertices[0].X + 1
+        };
+        Assert.Throws<InvalidDataException>(
+            () => PressureWorkContract.VerifyRetainedScatterOutput(
+                scatterEvidence,
+                records,
+                scatterVertices,
+                scatterIndices,
+                scatterSlices,
+                scatterPayloads,
+                [],
+                [],
+                [],
+                [],
+                []));
+        scatterVertices[0] = scatterVertices[0] with
+        {
+            X = scatterVertices[0].X - 1
+        };
+        scatterIndices[0]++;
+        Assert.Throws<InvalidDataException>(
+            () => PressureWorkContract.VerifyRetainedScatterOutput(
+                scatterEvidence,
+                records,
+                scatterVertices,
+                scatterIndices,
+                scatterSlices,
+                scatterPayloads,
+                [],
+                [],
+                [],
+                [],
+                []));
+        scatterIndices[0]--;
+        scatterSlices[0] = scatterSlices[0] with
+        {
+            Length = scatterSlices[0].Length - 1
+        };
+        Assert.Throws<InvalidDataException>(
+            () => PressureWorkContract.VerifyRetainedScatterOutput(
+                scatterEvidence,
+                records,
+                scatterVertices,
+                scatterIndices,
+                scatterSlices,
+                scatterPayloads,
+                [],
+                [],
+                [],
+                [],
+                []));
+
+        stages.GetAllBytes(stageBytes)[^1] ^= 1;
+        bool failed = false;
+        try
+        {
+            PressureWorkContract.VerifyRetainedOutput(
+                evidence,
+                vertices,
+                indices,
+                slices,
+                [],
+                [],
+                [],
+                stages,
+                emptyStages);
+        }
+        catch (InvalidDataException)
+        {
+            failed = true;
+        }
+
+        Assert.True(failed);
+    }
+
+    [Fact]
+    public void PressureCapacityCoversThePredeclaredCanonicalChunkRange()
+    {
+        VoxelCell[] cells = new VoxelCell[VoxelMath.CellsPerChunk];
+        SectionSummary[] sections = new SectionSummary[VoxelMath.SectionsPerChunk];
+        PressureChunkShape[] shapes = new PressureChunkShape[
+            PressureWorkContract.CanonicalPressureCorpusLength];
+        int maximumFaces = 0;
+        int maximumRecords = 0;
+        int maximumMaskWords = 0;
+        int maximumUpload = 0;
+        long maximumRetained = 0;
+        for (int chunk = 0; chunk < shapes.Length; chunk++)
+        {
+            PressureWorkContract.GenerateCells(
+                PressureWorkContract.CanonicalPressureSeed,
+                chunk,
+                cells);
+            PressureChunkShape shape = PressureWorkContract.DeriveChunkShape(cells, sections);
+            shapes[chunk] = shape;
+            PressureWorkContract.EnsurePressureCapacity(shape);
+            maximumRecords = Math.Max(maximumRecords, shape.RecordCount);
+            maximumFaces = Math.Max(maximumFaces, shape.FaceCount);
+            maximumMaskWords = Math.Max(
+                maximumMaskWords,
+                shape.TransparentMaskWords);
+            maximumUpload = Math.Max(maximumUpload, shape.UploadBytes);
+            maximumRetained = Math.Max(
+                maximumRetained,
+                PressureWorkContract.CalculateRetainedLogicalBytes(shape));
+        }
+
+        Assert.Equal(
+            PressureWorkContract.MaximumFaceRecordsPerChunk,
+            maximumRecords);
+        Assert.Equal(
+            PressureWorkContract.MaximumVisibleFacesPerChunk,
+            maximumFaces);
+        Assert.Equal(
+            PressureWorkContract.MaximumTransparentMaskWordsPerChunk,
+            maximumMaskWords);
+        Assert.Equal(
+            PressureWorkContract.MaximumUploadBytesPerChunk,
+            maximumUpload);
+        Assert.Equal(
+            PressureWorkContract.MaximumRetainedBytesPerChunk,
+            maximumRetained);
+
+        AssertCanonicalResidentCapacities(shapes);
+    }
+
+    [Fact]
+    public void CanonicalPressureChunkMaterializesEveryVoxelEngineSectionKind()
+    {
+        VoxelCell[] cells = new VoxelCell[VoxelMath.CellsPerChunk];
+        SectionSummary[] summaries =
+            new SectionSummary[VoxelMath.SectionsPerChunk];
+        PressureWorkContract.GenerateCells(17, 0, cells);
+        PressureChunkShape shape =
+            PressureWorkContract.DeriveChunkShape(cells, summaries);
+
+        Assert.True(shape.EmptySections > 0);
+        Assert.True(shape.UniformSections > 0);
+        Assert.True(shape.ExpandedSections > 0);
+        Assert.True(shape.PackedSections > 0);
+        Assert.True(shape.MultiPackedSections > 0);
+        Assert.Equal(
+            Enum.GetValues<SectionRepresentationKind>().Order(),
+            summaries.Select(static value => value.Kind).Distinct().Order());
+        Assert.Equal(
+            VoxelMath.SectionsPerChunk,
+            shape.SectionDescriptorCount);
+        Assert.True(shape.SectionValueCount > VoxelMath.CellsPerSection);
+        Assert.True(shape.SectionWordCount > 0);
+        Assert.True(shape.SectionStateWordCount > 0);
+    }
+
+    [Fact]
+    public void CanonicalPressureStreamContainsDistinctChunkAndSectionClasses()
+    {
+        VoxelCell[] cells = new VoxelCell[VoxelMath.CellsPerChunk];
+        SectionSummary[] summaries =
+            new SectionSummary[VoxelMath.SectionsPerChunk];
+        PressureChunkShape[] shapes = new PressureChunkShape[8];
+        for (int chunk = 0; chunk < shapes.Length; chunk++)
+        {
+            PressureWorkContract.GenerateCells(
+                PressureWorkContract.CanonicalPressureSeed,
+                chunk,
+                cells);
+            shapes[chunk] =
+                PressureWorkContract.DeriveChunkShape(cells, summaries);
+        }
+
+        Assert.Equal(6, shapes[1].EmptySections);
+        Assert.Equal(7, shapes[2].UniformSections);
+        Assert.Equal(8, shapes[3].PackedSections);
+        Assert.Equal(8, shapes[4].ExpandedSections);
+        Assert.Equal(8, shapes[5].MultiPackedSections);
+        Assert.Equal(8, shapes[6].MultiPackedSections);
+        Assert.Equal(8, shapes[7].MultiPackedSections);
+        Assert.True(shapes.Min(static shape => shape.UploadBytes) < 200_000);
+        Assert.True(shapes.Max(static shape => shape.UploadBytes) > 6_000_000);
+        Assert.Equal(
+            8,
+            shapes.Select(static shape => shape.UploadBytes).Distinct().Count());
+    }
+
+    [Fact]
+    public void PressureCorpusStartsBalancedAndThenUsesSpatialRegions()
+    {
+        for (int chunk = 0;
+            chunk < PressureWorkContract.DefaultRetentionDepth;
+            chunk++)
+        {
+            Assert.Equal(
+                chunk,
+                PressureWorkContract.PressureSourceChunkIndex(chunk));
+        }
+
+        for (int region = 0; region < 16; region++)
+        {
+            int firstChunk = checked(
+                PressureWorkContract.DefaultRetentionDepth
+                * (region + 1));
+            int archetype = PressureWorkContract.PressureSourceChunkIndex(
+                firstChunk) & 7;
+            for (int offset = 1;
+                offset < PressureWorkContract.DefaultRetentionDepth;
+                offset++)
+            {
+                Assert.Equal(
+                    archetype,
+                    PressureWorkContract.PressureSourceChunkIndex(
+                        firstChunk + offset) & 7);
+            }
+        }
+
+        Assert.Equal(
+            8,
+            Enumerable.Range(0, 16)
+                .Select(region =>
+                    PressureWorkContract.PressureSourceChunkIndex(
+                        PressureWorkContract.DefaultRetentionDepth
+                            * (region + 1))
+                    & 7)
+                .Distinct()
+                .Count());
+    }
+
+    [Fact]
+    public void SectionPrerenderEvidenceCoversEveryTypedValueAndRetainedMutation()
+    {
+        const int seed = 17;
+        const int chunkId = 0;
+        VoxelCell[] cells = new VoxelCell[VoxelMath.CellsPerChunk];
+        SectionSummary[] summaries =
+            new SectionSummary[VoxelMath.SectionsPerChunk];
+        PressureWorkContract.GenerateCells(seed, chunkId, cells);
+        PressureChunkShape shape =
+            PressureWorkContract.DeriveChunkShape(cells, summaries);
+        SectionPrerenderDescriptor[] descriptors =
+            new SectionPrerenderDescriptor[shape.SectionDescriptorCount];
+        ushort[] values = new ushort[shape.SectionValueCount];
+        uint[] words = new uint[shape.SectionWordCount];
+        ulong[] states = new ulong[shape.SectionStateWordCount];
+
+        string evidence =
+            PressureWorkContract.BuildAndVerifySectionRepresentations(
+                chunkId,
+                cells,
+                summaries,
+                descriptors,
+                values,
+                words,
+                states);
+        Assert.Equal(64, evidence.Length);
+        Assert.Equal(
+            evidence,
+            PressureWorkContract.VerifyAndHashSectionRepresentations(
+                chunkId,
+                cells,
+                summaries,
+                descriptors,
+                values,
+                words,
+                states));
+
+        SectionPrerenderDescriptor[] changedDescriptors =
+            descriptors.ToArray();
+        changedDescriptors[0] = changedDescriptors[0] with
+        {
+            EmptyCount = changedDescriptors[0].EmptyCount - 1
+        };
+        Assert.Throws<InvalidDataException>(() =>
+            PressureWorkContract.VerifyAndHashSectionRepresentations(
+                chunkId,
+                cells,
+                summaries,
+                changedDescriptors,
+                values,
+                words,
+                states));
+
+        ushort[] changedValues = values.ToArray();
+        changedValues[0] ^= 1;
+        Assert.Throws<InvalidDataException>(() =>
+            PressureWorkContract.VerifyAndHashSectionRepresentations(
+                chunkId,
+                cells,
+                summaries,
+                descriptors,
+                changedValues,
+                words,
+                states));
+
+        uint[] changedWords = words.ToArray();
+        changedWords[0] ^= 1;
+        Assert.Throws<InvalidDataException>(() =>
+            PressureWorkContract.VerifyAndHashSectionRepresentations(
+                chunkId,
+                cells,
+                summaries,
+                descriptors,
+                values,
+                changedWords,
+                states));
+
+        ulong[] changedStates = states.ToArray();
+        changedStates[0] ^= 1;
+        Assert.Throws<InvalidDataException>(() =>
+            PressureWorkContract.VerifyAndHashSectionRepresentations(
+                chunkId,
+                cells,
+                summaries,
+                descriptors,
+                values,
+                words,
+                changedStates));
+    }
+
+    [Fact]
+    public void SeparateSectionRangesMatchTheCanonicalContiguousLayout()
+    {
+        const int seed = 17;
+        const int chunkId = 0;
+        VoxelCell[] cells = new VoxelCell[VoxelMath.CellsPerChunk];
+        SectionSummary[] summaries =
+            new SectionSummary[VoxelMath.SectionsPerChunk];
+        PressureWorkContract.GenerateCells(seed, chunkId, cells);
+        PressureChunkShape shape =
+            PressureWorkContract.DeriveChunkShape(cells, summaries);
+        SectionPrerenderDescriptor[] expectedDescriptors =
+            new SectionPrerenderDescriptor[
+                shape.SectionDescriptorCount];
+        ushort[] expectedValues =
+            new ushort[shape.SectionValueCount];
+        uint[] expectedWords =
+            new uint[shape.SectionWordCount];
+        ulong[] expectedStates =
+            new ulong[shape.SectionStateWordCount];
+        PressureWorkContract.BuildSectionRepresentations(
+            cells,
+            summaries,
+            expectedDescriptors,
+            expectedValues,
+            expectedWords,
+            expectedStates);
+
+        SectionPrerenderDescriptor[] actualDescriptors =
+            new SectionPrerenderDescriptor[
+                shape.SectionDescriptorCount];
+        ushort[][] values =
+            new ushort[VoxelMath.SectionsPerChunk][];
+        uint[][] words =
+            new uint[VoxelMath.SectionsPerChunk][];
+        ulong[][] states =
+            new ulong[VoxelMath.SectionsPerChunk][];
+        int valueCursor = 0;
+        int wordCursor = 0;
+        int stateCursor = 0;
+        for (int section = 0;
+            section < VoxelMath.SectionsPerChunk;
+            section++)
+        {
+            PressureWorkContract.GetSectionStorageLengths(
+                summaries[section],
+                out int valueLength,
+                out int wordLength,
+                out int stateLength);
+            values[section] = new ushort[valueLength];
+            words[section] = new uint[wordLength];
+            states[section] = new ulong[stateLength];
+            actualDescriptors[section] =
+                PressureWorkContract.BuildSectionRepresentation(
+                    cells,
+                    section,
+                    summaries[section],
+                    values[section],
+                    words[section],
+                    states[section],
+                    ref valueCursor,
+                    ref wordCursor,
+                    ref stateCursor);
+        }
+
+        Assert.Equal(expectedDescriptors, actualDescriptors);
+        Assert.Equal(
+            expectedValues,
+            values.SelectMany(static range => range));
+        Assert.Equal(
+            expectedWords,
+            words.SelectMany(static range => range));
+        Assert.Equal(
+            expectedStates,
+            states.SelectMany(static range => range));
+
+        valueCursor = 0;
+        wordCursor = 0;
+        stateCursor = 0;
+        for (int section = 0;
+            section < VoxelMath.SectionsPerChunk;
+            section++)
+        {
+            PressureWorkContract.VerifySectionRepresentation(
+                cells,
+                section,
+                summaries[section],
+                actualDescriptors[section],
+                values[section],
+                words[section],
+                states[section],
+                ref valueCursor,
+                ref wordCursor,
+                ref stateCursor);
+        }
+
+        int changedSection = Array.FindIndex(
+            values,
+            static range => range.Length != 0);
+        values[changedSection][0] ^= 1;
+        Assert.Throws<InvalidDataException>(() =>
+        {
+            int changedValueCursor = 0;
+            int changedWordCursor = 0;
+            int changedStateCursor = 0;
+            for (int section = 0;
+                section < VoxelMath.SectionsPerChunk;
+                section++)
+            {
+                PressureWorkContract.VerifySectionRepresentation(
+                    cells,
+                    section,
+                    summaries[section],
+                    actualDescriptors[section],
+                    values[section],
+                    words[section],
+                    states[section],
+                    ref changedValueCursor,
+                    ref changedWordCursor,
+                    ref changedStateCursor);
+            }
+        });
+    }
+
+    private static void AssertCanonicalResidentCapacities(
+        ReadOnlySpan<PressureChunkShape> shapes)
+    {
+        int depth = PressureWorkContract.DefaultResidentDepth;
+        long maximumRecords = 0;
+        long maximumMasks = 0;
+        long maximumFaces = 0;
+        long maximumUpload = 0;
+        long maximumDescriptors = 0;
+        long maximumValues = 0;
+        long maximumWords = 0;
+        long maximumStates = 0;
+        long maximumSectionBytes = 0;
+        long maximumManagedPoolBytes = 0;
+        int maximumVertices = 0;
+        int maximumIndices = 0;
+        int maximumArraysPerBucket = 0;
+        for (int start = 0; start <= shapes.Length - depth; start++)
+        {
+            long records = 0;
+            long masks = 0;
+            long faces = 0;
+            long upload = 0;
+            long descriptors = 0;
+            long values = 0;
+            long words = 0;
+            long states = 0;
+            long retainedPoolBytes = 0;
+            int vertices = 0;
+            int indices = 0;
+            Dictionary<int, int> sliceBuckets = [];
+            Dictionary<int, int> uploadBuckets = [];
+            foreach (PressureChunkShape shape in shapes.Slice(start, depth))
+            {
+                records += Math.Max(1, shape.RecordCount);
+                masks += Math.Max(1, shape.TransparentMaskWords);
+                faces += Math.Max(1, shape.FaceCount);
+                upload += Math.Max(1, shape.UploadBytes);
+                descriptors += shape.SectionDescriptorCount;
+                values += shape.SectionValueCount;
+                words += shape.SectionWordCount;
+                states += shape.SectionStateWordCount;
+                vertices = Math.Max(
+                    vertices,
+                    Math.Max(1, shape.VertexCount));
+                indices = Math.Max(
+                    indices,
+                    Math.Max(1, shape.IndexCount));
+                int sliceBucket = PoolLength(Math.Max(1, shape.FaceCount));
+                int uploadBucket = PoolLength(Math.Max(1, shape.UploadBytes));
+                sliceBuckets[sliceBucket] =
+                    sliceBuckets.GetValueOrDefault(sliceBucket) + 1;
+                uploadBuckets[uploadBucket] =
+                    uploadBuckets.GetValueOrDefault(uploadBucket) + 1;
+                retainedPoolBytes = checked(
+                    retainedPoolBytes
+                    + (long)sliceBucket * VoxelMath.PayloadSliceBytes
+                    + uploadBucket);
+            }
+
+            maximumRecords = Math.Max(maximumRecords, records);
+            maximumMasks = Math.Max(maximumMasks, masks);
+            maximumFaces = Math.Max(maximumFaces, faces);
+            maximumUpload = Math.Max(maximumUpload, upload);
+            maximumDescriptors = Math.Max(maximumDescriptors, descriptors);
+            maximumValues = Math.Max(maximumValues, values);
+            maximumWords = Math.Max(maximumWords, words);
+            maximumStates = Math.Max(maximumStates, states);
+            maximumVertices = Math.Max(maximumVertices, vertices);
+            maximumIndices = Math.Max(maximumIndices, indices);
+            long sectionBytes = checked(
+                descriptors * VoxelMath.SectionPrerenderDescriptorBytes
+                + values * sizeof(ushort)
+                + words * sizeof(uint)
+                + states * sizeof(ulong));
+            maximumSectionBytes = Math.Max(
+                maximumSectionBytes,
+                sectionBytes);
+            maximumArraysPerBucket = Math.Max(
+                maximumArraysPerBucket,
+                Math.Max(
+                    sliceBuckets.Values.Max(),
+                    uploadBuckets.Values.Max()));
+            long managedPoolBytes = checked(
+                retainedPoolBytes
+                + (long)PoolLength(
+                    depth * VoxelMath.CellsPerChunk)
+                    * VoxelMath.VoxelCellBytes
+                + (long)PoolLength(checked((int)records))
+                    * VoxelMath.FaceRecordBytes
+                + (long)PoolLength(checked((int)masks)) * sizeof(ulong)
+                + (long)PoolLength(checked((int)descriptors))
+                    * VoxelMath.SectionPrerenderDescriptorBytes
+                + (long)PoolLength(Math.Max(1, checked((int)values)))
+                    * sizeof(ushort)
+                + (long)PoolLength(Math.Max(1, checked((int)words)))
+                    * sizeof(uint)
+                + (long)PoolLength(Math.Max(1, checked((int)states)))
+                    * sizeof(ulong)
+                + (long)PoolLength(vertices) * VoxelMath.VertexBytes
+                + (long)PoolLength(indices) * VoxelMath.IndexBytes);
+            maximumManagedPoolBytes = Math.Max(
+                maximumManagedPoolBytes,
+                managedPoolBytes);
+        }
+
+        Assert.Equal(
+            PressureWorkContract.CanonicalResidentCellCapacity,
+            depth * VoxelMath.CellsPerChunk);
+        Assert.Equal(
+            PressureWorkContract.CanonicalResidentFaceRecordCapacity,
+            maximumRecords);
+        Assert.Equal(
+            PressureWorkContract.CanonicalResidentTransparentMaskWordCapacity,
+            maximumMasks);
+        Assert.Equal(
+            PressureWorkContract.CanonicalResidentPayloadSliceCapacity,
+            maximumFaces);
+        Assert.Equal(
+            PressureWorkContract.CanonicalResidentUploadByteCapacity,
+            maximumUpload);
+        Assert.Equal(
+            PressureWorkContract.CanonicalResidentSectionDescriptorCapacity,
+            maximumDescriptors);
+        Assert.Equal(
+            PressureWorkContract.CanonicalResidentSectionValueCapacity,
+            maximumValues);
+        Assert.Equal(
+            PressureWorkContract.CanonicalResidentSectionWordCapacity,
+            maximumWords);
+        Assert.Equal(
+            PressureWorkContract.CanonicalResidentSectionStateWordCapacity,
+            maximumStates);
+        Assert.Equal(
+            PressureWorkContract.CanonicalMaximumVertexCapacity,
+            maximumVertices);
+        Assert.Equal(
+            PressureWorkContract.CanonicalMaximumIndexCapacity,
+            maximumIndices);
+        Assert.Equal(
+            PressureWorkContract.CanonicalMaximumArraysPerPoolBucket,
+            maximumArraysPerBucket);
+        Assert.True(
+            PressureWorkContract.CanonicalRetainedArraysPerPoolBucket
+                < PressureWorkContract.CanonicalMaximumArraysPerPoolBucket);
+        Assert.Equal(
+            PressureWorkContract.CanonicalManagedPoolResidentBytes,
+            maximumManagedPoolBytes);
+        Assert.Equal(
+            PressureWorkContract.CanonicalArenaReservationBytes,
+            checked(
+                (long)PressureWorkContract.CanonicalResidentCellCapacity
+                    * VoxelMath.VoxelCellBytes
+                + (long)maximumRecords * VoxelMath.FaceRecordBytes
+                + (long)maximumMasks * sizeof(ulong)
+                + maximumFaces * VoxelMath.PayloadSliceBytes
+                + maximumSectionBytes
+                + (long)maximumVertices * VoxelMath.VertexBytes
+                + (long)maximumIndices * VoxelMath.IndexBytes
+                + 4_096));
+    }
+
+    private static int PoolLength(int requestedElements)
+    {
+        int length = 16;
+        while (length < requestedElements)
+        {
+            length = checked(length * 2);
+        }
+
+        return length;
     }
 
     private static string FindRepositoryRoot()

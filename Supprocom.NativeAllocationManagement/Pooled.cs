@@ -7,21 +7,35 @@ public readonly ref struct Pooled<T>
     private readonly NativeOwnerKernel? _kernel;
     private readonly long _generation;
     private readonly long _allocationId;
+    private readonly NativeGeneration? _generationState;
+    private readonly NativeAllocation? _allocationState;
 
-    internal Pooled(NativeOwnerKernel kernel, long generation, long allocationId, int length, int capacity)
+    internal Pooled(
+        NativeOwnerKernel kernel,
+        NativePoolLease lease)
     {
         _kernel = kernel;
-        _generation = generation;
-        _allocationId = allocationId;
-        _ = length;
-        _ = capacity;
+        _generation = lease.Generation;
+        _allocationId = lease.AllocationId;
+        _generationState = lease.GenerationState;
+        _allocationState = lease.AllocationState;
     }
 
-    internal NativeOwnerKernel KernelForComposite => GetKernel("NativeLeaseOperations.Access");
+    internal NativeOwnerKernel KernelForComposite =>
+        GetKernel("NativeLeaseOperations.Access");
 
     internal long GenerationForComposite => _generation;
 
     internal long AllocationIdForComposite => _allocationId;
+
+    internal NativeGeneration GenerationStateForComposite =>
+        GetGenerationState("NativeLeaseOperations.Access");
+
+    internal NativeAllocation AllocationStateForComposite =>
+        GetAllocationState("NativeLeaseOperations.Access");
+
+    internal NativeOperationToken EnterForComposite(string operation) =>
+        EnterOperation(operation);
 
     /// <summary>Gets the logical element count.</summary>
     public int Length => GetMetadata(nameof(Length)).Length;
@@ -61,7 +75,7 @@ public readonly ref struct Pooled<T>
     /// <summary>Zeroes the logical range while holding one native operation token.</summary>
     public void Clear()
     {
-        NativeOperationToken token = GetKernel(nameof(Clear)).EnterOperation(_generation, _allocationId, nameof(Clear));
+        NativeOperationToken token = EnterOperation(nameof(Clear));
         try
         {
             token.GetView<T>().Clear();
@@ -81,7 +95,7 @@ public readonly ref struct Pooled<T>
             throw new ArgumentException("The source length must equal the pooled logical length.", nameof(source));
         }
 
-        NativeOperationToken token = GetKernel(nameof(CopyFrom)).EnterOperation(_generation, _allocationId, nameof(CopyFrom));
+        NativeOperationToken token = EnterOperation(nameof(CopyFrom));
         try
         {
             token.GetView<T>().CopyFrom(source);
@@ -101,7 +115,7 @@ public readonly ref struct Pooled<T>
             throw new ArgumentException("The destination must contain at least the pooled logical length.", nameof(destination));
         }
 
-        NativeOperationToken token = GetKernel(nameof(CopyTo)).EnterOperation(_generation, _allocationId, nameof(CopyTo));
+        NativeOperationToken token = EnterOperation(nameof(CopyTo));
         try
         {
             token.GetView<T>().CopyTo(destination);
@@ -116,7 +130,7 @@ public readonly ref struct Pooled<T>
     public void Access(NativeLeaseAction<T> action)
     {
         ArgumentNullException.ThrowIfNull(action);
-        NativeOperationToken token = GetKernel(nameof(Access)).EnterOperation(_generation, _allocationId, nameof(Access));
+        NativeOperationToken token = EnterOperation(nameof(Access));
         try
         {
             action(token.GetView<T>());
@@ -131,7 +145,7 @@ public readonly ref struct Pooled<T>
     public TResult Read<TResult>(NativeLeaseFunc<T, TResult> action)
     {
         ArgumentNullException.ThrowIfNull(action);
-        NativeOperationToken token = GetKernel(nameof(Read)).EnterOperation(_generation, _allocationId, nameof(Read));
+        NativeOperationToken token = EnterOperation(nameof(Read));
         try
         {
             return action(token.GetView<T>());
@@ -149,13 +163,39 @@ public readonly ref struct Pooled<T>
     {
         NativeHandleMetadata metadata = GetMetadata(operation);
         ValidateIndex(index, metadata.Length);
-        return GetKernel(operation).EnterOperation(_generation, _allocationId, operation);
+        return EnterOperation(operation);
     }
 
     private NativeOwnerKernel GetKernel(string operation) =>
         _kernel ?? throw new NativeAllocationUninitializedException(nameof(Pooled<T>), operation);
 
-    private NativeHandleMetadata GetMetadata(string operation) => GetKernel(operation).ValidateHandle(_generation, _allocationId, operation);
+    private NativeGeneration GetGenerationState(string operation) =>
+        _generationState
+        ?? throw new NativeAllocationUninitializedException(
+            nameof(Pooled<T>),
+            operation);
+
+    private NativeAllocation GetAllocationState(string operation) =>
+        _allocationState
+        ?? throw new NativeAllocationUninitializedException(
+            nameof(Pooled<T>),
+            operation);
+
+    private NativeOperationToken EnterOperation(string operation) =>
+        GetKernel(operation).EnterOperation(
+            GetGenerationState(operation),
+            GetAllocationState(operation),
+            _generation,
+            _allocationId,
+            operation);
+
+    private NativeHandleMetadata GetMetadata(string operation) =>
+        GetKernel(operation).ValidateHandle(
+            GetGenerationState(operation),
+            GetAllocationState(operation),
+            _generation,
+            _allocationId,
+            operation);
 
     private static void ValidateIndex(int index, int length)
     {

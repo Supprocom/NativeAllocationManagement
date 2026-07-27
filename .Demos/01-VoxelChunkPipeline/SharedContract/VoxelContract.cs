@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Numerics;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -40,6 +41,16 @@ public sealed class CanonicalHashAccumulator : IDisposable
         AddInt64(bytes.Length);
         _hash.AppendData(bytes);
     }
+
+    internal void BeginByteSequence(long length)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(length);
+        AddInt64(length);
+    }
+
+    internal void AppendByteSequencePart(
+        ReadOnlySpan<byte> bytes) =>
+        _hash.AppendData(bytes);
 
     public void AddString(string value)
     {
@@ -100,6 +111,48 @@ public sealed class CanonicalHashAccumulator : IDisposable
         AddInt32(value.CellIndex);
     }
 
+    public void AddVertices(ReadOnlySpan<Vertex> values)
+    {
+        if (BitConverter.IsLittleEndian)
+        {
+            _hash.AppendData(MemoryMarshal.AsBytes(values));
+            return;
+        }
+
+        for (int index = 0; index < values.Length; index++)
+        {
+            AddVertex(values[index]);
+        }
+    }
+
+    public void AddInt32Values(ReadOnlySpan<int> values)
+    {
+        if (BitConverter.IsLittleEndian)
+        {
+            _hash.AppendData(MemoryMarshal.AsBytes(values));
+            return;
+        }
+
+        for (int index = 0; index < values.Length; index++)
+        {
+            AddInt32(values[index]);
+        }
+    }
+
+    public void AddPayloadSlices(ReadOnlySpan<PayloadSlice> values)
+    {
+        if (BitConverter.IsLittleEndian)
+        {
+            _hash.AppendData(MemoryMarshal.AsBytes(values));
+            return;
+        }
+
+        for (int index = 0; index < values.Length; index++)
+        {
+            AddPayloadSlice(values[index]);
+        }
+    }
+
     public string Complete()
     {
         if (_completed)
@@ -116,7 +169,12 @@ public sealed class CanonicalHashAccumulator : IDisposable
 
 public static class VoxelMath
 {
-    public const int ChunkDimension = 64;
+    public const int ChunkDimension = 32;
+    public const int SectionDimension = 16;
+    public const int SectionsPerAxis = ChunkDimension / SectionDimension;
+    public const int SectionsPerChunk = SectionsPerAxis * SectionsPerAxis * SectionsPerAxis;
+    public const int CellsPerSection =
+        SectionDimension * SectionDimension * SectionDimension;
     public const int CellsPerChunk = ChunkDimension * ChunkDimension * ChunkDimension;
     public const int FacesPerCell = 6;
     public const int VerticesPerFace = 4;
@@ -126,6 +184,8 @@ public static class VoxelMath
     public static readonly int VertexBytes = Unsafe.SizeOf<Vertex>();
     public static readonly int IndexBytes = Unsafe.SizeOf<int>();
     public static readonly int PayloadSliceBytes = Unsafe.SizeOf<PayloadSlice>();
+    public static readonly int SectionPrerenderDescriptorBytes =
+        Unsafe.SizeOf<SectionPrerenderDescriptor>();
     public const int TransparentMaskWordsPerId = 64;
     public const int DigestModulus = 1_000_000_007;
     public const int DigestMultiplier = 1_000_003;
@@ -138,11 +198,11 @@ public static class VoxelMath
         [
             new(0, 0, 0, 0, 0, 0, 0, short.MinValue),
             new(0, 16, 16, 0, 0, 1, 256, 118),
-            new(0, 32, 32, 0, 0, 2, 257, 48),
-            new(0, 1024, 0, 16, 0, 4, 261, -88),
-            new(0, 1040, 16, 16, 0, 5, 258, -8)
+            new(0, 512, 0, 16, 0, 2, 257, -68),
+            new(0, 528, 16, 16, 0, 3, 259, 12),
+            new(0, 16384, 0, 0, 16, 4, 257, -65)
         ],
-        95816130);
+        400663378);
 
     public static readonly HandAuthoredInputFixture ExpectedHandAuthoredInputFixture = new(
         0x2468,
@@ -213,14 +273,14 @@ public static class VoxelMath
         [0, 1, 2, 2, 3, 0, 4, 5, 6, 6, 7, 4, 8, 9, 10, 10, 11, 8,
             12, 13, 14, 14, 15, 12, 16, 17, 18, 18, 19, 16],
         [
-            new(0, 192, 32, 6, 259, 12417),
-            new(192, 192, 32, 6, 259, 12417),
-            new(384, 192, 32, 6, 259, 12417),
-            new(576, 128, 4, 3, 256, 8455),
-            new(704, 128, 4, 3, 256, 8455)
+            new(0, 192, 32, 6, 259, 3137),
+            new(192, 192, 32, 6, 259, 3137),
+            new(384, 192, 32, 6, 259, 3137),
+            new(576, 128, 4, 3, 256, 2183),
+            new(704, 128, 4, 3, 256, 2183)
         ],
         Convert.FromBase64String(
-            "ANLjAAAWJwAAWmsAAJ6vAADi8wAAJjcAAGp7AACuvwAA8gMAADZHAAB6iwAAvs8AAAITAABGVwABAAAAAgAAAAMAAAAAAAAAAAAAAAMBAAABAAAAAgAAAAQAAAAAAAAAAQAAAAMBAAABAAAAAwAAAAQAAAAAAAAAAgAAAAMBAAABAAAAAwAAAAMAAAAAAAAAAwAAAAMBAAAAAAAAAQAAAAIAAAACAAAAAwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAANLjAAAWJwAAWmsAAJ6vAADi8wAAJjcAAGp7AACuvwAA8gMAADZHAAB6iwAAvs8AAAITAABGVwABAAAAAgAAAAMAAAACAAAAAAAAAAMBAAACAAAAAgAAAAQAAAACAAAAAQAAAAMBAAABAAAAAgAAAAQAAAACAAAAAgAAAAMBAAACAAAAAgAAAAMAAAACAAAAAwAAAAMBAAAEAAAABQAAAAYAAAAGAAAABwAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAANLjAAAWJwAAWmsAAJ6vAADi8wAAJjcAAGp7AACuvwAA8gMAADZHAAB6iwAAvs8AAAITAABGVwABAAAAAgAAAAQAAAAFAAAAAAAAAAMBAAACAAAAAgAAAAQAAAAFAAAAAQAAAAMBAAABAAAAAwAAAAQAAAAFAAAAAgAAAAMBAAACAAAAAwAAAAQAAAAFAAAAAwAAAAMBAAAIAAAACQAAAAoAAAAKAAAACwAAAAgAAAAAAAAAAAAAAAAAAAAAAAAA7f4AADFCAAAIAAAABAAAAAIAAAABAAAAAAAAAAABAAAIAAAABAAAAAMAAAABAAAAAQAAAAABAAAIAAAABQAAAAMAAAABAAAAAgAAAAABAAAIAAAABQAAAAIAAAABAAAAAwAAAAABAAAMAAAADQAAAA4AAAAOAAAADwAAAAwAAADt/gAAMUIAAAcAAAAFAAAAAgAAAAMAAAAAAAAAAAEAAAgAAAAFAAAAAwAAAAMAAAABAAAAAAEAAAcAAAAFAAAAAwAAAAMAAAACAAAAAAEAAAgAAAAFAAAAAgAAAAMAAAADAAAAAAEAABAAAAARAAAAEgAAABIAAAATAAAAEAAAAA=="),
+            "ABIjAABWZwAAmqsAAN7vAAAiMwAAZncAAKq7AADu/wAAMkMAAHaHAAC6ywAA/g8AAEJTAACGlwABAAAAAgAAAAMAAAAAAAAAAAAAAAMBAAABAAAAAgAAAAQAAAAAAAAAAQAAAAMBAAABAAAAAwAAAAQAAAAAAAAAAgAAAAMBAAABAAAAAwAAAAMAAAAAAAAAAwAAAAMBAAAAAAAAAQAAAAIAAAACAAAAAwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABIjAABWZwAAmqsAAN7vAAAiMwAAZncAAKq7AADu/wAAMkMAAHaHAAC6ywAA/g8AAEJTAACGlwABAAAAAgAAAAMAAAACAAAAAAAAAAMBAAACAAAAAgAAAAQAAAACAAAAAQAAAAMBAAABAAAAAgAAAAQAAAACAAAAAgAAAAMBAAACAAAAAgAAAAMAAAACAAAAAwAAAAMBAAAEAAAABQAAAAYAAAAGAAAABwAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAABIjAABWZwAAmqsAAN7vAAAiMwAAZncAAKq7AADu/wAAMkMAAHaHAAC6ywAA/g8AAEJTAACGlwABAAAAAgAAAAQAAAAFAAAAAAAAAAMBAAACAAAAAgAAAAQAAAAFAAAAAQAAAAMBAAABAAAAAwAAAAQAAAAFAAAAAgAAAAMBAAACAAAAAwAAAAQAAAAFAAAAAwAAAAMBAAAIAAAACQAAAAoAAAAKAAAACwAAAAgAAAAAAAAAAAAAAAAAAAAAAAAAbX4AALHCAAAIAAAABAAAAAIAAAABAAAAAAAAAAABAAAIAAAABAAAAAMAAAABAAAAAQAAAAABAAAIAAAABQAAAAMAAAABAAAAAgAAAAABAAAIAAAABQAAAAIAAAABAAAAAwAAAAABAAAMAAAADQAAAA4AAAAOAAAADwAAAAwAAABtfgAAscIAAAcAAAAFAAAAAgAAAAMAAAAAAAAAAAEAAAgAAAAFAAAAAwAAAAMAAAABAAAAAAEAAAcAAAAFAAAAAwAAAAMAAAACAAAAAAEAAAgAAAAFAAAAAgAAAAMAAAADAAAAAAEAABAAAAARAAAAEgAAABIAAAATAAAAEAAAAA=="),
         [
             new(4, 6, 1, 0, 0, 258), new(4, 6, 2, 0, 1, 258),
             new(4, 7, 2, 0, 2, 258), new(4, 7, 1, 0, 3, 258),
@@ -234,13 +294,13 @@ public static class VoxelMath
         [0, 1, 2, 2, 3, 0, 4, 5, 6, 6, 7, 4, 8, 9, 10, 10, 11, 8,
             12, 13, 14, 14, 15, 12],
         [
-            new(0, 160, 16, 9, 258, 4484),
-            new(160, 160, 16, 9, 258, 4484),
-            new(320, 136, 8, 2, 261, 20556),
-            new(456, 136, 8, 2, 261, 20556)
+            new(0, 160, 16, 9, 258, 1220),
+            new(160, 160, 16, 9, 258, 1220),
+            new(320, 136, 8, 2, 261, 5164),
+            new(456, 136, 8, 2, 261, 5164)
         ],
         Convert.FromBase64String(
-            "5AAAFygAAFtsAACfsAAA4/QAACc4AABrfAAAr8AAAPMEAAA3SAAAewQAAAAGAAAAAQAAAAAAAAAAAAAAAgEAAAQAAAAGAAAAAgAAAAAAAAABAAAAAgEAAAQAAAAHAAAAAgAAAAAAAAACAAAAAgEAAAQAAAAHAAAAAQAAAAAAAAADAAAAAgEAAAAAAAABAAAAAgAAAAIAAAADAAAAAAAAAOQAABcoAABbbAAAn7AAAOP0AAAnOAAAa3wAAK/AAADzBAAAN0gAAHsEAAAABgAAAAEAAAAEAAAAAAAAAAIBAAAFAAAABgAAAAEAAAAEAAAAAQAAAAIBAAAEAAAABwAAAAEAAAAEAAAAAgAAAAIBAAAFAAAABwAAAAEAAAAEAAAAAwAAAAIBAAAEAAAABQAAAAYAAAAGAAAABwAAAAQAAAAAoQAAAOUAAAApAAAAbQAADAAAAAEAAAAFAAAAAgAAAAAAAAAFAQAADQAAAAEAAAAGAAAAAgAAAAEAAAAFAQAADAAAAAEAAAAGAAAAAgAAAAIAAAAFAQAADQAAAAEAAAAFAAAAAgAAAAMAAAAFAQAACAAAAAkAAAAKAAAACgAAAAsAAAAIAAAAAKEAAADlAAAAKQAAAG0AAAwAAAABAAAABgAAAAUAAAAAAAAABQEAAA0AAAABAAAABgAAAAUAAAABAAAABQEAAAwAAAACAAAABgAAAAUAAAACAAAABQEAAA0AAAACAAAABgAAAAUAAAADAAAABQEAAAwAAAANAAAADgAAAA4AAAAPAAAADAAAAA==")
+            "pAAA1+gAABssAABfcAAAo7QAAOf4AAArPAAAb4AAALPEAAD3CAAAOwQAAAAGAAAAAQAAAAAAAAAAAAAAAgEAAAQAAAAGAAAAAgAAAAAAAAABAAAAAgEAAAQAAAAHAAAAAgAAAAAAAAACAAAAAgEAAAQAAAAHAAAAAQAAAAAAAAADAAAAAgEAAAAAAAABAAAAAgAAAAIAAAADAAAAAAAAAKQAANfoAAAbLAAAX3AAAKO0AADn+AAAKzwAAG+AAACzxAAA9wgAADsEAAAABgAAAAEAAAAEAAAAAAAAAAIBAAAFAAAABgAAAAEAAAAEAAAAAQAAAAIBAAAEAAAABwAAAAEAAAAEAAAAAgAAAAIBAAAFAAAABwAAAAEAAAAEAAAAAwAAAAIBAAAEAAAABQAAAAYAAAAGAAAABwAAAAQAAAAAQQAAAIUAAADJAAAADQAADAAAAAEAAAAFAAAAAgAAAAAAAAAFAQAADQAAAAEAAAAGAAAAAgAAAAEAAAAFAQAADAAAAAEAAAAGAAAAAgAAAAIAAAAFAQAADQAAAAEAAAAFAAAAAgAAAAMAAAAFAQAACAAAAAkAAAAKAAAACgAAAAsAAAAIAAAAAEEAAACFAAAAyQAAAA0AAAwAAAABAAAABgAAAAUAAAAAAAAABQEAAA0AAAABAAAABgAAAAUAAAABAAAABQEAAAwAAAACAAAABgAAAAUAAAACAAAABQEAAA0AAAACAAAABgAAAAUAAAADAAAABQEAAAwAAAANAAAADgAAAA4AAAAPAAAADAAAAA==")
     );
 
     public static int SizeOf<T>() where T : unmanaged => Unsafe.SizeOf<T>();
@@ -249,6 +309,26 @@ public static class VoxelMath
         checked((z * ChunkDimension + y) * ChunkDimension + x);
 
     public static int BlockIdForCell(int seed, int chunkIndex, int x, int y, int z)
+    {
+        return (chunkIndex & 7) switch
+        {
+            0 => BlockIdForCompleteSectionMix(seed, chunkIndex, x, y, z),
+            1 => BlockIdForSparseChunk(seed, chunkIndex, x, y, z),
+            2 => BlockIdForUniformChunk(x, y, z),
+            3 => BlockIdForPackedChunk(seed, chunkIndex, x, y, z),
+            4 => BlockIdForExpandedChunk(seed, chunkIndex, x, y, z),
+            5 => BlockIdForMultiPackedChunk(seed, chunkIndex, x, y, z),
+            6 => BlockIdForTransparentChunk(seed, chunkIndex, x, y, z),
+            _ => BlockIdForTerrainChunk(seed, chunkIndex, x, y, z)
+        };
+    }
+
+    private static int BlockIdForCompleteSectionMix(
+        int seed,
+        int chunkIndex,
+        int x,
+        int y,
+        int z)
     {
         int sectionPattern = SectionIndex(x, y, z) % 6;
         if (sectionPattern == 0)
@@ -286,6 +366,140 @@ public static class VoxelMath
                 9 or 10 => 260,
                 _ => 261
             }
+        };
+    }
+
+    private static int BlockIdForSparseChunk(
+        int seed,
+        int chunkIndex,
+        int x,
+        int y,
+        int z)
+    {
+        int section = SectionIndex(x, y, z);
+        if (section < 6)
+        {
+            return AirBlockId;
+        }
+
+        int hash = Hash(seed, chunkIndex, x, y, z);
+        return section == 6
+            ? (hash & 31) == 0 ? 256 : AirBlockId
+            : (hash & 63) == 0 ? 258 : AirBlockId;
+    }
+
+    private static int BlockIdForUniformChunk(int x, int y, int z) =>
+        SectionIndex(x, y, z) switch
+        {
+            0 or 1 or 2 => 256,
+            3 => 259,
+            4 or 5 => 257,
+            6 => AirBlockId,
+            _ => 261
+        };
+
+    private static int BlockIdForPackedChunk(
+        int seed,
+        int chunkIndex,
+        int x,
+        int y,
+        int z)
+    {
+        int hash = Hash(seed, chunkIndex, x >> 1, y >> 1, z >> 1);
+        if ((hash & 3) != 0)
+        {
+            return AirBlockId;
+        }
+
+        return (SectionIndex(x, y, z) & 3) switch
+        {
+            0 => 256,
+            1 => 257,
+            2 => 259,
+            _ => 258
+        };
+    }
+
+    private static int BlockIdForExpandedChunk(
+        int seed,
+        int chunkIndex,
+        int x,
+        int y,
+        int z)
+    {
+        int hash = Hash(seed, chunkIndex, x >> 2, y >> 2, z >> 2);
+        return (hash & 3) switch
+        {
+            0 => AirBlockId,
+            1 => 256,
+            2 => 257,
+            _ => 259
+        };
+    }
+
+    private static int BlockIdForMultiPackedChunk(
+        int seed,
+        int chunkIndex,
+        int x,
+        int y,
+        int z)
+    {
+        int hash = Hash(seed, chunkIndex, x >> 2, y >> 2, z >> 2);
+        return (hash % 13) switch
+        {
+            0 or 1 => AirBlockId,
+            2 or 3 or 4 => 256,
+            5 or 6 => 257,
+            7 or 8 => 258,
+            9 or 10 => 259,
+            11 => 260,
+            _ => 261
+        };
+    }
+
+    private static int BlockIdForTransparentChunk(
+        int seed,
+        int chunkIndex,
+        int x,
+        int y,
+        int z)
+    {
+        int hash = Hash(seed, chunkIndex, x >> 2, y >> 2, z >> 2);
+        return (hash & 15) switch
+        {
+            <= 8 => 257,
+            <= 11 => 258,
+            <= 13 => 261,
+            14 => AirBlockId,
+            _ => 256
+        };
+    }
+
+    private static int BlockIdForTerrainChunk(
+        int seed,
+        int chunkIndex,
+        int x,
+        int y,
+        int z)
+    {
+        int columnHash = Hash(seed, chunkIndex, x, 0, z);
+        int surface = 9 + columnHash % 14;
+        if (y > surface)
+        {
+            return y <= 15 ? 257 : AirBlockId;
+        }
+
+        if (y + 3 < surface)
+        {
+            return 256;
+        }
+
+        return (columnHash % 11) switch
+        {
+            0 => 258,
+            1 => 261,
+            2 => 259,
+            _ => 256
         };
     }
 
@@ -771,22 +985,13 @@ public static class VoxelMath
     {
         hash.AddString(name);
         hash.AddInt32(vertices.Length);
-        for (int index = 0; index < vertices.Length; index++)
-        {
-            hash.AddVertex(vertices[index]);
-        }
+        hash.AddVertices(vertices);
 
         hash.AddInt32(indices.Length);
-        for (int index = 0; index < indices.Length; index++)
-        {
-            hash.AddInt32(indices[index]);
-        }
+        hash.AddInt32Values(indices);
 
         hash.AddInt32(slices.Length);
-        for (int index = 0; index < slices.Length; index++)
-        {
-            hash.AddPayloadSlice(slices[index]);
-        }
+        hash.AddPayloadSlices(slices);
 
         hash.AddBytes(upload);
     }
@@ -973,7 +1178,9 @@ public static class VoxelMath
     }
 
     public static int SectionIndex(int x, int y, int z) =>
-        checked(((z / 16) * 4 + (y / 16)) * 4 + (x / 16));
+        checked(((z / SectionDimension) * SectionsPerAxis + (y / SectionDimension))
+            * SectionsPerAxis
+            + (x / SectionDimension));
 
     public static SectionSummary ClassifySection(ReadOnlySpan<ushort> materials, ReadOnlySpan<short> densities, int sectionIndex)
     {
@@ -982,17 +1189,23 @@ public static class VoxelMath
         Span<int> transparentCounts = stackalloc int[BlockTypes.Length];
         int distinct = 0;
         int transparentIds = 0;
-        int startX = (sectionIndex % 4) * 16;
-        int startY = ((sectionIndex / 4) % 4) * 16;
-        int startZ = (sectionIndex / 16) * 16;
-        for (int z = startZ; z < startZ + 16; z++)
+        int firstBlockId = -1;
+        int startX = (sectionIndex % SectionsPerAxis) * SectionDimension;
+        int startY = ((sectionIndex / SectionsPerAxis) % SectionsPerAxis) * SectionDimension;
+        int startZ = (sectionIndex / (SectionsPerAxis * SectionsPerAxis)) * SectionDimension;
+        for (int z = startZ; z < startZ + SectionDimension; z++)
         {
-            for (int y = startY; y < startY + 16; y++)
+            for (int y = startY; y < startY + SectionDimension; y++)
             {
                 int row = (z * ChunkDimension + y) * ChunkDimension;
-                for (int x = startX; x < startX + 16; x++)
+                for (int x = startX; x < startX + SectionDimension; x++)
                 {
                     int blockId = materials[row + x];
+                    if (firstBlockId < 0)
+                    {
+                        firstBlockId = blockId;
+                    }
+
                     int index = BlockTypeIndexById[blockId];
                     if (counts[index]++ == 0)
                     {
@@ -1007,26 +1220,12 @@ public static class VoxelMath
             }
         }
 
-        SectionRepresentationKind kind = distinct == 1 && counts[0] == 4096
-            ? SectionRepresentationKind.Empty
-            : distinct == 1
-                ? SectionRepresentationKind.Uniform
-                : distinct <= 2
-                    ? SectionRepresentationKind.Packed
-                    : distinct <= 4
-                        ? SectionRepresentationKind.Expanded
-                        : SectionRepresentationKind.MultiPacked;
-
-        int largest = 0;
-        int totalTransparent = 0;
-        for (int index = 0; index < transparentCounts.Length; index++)
-        {
-            largest = Math.Max(largest, transparentCounts[index]);
-            totalTransparent += transparentCounts[index];
-        }
-
-        bool dominant = transparentIds > 0 && largest * 2 >= totalTransparent;
-        return new SectionSummary(kind, transparentIds, dominant, transparentIds > 1 && !dominant);
+        return CreateSectionSummary(
+            counts,
+            transparentCounts,
+            distinct,
+            transparentIds,
+            firstBlockId);
     }
 
     public static SectionSummary ClassifySection(ReadOnlySpan<VoxelCell> cells, int sectionIndex)
@@ -1035,17 +1234,23 @@ public static class VoxelMath
         Span<int> transparentCounts = stackalloc int[BlockTypes.Length];
         int distinct = 0;
         int transparentIds = 0;
-        int startX = (sectionIndex % 4) * 16;
-        int startY = ((sectionIndex / 4) % 4) * 16;
-        int startZ = (sectionIndex / 16) * 16;
-        for (int z = startZ; z < startZ + 16; z++)
+        int firstBlockId = -1;
+        int startX = (sectionIndex % SectionsPerAxis) * SectionDimension;
+        int startY = ((sectionIndex / SectionsPerAxis) % SectionsPerAxis) * SectionDimension;
+        int startZ = (sectionIndex / (SectionsPerAxis * SectionsPerAxis)) * SectionDimension;
+        for (int z = startZ; z < startZ + SectionDimension; z++)
         {
-            for (int y = startY; y < startY + 16; y++)
+            for (int y = startY; y < startY + SectionDimension; y++)
             {
                 int row = (z * ChunkDimension + y) * ChunkDimension;
-                for (int x = startX; x < startX + 16; x++)
+                for (int x = startX; x < startX + SectionDimension; x++)
                 {
                     int blockId = cells[row + x].BlockId;
+                    if (firstBlockId < 0)
+                    {
+                        firstBlockId = blockId;
+                    }
+
                     int index = BlockTypeIndexById[blockId];
                     if (counts[index]++ == 0)
                     {
@@ -1060,7 +1265,23 @@ public static class VoxelMath
             }
         }
 
-        SectionRepresentationKind kind = distinct == 1 && counts[0] == 4096
+        return CreateSectionSummary(
+            counts,
+            transparentCounts,
+            distinct,
+            transparentIds,
+            firstBlockId);
+    }
+
+    private static SectionSummary CreateSectionSummary(
+        ReadOnlySpan<int> counts,
+        ReadOnlySpan<int> transparentCounts,
+        int distinct,
+        int transparentIds,
+        int firstBlockId)
+    {
+        SectionRepresentationKind kind =
+            distinct == 1 && counts[0] == CellsPerSection
             ? SectionRepresentationKind.Empty
             : distinct == 1
                 ? SectionRepresentationKind.Uniform
@@ -1077,8 +1298,27 @@ public static class VoxelMath
             totalTransparent += transparentCounts[index];
         }
 
+        int emptyCount = counts[0];
+        int opaqueCount = checked(
+            CellsPerSection - emptyCount - totalTransparent);
+        int bitsPerIndex = kind is SectionRepresentationKind.Packed
+            or SectionRepresentationKind.MultiPacked
+                ? Math.Max(1, BitOperations.Log2((uint)(distinct - 1)) + 1)
+                : 0;
         bool dominant = transparentIds > 0 && largest * 2 >= totalTransparent;
-        return new SectionSummary(kind, transparentIds, dominant, transparentIds > 1 && !dominant);
+        return new SectionSummary(
+            kind,
+            distinct,
+            transparentIds,
+            kind == SectionRepresentationKind.Uniform
+                ? checked((ushort)firstBlockId)
+                : (ushort)0,
+            opaqueCount,
+            totalTransparent,
+            emptyCount,
+            bitsPerIndex,
+            dominant,
+            transparentIds > 1 && !dominant);
     }
 
     public static int BuildTransparentMasks(
@@ -1091,15 +1331,15 @@ public static class VoxelMath
         Span<int> maskSlots = stackalloc int[BlockTypes.Length];
         maskSlots.Fill(-1);
         int transparentIds = 0;
-        int startX = (sectionIndex % 4) * 16;
-        int startY = ((sectionIndex / 4) % 4) * 16;
-        int startZ = (sectionIndex / 16) * 16;
-        for (int z = startZ; z < startZ + 16; z++)
+        int startX = (sectionIndex % SectionsPerAxis) * SectionDimension;
+        int startY = ((sectionIndex / SectionsPerAxis) % SectionsPerAxis) * SectionDimension;
+        int startZ = (sectionIndex / (SectionsPerAxis * SectionsPerAxis)) * SectionDimension;
+        for (int z = startZ; z < startZ + SectionDimension; z++)
         {
-            for (int y = startY; y < startY + 16; y++)
+            for (int y = startY; y < startY + SectionDimension; y++)
             {
                 int row = (z * ChunkDimension + y) * ChunkDimension;
-                for (int x = startX; x < startX + 16; x++)
+                for (int x = startX; x < startX + SectionDimension; x++)
                 {
                     int cell = row + x;
                     int blockId = materials[cell];
@@ -1129,15 +1369,15 @@ public static class VoxelMath
         Span<int> maskSlots = stackalloc int[BlockTypes.Length];
         maskSlots.Fill(-1);
         int transparentIds = 0;
-        int startX = (sectionIndex % 4) * 16;
-        int startY = ((sectionIndex / 4) % 4) * 16;
-        int startZ = (sectionIndex / 16) * 16;
-        for (int z = startZ; z < startZ + 16; z++)
+        int startX = (sectionIndex % SectionsPerAxis) * SectionDimension;
+        int startY = ((sectionIndex / SectionsPerAxis) % SectionsPerAxis) * SectionDimension;
+        int startZ = (sectionIndex / (SectionsPerAxis * SectionsPerAxis)) * SectionDimension;
+        for (int z = startZ; z < startZ + SectionDimension; z++)
         {
-            for (int y = startY; y < startY + 16; y++)
+            for (int y = startY; y < startY + SectionDimension; y++)
             {
                 int row = (z * ChunkDimension + y) * ChunkDimension;
-                for (int x = startX; x < startX + 16; x++)
+                for (int x = startX; x < startX + SectionDimension; x++)
                 {
                     int cell = row + x;
                     int blockId = cells[cell].BlockId;

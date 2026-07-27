@@ -43,30 +43,36 @@ public readonly ref struct NativeRegion
             doNotLeaseOnDeclaration);
     }
 
-    /// <summary>Leases an ordinary heterogeneous range from the active region.</summary>
-    public Local<T> Lease<T>(int length)
+    /// <summary>Initializes an ordinary heterogeneous range before publication.</summary>
+    public Local<T> Lease<T>(
+        int length,
+        NativeLeaseInitializer<T> initializer)
     {
         NativeOwnerKernel kernel = GetKernel(nameof(Lease));
-        NativeRegionAllocation allocation = kernel.LeaseBump(
+        NativeRegionAllocation allocation = kernel.LeaseBumpInitialized(
             length,
             NativeTypeLayout.StorageSize<T>(),
             NativeTypeLayout.Alignment<T>(),
             scoped: false,
-            typeof(T));
-        return new Local<T>(kernel, allocation.Generation, allocation.AllocationId, allocation.Length, allocation.Capacity);
+            NativeTypeLayout.ContainsReferences<T>(),
+            initializer);
+        return new Local<T>(kernel, allocation);
     }
 
-    /// <summary>Leases a scoped range whose storage can be completed by <see cref="RecycleScoped"/>.</summary>
-    public Local<T> LeaseScoped<T>(int length)
+    /// <summary>Initializes a scoped heterogeneous range before publication.</summary>
+    public Local<T> LeaseScoped<T>(
+        int length,
+        NativeLeaseInitializer<T> initializer)
     {
         NativeOwnerKernel kernel = GetKernel(nameof(LeaseScoped));
-        NativeRegionAllocation allocation = kernel.LeaseBump(
+        NativeRegionAllocation allocation = kernel.LeaseBumpInitialized(
             length,
             NativeTypeLayout.StorageSize<T>(),
             NativeTypeLayout.Alignment<T>(),
             scoped: true,
-            typeof(T));
-        return new Local<T>(kernel, allocation.Generation, allocation.AllocationId, allocation.Length, allocation.Capacity);
+            NativeTypeLayout.ContainsReferences<T>(),
+            initializer);
+        return new Local<T>(kernel, allocation);
     }
 
     /// <summary>Publishes the initial region generation when declaration leasing was deferred.</summary>
@@ -74,6 +80,10 @@ public readonly ref struct NativeRegion
 
     /// <summary>Recycles the complete analyzer-proven dead scoped pending set.</summary>
     public void RecycleScoped() => GetKernel(nameof(RecycleScoped)).RecycleScoped();
+
+    /// <summary>Adds one exact retained byte segment for later heterogeneous leases.</summary>
+    public nuint ReserveRetainedMemory(nuint byteLength) =>
+        GetKernel(nameof(ReserveRetainedMemory)).ReserveRetainedMemory(byteLength);
 
     /// <summary>Ends the current region generation and frees native storage immediately.</summary>
     public void ReturnMemoryToNativeMemory() => GetKernel(nameof(ReturnMemoryToNativeMemory)).ReturnMemoryToNativeMemory();
@@ -93,8 +103,7 @@ public readonly ref struct NativeRegion
         GetKernel(nameof(TrimRetainedMemoryByLeaseSize)).TrimRetainedMemoryByLeaseSize(
             leaseLength,
             NativeTypeLayout.StorageSize<T>(),
-            NativeTypeLayout.Alignment<T>(),
-            typeof(T));
+            NativeTypeLayout.Alignment<T>());
 
     /// <summary>Ends the lexical region using its configured memory policy.</summary>
     public void Dispose() => GetKernel(nameof(Dispose)).Dispose();

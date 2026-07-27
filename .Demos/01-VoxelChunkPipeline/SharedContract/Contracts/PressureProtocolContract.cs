@@ -1,0 +1,427 @@
+using System.Diagnostics;
+using System.Globalization;
+using System.Text.Json;
+
+namespace Supprocom.NativeAllocationManagement.Demos.VoxelChunkPipeline.SharedContract;
+
+public enum PressureProfileOutcome
+{
+    Completed,
+    DeadlineExceeded,
+    OutOfMemory,
+    IncorrectOutput,
+    Crash,
+    HarnessFailure
+}
+
+public enum VoxelPipelineStage
+{
+    None,
+    Build,
+    Render,
+    Prerender,
+    GpuUpload,
+    Verification,
+    Completed
+}
+
+public enum PressureCommandKind
+{
+    Hello,
+    Warmup,
+    RunProfile,
+    VerifyProfile,
+    Shutdown
+}
+
+public enum PressureExecutionMode
+{
+    Measurement,
+    Verification
+}
+
+public enum PressureEnvelopeKind
+{
+    Ready,
+    Progress,
+    Result,
+    Failure,
+    Goodbye
+}
+
+public enum PressureProgressKind
+{
+    ProcessingStarted,
+    Checkpoint,
+    ProcessingCompleted
+}
+
+public readonly record struct PressureProfileRequest(
+    int ProfilePercent,
+    long CgroupCapBytes,
+    long RequestedCumulativeDemandBytes,
+    double DeadlineMilliseconds,
+    int Seed,
+    int RetentionDepth,
+    int ProgressEveryChunks,
+    bool Warmup = false,
+    PressureExecutionMode ExecutionMode =
+        PressureExecutionMode.Verification,
+    PressureChunkPlanEntry[]? PlannedChunks = null)
+{
+    public bool HasPlannedChunks =>
+        PlannedChunks is { Length: > 0 };
+
+    public int PlannedChunkCount =>
+        PlannedChunks?.Length ?? 0;
+
+    public void Validate()
+    {
+        if (ProfilePercent <= 0
+            || CgroupCapBytes <= 0
+            || RequestedCumulativeDemandBytes <= 0
+            || DeadlineMilliseconds <= 0
+            || RetentionDepth <= 0
+            || ProgressEveryChunks <= 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(PressureProfileRequest),
+                "Pressure profile sizes, deadline, retention, and progress cadence must be positive.");
+        }
+
+        if (PlannedChunks is null)
+        {
+            return;
+        }
+
+        if (PlannedChunks.Length == 0
+            || PlannedChunks.Any(
+                static chunk =>
+                    chunk.ChunkId < 0
+                    || chunk.LogicalDemandBytes <= 0
+                    || chunk.EstimatedWorkUnits <= 0))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(PlannedChunks),
+                "A planned chunk sequence contains an invalid chunk.");
+        }
+    }
+
+    public bool NeedsChunk(
+        int completedChunks,
+        long realizedDemandBytes,
+        int minimumChunks) =>
+        HasPlannedChunks
+            ? completedChunks < PlannedChunkCount
+            : realizedDemandBytes
+                < RequestedCumulativeDemandBytes
+                || completedChunks < minimumChunks;
+
+    public int GetChunkId(int localChunkIndex)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(
+            localChunkIndex);
+        if (PlannedChunks is null)
+        {
+            return localChunkIndex;
+        }
+
+        if ((uint)localChunkIndex
+            >= (uint)PlannedChunks.Length)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(localChunkIndex));
+        }
+
+        return PlannedChunks[localChunkIndex].ChunkId;
+    }
+
+    public PressureChunkShape GetChunkShape(
+        int localChunkIndex)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(
+            localChunkIndex);
+        if (PlannedChunks is null
+            || (uint)localChunkIndex
+                >= (uint)PlannedChunks.Length)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(localChunkIndex));
+        }
+
+        return PlannedChunks[localChunkIndex].Shape;
+    }
+}
+
+public readonly record struct PressureCommand(
+    string RequestId,
+    PressureCommandKind Kind,
+    PressureProfileRequest? Profile = null);
+
+public readonly record struct PressureProgress(
+    string Implementation,
+    int ProfilePercent,
+    PressureProgressKind Kind,
+    int CompletedChunks,
+    long CompletedLogicalBytes,
+    VoxelPipelineStage LastCompletedStage,
+    int LastCompletedChunkId);
+
+public readonly record struct PressureChunkEvidence(
+    int ChunkId,
+    long SourceInputBytes,
+    long LogicalDemandBytes,
+    int OpaqueVertexLength,
+    int OpaqueIndexLength,
+    int OpaqueSliceLength,
+    int OpaqueUploadLength,
+    int TransparentVertexLength,
+    int TransparentIndexLength,
+    int TransparentSliceLength,
+    int TransparentUploadLength,
+    int SectionDescriptorLength,
+    int SectionValueLength,
+    int SectionWordLength,
+    int SectionStateWordLength,
+    string ExactEvidenceHash,
+    bool ExactVerificationPassed);
+
+public readonly record struct PressureRuntimeSnapshot(
+    DateTime Utc,
+    long TotalAllocatedBytes,
+    int Gen0Collections,
+    int Gen1Collections,
+    int Gen2Collections,
+    double TotalPauseMilliseconds,
+    long TotalAvailableMemoryBytes,
+    long MemoryLoadBytes,
+    long HighMemoryLoadThresholdBytes,
+    long TotalCommittedBytes,
+    long HeapSizeBytes,
+    long FragmentedBytes,
+    long LargeObjectHeapBytes,
+    long ProcessWorkingSetBytes,
+    double ProcessCpuMilliseconds,
+    int ProcessorCount,
+    CgroupMemorySnapshot Cgroup,
+    IReadOnlyDictionary<string, string> GcConfiguration)
+{
+    public static PressureRuntimeSnapshot Capture()
+    {
+        GCMemoryInfo memory = GC.GetGCMemoryInfo();
+        using Process process = Process.GetCurrentProcess();
+        Dictionary<string, string> configuration = new(StringComparer.Ordinal);
+        foreach (KeyValuePair<string, object> entry in GC.GetConfigurationVariables())
+        {
+            configuration[entry.Key] = Convert.ToString(
+                entry.Value,
+                CultureInfo.InvariantCulture) ?? string.Empty;
+        }
+
+        return new PressureRuntimeSnapshot(
+            DateTime.UtcNow,
+            GC.GetTotalAllocatedBytes(precise: true),
+            GC.CollectionCount(0),
+            GC.CollectionCount(1),
+            GC.CollectionCount(2),
+            GC.GetTotalPauseDuration().TotalMilliseconds,
+            memory.TotalAvailableMemoryBytes,
+            memory.MemoryLoadBytes,
+            memory.HighMemoryLoadThresholdBytes,
+            memory.TotalCommittedBytes,
+            memory.HeapSizeBytes,
+            memory.FragmentedBytes,
+            memory.GenerationInfo.Length > 3 ? memory.GenerationInfo[3].SizeAfterBytes : 0,
+            process.WorkingSet64,
+            process.TotalProcessorTime.TotalMilliseconds,
+            Environment.ProcessorCount,
+            CgroupMemorySnapshot.Read(),
+            configuration);
+    }
+}
+
+public readonly record struct PressureProfileResult(
+    string Implementation,
+    PressureProfileOutcome Outcome,
+    int ProfilePercent,
+    long CgroupCapBytes,
+    long RequestedCumulativeDemandBytes,
+    long RealizedCumulativeDemandBytes,
+    long DemandOvershootBytes,
+    double DeadlineMilliseconds,
+    int CompletedChunks,
+    long CompletedLogicalBytes,
+    long SourceInputBytes,
+    long PeakLiveLogicalBytes,
+    double AllocatorTurnover,
+    int RetentionDepth,
+    int PeakRetentionDepth,
+    long AdmissionBudgetBytes,
+    int AdmissionThrottleCount,
+    VoxelPipelineStage LastCompletedStage,
+    int LastCompletedChunkId,
+    bool CorrectnessPassed,
+    string CanonicalEvidenceHash,
+    IReadOnlyList<PressureChunkEvidence> ChunkEvidence,
+    PressureRuntimeSnapshot Before,
+    PressureRuntimeSnapshot After,
+    long ManagedAllocationDeltaBytes,
+    int Gen0Delta,
+    int Gen1Delta,
+    int Gen2Delta,
+    double PauseDeltaMilliseconds,
+    long NativePeakBytes,
+    long NativeRetainedBytes,
+    long NativeFinalBytes,
+    long TypedPhysicalReuseCount,
+    long ScopedPhysicalReuseCount,
+    long ScopedPhysicalReuseBytes,
+    IReadOnlyList<NativeOwnerProfile>? NativeOwners,
+    string? ExceptionType = null,
+    string? ExceptionMessage = null,
+    int ActiveWorkerCount = 1,
+    IReadOnlyList<long>? WorkerBudgetBytes = null,
+    IReadOnlyList<PressureWorkerCapacity>? WorkerCapacities = null);
+
+public readonly record struct PressureEnvelope(
+    string RequestId,
+    PressureEnvelopeKind Kind,
+    string Implementation,
+    PressureProgress? Progress = null,
+    PressureProfileResult? Result = null,
+    PressureRuntimeSnapshot? Runtime = null,
+    string? ErrorType = null,
+    string? ErrorMessage = null);
+
+public interface IPressureProfileSession : IDisposable
+{
+    string Implementation { get; }
+
+    PressureProfileResult Run(
+        PressureProfileRequest request,
+        Action<PressureProgress> reportProgress);
+}
+
+public interface IQueuedPressureProfileSession :
+    IPressureProfileSession
+{
+    Task<PressureProfileResult> QueueAsync(
+        PressureProfileRequest request,
+        Action<PressureProgress> reportProgress);
+}
+
+public readonly record struct PressureWorkerCapacity(
+    long MinimumRetainedBytes,
+    long SafetyReserveBytes,
+    long PreferredRetainedBytes);
+
+public interface IPressureWorkerCapacityPlanner
+{
+    PressureWorkerCapacity PlanWorkerCapacity(
+        PressureProfileRequest request);
+}
+
+public static class PressureProtocolServer
+{
+    public static int Run(IPressureProfileSession session)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        try
+        {
+            Write(new PressureEnvelope(
+                "startup",
+                PressureEnvelopeKind.Ready,
+                session.Implementation,
+                Runtime: PressureRuntimeSnapshot.Capture()));
+            string? line;
+            while ((line = Console.ReadLine()) is not null)
+            {
+                PressureCommand command;
+                try
+                {
+                    command = JsonSerializer.Deserialize<PressureCommand>(
+                        line.TrimStart('\uFEFF'),
+                        VoxelJson.Options);
+                }
+                catch (Exception exception)
+                {
+                    WriteFailure("unparsed", session.Implementation, exception);
+                    continue;
+                }
+
+                try
+                {
+                    switch (command.Kind)
+                    {
+                        case PressureCommandKind.Hello:
+                            Write(new PressureEnvelope(
+                                command.RequestId,
+                                PressureEnvelopeKind.Ready,
+                                session.Implementation,
+                                Runtime: PressureRuntimeSnapshot.Capture()));
+                            break;
+                        case PressureCommandKind.Warmup:
+                        case PressureCommandKind.RunProfile:
+                        case PressureCommandKind.VerifyProfile:
+                            PressureProfileRequest request = command.Profile
+                                ?? throw new InvalidDataException("A profile command requires a profile request.");
+                            request.Validate();
+                            PressureProfileResult result = session.Run(
+                                request with
+                                {
+                                    Warmup = command.Kind
+                                        == PressureCommandKind.Warmup,
+                                    ExecutionMode = command.Kind
+                                        == PressureCommandKind.VerifyProfile
+                                        ? PressureExecutionMode.Verification
+                                        : PressureExecutionMode.Measurement
+                                },
+                                progress => Write(new PressureEnvelope(
+                                    command.RequestId,
+                                    PressureEnvelopeKind.Progress,
+                                    session.Implementation,
+                                    Progress: progress)));
+                            Write(new PressureEnvelope(
+                                command.RequestId,
+                                PressureEnvelopeKind.Result,
+                                session.Implementation,
+                                Result: result));
+                            break;
+                        case PressureCommandKind.Shutdown:
+                            Write(new PressureEnvelope(
+                                command.RequestId,
+                                PressureEnvelopeKind.Goodbye,
+                                session.Implementation));
+                            return 0;
+                        default:
+                            throw new InvalidDataException($"Unknown pressure command '{command.Kind}'.");
+                    }
+                }
+                catch (Exception exception)
+                {
+                    WriteFailure(command.RequestId, session.Implementation, exception);
+                }
+            }
+
+            return 0;
+        }
+        finally
+        {
+            session.Dispose();
+        }
+    }
+
+    private static void WriteFailure(string requestId, string implementation, Exception exception) =>
+        Write(new PressureEnvelope(
+            requestId,
+            PressureEnvelopeKind.Failure,
+            implementation,
+            ErrorType: exception.GetType().FullName,
+            ErrorMessage: exception.Message));
+
+    private static void Write(PressureEnvelope envelope)
+    {
+        Console.WriteLine(JsonSerializer.Serialize(envelope, VoxelJson.Options));
+        Console.Out.Flush();
+    }
+}

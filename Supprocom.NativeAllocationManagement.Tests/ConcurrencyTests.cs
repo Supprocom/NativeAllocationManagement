@@ -23,7 +23,7 @@ public sealed class ConcurrencyTests
         {
             Task worker = Task.Run(() =>
             {
-                Pooled<int> lease = pool.Rent(1);
+                Pooled<int> lease = pool.Rent(1, static writer => writer.Fill(default!));
                 lease.Access(static span => span[0] = 42);
                 lease.Dispose();
             });
@@ -35,7 +35,7 @@ public sealed class ConcurrencyTests
             release.Set();
             await worker;
 
-            Pooled<int> usable = pool.Rent(1);
+            Pooled<int> usable = pool.Rent(1, static writer => writer.Fill(default!));
             Assert.Equal(0, usable[0]);
             usable.Dispose();
             pool.Dispose();
@@ -73,7 +73,7 @@ public sealed class ConcurrencyTests
         {
             Task worker = Task.Run(() =>
             {
-                Pooled<int> lease = pool.Rent(1);
+                Pooled<int> lease = pool.Rent(1, static writer => writer.Fill(default!));
                 lease.Access(static span => span[0] = 42);
                 lease.Dispose();
             });
@@ -95,7 +95,7 @@ public sealed class ConcurrencyTests
 
             NativeMemoryTestHooks.SetOperationEntered(null);
             pool.LeaseFromMemory();
-            Pooled<int> current = pool.Rent(1);
+            Pooled<int> current = pool.Rent(1, static writer => writer.Fill(default!));
             current[0] = 7;
             Assert.Equal(7, current[0]);
             current.Dispose();
@@ -113,7 +113,7 @@ public sealed class ConcurrencyTests
             }
 
             Assert.Equal(0, NativeMemoryTestHooks.Snapshot().DetachedNativeBytes);
-            Pooled<int> verified = pool.Rent(1);
+            Pooled<int> verified = pool.Rent(1, static writer => writer.Fill(default!));
             Assert.Equal(0, verified[0]);
             verified.Dispose();
             pool.Dispose();
@@ -129,7 +129,7 @@ public sealed class ConcurrencyTests
     public void ReturnWinsBeforeOperationEntryAndOperationFailsBeforeAddressCalculation()
     {
         NativePool<int> pool = new();
-        Pooled<int> lease = pool.Rent(1);
+        Pooled<int> lease = pool.Rent(1, static writer => writer.Fill(default!));
         pool.ReturnMemoryToNativeMemory();
         NativeAllocationReturnedException exception = CaptureReturned(lease);
         Assert.Contains("returned", exception.Message, StringComparison.OrdinalIgnoreCase);
@@ -163,7 +163,7 @@ public sealed class ConcurrencyTests
         {
             Task<Exception?> worker = Task.Run(() =>
             {
-                Pooled<int> lease = pool.Rent(2);
+                Pooled<int> lease = pool.Rent(2, static writer => writer.Fill(default!));
                 try
                 {
                     lease.Access(static span => span[0] = 1);
@@ -182,7 +182,7 @@ public sealed class ConcurrencyTests
             Assert.True(entered.Wait(TimeSpan.FromSeconds(10)));
             Assert.Null(await worker);
             Assert.NotNull(returnException);
-            Pooled<int> reused = pool.Rent(2);
+            Pooled<int> reused = pool.Rent(2, static writer => writer.Fill(default!));
             Assert.Equal(0, reused[0]);
             reused.Dispose();
             pool.Dispose();
@@ -199,7 +199,7 @@ public sealed class ConcurrencyTests
         NativePool<int> pool = new();
         Parallel.For(0, 16, index =>
         {
-            Pooled<int> lease = pool.Rent(1);
+            Pooled<int> lease = pool.Rent(1, static writer => writer.Fill(default!));
             lease[0] = index;
             Assert.Equal(index, lease[0]);
             lease.Dispose();

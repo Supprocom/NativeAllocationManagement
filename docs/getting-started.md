@@ -227,6 +227,37 @@ set is not completed on every path. Early return and exception paths put that sa
 roots, advances allocation epochs, and rewinds eligible high-water state while retaining
 backing memory. Trimming cannot satisfy a scoped obligation.
 
+## Owner statistics
+
+`NativePool<T>`, `NativeRegion`, and `NativeArena` expose `GetStatistics()` for
+diagnostics and capacity policy. The snapshot reports lifecycle and generation,
+currently requested bytes, retained and retired physical bytes, current and retired
+segment counts, cumulative trimming, and fresh upstream segment allocations.
+
+```csharp
+using Supprocom.NativeAllocationManagement;
+
+using NativePool<int> pool = new(initialCapacity: 4_096);
+using Pooled<int> values = pool.Rent(1_024);
+
+NativeOwnerStatistics snapshot = pool.GetStatistics();
+Console.WriteLine(
+    $"requested={snapshot.RequestedBytes}, "
+    + $"retained={snapshot.RetainedBytes}, "
+    + $"segments={snapshot.SegmentCount}");
+```
+
+The operation is a truthful point-in-time diagnostic, not a free hot-path counter. It
+takes the owner gate and derives requested and retained totals from the current owner
+state. Capture it before or after measured processing, at a maintenance boundary, or
+after a rare capacity event. Do not call it for every lease or inside an allocation
+benchmark loop.
+
+`NativeMemoryDiagnostics.Snapshot()` provides the corresponding process-wide physical
+native counters. It is useful for proving that terminal cleanup returned to a known
+baseline, while `GetStatistics()` explains which live owner retained a particular
+capacity.
+
 ## Trimming and runtime fallback
 
 `TrimRetainedMemory()` releases every idle storage unit. The byte and lease-shape forms

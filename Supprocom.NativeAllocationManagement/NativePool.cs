@@ -48,7 +48,6 @@ public sealed class NativePool<T> : IDisposable
         NativeMemoryReturnValidation.Validate(returnMemoryOnDispose, nameof(returnMemoryOnDispose));
         _kernel = NativeOwnerKernel.CreatePool(
             initialCapacity,
-            typeof(T),
             NativeTypeLayout.StorageSize<T>(),
             $"NativePool<{typeof(T).FullName ?? typeof(T).Name}>",
             returnMemoryOnDispose,
@@ -56,18 +55,28 @@ public sealed class NativePool<T> : IDisposable
             doNotLeaseOnDeclaration);
     }
 
-    /// <summary>Rents a logical range from the active generation.</summary>
-    public Pooled<T> Rent(int length)
+    /// <summary>Rents a range after one initializer writes all logical elements.</summary>
+    public Pooled<T> Rent(
+        int length,
+        NativeLeaseInitializer<T> initializer)
     {
-        NativePoolLease lease = _kernel.Rent(length, scoped: false);
-        return new Pooled<T>(_kernel, lease.Generation, lease.AllocationId, lease.Length, lease.Capacity);
+        NativePoolLease lease = _kernel.RentInitialized(
+            length,
+            scoped: false,
+            initializer);
+        return new Pooled<T>(_kernel, lease);
     }
 
-    /// <summary>Acquires a range whose storage can be completed by <see cref="RecycleScoped"/>.</summary>
-    public Pooled<T> LeaseScoped(int length)
+    /// <summary>Initializes a scoped range before NAM publishes its readable lease.</summary>
+    public Pooled<T> LeaseScoped(
+        int length,
+        NativeLeaseInitializer<T> initializer)
     {
-        NativePoolLease lease = _kernel.Rent(length, scoped: true);
-        return new Pooled<T>(_kernel, lease.Generation, lease.AllocationId, lease.Length, lease.Capacity);
+        NativePoolLease lease = _kernel.RentInitialized(
+            length,
+            scoped: true,
+            initializer);
+        return new Pooled<T>(_kernel, lease);
     }
 
     /// <summary>Ends the current memory generation and frees its native storage immediately.</summary>
@@ -99,8 +108,7 @@ public sealed class NativePool<T> : IDisposable
         _kernel.TrimRetainedMemoryByLeaseSize(
             leaseLength,
             NativeTypeLayout.StorageSize<T>(),
-            NativeTypeLayout.Alignment<T>(),
-            typeof(T));
+            NativeTypeLayout.Alignment<T>());
 
     /// <summary>Permanently closes the owner and applies its configured memory policy.</summary>
     public void Dispose() => _kernel.Dispose();

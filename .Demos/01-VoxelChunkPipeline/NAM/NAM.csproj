@@ -12,9 +12,18 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\SharedContract\SharedContract.csproj" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(CompilationBenchmark)' != 'true'">
     <ProjectReference Include="..\..\..\Supprocom.NativeAllocationManagement\Supprocom.NativeAllocationManagement.csproj" />
     <ProjectReference Include="..\..\..\Supprocom.NativeAllocationManagement.Analyzers\Supprocom.NativeAllocationManagement.Analyzers.csproj"
                       OutputItemType="Analyzer"
                       ReferenceOutputAssembly="false" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(CompilationBenchmark)' == 'true'">
+    <Reference Include="Supprocom.NativeAllocationManagement">
+      <HintPath>..\..\..\Supprocom.NativeAllocationManagement\bin\Release\net10.0\Supprocom.NativeAllocationManagement.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Analyzer Include="..\..\..\Supprocom.NativeAllocationManagement.Analyzers\bin\Release\netstandard2.0\Supprocom.NativeAllocationManagement.Analyzers.dll" />
   </ItemGroup>
 </Project>

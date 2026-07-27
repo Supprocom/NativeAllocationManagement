@@ -29,6 +29,51 @@ internal static class Program
         CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;
         CultureInfo.CurrentUICulture = CultureInfo.InvariantCulture;
 
+        if (args is ["--scoped-recycle-probe"])
+        {
+            Console.WriteLine(
+                JsonSerializer.Serialize(MeasureScopedRecycleProbe()));
+            return 0;
+        }
+
+        if (args is ["--scoped-recycle-no-access-probe"])
+        {
+            Console.WriteLine(
+                JsonSerializer.Serialize(
+                    MeasureScopedRecycleProbe(includeAccess: false)));
+            return 0;
+        }
+
+        if (args is ["--safe-recycle-probe"])
+        {
+            Console.WriteLine(
+                JsonSerializer.Serialize(MeasureSafeRecycleProbe()));
+            return 0;
+        }
+
+        if (args is ["--scoped-initialize-probe"])
+        {
+            Console.WriteLine(
+                JsonSerializer.Serialize(
+                    MeasureScopedRecycleProbe(
+                        includeAccess: false)));
+            return 0;
+        }
+
+        if (args is ["--native-access-probe"])
+        {
+            Console.WriteLine(
+                JsonSerializer.Serialize(MeasureNativeAccessProbe()));
+            return 0;
+        }
+
+        if (args is ["--scoped-phase-probe"])
+        {
+            Console.WriteLine(
+                JsonSerializer.Serialize(MeasureScopedPhaseProbe()));
+            return 0;
+        }
+
         if (args is ["--workload", string workloadArgument])
         {
             Console.WriteLine(JsonSerializer.Serialize(MeasureSingleWorkload(workloadArgument)));
@@ -262,7 +307,7 @@ internal static class Program
             if (method < 2)
             {
                 int value = editHeavyMethod && method == 0 ? 1 : 0;
-                source.AppendLine($"public static void Method{method}() {{ NativePool<int> pool = new(); Pooled<int> value = pool.Rent(1); value[0] = {value}; value.Dispose(); pool.Dispose(); }}");
+                source.AppendLine($"public static void Method{method}() {{ NativePool<int> pool = new(); Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!)); value[0] = {value}; value.Dispose(); pool.Dispose(); }}");
             }
             else
             {
@@ -442,9 +487,9 @@ internal static class Program
         {
             for (int iteration = 0; iteration < WorkloadIterations; iteration++)
             {
-                Pooled<Coordinate> coordinates = coordinatePool.Rent(CoordinateElements);
-                Pooled<Voxel> voxels = voxelPool.Rent(VoxelElements);
-                Pooled<byte> upload = uploadPool.Rent(UploadElements);
+                Pooled<Coordinate> coordinates = coordinatePool.Rent(CoordinateElements, static writer => writer.Fill(default!));
+                Pooled<Voxel> voxels = voxelPool.Rent(VoxelElements, static writer => writer.Fill(default!));
+                Pooled<byte> upload = uploadPool.Rent(UploadElements, static writer => writer.Fill(default!));
                 callback.Run(coordinates);
                 callback.Run(voxels);
                 callback.Run(upload);
@@ -471,9 +516,9 @@ internal static class Program
                     + UploadElements * NativeTypeLayout.StorageSize<byte>()));
             using (NativeRegion region = new(reservation, NativeMemoryReturn.ToNativeMemory))
             {
-                Local<Coordinate> coordinates = region.Lease<Coordinate>(CoordinateElements);
-                Local<Voxel> voxels = region.Lease<Voxel>(VoxelElements);
-                Local<byte> upload = region.Lease<byte>(UploadElements);
+                Local<Coordinate> coordinates = region.Lease<Coordinate>(CoordinateElements, static writer => writer.Fill(default!));
+                Local<Voxel> voxels = region.Lease<Voxel>(VoxelElements, static writer => writer.Fill(default!));
+                Local<byte> upload = region.Lease<byte>(UploadElements, static writer => writer.Fill(default!));
                 callback.Run(coordinates);
                 callback.Run(voxels);
                 callback.Run(upload);
@@ -489,9 +534,9 @@ internal static class Program
         {
             for (int iteration = 0; iteration < WorkloadIterations; iteration++)
             {
-                ArenaLease<Coordinate> coordinates = arena.Scratch<Coordinate>(CoordinateElements);
-                ArenaLease<Voxel> voxels = arena.Scratch<Voxel>(VoxelElements);
-                ArenaLease<byte> upload = arena.Scratch<byte>(UploadElements);
+                ArenaLease<Coordinate> coordinates = arena.Scratch<Coordinate>(CoordinateElements, static writer => writer.Fill(default!));
+                ArenaLease<Voxel> voxels = arena.Scratch<Voxel>(VoxelElements, static writer => writer.Fill(default!));
+                ArenaLease<byte> upload = arena.Scratch<byte>(UploadElements, static writer => writer.Fill(default!));
                 callback.Run(coordinates);
                 callback.Run(voxels);
                 callback.Run(upload);
@@ -509,13 +554,13 @@ internal static class Program
         NativeArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         try
         {
-            ArenaLease<byte> firstSpike = arena.Scratch<byte>(3 * 1024 * 1024);
+            ArenaLease<byte> firstSpike = arena.Scratch<byte>(3 * 1024 * 1024, static writer => writer.Fill(default!));
             _ = firstSpike.Length;
             callback.SampleResources();
             arena.ReleaseLeasesToNativeMemory();
             nuint trimmedByBytes = arena.TrimRetainedMemoryByBytes(1);
 
-            ArenaLease<byte> secondSpike = arena.Scratch<byte>(5 * 1024 * 1024);
+            ArenaLease<byte> secondSpike = arena.Scratch<byte>(5 * 1024 * 1024, static writer => writer.Fill(default!));
             _ = secondSpike.Length;
             callback.SampleResources();
             arena.ReleaseLeasesToNativeMemory();
@@ -525,6 +570,472 @@ internal static class Program
         finally
         {
             arena.Dispose();
+        }
+    }
+
+    private static ScopedRecycleProbeEvidence MeasureScopedRecycleProbe(
+        bool includeAccess = true)
+    {
+        const int warmupIterations = 10_000;
+        const int measuredIterations = 1_000_000;
+        NativeArena arena = new(
+            preAllocateBytes: 4_096,
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        try
+        {
+            ArenaLease<byte> source = arena.Scratch<byte>(
+                1,
+                static writer => writer.Fill(1));
+            RunScopedRecycleProbeIterations(
+                arena,
+                source,
+                warmupIterations,
+                includeAccess);
+
+            long managedBefore =
+                GC.GetAllocatedBytesForCurrentThread();
+            Stopwatch clock = Stopwatch.StartNew();
+            RunScopedRecycleProbeIterations(
+                arena,
+                source,
+                measuredIterations,
+                includeAccess);
+            clock.Stop();
+            long managedBytes =
+                GC.GetAllocatedBytesForCurrentThread()
+                - managedBefore;
+            return new(
+                measuredIterations,
+                clock.Elapsed.TotalMilliseconds,
+                clock.Elapsed.TotalNanoseconds
+                    / measuredIterations,
+                managedBytes,
+                _sink);
+        }
+        finally
+        {
+            arena.Dispose();
+        }
+    }
+
+    private static void RunScopedRecycleProbeIterations(
+        NativeArena arena,
+        ArenaLease<byte> source,
+        int iterations,
+        bool includeAccess)
+    {
+        for (int iteration = 0; iteration < iterations; iteration++)
+        {
+            NativeLeaseOperations.InitializeScoped<
+                byte,
+                byte,
+                short,
+                int,
+                long,
+                float,
+                double,
+                Coordinate,
+                Voxel>(
+                source,
+                arena,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                static (
+                    input,
+                    first,
+                    second,
+                    third,
+                    fourth,
+                    fifth,
+                    sixth,
+                    seventh,
+                    eighth) =>
+                {
+                    first[0] = input[0];
+                    second[0] = 2;
+                    third[0] = 3;
+                    fourth[0] = 4;
+                    fifth[0] = 5;
+                    sixth[0] = 6;
+                    seventh[0] = default;
+                    eighth[0] = default;
+                },
+                out ArenaLease<byte> first,
+                out ArenaLease<short> second,
+                out ArenaLease<int> third,
+                out ArenaLease<long> fourth,
+                out ArenaLease<float> fifth,
+                out ArenaLease<double> sixth,
+                out ArenaLease<Coordinate> seventh,
+                out ArenaLease<Voxel> eighth);
+            if (includeAccess)
+            {
+                NativeLeaseOperations.Access(
+                    first,
+                    second,
+                    third,
+                    fourth,
+                    fifth,
+                    sixth,
+                    seventh,
+                    eighth,
+                    ConsumeNativeProbe);
+            }
+
+            arena.RecycleScoped();
+        }
+    }
+
+    private static ScopedPhaseProbeEvidence
+        MeasureScopedPhaseProbe()
+    {
+        const int warmupIterations = 10_000;
+        const int measuredIterations = 1_000_000;
+        using NativeArena arena = new(
+            preAllocateBytes: 4_096,
+            returnMemoryOnDispose:
+                NativeMemoryReturn.ToNativeMemory);
+        ArenaLease<byte> source = arena.Scratch<byte>(
+            1,
+            static writer => writer.Fill(1));
+        RunScopedRecycleProbeIterations(
+            arena,
+            source,
+            warmupIterations,
+            includeAccess: true);
+
+        long initializationTicks = 0;
+        long accessTicks = 0;
+        long recycleTicks = 0;
+        long wallStart = Stopwatch.GetTimestamp();
+        for (int iteration = 0;
+            iteration < measuredIterations;
+            iteration++)
+        {
+            long start = Stopwatch.GetTimestamp();
+            NativeLeaseOperations.InitializeScoped<
+                byte,
+                byte,
+                short,
+                int,
+                long,
+                float,
+                double,
+                Coordinate,
+                Voxel>(
+                source,
+                arena,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                static (
+                    input,
+                    first,
+                    second,
+                    third,
+                    fourth,
+                    fifth,
+                    sixth,
+                    seventh,
+                    eighth) =>
+                {
+                    first[0] = input[0];
+                    second[0] = 2;
+                    third[0] = 3;
+                    fourth[0] = 4;
+                    fifth[0] = 5;
+                    sixth[0] = 6;
+                    seventh[0] = default;
+                    eighth[0] = default;
+                },
+                out ArenaLease<byte> first,
+                out ArenaLease<short> second,
+                out ArenaLease<int> third,
+                out ArenaLease<long> fourth,
+                out ArenaLease<float> fifth,
+                out ArenaLease<double> sixth,
+                out ArenaLease<Coordinate> seventh,
+                out ArenaLease<Voxel> eighth);
+            long initialized = Stopwatch.GetTimestamp();
+            NativeLeaseOperations.Access(
+                first,
+                second,
+                third,
+                fourth,
+                fifth,
+                sixth,
+                seventh,
+                eighth,
+                ConsumeNativeProbe);
+            long accessed = Stopwatch.GetTimestamp();
+            arena.RecycleScoped();
+            long recycled = Stopwatch.GetTimestamp();
+            initializationTicks = checked(
+                initializationTicks
+                + initialized
+                - start);
+            accessTicks = checked(
+                accessTicks
+                + accessed
+                - initialized);
+            recycleTicks = checked(
+                recycleTicks
+                + recycled
+                - accessed);
+        }
+
+        long wallTicks =
+            Stopwatch.GetTimestamp() - wallStart;
+        return new ScopedPhaseProbeEvidence(
+            measuredIterations,
+            ToNanoseconds(
+                initializationTicks,
+                measuredIterations),
+            ToNanoseconds(
+                accessTicks,
+                measuredIterations),
+            ToNanoseconds(
+                recycleTicks,
+                measuredIterations),
+            ToNanoseconds(
+                wallTicks,
+                measuredIterations),
+            _sink);
+    }
+
+    private static double ToNanoseconds(
+        long ticks,
+        int iterations) =>
+        ticks
+        * 1_000_000_000d
+        / Stopwatch.Frequency
+        / iterations;
+
+    private static ScopedRecycleProbeEvidence MeasureNativeAccessProbe()
+    {
+        const int warmupIterations = 10_000;
+        const int measuredIterations = 1_000_000;
+        using NativeArena arena = new(
+            preAllocateBytes: 4_096,
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        ArenaLease<byte> first = arena.Scratch<byte>(
+            1,
+            static writer => writer.Write(1));
+        ArenaLease<short> second = arena.Scratch<short>(
+            1,
+            static writer => writer.Write(2));
+        ArenaLease<int> third = arena.Scratch<int>(
+            1,
+            static writer => writer.Write(3));
+        ArenaLease<long> fourth = arena.Scratch<long>(
+            1,
+            static writer => writer.Write(4));
+        ArenaLease<float> fifth = arena.Scratch<float>(
+            1,
+            static writer => writer.Write(5));
+        ArenaLease<double> sixth = arena.Scratch<double>(
+            1,
+            static writer => writer.Write(6));
+        ArenaLease<Coordinate> seventh =
+            arena.Scratch<Coordinate>(
+                1,
+                static writer =>
+                    writer.Write(default(Coordinate)));
+        ArenaLease<Voxel> eighth = arena.Scratch<Voxel>(
+            1,
+            static writer => writer.Write(default(Voxel)));
+        RunNativeAccessProbeIterations(
+            first,
+            second,
+            third,
+            fourth,
+            fifth,
+            sixth,
+            seventh,
+            eighth,
+            warmupIterations);
+
+        long managedBefore =
+            GC.GetAllocatedBytesForCurrentThread();
+        Stopwatch clock = Stopwatch.StartNew();
+        RunNativeAccessProbeIterations(
+            first,
+            second,
+            third,
+            fourth,
+            fifth,
+            sixth,
+            seventh,
+            eighth,
+            measuredIterations);
+        clock.Stop();
+        return new(
+            measuredIterations,
+            clock.Elapsed.TotalMilliseconds,
+            clock.Elapsed.TotalNanoseconds
+                / measuredIterations,
+            GC.GetAllocatedBytesForCurrentThread()
+                - managedBefore,
+            _sink);
+    }
+
+    private static void RunNativeAccessProbeIterations(
+        ArenaLease<byte> first,
+        ArenaLease<short> second,
+        ArenaLease<int> third,
+        ArenaLease<long> fourth,
+        ArenaLease<float> fifth,
+        ArenaLease<double> sixth,
+        ArenaLease<Coordinate> seventh,
+        ArenaLease<Voxel> eighth,
+        int iterations)
+    {
+        for (int iteration = 0; iteration < iterations; iteration++)
+        {
+            NativeLeaseOperations.Access(
+                first,
+                second,
+                third,
+                fourth,
+                fifth,
+                sixth,
+                seventh,
+                eighth,
+                ConsumeNativeProbe);
+        }
+    }
+
+    private static void ConsumeNativeProbe(
+        scoped NativeLeaseView<byte> first,
+        scoped NativeLeaseView<short> second,
+        scoped NativeLeaseView<int> third,
+        scoped NativeLeaseView<long> fourth,
+        scoped NativeLeaseView<float> fifth,
+        scoped NativeLeaseView<double> sixth,
+        scoped NativeLeaseView<Coordinate> seventh,
+        scoped NativeLeaseView<Voxel> eighth)
+    {
+        _sink = unchecked(
+            _sink
+            + first[0]
+            + second[0]
+            + third[0]
+            + (int)fourth[0]
+            + (int)fifth[0]
+            + (int)sixth[0]
+            + seventh[0].X
+            + eighth[0].Material);
+    }
+
+    private static ScopedRecycleProbeEvidence MeasureSafeRecycleProbe()
+    {
+        const int warmupIterations = 10_000;
+        const int measuredIterations = 1_000_000;
+        ArrayPool<byte> firstPool = ArrayPool<byte>.Create(16, 1);
+        ArrayPool<short> secondPool = ArrayPool<short>.Create(16, 1);
+        ArrayPool<int> thirdPool = ArrayPool<int>.Create(16, 1);
+        ArrayPool<long> fourthPool = ArrayPool<long>.Create(16, 1);
+        ArrayPool<float> fifthPool = ArrayPool<float>.Create(16, 1);
+        ArrayPool<double> sixthPool = ArrayPool<double>.Create(16, 1);
+        ArrayPool<Coordinate> seventhPool =
+            ArrayPool<Coordinate>.Create(16, 1);
+        ArrayPool<Voxel> eighthPool =
+            ArrayPool<Voxel>.Create(16, 1);
+        RunSafeRecycleProbeIterations(
+            firstPool,
+            secondPool,
+            thirdPool,
+            fourthPool,
+            fifthPool,
+            sixthPool,
+            seventhPool,
+            eighthPool,
+            warmupIterations);
+
+        long managedBefore =
+            GC.GetAllocatedBytesForCurrentThread();
+        Stopwatch clock = Stopwatch.StartNew();
+        RunSafeRecycleProbeIterations(
+            firstPool,
+            secondPool,
+            thirdPool,
+            fourthPool,
+            fifthPool,
+            sixthPool,
+            seventhPool,
+            eighthPool,
+            measuredIterations);
+        clock.Stop();
+        long managedBytes =
+            GC.GetAllocatedBytesForCurrentThread()
+            - managedBefore;
+        return new(
+            measuredIterations,
+            clock.Elapsed.TotalMilliseconds,
+            clock.Elapsed.TotalNanoseconds
+                / measuredIterations,
+            managedBytes,
+            _sink);
+    }
+
+    private static void RunSafeRecycleProbeIterations(
+        ArrayPool<byte> firstPool,
+        ArrayPool<short> secondPool,
+        ArrayPool<int> thirdPool,
+        ArrayPool<long> fourthPool,
+        ArrayPool<float> fifthPool,
+        ArrayPool<double> sixthPool,
+        ArrayPool<Coordinate> seventhPool,
+        ArrayPool<Voxel> eighthPool,
+        int iterations)
+    {
+        for (int iteration = 0; iteration < iterations; iteration++)
+        {
+            byte[] first = firstPool.Rent(1);
+            short[] second = secondPool.Rent(1);
+            int[] third = thirdPool.Rent(1);
+            long[] fourth = fourthPool.Rent(1);
+            float[] fifth = fifthPool.Rent(1);
+            double[] sixth = sixthPool.Rent(1);
+            Coordinate[] seventh = seventhPool.Rent(1);
+            Voxel[] eighth = eighthPool.Rent(1);
+            first[0] = 1;
+            second[0] = 2;
+            third[0] = 3;
+            fourth[0] = 4;
+            fifth[0] = 5;
+            sixth[0] = 6;
+            seventh[0] = default;
+            eighth[0] = default;
+            _sink = unchecked(
+                _sink
+                + first[0]
+                + second[0]
+                + third[0]
+                + (int)fourth[0]
+                + (int)fifth[0]
+                + (int)sixth[0]
+                + seventh[0].X
+                + eighth[0].Material);
+            firstPool.Return(first, clearArray: false);
+            secondPool.Return(second, clearArray: false);
+            thirdPool.Return(third, clearArray: false);
+            fourthPool.Return(fourth, clearArray: false);
+            fifthPool.Return(fifth, clearArray: false);
+            sixthPool.Return(sixth, clearArray: false);
+            seventhPool.Return(seventh, clearArray: false);
+            eighthPool.Return(eighth, clearArray: false);
         }
     }
 
@@ -822,6 +1333,21 @@ internal static class Program
         double CallbackBodyNanoseconds,
         double BoundaryMinusBodyNanoseconds,
         long PeakResidentBytes);
+
+    private sealed record ScopedRecycleProbeEvidence(
+        int Iterations,
+        double ElapsedMilliseconds,
+        double NanosecondsPerBatch,
+        long ManagedAllocatedBytes,
+        int Sink);
+
+    private sealed record ScopedPhaseProbeEvidence(
+        int Iterations,
+        double InitializationNanoseconds,
+        double AccessNanoseconds,
+        double RecycleNanoseconds,
+        double WallNanoseconds,
+        int Sink);
 
     [DiagnosticAnalyzer(LanguageNames.CSharp)]
     private sealed class OperationBlockCounterAnalyzer : DiagnosticAnalyzer

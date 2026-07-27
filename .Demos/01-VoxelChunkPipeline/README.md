@@ -1,134 +1,193 @@
 # Voxel chunk pipeline
 
-This demo compares expert safe C# with safe C# using Native Allocation
-Management (NAM) for a deterministic, memory-pressure-heavy voxel build,
-prerender, mesh-packing, and upload-staging pipeline. The tree is split into
-`SharedContract`, `SafeCSharp`, `NAM`, and `Harness`. The contract owns the
-machine-readable workload and parity rules, the safe project is the managed
-baseline, the NAM project is the direct native-backed implementation, and the
-harness runs isolated children and the paired statistical gate.
+This demo compares expert safe C# with expert safe C# using Native Allocation
+Management in a constrained voxel pipeline. It is intended to answer a useful
+question: after the managed implementation has applied pooling, exact sizing,
+prompt returns, and memory-aware backpressure, does explicit native ownership
+still provide an advantage? An out-of-memory failure caused by retaining too
+much pooled storage is not treated as the managed strategy.
 
-The workload follows the source-backed VoxelEngine shape. Runtime block metadata
-is setup-time value data with custom `ushort` identifiers beginning at 256, while
-measured cells carry only those identifiers. The registry varies payload size,
-alignment, opacity, face-tile stage mask, transparent-palette cardinality, and
-frequency. Every measured run exercises Empty, Uniform, Expanded, Packed, and
-MultiPacked section representations, including dominant and residual transparent
-paths. The source references are `MVGE-INF/Models/Terrain/BlockType.cs:9-23`,
-`MVGE-INF/Loaders/TerrainLoader.cs:18-29,215-289,384-387`,
-`MVGE-INF/Models/Generation/Section.cs:12-80`, and
-`MVGE-GEN/Terrain/ChunkGeneration.cs:41-108,236-567` at VoxelEngine commit
-`4969faeb07af77f5cfaad21b06f680490014aac3`.
+The `SharedContract` project owns every workload, protocol, input, output,
+telemetry, and report type. `SafeCSharp` and `NAM` contain only their execution
+strategies. `Harness` owns the external compile and runtime gates, while
+`Pressure/run-constrained.ps1` builds the fixed artifacts and invokes those
+gates in the required order.
 
-Both implementations retain the expert safe techniques appropriate for bounded
-voxel work: worker-local reuse, `ArrayPool<T>` where it remains the right fit,
-pre-sized value storage, stack-based section counters and masks, and zero
-per-cell object creation. Every value-only managed array is fully overwritten in
-its logical range, so the safe baseline returns it without clearing rounded
-unused bucket capacity; the transparent-mask logical range is explicitly cleared
-before use. The NAM path owns cell data, opaque and transparent face records,
-vertices, and indices in typed `NativePool<T>` leases. It uses a worker-local
-`NativeArena` for variable transparent masks, slice descriptors, and exact
-upload-byte staging with heterogeneous runtime-defined shapes. `NativeLeaseOperations.Access`
-exposes direct bounded views to useful processing callbacks; NAM does not copy a
-managed mirror into native storage and back. Small bounded masks remain
-`stackalloc` in both implementations.
+## The common pipeline
 
-The stage boundaries are explicit. Cell coordinates, density, material IDs, face
-masks, section classification, and transparent masks are consumed before
-packing. The managed baseline returns its cell array immediately before the
-combined output pack. The NAM cell lease is ended and recycled as soon as face
-derivation and mask construction finish, before the output pack begins. Face
-records remain live through vertex, index, descriptor, and upload packing. Each
-recyclable stage uses a lexical scoped lease followed by one analyzer-proven
-`RecycleScoped` completion, so a stale scoped handle cannot be used after its
-boundary. Both implementations write the same complete output layout during
-correctness mode; the harness compares every fixture element and byte, while
-timed pressure runs retain the same materialized work and compare a canonical
-SHA-256 hash over every output element, descriptor, byte, length, and counter.
-Worker-local owners remain alive across measured chunks, and terminal owner
-disposal requires the process to return to its zero native baseline.
+Both implementations generate the same ordered 32 by 32 by 32 chunks from the
+same seed and runtime block registry. They classify the same sections, derive
+the same opaque and transparent face records, construct the same transparent
+masks, render the same vertices and indices, and prerender the same payload
+descriptors and upload bytes. The upload layout includes each block type's
+payload, alignment, stage mask, encoded vertices and indices, and a fixed GPU
+command area. Alignment and command padding are zero-filled and verified.
 
-The raw benchmark records generation and face derivation separately from
-transparent-mask, opaque-packing, and transparent-packing time, and records
-coordinate, face, mask, and packing recycle boundaries with their clearing work.
-Typed-pool slab reuse is reported separately from arena reclaimed-range reuse.
-Only the latter proves that `RecycleScoped` made an arena byte range available
-and that a later scoped acquisition overlapped that reclaimed range; the demo
-never treats a second allocation in an untouched bump segment as recycling
-evidence.
+Each chunk contributes its complete cell storage, face records, transparent
+masks, vertices, indices, payload descriptors, and upload bytes to cumulative
+logical allocator demand. A profile ends only after that demand reaches the
+requested percentage of the 256 MiB cgroup cap. Thus 1000 percent means about
+2.5 GiB of real pipeline allocation requests turned through bounded storage,
+not a simultaneous 2.5 GiB resident set and not synthetic garbage.
 
-Build the four C# projects with these commands.
+The canonical evidence is ordered by chunk. Typed vertices and indices are
+checked against independently derived values. Retained descriptors and upload
+bytes are checked again at the GPU consumer boundary, including every encoded
+field and zero-filled byte. A SHA-256 stream includes every materialized typed
+value, descriptor, byte, length, partition boundary, and chunk boundary. Safe
+C# and NAM must produce identical per-chunk evidence and the same final
+evidence stream.
+
+## The corrected managed baseline
+
+The managed implementation uses unsafe-disabled C#, `Span<T>`,
+`ReadOnlySpan<T>`, exact logical slices, stack storage for small bounded data,
+and worker-local `ArrayPool<T>` instances. Transient size classes retain one
+array, while the upload and payload-descriptor size classes retain exactly the
+maximum admitted horizon of fifteen arrays. This matches each array's true
+lifetime, eliminates avoidable per-batch allocations after warmup, and keeps
+managed retention explicitly bounded. Value buffers are completely overwritten
+in their logical ranges and are returned without clearing unused bucket slack.
+
+The requested in-flight horizon is twenty chunks. Under the 256 MiB profile,
+the admission controller reserves one third of the effective managed limit,
+with a minimum 64 MiB guard, for the CLR, GC, typed transient stages, and pool
+metadata. It admits no more than fifteen chunks into a resident batch. When
+more work remains, the upload consumer drains that batch, the arrays return to
+their bounded size classes, and production resumes. No chunk, output, or byte
+is dropped. The resulting orchestration and GC work is part of the managed
+implementation's measured cost.
+
+In simplified form, the managed flow is equivalent to the following code.
 
 ```text
-dotnet restore .Demos/01-VoxelChunkPipeline/Harness/Harness.csproj
-dotnet build .Demos/01-VoxelChunkPipeline/SharedContract/SharedContract.csproj -c Release --no-restore
-dotnet build .Demos/01-VoxelChunkPipeline/SafeCSharp/SafeCSharp.csproj -c Release --no-restore
-dotnet build .Demos/01-VoxelChunkPipeline/NAM/NAM.csproj -c Release --no-restore
-dotnet build .Demos/01-VoxelChunkPipeline/Harness/Harness.csproj -c Release --no-restore
+read the effective managed-memory limit
+derive the bounded admission depth
+while cumulative demand remains:
+    build at most fifteen complete chunks
+    rent exact logical stage buffers from bounded worker-local pools
+    render and prerender every materialized output
+    verify and consume outputs in canonical order
+    return every buffer at its true consumer boundary
 ```
 
-Run correctness parity with
-`dotnet .Demos/01-VoxelChunkPipeline/Harness/bin/Release/net10.0/VoxelChunkPipeline.Harness.dll
---correctness-only`. Correctness mode serializes the complete canonical input
-cell sequence and the complete independent opaque and transparent output fixture
-outside the measured interval. The harness compares both implementation inputs,
-every fixture element and byte, full-work SHA-256 hashes, lengths, and counters.
+This is deliberately not a baseline that waits for `OutOfMemoryException`.
+Every failure is still preserved in the raw report, but proactive admission is
+the expected path.
 
-The controlled benchmark starts one isolated child per implementation for each
-paired sample. Each child warms its worker-local state inside the same process,
-resets logical counters, and then measures repeated chunks. The harness
-alternates implementation order, requires at least thirty paired samples, stores
-every raw sample, reports latency standard deviations and p50/p95/p99 values, and
-calculates a paired Student-t 95% interval over Safe/NAM speedups. Cold
-end-to-end time includes owner construction and the same warmup; steady-state
-time begins at the shared post-warmup start gate.
+## The NAM implementation
 
-The optional `--enforce` switch returns failure unless all correctness counters
-match, NAM mean throughput is at least five percent higher, the paired
-confidence interval is entirely above 1.00, cold managed allocation and backing
-creation are materially lower, and final physical native bytes are zero. Each
-child reports warm steady-state allocation separately from cold allocation and
-backing creation. A failed gate is reported honestly. The benchmark does not
-shorten the safe workload or treat a logical capacity estimate as physical native
-memory. The demo is local verification only and does not publish or version-bump
-a NuGet or GitHub package.
+The NAM process keeps one persistent execution worker and its owners alive
+across warmup and every profile. Predictable types use exact typed size
+classes. The heterogeneous arena groups payload descriptors and upload bytes
+that share one generation boundary. The resident admission depth is the same
+fifteen chunks used by the managed path, while the public requested horizon
+remains twenty.
 
-The backing-byte scopes are explicit. SafeCSharp reports the sum of its concurrent
-worker peak and cold backing values, while NAM reports the absolute process-global
-physical native high-water mark from `NativeMemoryDiagnostics` and a separate
-process-global managed backing value. The native child asserts zero outstanding
-bytes before setup and after terminal disposal. Coordinate, face, and packing
-stage fields are per-worker stage-budget diagnostics rather than a cross-allocator
-physical-memory comparison: Safe values include actual `ArrayPool<T>` bucket
-sizes, while NAM values are exact native lease capacities.
+The predeclared capacities are verified across 1024 canonical chunks. A batch
+contains at most fourteen thousand face records, thirty-six thousand visible
+faces, 1024 transparent-mask words, seven million upload bytes, and 7.5
+million retained descriptor-plus-upload bytes per chunk. The typed cell, face,
+mask, vertex, and index owners and the heterogeneous arena are sized from those
+bounds. Warmup establishes their backing, and later fixed-shape batches reuse
+the same physical segments without geometric regrowth.
 
-The shared input contract carries the registry, workload options, every measured
-chunk, the observed pre-mutation cell count, and a SHA-256 hash over the canonical
-little-endian values. Correctness mode also serializes the complete observed cell
-sequence. Pressure runs carry the same observed count and hash without retaining
-the full cell array after timing. The shared output contract carries one
-`FaceRecord` layout, vertices, indices, `PayloadSlice` descriptors, upload bytes,
-lengths, and counters. Its SHA-256 stream includes every canonical little-endian
-element, byte, length, and stream boundary, so equal aggregate counts cannot hide
-a changed element or byte. NAM also reports each owner's requested bytes, peak
-physical segment capacity, idle retained capacity, retired bytes, growth slack
-observed while a request was live, trim work, and fresh-segment regrowth. Idle
-retained capacity is not mislabeled as geometric-growth slack.
+`NativeLeaseOperations.Access` enters related same-owner views with one
+failure-atomic composite operation. Scoped arena recycling uses recorded
+watermarks and touched ranges rather than rescanning every allocation against
+every segment. Generation release invalidates the complete batch together,
+clears reusable ranges as required by NAM semantics, and retains only the
+bounded backing for the next batch.
 
-The constrained experiment is opt-in and uses
-`Pressure/run-constrained.ps1`. It builds a pinned Linux runtime image before
-measuring, uses identical Docker memory and swap limits with CPU limits for both
-children, and predeclares an unconstrained control plus 1 GiB, 768 MiB, 640 MiB,
-and 512 MiB profiles. Four worker-local pipelines overlap variable chunks and
-iterations, so the cap covers legitimate in-flight stage pressure rather than a
-single sequential chunk. Each child reports cold end-to-end time including owner
-construction and steady-state time after the same in-process warmup. The raw
-report records image identity, real start and finish times, completion,
-capacity/OOM/timeout status, cgroup limit and peak, GC memory availability and
-collection deltas, pause duration, heap/LOH/fragmentation facts, native
-peak/final bytes, every paired sample, and the Student-t gate. A constrained
-throughput result is valid only when SafeCSharp demonstrably sees collection
-pressure and reaches the declared cap regime; an OOM, timeout, or invalid
-no-pressure run is preserved as its capacity or validity result rather than
-substituted with another profile.
+## Compilation is the first blocking gate
+
+Runtime numbers are forbidden unless compilation passes first. The harness
+alternates clean Release rebuilds of the Safe C# and NAM demo projects with
+restore, dependency builds, compiler sharing, and build-server reuse disabled.
+NAM consumes the already-built runtime and analyzer binaries during this gate,
+which models a package consumer and avoids charging recursive source-project
+evaluation to the analyzer.
+
+The report stores every warmup and measured sample, command wall time, the
+MSBuild `Csc` task duration, outcome, exit code, and bounded output tails. Both
+the mean compiler-task ratio and the mean complete command wall-time ratio are
+blocking. NAM must be no more than 1.10 times Safe C# on each ratio. A failed
+compile, a missing timing, a timeout, or either ratio above 1.10 exits before
+publish, image construction, or pressure measurement.
+
+The gate can be run directly after building the harness.
+
+```powershell
+dotnet .Demos/01-VoxelChunkPipeline/Harness/bin/Release/net10.0/VoxelChunkPipeline.Harness.dll `
+  --compile-gate `
+  --repo E:\source\Supprocom\NativeAllocationManagement `
+  --output artifacts\voxel-compilation.json `
+  --warmup-pairs 1 `
+  --pairs 5 `
+  --compile-timeout-ms 30000
+```
+
+## Constrained execution
+
+The runtime harness starts one persistent Safe C# container and one persistent
+NAM container. They receive equal 256 MiB memory and swap limits, swappiness
+zero, equal PID limits, disjoint equal CPU sets, server GC, four GC heaps, and
+the same 90 percent GC heap hard limit. No CFS CPU quota is applied. The
+containers run concurrently so each implementation receives its own full
+six-second deadline without doubling matrix wall time.
+
+The predeclared profiles are 50, 100, 200, 300, 400, 500, 600, 700, 800, 900,
+and 1000 percent of the binary cgroup cap. Fifty and one hundred percent are
+control profiles. Every implementation and profile receives an explicit
+outcome such as `Completed`, `DeadlineExceeded`, `OutOfMemory`,
+`IncorrectOutput`, `Crash`, or `HarnessFailure`. A failed outcome remains in
+the raw artifact with its last completed chunk, logical bytes, pipeline stage,
+exception or exit information, and available GC and cgroup state.
+
+Elapsed processing time is measured by the host between child boundary
+messages. The child does not run a benchmark stopwatch and does not call
+`GetStatistics()` or scan owners during processing. Fixed four-chunk consumer
+checkpoints are timestamped when the host receives them; their protocol cost is
+included for both implementations. Owner and runtime snapshots occur outside
+the processing boundary. Docker CPU and resident samples are polled externally,
+and cgroup `memory.current`, `memory.peak`, `memory.events`, and `memory.stat`
+are captured at profile boundaries.
+
+Both controls must complete with exact parity. Their mean paired NAM speedup
+must be at least 1.00, their lower 95 percent confidence bound must be at least
+0.98, and their p95 and p99 normalized latency may not materially regress.
+From 200 through 1000 percent, a pair that completes must have mean NAM speedup
+of at least 1.05 and a lower bound above 1.00.
+
+A pressure profile also requires a Safe C# Gen2 collection, managed allocation
+turnover above the effective heap limit, and resident evidence from either an
+80 percent cgroup peak or a 90 percent GC high-memory load. NAM completing
+inside six seconds while Safe C# times out, runs out of memory, crashes, or
+produces incorrect output is recorded as a decisive result without inventing a
+finite speedup for the censored Safe duration. A NAM failure always fails the
+profile.
+
+## Running the complete experiment
+
+Restore and build the solution once before the constrained run.
+
+```powershell
+dotnet restore Supprocom.NativeAllocationManagement.slnx
+dotnet build Supprocom.NativeAllocationManagement.slnx -c Release --no-restore
+```
+
+The runner performs the blocking five-pair compilation gate, publishes the two
+Linux children, builds the pinned runtime image, and then runs the fixed matrix.
+Every subprocess has a hard timeout, and the complete script has a 180-second
+bound.
+
+```powershell
+& .Demos/01-VoxelChunkPipeline/Pressure/run-constrained.ps1 `
+  -RepoRoot E:\source\Supprocom\NativeAllocationManagement `
+  -CompilationOutputPath artifacts\voxel-compilation-final.json `
+  -OutputPath artifacts\voxel-pressure-final.json `
+  -Enforce
+```
+
+The command is local verification. It does not change the package version and
+does not publish a NuGet or GitHub package.

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Supprocom.NativeAllocationManagement.Demos.VoxelChunkPipeline.SharedContract;
 
@@ -48,8 +49,12 @@ public readonly record struct CgroupMemorySnapshot(
     long LimitBytes,
     long CurrentBytes,
     long PeakBytes,
+    long LowEvents,
+    long HighEvents,
+    long MaxEvents,
     long OomEvents,
     long OomKillEvents,
+    long OomGroupKillEvents,
     long AnonBytes,
     long FileBytes)
 {
@@ -76,15 +81,25 @@ public readonly record struct CgroupMemorySnapshot(
             peak = ReadLong(Path.Combine(root, "memory.max_usage_in_bytes"));
         }
 
-        (long oom, long oomKill) = ReadEvents(root);
+        (
+            long low,
+            long high,
+            long max,
+            long oom,
+            long oomKill,
+            long oomGroupKill) = ReadEvents(root);
         (long anon, long file) = ReadStat(root);
         return new CgroupMemorySnapshot(
             limit > 0 || current > 0 || peak > 0,
             limit,
             current,
             peak,
+            low,
+            high,
+            max,
             oom,
             oomKill,
+            oomGroupKill,
             anon,
             file);
     }
@@ -130,13 +145,23 @@ public readonly record struct CgroupMemorySnapshot(
         }
     }
 
-    private static (long Oom, long OomKill) ReadEvents(string root)
+    private static (
+        long Low,
+        long High,
+        long Max,
+        long Oom,
+        long OomKill,
+        long OomGroupKill) ReadEvents(string root)
     {
         string path = Path.Combine(root, "memory.events");
         try
         {
+            long low = 0;
+            long high = 0;
+            long max = 0;
             long oom = 0;
             long oomKill = 0;
+            long oomGroupKill = 0;
             foreach (string line in File.ReadLines(path))
             {
                 string[] parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
@@ -145,7 +170,19 @@ public readonly record struct CgroupMemorySnapshot(
                     continue;
                 }
 
-                if (parts[0] == "oom")
+                if (parts[0] == "low")
+                {
+                    low = value;
+                }
+                else if (parts[0] == "high")
+                {
+                    high = value;
+                }
+                else if (parts[0] == "max")
+                {
+                    max = value;
+                }
+                else if (parts[0] == "oom")
                 {
                     oom = value;
                 }
@@ -153,9 +190,13 @@ public readonly record struct CgroupMemorySnapshot(
                 {
                     oomKill = value;
                 }
+                else if (parts[0] == "oom_group_kill")
+                {
+                    oomGroupKill = value;
+                }
             }
 
-            return (oom, oomKill);
+            return (low, high, max, oom, oomKill, oomGroupKill);
         }
         catch (IOException)
         {
@@ -210,7 +251,10 @@ public static class VoxelJson
     public static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.General)
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        WriteIndented = false
+        WriteIndented = false,
+        Converters =
+        {
+            new JsonStringEnumConverter()
+        }
     };
 }
-

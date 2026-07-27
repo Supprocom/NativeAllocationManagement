@@ -38,7 +38,7 @@ public sealed class PackageSmokeTests
                         using NativePool<int> pool = new(doNotLeaseOnDeclaration: true);
                         pool.LeaseFromMemory();
                         {
-                            Pooled<int> values = pool.Rent(1);
+                            Pooled<int> values = pool.Rent(1, static writer => writer.Fill(default!));
                             values[0] = 7;
                             values.Dispose();
                         }
@@ -49,13 +49,13 @@ public sealed class PackageSmokeTests
                         using (NativeRegion region = new(doNotLeaseOnDeclaration: true))
                         {
                             region.LeaseFromMemory();
-                            Local<int> local = region.Lease<int>(1);
+                            Local<int> local = region.Lease<int>(1, static writer => writer.Fill(default!));
                             local[0] = 7;
                             _ = region.TrimRetainedMemory();
                             _ = region.TrimRetainedMemoryByBytes(1);
                             _ = region.TrimRetainedMemoryByLeaseSize<int>(1);
                             {
-                                scoped Local<int> scopedLocal = region.LeaseScoped<int>(1);
+                                scoped Local<int> scopedLocal = region.LeaseScoped<int>(1, static writer => writer.Fill(default!));
                                 scopedLocal[0] = 11;
                             }
                             region.RecycleScoped();
@@ -64,11 +64,11 @@ public sealed class PackageSmokeTests
                         using NativeArena arena = new(doNotLeaseOnDeclaration: true);
                         arena.LeaseFromMemory();
                         {
-                            using Pooled<int> faces = pool.Rent(1);
-                            using Pooled<int> vertices = pool.Rent(1);
-                            using Pooled<int> indices = pool.Rent(1);
-                            ArenaLease<int> slices = arena.Scratch<int>(1);
-                            ArenaLease<byte> upload = arena.Scratch<byte>(1);
+                            using Pooled<int> faces = pool.Rent(1, static writer => writer.Fill(default!));
+                            using Pooled<int> vertices = pool.Rent(1, static writer => writer.Fill(default!));
+                            using Pooled<int> indices = pool.Rent(1, static writer => writer.Fill(default!));
+                            ArenaLease<int> slices = arena.Scratch<int>(1, static writer => writer.Fill(default!));
+                            ArenaLease<byte> upload = arena.Scratch<byte>(1, static writer => writer.Fill(default!));
                             NativeLeaseOperations.Access(
                                 faces,
                                 vertices,
@@ -85,7 +85,7 @@ public sealed class PackageSmokeTests
                                 });
                         }
                         {
-                            ArenaLease<string> labels = arena.Scratch<string>(1);
+                            ArenaLease<string> labels = arena.Scratch<string>(1, static writer => writer.Fill(default!));
                             labels[0] = "package";
                         }
 
@@ -95,7 +95,7 @@ public sealed class PackageSmokeTests
                         _ = arena.TrimRetainedMemoryByLeaseSize<int>(1);
 
                         {
-                            scoped ArenaLease<int> scopedValues = arena.ScratchScoped<int>(1);
+                            scoped ArenaLease<int> scopedValues = arena.ScratchScoped<int>(1, static writer => writer.Fill(default!));
                             scopedValues[0] = 9;
                         }
 
@@ -146,13 +146,13 @@ public sealed class PackageSmokeTests
                     {
                         bool valid = true;
                         NativePool<string> pool = new(initialCapacity: 2);
-                        Pooled<string> first = pool.Rent(2);
+                        Pooled<string> first = pool.Rent(2, static writer => writer.Fill(default!));
                         first[0] = "first";
                         first[1] = "second";
                         valid &= first[0] == "first" && first[1] == "second";
 
                         first.Dispose();
-                        Pooled<string> reused = pool.Rent(2);
+                        Pooled<string> reused = pool.Rent(2, static writer => writer.Fill(default!));
                         valid &= reused[0] is null && reused[1] is null;
 
                         reused.Dispose();
@@ -160,21 +160,21 @@ public sealed class PackageSmokeTests
 
                         using (NativeRegion region = new())
                         {
-                            Local<ReferenceCell> local = region.Lease<ReferenceCell>(1);
+                            Local<ReferenceCell> local = region.Lease<ReferenceCell>(1, static writer => writer.Fill(default!));
                             local[0] = new ReferenceCell { Text = "region", Number = 3 };
                             valid &= local[0].Text == "region" && local[0].Number == 3;
                         }
 
                         NativeArena arena = new();
                         {
-                            ArenaLease<ReferenceCell> firstArena = arena.Scratch<ReferenceCell>(1);
+                            ArenaLease<ReferenceCell> firstArena = arena.Scratch<ReferenceCell>(1, static writer => writer.Fill(default!));
                             firstArena[0] = new ReferenceCell { Text = "arena", Number = 4 };
                             valid &= firstArena[0].Text == "arena" && firstArena[0].Number == 4;
                         }
 
                         arena.ReleaseLeasesToNativeMemory();
                         {
-                            ArenaLease<ReferenceCell> reusedArena = arena.Scratch<ReferenceCell>(1);
+                            ArenaLease<ReferenceCell> reusedArena = arena.Scratch<ReferenceCell>(1, static writer => writer.Fill(default!));
                             valid &= reusedArena[0].Text is null && reusedArena[0].Number == 0;
                         }
 
@@ -220,7 +220,7 @@ public sealed class PackageSmokeTests
                 {
                     public static void Run(NativeArena arena)
                     {
-                        scoped ArenaLease<int> values = arena.ScratchScoped<int>(1);
+                        scoped ArenaLease<int> values = arena.ScratchScoped<int>(1, static writer => writer.Fill(default!));
                         values[0] = 1;
                         arena.RecycleScoped();
                     }
@@ -261,7 +261,7 @@ public sealed class PackageSmokeTests
                 using (NativeRegion region = new(doNotLeaseOnDeclaration: true))
                 {
                     region.LeaseFromMemory();
-                    Local<int> value = region.Lease<int>(1);
+                    Local<int> value = region.Lease<int>(1, static writer => writer.Fill(default!));
                     value[0] = 42;
                 }
                 """);
@@ -297,7 +297,7 @@ public sealed class PackageSmokeTests
 
                 using NativeRegion region = new(doNotLeaseOnDeclaration: true);
                 region.LeaseFromMemory();
-                Local<int> value = region.Lease<int>(1);
+                Local<int> value = region.Lease<int>(1, static writer => writer.Fill(default!));
                 value[0] = 42;
                 """);
 
@@ -336,7 +336,7 @@ public sealed class PackageSmokeTests
                 using NativeRegion inner = new(doNotLeaseOnDeclaration: true);
                 outer.LeaseFromMemory();
                 inner.LeaseFromMemory();
-                Local<int> value = outer.Lease<int>(1);
+                Local<int> value = outer.Lease<int>(1, static writer => writer.Fill(default!));
                 value[0] = 42;
                 """);
 
@@ -378,7 +378,7 @@ public sealed class PackageSmokeTests
                     {
                         using NativeRegion region = new(doNotLeaseOnDeclaration: true);
                         region.LeaseFromMemory();
-                        Local<int> value = region.Lease<int>(1);
+                        Local<int> value = region.Lease<int>(1, static writer => writer.Fill(default!));
                         value[0] = 42;
                     }
                 }
@@ -420,12 +420,12 @@ public sealed class PackageSmokeTests
                     public static void Run()
                     {
                         NativePool<int> pool = new(doNotLeaseOnDeclaration: true);
-                        _ = pool.Rent(1);
+                        _ = pool.Rent(1, static writer => writer.Fill(default!));
                         pool.Dispose();
 
                         using (NativeRegion region = new(doNotLeaseOnDeclaration: true))
                         {
-                            Local<int> value = region.Lease<int>(1);
+                            Local<int> value = region.Lease<int>(1, static writer => writer.Fill(default!));
                             _ = value.Length;
                         }
                     }
@@ -549,7 +549,7 @@ public sealed class PackageSmokeTests
                     public static void Run()
                     {
                         NativePool<int> pool = new();
-                        Pooled<int> value = pool.Rent(1);
+                        Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!));
                         _ = value.TrimRetainedMemory();
                         pool.ReturnToNativeMemory();
                     }
@@ -594,7 +594,7 @@ public sealed class PackageSmokeTests
                     {
                         NativePool<int> pool = new();
                         {
-                            Pooled<int> value = pool.Rent(1);
+                            Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!));
                         }
 
                         pool.Dispose();
@@ -604,7 +604,7 @@ public sealed class PackageSmokeTests
                     {
                         NativePool<int> pool = new();
                         {
-                            Pooled<int> value = pool.Rent(1);
+                            Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!));
                         }
 
                         pool.Dispose();
@@ -652,7 +652,7 @@ public sealed class PackageSmokeTests
                     public static void Run()
                     {
                         NativePool<int> pool = new();
-                        Pooled<int> stale = pool.Rent(1);
+                        Pooled<int> stale = pool.Rent(1, static writer => writer.Fill(default!));
                         pool.ReturnMemoryToNativeMemory();
                         _ = stale.Length;
                     }
@@ -695,7 +695,7 @@ public sealed class PackageSmokeTests
                     public static void Run()
                     {
                         using NativePool<int> pool = new();
-                        using Pooled<int> values = pool.Rent(1);
+                        using Pooled<int> values = pool.Rent(1, static writer => writer.Fill(default!));
                         values[0] = 7;
                     }
                 }
@@ -741,7 +741,7 @@ public sealed class PackageSmokeTests
                     public static void Run()
                     {
                         NativePool<int> pool = new();
-                        Pooled<int> values = pool.Rent(1);
+                        Pooled<int> values = pool.Rent(1, static writer => writer.Fill(default!));
                         pool.ReturnMemoryToGarbageCollector();
                         pool.Dispose();
                     }
@@ -797,7 +797,7 @@ public sealed class PackageSmokeTests
                     public static void Run()
                     {
                         NativePool<int> pool = new();
-                        Pooled<int> value = pool.Rent(1);
+                        Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!));
                         pool.ReturnMemoryToNativeMemory();
                         pool.Dispose();
                     }
@@ -843,7 +843,7 @@ public sealed class PackageSmokeTests
                     {
                         using NativeArena arena = new();
                         {
-                            scoped ArenaLease<int> values = arena.ScratchScoped<int>(1);
+                            scoped ArenaLease<int> values = arena.ScratchScoped<int>(1, static writer => writer.Fill(default!));
                             values[0] = 1;
                         }
                     }
@@ -899,7 +899,7 @@ public sealed class PackageSmokeTests
                     public static int Main()
                     {
                         NativePool<int> deferredPool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-                        Pooled<int> borrowed = deferredPool.Rent(1);
+                        Pooled<int> borrowed = deferredPool.Rent(1, static writer => writer.Fill(default!));
                         bool callbackCompleted = false;
                         borrowed.Access(span =>
                         {
@@ -923,7 +923,7 @@ public sealed class PackageSmokeTests
                         }
 
                         deferredPool.LeaseFromMemory();
-                        Pooled<int> current = deferredPool.Rent(1);
+                        Pooled<int> current = deferredPool.Rent(1, static writer => writer.Fill(default!));
                         if (current[0] != 0)
                         {
                             return 14;
@@ -933,7 +933,7 @@ public sealed class PackageSmokeTests
                         deferredPool.Dispose();
 
                         NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-                        Pooled<int> stale = pool.Rent(1);
+                        Pooled<int> stale = pool.Rent(1, static writer => writer.Fill(default!));
                         pool.ReturnMemoryToNativeMemory();
                         try
                         {
@@ -947,7 +947,7 @@ public sealed class PackageSmokeTests
                         }
 
                         NativePool<int> guardedPool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-                        Pooled<int> guarded = guardedPool.Rent(1);
+                        Pooled<int> guarded = guardedPool.Rent(1, static writer => writer.Fill(default!));
                         try
                         {
                             guarded.Access(_ => guardedPool.ReturnMemoryToNativeMemory());
@@ -1000,7 +1000,7 @@ public sealed class PackageSmokeTests
                     public static int Main()
                     {
                         NativePool<int> strictPool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-                        Pooled<int> strictBorrow = strictPool.Rent(1);
+                        Pooled<int> strictBorrow = strictPool.Rent(1, static writer => writer.Fill(default!));
                         bool strictRejected = false;
                         strictBorrow.Access(span =>
                         {
@@ -1027,14 +1027,14 @@ public sealed class PackageSmokeTests
                         strictPool.Dispose();
 
                         NativePool<int> gcPool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-                        Pooled<int> detachedBorrow = gcPool.Rent(1);
+                        Pooled<int> detachedBorrow = gcPool.Rent(1, static writer => writer.Fill(default!));
                         bool detachedOperationWasValid = false;
                         detachedBorrow.Access(span =>
                         {
                             gcPool.ReleaseLeasesToGarbageCollector();
                             gcPool.ReturnMemoryToGarbageCollector();
                             gcPool.LeaseFromMemory();
-                            Pooled<int> freshInsideCallback = gcPool.Rent(1);
+                            Pooled<int> freshInsideCallback = gcPool.Rent(1, static writer => writer.Fill(default!));
                             bool freshWasZeroed = freshInsideCallback[0] == 0;
                             freshInsideCallback.Dispose();
                             gcPool.ReturnMemoryToNativeMemory();

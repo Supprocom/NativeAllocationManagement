@@ -16,7 +16,7 @@ public sealed class OwnerWideLifecycleTests
         {
             WaitForEntry(busy);
             {
-                Pooled<int> current = pool.Rent(1);
+                Pooled<int> current = pool.Rent(1, static writer => writer.Fill(default!));
                 current[0] = 7;
 
                 NativeAllocationInUseException rejection =
@@ -56,7 +56,7 @@ public sealed class OwnerWideLifecycleTests
         {
             WaitForEntry(busy);
             {
-                ArenaLease<int> current = arena.Scratch<int>(1);
+                ArenaLease<int> current = arena.Scratch<int>(1, static writer => writer.Fill(default!));
                 current[0] = 7;
 
                 NativeAllocationInUseException rejection =
@@ -157,7 +157,7 @@ public sealed class OwnerWideLifecycleTests
             WaitForEntry(busy);
             long freeBeforeDrain = 0;
             {
-                Pooled<int> current = pool.Rent(1);
+                Pooled<int> current = pool.Rent(1, static writer => writer.Fill(default!));
                 current[0] = 8;
                 long freeBeforeReturn = NativeMemoryTestHooks.Snapshot().FreeCount;
 
@@ -165,7 +165,7 @@ public sealed class OwnerWideLifecycleTests
                 Assert.Equal(NativeOwnerLifecycle.Returned, pool.CurrentLifecycle);
                 Assert.Equal(freeBeforeReturn, NativeMemoryTestHooks.Snapshot().FreeCount);
                 pool.LeaseFromMemory();
-                Pooled<int> fresh = pool.Rent(1);
+                Pooled<int> fresh = pool.Rent(1, static writer => writer.Fill(default!));
                 Assert.Equal([4L], pool.CurrentSegmentOrdinalsForTest);
                 Assert.Equal(0, fresh[0]);
                 long freeBeforeStrictReturn = NativeMemoryTestHooks.Snapshot().FreeCount;
@@ -201,7 +201,7 @@ public sealed class OwnerWideLifecycleTests
             WaitForEntry(busy);
             long freeBeforeDrain = 0;
             {
-                ArenaLease<int> current = arena.Scratch<int>(1);
+                ArenaLease<int> current = arena.Scratch<int>(1, static writer => writer.Fill(default!));
                 current[0] = 8;
                 long freeBeforeReturn = NativeMemoryTestHooks.Snapshot().FreeCount;
 
@@ -209,7 +209,7 @@ public sealed class OwnerWideLifecycleTests
                 Assert.Equal(NativeOwnerLifecycle.Returned, arena.CurrentLifecycle);
                 Assert.Equal(freeBeforeReturn, NativeMemoryTestHooks.Snapshot().FreeCount);
                 arena.LeaseFromMemory();
-                ArenaLease<int> fresh = arena.Scratch<int>(1);
+                ArenaLease<int> fresh = arena.Scratch<int>(1, static writer => writer.Fill(default!));
                 Assert.Equal([4L], arena.CurrentSegmentOrdinalsForTest);
                 Assert.Equal(0, fresh[0]);
                 long freeBeforeStrictReturn = NativeMemoryTestHooks.Snapshot().FreeCount;
@@ -649,7 +649,7 @@ public sealed class OwnerWideLifecycleTests
 
             pool.LeaseFromMemory();
             {
-                Pooled<int> fresh = pool.Rent(1);
+                Pooled<int> fresh = pool.Rent(1, static writer => writer.Fill(default!));
                 Assert.Equal([2L], pool.CurrentSegmentOrdinalsForTest);
                 fresh.Dispose();
                 long freeBeforeDispose = NativeMemoryTestHooks.Snapshot().FreeCount;
@@ -688,7 +688,7 @@ public sealed class OwnerWideLifecycleTests
 
             arena.LeaseFromMemory();
             {
-                ArenaLease<int> fresh = arena.Scratch<int>(1);
+                ArenaLease<int> fresh = arena.Scratch<int>(1, static writer => writer.Fill(default!));
                 Assert.Equal([2L], arena.CurrentSegmentOrdinalsForTest);
                 Assert.Equal(0, fresh[0]);
                 arena.Dispose();
@@ -797,7 +797,7 @@ public sealed class OwnerWideLifecycleTests
     {
         try
         {
-            Pooled<int> lease = pool.Rent(length);
+            Pooled<int> lease = pool.Rent(length, static writer => writer.Fill(default!));
             lease[0] = value;
             lease.Access(_ =>
             {
@@ -821,7 +821,7 @@ public sealed class OwnerWideLifecycleTests
     {
         try
         {
-            ArenaLease<int> lease = arena.Scratch<int>(length);
+            ArenaLease<int> lease = arena.Scratch<int>(length, static writer => writer.Fill(default!));
             lease[0] = value;
             lease.Access(_ =>
             {

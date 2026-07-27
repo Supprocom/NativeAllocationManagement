@@ -21,7 +21,7 @@ public sealed class AnalyzerContractTests
                 public static void Run()
                 {
                     using NativePool<int> pool = new();
-                    using Pooled<int> values = pool.Rent(4);
+                    using Pooled<int> values = pool.Rent(4, static writer => writer.Fill(default!));
                     values.Access(static span => Fill(span));
                 }
 
@@ -48,7 +48,7 @@ public sealed class AnalyzerContractTests
                 {
                     using (NativePool<int> pool = new())
                     {
-                        using (Pooled<int> values = pool.Rent(1))
+                        using (Pooled<int> values = pool.Rent(1, static writer => writer.Fill(default!)))
                         {
                             values[0] = 1;
                         }
@@ -72,11 +72,11 @@ public sealed class AnalyzerContractTests
                 public static void Run()
                 {
                     NativePool<int> pool = new();
-                    Pooled<int> oldValues = pool.Rent(1);
+                    Pooled<int> oldValues = pool.Rent(1, static writer => writer.Fill(default!));
                     pool.ReturnMemoryToNativeMemory();
                     _ = oldValues.Length;
                     pool.LeaseFromMemory();
-                    Pooled<int> currentValues = pool.Rent(1);
+                    Pooled<int> currentValues = pool.Rent(1, static writer => writer.Fill(default!));
                     _ = currentValues.Length;
                     pool.Dispose();
                 }
@@ -98,7 +98,7 @@ public sealed class AnalyzerContractTests
                 public static void Run()
                 {
                     NativePool<int> pool = new();
-                    Pooled<int> stale = pool.Rent(1);
+                    Pooled<int> stale = pool.Rent(1, static writer => writer.Fill(default!));
                     pool.ReturnMemoryToNativeMemory();
                     _ = stale.Length;
                 }
@@ -129,7 +129,7 @@ public sealed class AnalyzerContractTests
                 public static void Run()
                 {
                     NativePool<int> pool = new();
-                    Pooled<int> values = pool.Rent(1);
+                    Pooled<int> values = pool.Rent(1, static writer => writer.Fill(default!));
                     Pooled<int> alias = values;
                     Consume(values);
                 }
@@ -159,18 +159,18 @@ public sealed class AnalyzerContractTests
                 public static void Run()
                 {
                     NativeRegion unscoped = new();
-                    Local<int> first = unscoped.Lease<int>(1);
+                    Local<int> first = unscoped.Lease<int>(1, static writer => writer.Fill(default!));
                     unscoped.Dispose();
                     {
                         NativeRegion naked = new();
-                        Local<int> nakedValue = naked.Lease<int>(1);
+                        Local<int> nakedValue = naked.Lease<int>(1, static writer => writer.Fill(default!));
                         naked.Dispose();
                     }
                     using (NativeRegion outer = new())
                     {
                         using (NativeRegion inner = new())
                         {
-                            Local<int> second = outer.Lease<int>(1);
+                            Local<int> second = outer.Lease<int>(1, static writer => writer.Fill(default!));
                             _ = second.Length;
                         }
                     }
@@ -195,7 +195,7 @@ public sealed class AnalyzerContractTests
                 public static void Run()
                 {
                     using (NativeRegion region = new())
-                        Local<int> local = region.Lease<int>(1);
+                        Local<int> local = region.Lease<int>(1, static writer => writer.Fill(default!));
                 }
             }
             """);
@@ -243,7 +243,7 @@ public sealed class AnalyzerContractTests
                     NativeRegion region = new();
                     try
                     {
-                        Local<int> value = region.Lease<int>(1);
+                        Local<int> value = region.Lease<int>(1, static writer => writer.Fill(default!));
                         value[0] = 1;
                     }
                     finally
@@ -271,7 +271,7 @@ public sealed class AnalyzerContractTests
                 public static void Run()
                 {
                     NativePool<int> pool = new();
-                    using Pooled<int> values = pool.Rent(1);
+                    using Pooled<int> values = pool.Rent(1, static writer => writer.Fill(default!));
                     values.Access(span => pool.ReturnMemoryToNativeMemory());
                 }
             }
@@ -292,8 +292,8 @@ public sealed class AnalyzerContractTests
                 public static void Run()
                 {
                     NativePool<int> pool = new();
-                    Pooled<int> first = pool.Rent(1);
-                    Pooled<int> second = pool.Rent(1);
+                    Pooled<int> first = pool.Rent(1, static writer => writer.Fill(default!));
+                    Pooled<int> second = pool.Rent(1, static writer => writer.Fill(default!));
                     pool.ReturnMemoryToGarbageCollector();
                     pool.Dispose();
                 }
@@ -325,7 +325,7 @@ public sealed class AnalyzerContractTests
                 public static void Run()
                 {
                     NativePool<int> pool = new();
-                    Pooled<int> values = pool.Rent(1);
+                    Pooled<int> values = pool.Rent(1, static writer => writer.Fill(default!));
                     values.Access(_ => pool.ReturnMemoryToGarbageCollector());
                     pool.Dispose();
                 }
@@ -353,7 +353,7 @@ public sealed class AnalyzerContractTests
                     public static void Run()
                     {
                         NativePool<int> pool = new();
-                        Pooled<int> value = pool.Rent(1);
+                        Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!));
                         pool.ReturnMemoryToNativeMemory();
                         pool.Dispose();
                     }
@@ -369,8 +369,8 @@ public sealed class AnalyzerContractTests
                     public static void Run()
                     {
                         NativePool<int> pool = new();
-                        Pooled<int> first = pool.Rent(1);
-                        Pooled<int> second = pool.Rent(1);
+                        Pooled<int> first = pool.Rent(1, static writer => writer.Fill(default!));
+                        Pooled<int> second = pool.Rent(1, static writer => writer.Fill(default!));
                         pool.ReturnMemoryToNativeMemory();
                         pool.Dispose();
                     }
@@ -386,7 +386,7 @@ public sealed class AnalyzerContractTests
                     public static void Run()
                     {
                         NativePool<int> pool = new();
-                        Pooled<int> value = pool.Rent(1);
+                        Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!));
                         value.Access(_ => pool.ReturnMemoryToNativeMemory());
                         pool.Dispose();
                     }
@@ -402,7 +402,7 @@ public sealed class AnalyzerContractTests
                     public static void Run()
                     {
                         NativePool<int> pool = new();
-                        Pooled<int> value = pool.Rent(1);
+                        Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!));
                         _ = value.Read(_ => { pool.ReturnMemoryToNativeMemory(); return 0; });
                         pool.Dispose();
                     }
@@ -418,7 +418,7 @@ public sealed class AnalyzerContractTests
                     public static void Run()
                     {
                         NativePool<int> pool = new();
-                        Pooled<int> value = pool.Rent(1);
+                        Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!));
                         Pooled<int> alias = value;
                         pool.ReturnMemoryToNativeMemory();
                         pool.Dispose();
@@ -435,7 +435,7 @@ public sealed class AnalyzerContractTests
                     public static void Run()
                     {
                         NativePool<int> pool = new();
-                        Pooled<int> value = pool.Rent(1);
+                        Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!));
                         Consume(value);
                         pool.ReturnMemoryToNativeMemory();
                         pool.Dispose();
@@ -454,7 +454,7 @@ public sealed class AnalyzerContractTests
                     public static void Run()
                     {
                         NativePool<int> pool = new();
-                        Pooled<int> value = pool.Rent(1);
+                        Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!));
                         value.Dispose();
                         pool.ReturnMemoryToNativeMemory();
                         pool.Dispose();
@@ -487,7 +487,7 @@ public sealed class AnalyzerContractTests
                     public static void Run(bool condition)
                     {
                         NativePool<int> pool = new();
-                        Pooled<int> value = pool.Rent(1);
+                        Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!));
                         if (condition)
                         {
                             pool.ReturnMemoryToNativeMemory();
@@ -512,7 +512,7 @@ public sealed class AnalyzerContractTests
                         NativePool<int> pool = new();
                         for (int index = 0; index < iterations; index++)
                         {
-                            Pooled<int> value = pool.Rent(1);
+                            Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!));
                             pool.ReturnMemoryToNativeMemory();
                             pool.LeaseFromMemory();
                         }
@@ -530,7 +530,7 @@ public sealed class AnalyzerContractTests
                     public static void Run()
                     {
                         NativePool<int> pool = new();
-                        Pooled<int> value = pool.Rent(1);
+                        Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!));
                         ReturnPool(pool);
                         pool.Dispose();
                     }
@@ -549,10 +549,10 @@ public sealed class AnalyzerContractTests
                     public static void Run()
                     {
                         NativePool<int> pool = new();
-                        Pooled<int> oldValue = pool.Rent(1);
+                        Pooled<int> oldValue = pool.Rent(1, static writer => writer.Fill(default!));
                         pool.ReturnMemoryToNativeMemory();
                         pool.LeaseFromMemory();
-                        Pooled<int> currentValue = pool.Rent(1);
+                        Pooled<int> currentValue = pool.Rent(1, static writer => writer.Fill(default!));
                         currentValue.Dispose();
                         pool.Dispose();
                     }
@@ -670,7 +670,7 @@ public sealed class AnalyzerContractTests
                 public static async Task Run()
                 {
                     NativePool<int> pool = new();
-                    Pooled<int> values = pool.Rent(1);
+                    Pooled<int> values = pool.Rent(1, static writer => writer.Fill(default!));
                     await Task.Yield();
                     _ = values.Length;
                     pool.Dispose();
@@ -703,7 +703,7 @@ public sealed class AnalyzerContractTests
                     }
 
                     pool.LeaseFromMemory();
-                    Pooled<int> values = pool.Rent(1);
+                    Pooled<int> values = pool.Rent(1, static writer => writer.Fill(default!));
                     values.Dispose();
                     pool.Dispose();
 
@@ -732,7 +732,7 @@ public sealed class AnalyzerContractTests
                         pool.ReturnMemoryToNativeMemory();
                     }
 
-                    _ = pool.Rent(1);
+                    _ = pool.Rent(1, static writer => writer.Fill(default!));
                 }
             }
             """);
@@ -752,7 +752,7 @@ public sealed class AnalyzerContractTests
                 public static void Run()
                 {
                     NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-                    Pooled<int> values = pool.Rent(1);
+                    Pooled<int> values = pool.Rent(1, static writer => writer.Fill(default!));
                     try
                     {
                         values[0] = 1;
@@ -782,7 +782,7 @@ public sealed class AnalyzerContractTests
                 public static void Run()
                 {
                     NativePool<int> pool = new();
-                    Pooled<int> values = pool.Rent(1);
+                    Pooled<int> values = pool.Rent(1, static writer => writer.Fill(default!));
                     var tuple = (values, 1);
 
                     void ReadLater()
@@ -815,7 +815,7 @@ public sealed class AnalyzerContractTests
                     Local<int> value;
                     using (NativeRegion region = new())
                     {
-                        value = region.Lease<int>(1);
+                        value = region.Lease<int>(1, static writer => writer.Fill(default!));
                     }
 
                     _ = value.Length;
@@ -838,7 +838,7 @@ public sealed class AnalyzerContractTests
                     using (NativeRegion region = new(doNotLeaseOnDeclaration: true))
                     {
                         region.LeaseFromMemory();
-                        Local<int> value = region.Lease<int>(1);
+                        Local<int> value = region.Lease<int>(1, static writer => writer.Fill(default!));
                         value[0] = 42;
                     }
                 }
@@ -860,12 +860,12 @@ public sealed class AnalyzerContractTests
                 {
                     using NativePool<int> pool = new(doNotLeaseOnDeclaration: true);
                     pool.LeaseFromMemory();
-                    using Pooled<int> values = pool.Rent(1);
+                    using Pooled<int> values = pool.Rent(1, static writer => writer.Fill(default!));
 
                     using (NativeRegion region = new(doNotLeaseOnDeclaration: true))
                     {
                         region.LeaseFromMemory();
-                        Local<int> local = region.Lease<int>(1);
+                        Local<int> local = region.Lease<int>(1, static writer => writer.Fill(default!));
                         local[0] = values[0];
                     }
                 }
@@ -887,12 +887,12 @@ public sealed class AnalyzerContractTests
                 public static void Run()
                 {
                     NativePool<int> pool = new(doNotLeaseOnDeclaration: true);
-                    Pooled<int> values = pool.Rent(1);
+                    Pooled<int> values = pool.Rent(1, static writer => writer.Fill(default!));
                     pool.Dispose();
 
                     using (NativeRegion region = new(doNotLeaseOnDeclaration: true))
                     {
-                        Local<int> local = region.Lease<int>(1);
+                        Local<int> local = region.Lease<int>(1, static writer => writer.Fill(default!));
                         _ = local.Length;
                     }
                 }
@@ -920,7 +920,7 @@ public sealed class AnalyzerContractTests
                         pool.LeaseFromMemory();
                     }
 
-                    Pooled<int> values = pool.Rent(1);
+                    Pooled<int> values = pool.Rent(1, static writer => writer.Fill(default!));
                     values.Dispose();
                     pool.Dispose();
                 }
@@ -939,7 +939,7 @@ public sealed class AnalyzerContractTests
 
             using NativeRegion region = new(doNotLeaseOnDeclaration: true);
             region.LeaseFromMemory();
-            Local<int> value = region.Lease<int>(1);
+            Local<int> value = region.Lease<int>(1, static writer => writer.Fill(default!));
             value[0] = 42;
             """);
 
@@ -961,7 +961,7 @@ public sealed class AnalyzerContractTests
                 {
                     using NativeRegion region = new(doNotLeaseOnDeclaration: true);
                     region.LeaseFromMemory();
-                    Local<int> value = region.Lease<int>(1);
+                    Local<int> value = region.Lease<int>(1, static writer => writer.Fill(default!));
                     value[0] = 42;
                 }
             }
@@ -983,7 +983,7 @@ public sealed class AnalyzerContractTests
             using NativeRegion inner = new(doNotLeaseOnDeclaration: true);
             outer.LeaseFromMemory();
             inner.LeaseFromMemory();
-            Local<int> value = outer.Lease<int>(1);
+            Local<int> value = outer.Lease<int>(1, static writer => writer.Fill(default!));
             value[0] = 42;
             """);
 
@@ -1006,13 +1006,13 @@ public sealed class AnalyzerContractTests
                 {
                     using (NativeRegion first = new())
                     {
-                        Local<int> value = first.Lease<int>(1);
+                        Local<int> value = first.Lease<int>(1, static writer => writer.Fill(default!));
                         value[0] = 1;
                     }
 
                     using (NativeRegion second = new())
                     {
-                        Local<int> value = second.Lease<int>(1);
+                        Local<int> value = second.Lease<int>(1, static writer => writer.Fill(default!));
                         value[0] = 2;
                     }
                 }
@@ -1036,7 +1036,7 @@ public sealed class AnalyzerContractTests
                     NativePool<int> pool = new();
                     ReturnPool(pool);
                     pool.LeaseFromMemory();
-                    Pooled<int> values = pool.Rent(1);
+                    Pooled<int> values = pool.Rent(1, static writer => writer.Fill(default!));
                     values.Dispose();
                     pool.Dispose();
 
@@ -1065,7 +1065,7 @@ public sealed class AnalyzerContractTests
                 public static void Run(bool condition)
                 {
                     NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-                    Pooled<int> values = pool.Rent(1);
+                    Pooled<int> values = pool.Rent(1, static writer => writer.Fill(default!));
                     if (condition)
                     {
                         return;
@@ -1092,7 +1092,7 @@ public sealed class AnalyzerContractTests
                 public static void Run(bool condition)
                 {
                     NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-                    Pooled<int> values = pool.Rent(1);
+                    Pooled<int> values = pool.Rent(1, static writer => writer.Fill(default!));
                     try
                     {
                         if (condition)
@@ -1127,7 +1127,7 @@ public sealed class AnalyzerContractTests
                 public static IEnumerable<int> Run()
                 {
                     NativePool<int> pool = new();
-                    Pooled<int> values = pool.Rent(1);
+                    Pooled<int> values = pool.Rent(1, static writer => writer.Fill(default!));
                     yield return 1;
                     values.Dispose();
                     pool.Dispose();
@@ -1150,7 +1150,7 @@ public sealed class AnalyzerContractTests
                 public static void Run()
                 {
                     NativePool<int> pool = new();
-                    Pooled<int> stale = pool.Rent(2);
+                    Pooled<int> stale = pool.Rent(2, static writer => writer.Fill(default!));
                     pool.ReturnMemoryToNativeMemory();
                     _ = stale.Length;
                     _ = stale.Capacity;
@@ -1182,12 +1182,12 @@ public sealed class AnalyzerContractTests
 
             public static class Sample
             {
-                public static Pooled<int> ReturnHandle(NativePool<int> pool) => pool.Rent(1);
+                public static Pooled<int> ReturnHandle(NativePool<int> pool) => pool.Rent(1, static writer => writer.Fill(default!));
 
                 public static void ReturnInsideTry(bool condition)
                 {
                     NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-                    Pooled<int> value = pool.Rent(1);
+                    Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!));
                     try
                     {
                         if (condition)
@@ -1214,7 +1214,7 @@ public sealed class AnalyzerContractTests
                 public static void ThrowWithoutCleanup()
                 {
                     NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-                    Pooled<int> value = pool.Rent(1);
+                    Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!));
                     throw new InvalidOperationException();
                 }
             }
@@ -1263,7 +1263,7 @@ public sealed class AnalyzerContractTests
                 public static void Run(bool condition)
                 {
                     NativePool<int> pool = new();
-                    Pooled<int> values = pool.Rent(1);
+                    Pooled<int> values = pool.Rent(1, static writer => writer.Fill(default!));
                     if (condition)
                     {
                         values.Dispose();
@@ -1327,7 +1327,7 @@ public sealed class AnalyzerContractTests
                     {
                         pool.ReturnMemoryToNativeMemory();
                         pool.LeaseFromMemory();
-                        Pooled<int> values = pool.Rent(1);
+                        Pooled<int> values = pool.Rent(1, static writer => writer.Fill(default!));
                         values.Dispose();
                     }
 
@@ -1363,7 +1363,7 @@ public sealed class AnalyzerContractTests
                         }
 
                         pool.LeaseFromMemory();
-                        Pooled<int> values = pool.Rent(1);
+                        Pooled<int> values = pool.Rent(1, static writer => writer.Fill(default!));
                         values.Dispose();
                     }
 
@@ -1420,7 +1420,7 @@ public sealed class AnalyzerContractTests
                 public static void Run(int iterations)
                 {
                     NativePool<int> pool = new();
-                    Pooled<int> stale = pool.Rent(1);
+                    Pooled<int> stale = pool.Rent(1, static writer => writer.Fill(default!));
                     for (int index = 0; index < iterations; index++)
                     {
                         pool.ReturnMemoryToNativeMemory();
@@ -1450,7 +1450,7 @@ public sealed class AnalyzerContractTests
                 {
                     NativePool<int> pool = new();
                     {
-                        Pooled<int> value = pool.Rent(1);
+                        Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!));
                     }
 
                     pool.Dispose();
@@ -1474,7 +1474,7 @@ public sealed class AnalyzerContractTests
                 {
                     NativePool<int> pool = new();
                     {
-                        Pooled<int> value = pool.Rent(1);
+                        Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!));
                     }
 
                     pool.Dispose();
@@ -1500,7 +1500,7 @@ public sealed class AnalyzerContractTests
                 {
                     NativePool<int> pool = new();
                     {
-                        Pooled<int> value = pool.Rent(1);
+                        Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!));
                         value.Dispose();
                     }
 
@@ -1525,7 +1525,7 @@ public sealed class AnalyzerContractTests
                 {
                     NativePool<int> pool = new();
                     {
-                        Pooled<int> value = pool.Rent(1);
+                        Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!));
                         pool.ReturnMemoryToNativeMemory();
                     }
 
@@ -1555,7 +1555,7 @@ public sealed class AnalyzerContractTests
                     NativePool<int> pool = new();
                     for (int index = 0; index < iterations; index++)
                     {
-                        Pooled<int> value = pool.Rent(1);
+                        Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!));
                         value.Dispose();
                     }
 
@@ -1584,10 +1584,10 @@ public sealed class AnalyzerContractTests
                         switch (value)
                         {
                             case 1:
-                                Pooled<int> switched = pool.Rent(1);
+                                Pooled<int> switched = pool.Rent(1, static writer => writer.Fill(default!));
                                 break;
                             default:
-                                Pooled<int> continued = pool.Rent(1);
+                                Pooled<int> continued = pool.Rent(1, static writer => writer.Fill(default!));
                                 continue;
                         }
 
@@ -1616,7 +1616,7 @@ public sealed class AnalyzerContractTests
                 {
                     NativePool<int> pool = new();
                     {
-                        Pooled<int> value = pool.Rent(1);
+                        Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!));
                         goto Done;
                     }
 
@@ -1628,7 +1628,7 @@ public sealed class AnalyzerContractTests
                 {
                     NativePool<int> pool = new();
                     {
-                        Pooled<int> value = pool.Rent(1);
+                        Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!));
                         return 42;
                     }
                 }
@@ -1638,7 +1638,7 @@ public sealed class AnalyzerContractTests
                     NativePool<int> pool = new();
                     try
                     {
-                        Pooled<int> value = pool.Rent(1);
+                        Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!));
                         throw new InvalidOperationException();
                     }
                     catch (InvalidOperationException)
@@ -1733,7 +1733,7 @@ public sealed class AnalyzerContractTests
                 public static void Run(bool condition)
                 {
                     NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-                    Pooled<int> value = pool.Rent(1);
+                    Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!));
                     if (condition)
                     {
                         goto Done;
@@ -1763,7 +1763,7 @@ public sealed class AnalyzerContractTests
                 public static int Run(bool condition)
                 {
                     NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-                    Pooled<int> values = pool.Rent(1);
+                    Pooled<int> values = pool.Rent(1, static writer => writer.Fill(default!));
                     if (condition)
                     {
                         return 42;
@@ -1798,7 +1798,7 @@ public sealed class AnalyzerContractTests
                     {
                         NativeRegion region = new();
                         NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-                        Pooled<int> values = pool.Rent(1);
+                        Pooled<int> values = pool.Rent(1, static writer => writer.Fill(default!));
                     }
                 }
             }
@@ -1949,7 +1949,7 @@ public sealed class AnalyzerContractTests
                     NativePool<int> pool = new();
                     ReturnPool(pool);
                     pool.LeaseFromMemory();
-                    Pooled<int> value = pool.Rent(1);
+                    Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!));
                     value.Dispose();
                     pool.Dispose();
                 }
@@ -1984,14 +1984,14 @@ public sealed class AnalyzerContractTests
                     NativePool<int> pool = new();
                     ReturnOuter(pool);
                     pool.LeaseFromMemory();
-                    Pooled<int> values = pool.Rent(1);
+                    Pooled<int> values = pool.Rent(1, static writer => writer.Fill(default!));
                     values.Dispose();
                     pool.Dispose();
 
                     NativePool<int> second = new();
                     ReturnThenMaybeExit(second, condition: true);
                     second.LeaseFromMemory();
-                    Pooled<int> secondValues = second.Rent(1);
+                    Pooled<int> secondValues = second.Rent(1, static writer => writer.Fill(default!));
                     secondValues.Dispose();
                     second.Dispose();
                 }
@@ -2128,6 +2128,143 @@ public sealed class AnalyzerContractTests
             """);
 
         Assert.Contains("NAM1015", NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task NestedUsingFinalizersConvergeWithoutOwnershipDiagnostics()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run(bool first, bool second)
+                {
+                    using NativePool<int> one = new();
+                    using NativePool<int> two = new();
+                    using NativePool<int> three = new();
+                    using NativePool<int> four = new();
+                    using NativePool<int> five = new();
+                    using NativePool<int> six = new();
+                    using Pooled<int> values = one.Rent(4, static writer => writer.Fill(default!));
+                    if (first)
+                    {
+                        values[0] = 1;
+                    }
+                    else if (second)
+                    {
+                        values[0] = 2;
+                    }
+                    else
+                    {
+                        values[0] = 3;
+                    }
+                }
+            }
+            """);
+
+        Assert.Empty(NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task FinallyTransferCachePreservesDistinctHandleStates()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run(bool endLease)
+                {
+                    using NativePool<int> one = new();
+                    using NativePool<int> two = new();
+                    using NativePool<int> three = new();
+                    Pooled<int> values = one.Rent(4, static writer => writer.Fill(default!));
+                    if (endLease)
+                    {
+                        values.Dispose();
+                        return;
+                    }
+
+                    values[0] = 1;
+                }
+            }
+            """);
+
+        Assert.Contains("NAM1003", NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task SourceVisibleNonRetainingOwnerHelperIsAccepted()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    using NativePool<int> pool = new();
+                    Fill(pool);
+                }
+
+                private static void Fill(NativePool<int> pool)
+                {
+                    using Pooled<int> values = pool.Rent(4, static writer => writer.Fill(default!));
+                    values[0] = 1;
+                }
+            }
+            """);
+
+        Assert.Empty(NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task RetainingOwnerHelpersRemainRejected()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using System;
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                private static NativePool<int>? _retained;
+
+                public static void Run()
+                {
+                    using NativePool<int> first = new();
+                    using NativePool<int> second = new();
+                    using NativePool<int> third = new();
+                    Retain(first);
+                    Alias(second);
+                    Capture(third);
+                }
+
+                private static void Retain(NativePool<int> pool)
+                {
+                    _retained = pool;
+                }
+
+                private static void Alias(NativePool<int> pool)
+                {
+                    NativePool<int> alias = pool;
+                    _ = alias;
+                }
+
+                private static void Capture(NativePool<int> pool)
+                {
+                    Action callback = () => pool.LeaseFromMemory();
+                    _ = callback;
+                }
+            }
+            """);
+
+        Assert.True(
+            NativeDiagnostics(diagnostics).Count(id => id == "NAM1001") >= 3);
     }
 
     internal static string[] NativeDiagnostics(ImmutableArray<Diagnostic> diagnostics)
