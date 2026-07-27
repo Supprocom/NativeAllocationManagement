@@ -261,6 +261,14 @@ public sealed class VoxelSharedContractTests
             measuredNativeHandoff,
             StringComparison.Ordinal);
         Assert.Contains(
+            "CompletedLogicalBytes + BatchDemand",
+            measuredNativeHandoff,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "_slots[batchIndex]",
+            measuredNativeHandoff,
+            StringComparison.Ordinal);
+        Assert.Contains(
             "PressureChunkEvidence[] evidence = verification",
             workerSource,
             StringComparison.Ordinal);

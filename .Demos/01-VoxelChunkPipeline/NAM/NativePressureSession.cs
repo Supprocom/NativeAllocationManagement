@@ -1285,14 +1285,8 @@ internal sealed class NativePressureSession :
 
         internal void CompleteScatterHandoff()
         {
-            for (int batchIndex = 0;
-                batchIndex < BatchCount;
-                batchIndex++)
-            {
-                BatchSlot slot = _slots[batchIndex];
-                CompletedLogicalBytes = checked(
-                    CompletedLogicalBytes + slot.Demand);
-            }
+            CompletedLogicalBytes = checked(
+                CompletedLogicalBytes + BatchDemand);
         }
 
         private void CompleteScatterHandoff(
