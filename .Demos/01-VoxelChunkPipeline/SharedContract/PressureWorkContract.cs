@@ -1280,7 +1280,7 @@ public static class PressureWorkContract
         return enabledStageBytes;
     }
 
-    public static int PackAliasedScatterStream(
+    public static void PackAliasedScatterStream(
         ReadOnlySpan<FaceRecord> records,
         Span<Vertex> vertices,
         Span<int> indices,
@@ -1289,7 +1289,6 @@ public static class PressureWorkContract
         int vertexCount = 0;
         int indexCount = 0;
         int sliceCount = 0;
-        int enabledStageBytes = 0;
         Span<int> stageCursors = stackalloc int[5];
         for (int recordIndex = 0;
             recordIndex < records.Length;
@@ -1309,12 +1308,6 @@ public static class PressureWorkContract
                 int stageOffset = stageCursors[stageClass];
                 stageCursors[stageClass] = checked(
                     stageOffset + record.StageBytes);
-
-                enabledStageBytes = checked(
-                    enabledStageBytes
-                    + CountEnabledPayloadBytes(
-                        record.PayloadBytes,
-                        record.StageMask));
 
                 int vertexOffset = vertexCount;
                 WriteFaceVertices(
@@ -1349,8 +1342,6 @@ public static class PressureWorkContract
             throw new InvalidDataException(
                 "Aliased scatter packing did not fill every output range.");
         }
-
-        return enabledStageBytes;
     }
 
     private static int StageClassIndex(int stageBytes) =>

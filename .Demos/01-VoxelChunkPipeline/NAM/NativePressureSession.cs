@@ -1177,14 +1177,14 @@ internal sealed class NativePressureSession :
                     shape.OpaqueFaceCount * VoxelMath.VerticesPerFace);
                 int opaqueIndices = checked(
                     shape.OpaqueFaceCount * VoxelMath.IndicesPerFace);
-                _ = PressureWorkContract.PackAliasedScatterStream(
+                PressureWorkContract.PackAliasedScatterStream(
                     chunkFaces.Slice(0, shape.OpaqueRecordCount),
                     chunkVertices.Slice(0, opaqueVertices),
                     chunkIndices.Slice(0, opaqueIndices),
                     allSlices.Slice(
                         slot.SliceOffset,
                         shape.OpaqueFaceCount));
-                _ = PressureWorkContract.PackAliasedScatterStream(
+                PressureWorkContract.PackAliasedScatterStream(
                     chunkFaces.Slice(
                         shape.OpaqueRecordCount,
                         shape.TransparentRecordCount),
