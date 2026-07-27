@@ -307,8 +307,10 @@ public static class NativeLeaseOperations
         long sourceAllocationId = 0)
     {
         NativeOwnerKernel arenaKernel = arena.KernelForInitialization;
-        NativeBumpInitializationGroup group =
+        NativeBumpInitializationGroupBuffer reservations = default;
+        bool usesSingleInitializationAdmission =
             arenaKernel.BeginBumpInitializationGroup(
+                ref reservations,
                 firstLength,
                 NativeTypeLayout.StorageSize<TFirst>(),
                 NativeTypeLayout.Alignment<TFirst>(),
@@ -338,43 +340,55 @@ public static class NativeLeaseOperations
             initializer(
                 source,
                 new NativeLeaseWriter<TFirst>(
-                    group.First.Allocation,
+                    reservations[0].Allocation,
                     ref firstInitializedLength),
                 new NativeLeaseWriter<TSecond>(
-                    group.Second.Allocation,
+                    reservations[1].Allocation,
                     ref secondInitializedLength),
                 new NativeLeaseWriter<TThird>(
-                    group.Third.Allocation,
+                    reservations[2].Allocation,
                     ref thirdInitializedLength),
                 new NativeLeaseWriter<TFourth>(
-                    group.Fourth.Allocation,
+                    reservations[3].Allocation,
                     ref fourthInitializedLength));
 
-            group.First.Allocation.InitializedLength = firstInitializedLength;
-            group.Second.Allocation.InitializedLength = secondInitializedLength;
-            group.Third.Allocation.InitializedLength = thirdInitializedLength;
-            group.Fourth.Allocation.InitializedLength = fourthInitializedLength;
-            arenaKernel.CompleteBumpInitializationGroup(group);
+            reservations[0].Allocation.InitializedLength =
+                firstInitializedLength;
+            reservations[1].Allocation.InitializedLength =
+                secondInitializedLength;
+            reservations[2].Allocation.InitializedLength =
+                thirdInitializedLength;
+            reservations[3].Allocation.InitializedLength =
+                fourthInitializedLength;
+            arenaKernel.CompleteBumpInitializationGroup(
+                ref reservations,
+                usesSingleInitializationAdmission);
             first = new ArenaLease<TFirst>(
                 arenaKernel,
-                group.First.Lease);
+                reservations[0].Lease);
             second = new ArenaLease<TSecond>(
                 arenaKernel,
-                group.Second.Lease);
+                reservations[1].Lease);
             third = new ArenaLease<TThird>(
                 arenaKernel,
-                group.Third.Lease);
+                reservations[2].Lease);
             fourth = new ArenaLease<TFourth>(
                 arenaKernel,
-                group.Fourth.Lease);
+                reservations[3].Lease);
         }
         catch
         {
-            group.First.Allocation.InitializedLength = firstInitializedLength;
-            group.Second.Allocation.InitializedLength = secondInitializedLength;
-            group.Third.Allocation.InitializedLength = thirdInitializedLength;
-            group.Fourth.Allocation.InitializedLength = fourthInitializedLength;
-            arenaKernel.AbortBumpInitializationGroup(group);
+            reservations[0].Allocation.InitializedLength =
+                firstInitializedLength;
+            reservations[1].Allocation.InitializedLength =
+                secondInitializedLength;
+            reservations[2].Allocation.InitializedLength =
+                thirdInitializedLength;
+            reservations[3].Allocation.InitializedLength =
+                fourthInitializedLength;
+            arenaKernel.AbortBumpInitializationGroup(
+                ref reservations,
+                usesSingleInitializationAdmission);
             throw;
         }
     }
@@ -499,8 +513,10 @@ public static class NativeLeaseOperations
         where TFourth : unmanaged
     {
         NativeOwnerKernel arenaKernel = arena.KernelForInitialization;
-        NativeBumpInitializationGroup group =
+        NativeBumpInitializationGroupBuffer reservations = default;
+        bool usesSingleInitializationAdmission =
             arenaKernel.BeginBumpInitializationGroup(
+                ref reservations,
                 firstLength,
                 NativeTypeLayout.StorageSize<TFirst>(),
                 NativeTypeLayout.Alignment<TFirst>(),
@@ -525,27 +541,31 @@ public static class NativeLeaseOperations
         {
             initializer(
                 source,
-                group.First.Allocation.AsSpan<TFirst>(),
-                group.Second.Allocation.AsSpan<TSecond>(),
-                group.Third.Allocation.AsSpan<TThird>(),
-                group.Fourth.Allocation.AsSpan<TFourth>());
-            arenaKernel.CompleteUnmanagedBumpInitializationGroup(group);
+                reservations[0].Allocation.AsSpan<TFirst>(),
+                reservations[1].Allocation.AsSpan<TSecond>(),
+                reservations[2].Allocation.AsSpan<TThird>(),
+                reservations[3].Allocation.AsSpan<TFourth>());
+            arenaKernel.CompleteUnmanagedBumpInitializationGroup(
+                ref reservations,
+                usesSingleInitializationAdmission);
             first = new ArenaLease<TFirst>(
                 arenaKernel,
-                group.First.Lease);
+                reservations[0].Lease);
             second = new ArenaLease<TSecond>(
                 arenaKernel,
-                group.Second.Lease);
+                reservations[1].Lease);
             third = new ArenaLease<TThird>(
                 arenaKernel,
-                group.Third.Lease);
+                reservations[2].Lease);
             fourth = new ArenaLease<TFourth>(
                 arenaKernel,
-                group.Fourth.Lease);
+                reservations[3].Lease);
         }
         catch
         {
-            arenaKernel.AbortBumpInitializationGroup(group);
+            arenaKernel.AbortBumpInitializationGroup(
+                ref reservations,
+                usesSingleInitializationAdmission);
             throw;
         }
     }
@@ -730,8 +750,10 @@ public static class NativeLeaseOperations
         where TEighth : unmanaged
     {
         NativeOwnerKernel arenaKernel = arena.KernelForInitialization;
-        NativeBumpInitializationOctet octet =
+        NativeBumpInitializationBuffer reservations = default;
+        bool usesSingleInitializationAdmission =
             arenaKernel.BeginBumpInitializationOctet(
+                ref reservations,
                 firstLength,
                 NativeTypeLayout.StorageSize<TFirst>(),
                 NativeTypeLayout.Alignment<TFirst>(),
@@ -768,49 +790,51 @@ public static class NativeLeaseOperations
                 sourceAllocation,
                 sourceGenerationNumber,
                 sourceAllocationId);
-        NativeBumpInitializationGroup firstGroup = octet.First;
-        NativeBumpInitializationGroup secondGroup = octet.Second;
         try
         {
             initializer(
                 source,
-                firstGroup.First.Allocation.AsSpan<TFirst>(),
-                firstGroup.Second.Allocation.AsSpan<TSecond>(),
-                firstGroup.Third.Allocation.AsSpan<TThird>(),
-                firstGroup.Fourth.Allocation.AsSpan<TFourth>(),
-                secondGroup.First.Allocation.AsSpan<TFifth>(),
-                secondGroup.Second.Allocation.AsSpan<TSixth>(),
-                secondGroup.Third.Allocation.AsSpan<TSeventh>(),
-                secondGroup.Fourth.Allocation.AsSpan<TEighth>());
-            arenaKernel.CompleteUnmanagedBumpInitializationOctet(octet);
+                reservations[0].Allocation.AsSpan<TFirst>(),
+                reservations[1].Allocation.AsSpan<TSecond>(),
+                reservations[2].Allocation.AsSpan<TThird>(),
+                reservations[3].Allocation.AsSpan<TFourth>(),
+                reservations[4].Allocation.AsSpan<TFifth>(),
+                reservations[5].Allocation.AsSpan<TSixth>(),
+                reservations[6].Allocation.AsSpan<TSeventh>(),
+                reservations[7].Allocation.AsSpan<TEighth>());
+            arenaKernel.CompleteUnmanagedBumpInitializationOctet(
+                ref reservations,
+                usesSingleInitializationAdmission);
             first = new ArenaLease<TFirst>(
                 arenaKernel,
-                firstGroup.First.Lease);
+                reservations[0].Lease);
             second = new ArenaLease<TSecond>(
                 arenaKernel,
-                firstGroup.Second.Lease);
+                reservations[1].Lease);
             third = new ArenaLease<TThird>(
                 arenaKernel,
-                firstGroup.Third.Lease);
+                reservations[2].Lease);
             fourth = new ArenaLease<TFourth>(
                 arenaKernel,
-                firstGroup.Fourth.Lease);
+                reservations[3].Lease);
             fifth = new ArenaLease<TFifth>(
                 arenaKernel,
-                secondGroup.First.Lease);
+                reservations[4].Lease);
             sixth = new ArenaLease<TSixth>(
                 arenaKernel,
-                secondGroup.Second.Lease);
+                reservations[5].Lease);
             seventh = new ArenaLease<TSeventh>(
                 arenaKernel,
-                secondGroup.Third.Lease);
+                reservations[6].Lease);
             eighth = new ArenaLease<TEighth>(
                 arenaKernel,
-                secondGroup.Fourth.Lease);
+                reservations[7].Lease);
         }
         catch
         {
-            arenaKernel.AbortBumpInitializationOctet(octet);
+            arenaKernel.AbortBumpInitializationOctet(
+                ref reservations,
+                usesSingleInitializationAdmission);
             throw;
         }
     }

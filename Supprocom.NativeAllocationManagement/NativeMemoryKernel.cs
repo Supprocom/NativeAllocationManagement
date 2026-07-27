@@ -175,18 +175,6 @@ internal readonly struct NativeBumpInitialization
     internal bool StartedScope { get; }
 }
 
-internal readonly record struct NativeBumpInitializationGroup(
-    NativeBumpInitialization First,
-    NativeBumpInitialization Second,
-    NativeBumpInitialization Third,
-    NativeBumpInitialization Fourth,
-    bool UsesSingleInitializationAdmission = false);
-
-internal readonly record struct NativeBumpInitializationOctet(
-    NativeBumpInitializationGroup First,
-    NativeBumpInitializationGroup Second,
-    bool UsesSingleInitializationAdmission = false);
-
 internal readonly record struct NativeBumpBatchRequest(
     int Length,
     nuint ByteLength,
@@ -207,6 +195,12 @@ internal struct NativeBumpCursorBuffer
 
 [InlineArray(8)]
 internal struct NativeBumpInitializationBuffer
+{
+    private NativeBumpInitialization _element0;
+}
+
+[InlineArray(4)]
+internal struct NativeBumpInitializationGroupBuffer
 {
     private NativeBumpInitialization _element0;
 }
@@ -2775,7 +2769,8 @@ internal sealed class NativeOwnerKernel
         }
     }
 
-    internal NativeBumpInitializationGroup BeginBumpInitializationGroup(
+    internal bool BeginBumpInitializationGroup(
+        ref NativeBumpInitializationGroupBuffer reservations,
         int firstLength,
         int firstElementSize,
         nuint firstAlignment,
@@ -2825,6 +2820,7 @@ internal sealed class NativeOwnerKernel
         {
             return BeginBumpInitializationGroupLocked(
                 ref requests,
+                ref reservations[0],
                 firstLength,
                 firstElementSize,
                 firstAlignment,
@@ -2853,6 +2849,7 @@ internal sealed class NativeOwnerKernel
         {
             return BeginBumpInitializationGroupLocked(
                 ref requests,
+                ref reservations[0],
                 firstLength,
                 firstElementSize,
                 firstAlignment,
@@ -2878,9 +2875,10 @@ internal sealed class NativeOwnerKernel
         }
     }
 
-    private NativeBumpInitializationGroup
+    private bool
         BeginBumpInitializationGroupLocked(
             ref NativeBumpBatchRequestBuffer requests,
+            ref NativeBumpInitialization firstReservation,
             int firstLength,
             int firstElementSize,
             nuint firstAlignment,
@@ -2917,15 +2915,10 @@ internal sealed class NativeOwnerKernel
             && TryBeginBumpInitializationBatchLocked(
                 generation,
                 ref requests,
-                4,
-                out NativeBumpInitializationBuffer reservations))
+                ref firstReservation,
+                4))
         {
-            return new NativeBumpInitializationGroup(
-                reservations[0],
-                reservations[1],
-                reservations[2],
-                reservations[3],
-                UsesSingleInitializationAdmission: true);
+            return true;
         }
 
         int expectedInitializations =
@@ -2941,14 +2934,11 @@ internal sealed class NativeOwnerKernel
                 "A different native lease initializer is active.");
         }
 
-        NativeBumpInitialization first = default;
-        NativeBumpInitialization second = default;
-        NativeBumpInitialization third = default;
-        NativeBumpInitialization fourth = default;
         int reservationCount = 0;
         try
         {
-            first = BeginBumpInitializationLocked(
+            firstReservation =
+                BeginBumpInitializationLocked(
                 firstLength,
                 firstAlignment,
                 scoped: true,
@@ -2959,7 +2949,8 @@ internal sealed class NativeOwnerKernel
                     firstElementSize,
                     "scoped allocation"));
             reservationCount = 1;
-            second = BeginBumpInitializationLocked(
+            Unsafe.Add(ref firstReservation, 1) =
+                BeginBumpInitializationLocked(
                 secondLength,
                 secondAlignment,
                 scoped: true,
@@ -2970,7 +2961,8 @@ internal sealed class NativeOwnerKernel
                     secondElementSize,
                     "scoped allocation"));
             reservationCount = 2;
-            third = BeginBumpInitializationLocked(
+            Unsafe.Add(ref firstReservation, 2) =
+                BeginBumpInitializationLocked(
                 thirdLength,
                 thirdAlignment,
                 scoped: true,
@@ -2981,7 +2973,8 @@ internal sealed class NativeOwnerKernel
                     thirdElementSize,
                     "scoped allocation"));
             reservationCount = 3;
-            fourth = BeginBumpInitializationLocked(
+            Unsafe.Add(ref firstReservation, 3) =
+                BeginBumpInitializationLocked(
                 fourthLength,
                 fourthAlignment,
                 scoped: true,
@@ -3004,32 +2997,32 @@ internal sealed class NativeOwnerKernel
                 checked(
                     generation.ScopedCleanupPending.Count
                     + referenceAllocationCount));
-            return new NativeBumpInitializationGroup(
-                first,
-                second,
-                third,
-                fourth);
+            return false;
         }
         catch
         {
             if (reservationCount >= 4)
             {
-                AbortBumpInitialization(fourth);
+                AbortBumpInitialization(
+                    Unsafe.Add(ref firstReservation, 3));
             }
 
             if (reservationCount >= 3)
             {
-                AbortBumpInitialization(third);
+                AbortBumpInitialization(
+                    Unsafe.Add(ref firstReservation, 2));
             }
 
             if (reservationCount >= 2)
             {
-                AbortBumpInitialization(second);
+                AbortBumpInitialization(
+                    Unsafe.Add(ref firstReservation, 1));
             }
 
             if (reservationCount >= 1)
             {
-                AbortBumpInitialization(first);
+                AbortBumpInitialization(
+                    firstReservation);
             }
 
             throw;
@@ -3065,7 +3058,8 @@ internal sealed class NativeOwnerKernel
 
     }
 
-    internal NativeBumpInitializationOctet BeginBumpInitializationOctet(
+    internal bool BeginBumpInitializationOctet(
+        ref NativeBumpInitializationBuffer reservations,
         int firstLength,
         int firstElementSize,
         nuint firstAlignment,
@@ -3158,16 +3152,18 @@ internal sealed class NativeOwnerKernel
                 sourceGenerationNumber,
                 sourceAllocationId);
 
-            if (TryBeginBumpInitializationOctetLocked(
+            if (TryBeginBumpInitializationBatchLocked(
                     current,
                     ref requests,
-                    out NativeBumpInitializationOctet octet))
+                    ref reservations[0],
+                    count: 8))
             {
-                return octet;
+                return true;
             }
 
-            NativeBumpInitializationGroup first =
-                BeginBumpInitializationGroup(
+            _ = BeginBumpInitializationGroupLocked(
+                ref requests,
+                ref reservations[0],
                     firstLength,
                     firstElementSize,
                     firstAlignment,
@@ -3184,11 +3180,17 @@ internal sealed class NativeOwnerKernel
                     fourthElementSize,
                     fourthAlignment,
                     fourthContainsReferences,
-                    useSingleInitializationAdmission: false);
+                    continueExistingGroup: false,
+                    useSingleInitializationAdmission: false,
+                    sourceGeneration,
+                    sourceAllocation,
+                    sourceGenerationNumber,
+                    sourceAllocationId);
             try
             {
-                NativeBumpInitializationGroup second =
-                    BeginBumpInitializationGroup(
+                _ = BeginBumpInitializationGroupLocked(
+                    ref requests,
+                    ref reservations[4],
                         fifthLength,
                         fifthElementSize,
                         fifthAlignment,
@@ -3206,14 +3208,19 @@ internal sealed class NativeOwnerKernel
                         eighthAlignment,
                         eighthContainsReferences,
                         continueExistingGroup: true,
-                        useSingleInitializationAdmission: false);
-                return new NativeBumpInitializationOctet(
-                    first,
-                    second);
+                        useSingleInitializationAdmission: false,
+                        sourceGeneration,
+                        sourceAllocation,
+                        sourceGenerationNumber,
+                        sourceAllocationId);
+                return false;
             }
             catch
             {
-                AbortBumpInitializationGroup(first);
+                AbortBumpInitialization(reservations[3]);
+                AbortBumpInitialization(reservations[2]);
+                AbortBumpInitialization(reservations[1]);
+                AbortBumpInitialization(reservations[0]);
                 throw;
             }
         }
@@ -3239,43 +3246,12 @@ internal sealed class NativeOwnerKernel
             containsReferences);
     }
 
-    private bool TryBeginBumpInitializationOctetLocked(
-        NativeGeneration generation,
-        ref NativeBumpBatchRequestBuffer requests,
-        out NativeBumpInitializationOctet octet)
-    {
-        octet = default;
-        if (!TryBeginBumpInitializationBatchLocked(
-                generation,
-                ref requests,
-                8,
-                out NativeBumpInitializationBuffer reservations))
-        {
-            return false;
-        }
-
-        octet = new NativeBumpInitializationOctet(
-            new NativeBumpInitializationGroup(
-                reservations[0],
-                reservations[1],
-                reservations[2],
-                reservations[3]),
-            new NativeBumpInitializationGroup(
-                reservations[4],
-                reservations[5],
-                reservations[6],
-                reservations[7]),
-            UsesSingleInitializationAdmission: true);
-        return true;
-    }
-
     private bool TryBeginBumpInitializationBatchLocked(
         NativeGeneration generation,
         ref NativeBumpBatchRequestBuffer requests,
-        int count,
-        out NativeBumpInitializationBuffer reservations)
+        ref NativeBumpInitialization firstReservation,
+        int count)
     {
-        reservations = default;
         int firstRecordIndex = generation.ScopedRecordCount;
         if (_kind is not (NativeOwnerKind.Region or NativeOwnerKind.Arena)
             || generation.InitializationsInProgress != 0
@@ -3348,7 +3324,7 @@ internal sealed class NativeOwnerKernel
                     scopeEpoch);
                 allocation.Lifecycle =
                     NativeAllocationLifecycle.Initializing;
-                reservations[index] =
+                Unsafe.Add(ref firstReservation, index) =
                     new NativeBumpInitialization(
                         allocation,
                         createdSegment: null,
@@ -3703,42 +3679,42 @@ internal sealed class NativeOwnerKernel
     }
 
     internal void CompleteBumpInitializationGroup(
-        NativeBumpInitializationGroup group) =>
+        ref NativeBumpInitializationGroupBuffer reservations,
+        bool usesSingleInitializationAdmission) =>
         CompleteBumpInitializationGroup(
-            group,
+            ref reservations,
+            usesSingleInitializationAdmission,
             validateInitializedLengths: true);
 
     internal void CompleteUnmanagedBumpInitializationGroup(
-        NativeBumpInitializationGroup group) =>
+        ref NativeBumpInitializationGroupBuffer reservations,
+        bool usesSingleInitializationAdmission) =>
         CompleteBumpInitializationGroup(
-            group,
+            ref reservations,
+            usesSingleInitializationAdmission,
             validateInitializedLengths: false);
 
     private void CompleteBumpInitializationGroup(
-        NativeBumpInitializationGroup group,
+        ref NativeBumpInitializationGroupBuffer reservations,
+        bool usesSingleInitializationAdmission,
         bool validateInitializedLengths)
     {
         if (validateInitializedLengths)
         {
-            ValidateInitializedLength(group.First);
-            ValidateInitializedLength(group.Second);
-            ValidateInitializedLength(group.Third);
-            ValidateInitializedLength(group.Fourth);
+            ValidateInitializedLength(reservations[0]);
+            ValidateInitializedLength(reservations[1]);
+            ValidateInitializedLength(reservations[2]);
+            ValidateInitializedLength(reservations[3]);
         }
 
-        if (group.UsesSingleInitializationAdmission)
+        if (usesSingleInitializationAdmission)
         {
             lock (_gate)
             {
-                ValidateBumpInitializationLocked(group.First);
-                NativeBumpInitializationBuffer reservations =
-                    default;
-                CopyBumpInitializationGroup(
-                    ref reservations,
-                    0,
-                    group);
+                ValidateBumpInitializationLocked(
+                    reservations[0]);
                 PublishFastBumpInitializationBatchLocked(
-                    ref reservations,
+                    ref reservations[0],
                     4);
             }
 
@@ -3747,66 +3723,59 @@ internal sealed class NativeOwnerKernel
 
         lock (_gate)
         {
-            ValidateBumpInitializationLocked(group.First);
-            ValidateBumpInitializationLocked(group.Second);
-            ValidateBumpInitializationLocked(group.Third);
-            ValidateBumpInitializationLocked(group.Fourth);
+            ValidateBumpInitializationLocked(reservations[0]);
+            ValidateBumpInitializationLocked(reservations[1]);
+            ValidateBumpInitializationLocked(reservations[2]);
+            ValidateBumpInitializationLocked(reservations[3]);
 
-            PublishBumpInitializationLocked(group.First);
-            PublishBumpInitializationLocked(group.Second);
-            PublishBumpInitializationLocked(group.Third);
-            PublishBumpInitializationLocked(group.Fourth);
+            PublishBumpInitializationLocked(reservations[0]);
+            PublishBumpInitializationLocked(reservations[1]);
+            PublishBumpInitializationLocked(reservations[2]);
+            PublishBumpInitializationLocked(reservations[3]);
         }
     }
 
     internal void CompleteBumpInitializationOctet(
-        in NativeBumpInitializationOctet octet) =>
+        ref NativeBumpInitializationBuffer reservations,
+        bool usesSingleInitializationAdmission) =>
         CompleteBumpInitializationOctet(
-            octet,
+            ref reservations,
+            usesSingleInitializationAdmission,
             validateInitializedLengths: true);
 
     internal void CompleteUnmanagedBumpInitializationOctet(
-        in NativeBumpInitializationOctet octet) =>
+        ref NativeBumpInitializationBuffer reservations,
+        bool usesSingleInitializationAdmission) =>
         CompleteBumpInitializationOctet(
-            octet,
+            ref reservations,
+            usesSingleInitializationAdmission,
             validateInitializedLengths: false);
 
     private void CompleteBumpInitializationOctet(
-        in NativeBumpInitializationOctet octet,
+        ref NativeBumpInitializationBuffer reservations,
+        bool usesSingleInitializationAdmission,
         bool validateInitializedLengths)
     {
-        NativeBumpInitializationGroup first = octet.First;
-        NativeBumpInitializationGroup second = octet.Second;
         if (validateInitializedLengths)
         {
-            ValidateInitializedLength(first.First);
-            ValidateInitializedLength(first.Second);
-            ValidateInitializedLength(first.Third);
-            ValidateInitializedLength(first.Fourth);
-            ValidateInitializedLength(second.First);
-            ValidateInitializedLength(second.Second);
-            ValidateInitializedLength(second.Third);
-            ValidateInitializedLength(second.Fourth);
+            ValidateInitializedLength(reservations[0]);
+            ValidateInitializedLength(reservations[1]);
+            ValidateInitializedLength(reservations[2]);
+            ValidateInitializedLength(reservations[3]);
+            ValidateInitializedLength(reservations[4]);
+            ValidateInitializedLength(reservations[5]);
+            ValidateInitializedLength(reservations[6]);
+            ValidateInitializedLength(reservations[7]);
         }
 
-        if (octet.UsesSingleInitializationAdmission)
+        if (usesSingleInitializationAdmission)
         {
             lock (_gate)
             {
                 ValidateBumpInitializationLocked(
-                    first.First);
-                NativeBumpInitializationBuffer reservations =
-                    default;
-                CopyBumpInitializationGroup(
-                    ref reservations,
-                    0,
-                    first);
-                CopyBumpInitializationGroup(
-                    ref reservations,
-                    4,
-                    second);
+                    reservations[0]);
                 PublishFastBumpInitializationBatchLocked(
-                    ref reservations,
+                    ref reservations[0],
                     8);
             }
 
@@ -3815,49 +3784,40 @@ internal sealed class NativeOwnerKernel
 
         lock (_gate)
         {
-            ValidateBumpInitializationLocked(first.First);
-            ValidateBumpInitializationLocked(first.Second);
-            ValidateBumpInitializationLocked(first.Third);
-            ValidateBumpInitializationLocked(first.Fourth);
-            ValidateBumpInitializationLocked(second.First);
-            ValidateBumpInitializationLocked(second.Second);
-            ValidateBumpInitializationLocked(second.Third);
-            ValidateBumpInitializationLocked(second.Fourth);
+            ValidateBumpInitializationLocked(reservations[0]);
+            ValidateBumpInitializationLocked(reservations[1]);
+            ValidateBumpInitializationLocked(reservations[2]);
+            ValidateBumpInitializationLocked(reservations[3]);
+            ValidateBumpInitializationLocked(reservations[4]);
+            ValidateBumpInitializationLocked(reservations[5]);
+            ValidateBumpInitializationLocked(reservations[6]);
+            ValidateBumpInitializationLocked(reservations[7]);
 
-            PublishBumpInitializationLocked(first.First);
-            PublishBumpInitializationLocked(first.Second);
-            PublishBumpInitializationLocked(first.Third);
-            PublishBumpInitializationLocked(first.Fourth);
-            PublishBumpInitializationLocked(second.First);
-            PublishBumpInitializationLocked(second.Second);
-            PublishBumpInitializationLocked(second.Third);
-            PublishBumpInitializationLocked(second.Fourth);
+            PublishBumpInitializationLocked(reservations[0]);
+            PublishBumpInitializationLocked(reservations[1]);
+            PublishBumpInitializationLocked(reservations[2]);
+            PublishBumpInitializationLocked(reservations[3]);
+            PublishBumpInitializationLocked(reservations[4]);
+            PublishBumpInitializationLocked(reservations[5]);
+            PublishBumpInitializationLocked(reservations[6]);
+            PublishBumpInitializationLocked(reservations[7]);
         }
     }
 
-    private static void CopyBumpInitializationGroup(
-        ref NativeBumpInitializationBuffer reservations,
-        int offset,
-        NativeBumpInitializationGroup group)
-    {
-        reservations[offset] = group.First;
-        reservations[offset + 1] = group.Second;
-        reservations[offset + 2] = group.Third;
-        reservations[offset + 3] = group.Fourth;
-    }
-
     private static void PublishFastBumpInitializationBatchLocked(
-        ref NativeBumpInitializationBuffer reservations,
+        ref NativeBumpInitialization firstReservation,
         int count)
     {
-        NativeBumpInitialization first = reservations[0];
+        NativeBumpInitialization first = firstReservation;
         NativeGeneration generation = first.Generation;
         NativeBumpSegment segment =
             first.BumpSegment
             ?? throw new InvalidOperationException(
                 "The native batch has no backing segment.");
         NativeAllocation last =
-            reservations[count - 1].Allocation;
+            Unsafe.Add(
+                ref firstReservation,
+                count - 1).Allocation;
         TrackScopedRangeLocked(
             generation,
             segment,
@@ -3869,7 +3829,9 @@ internal sealed class NativeOwnerKernel
         for (int index = 0; index < count; index++)
         {
             NativeAllocation allocation =
-                reservations[index].Allocation;
+                Unsafe.Add(
+                    ref firstReservation,
+                    index).Allocation;
             nuint reclaimedBytes = segment.ReclaimedOverlap(
                 allocation.OffsetBytes,
                 allocation.StorageBytes,
@@ -3894,7 +3856,9 @@ internal sealed class NativeOwnerKernel
         for (int index = 0; index < count; index++)
         {
             NativeAllocation allocation =
-                reservations[index].Allocation;
+                Unsafe.Add(
+                    ref firstReservation,
+                    index).Allocation;
             allocation.Lifecycle =
                 NativeAllocationLifecycle.Active;
             allocation.InitializedLength = 0;
@@ -3968,60 +3932,52 @@ internal sealed class NativeOwnerKernel
     }
 
     internal void AbortBumpInitializationGroup(
-        NativeBumpInitializationGroup group)
+        ref NativeBumpInitializationGroupBuffer reservations,
+        bool usesSingleInitializationAdmission)
     {
-        if (group.UsesSingleInitializationAdmission)
+        if (usesSingleInitializationAdmission)
         {
-            NativeBumpInitializationBuffer reservations =
-                default;
-            CopyBumpInitializationGroup(
-                ref reservations,
-                0,
-                group);
             AbortFastBumpInitializationBatch(
-                ref reservations,
+                ref reservations[0],
                 4);
             return;
         }
 
-        AbortBumpInitialization(group.Fourth);
-        AbortBumpInitialization(group.Third);
-        AbortBumpInitialization(group.Second);
-        AbortBumpInitialization(group.First);
+        AbortBumpInitialization(reservations[3]);
+        AbortBumpInitialization(reservations[2]);
+        AbortBumpInitialization(reservations[1]);
+        AbortBumpInitialization(reservations[0]);
     }
 
     internal void AbortBumpInitializationOctet(
-        in NativeBumpInitializationOctet octet)
+        ref NativeBumpInitializationBuffer reservations,
+        bool usesSingleInitializationAdmission)
     {
-        if (octet.UsesSingleInitializationAdmission)
+        if (usesSingleInitializationAdmission)
         {
-            NativeBumpInitializationBuffer reservations =
-                default;
-            CopyBumpInitializationGroup(
-                ref reservations,
-                0,
-                octet.First);
-            CopyBumpInitializationGroup(
-                ref reservations,
-                4,
-                octet.Second);
             AbortFastBumpInitializationBatch(
-                ref reservations,
+                ref reservations[0],
                 8);
             return;
         }
 
-        AbortBumpInitializationGroup(octet.Second);
-        AbortBumpInitializationGroup(octet.First);
+        AbortBumpInitialization(reservations[7]);
+        AbortBumpInitialization(reservations[6]);
+        AbortBumpInitialization(reservations[5]);
+        AbortBumpInitialization(reservations[4]);
+        AbortBumpInitialization(reservations[3]);
+        AbortBumpInitialization(reservations[2]);
+        AbortBumpInitialization(reservations[1]);
+        AbortBumpInitialization(reservations[0]);
     }
 
     private void AbortFastBumpInitializationBatch(
-        ref NativeBumpInitializationBuffer reservations,
+        ref NativeBumpInitialization firstReservation,
         int count)
     {
         lock (_gate)
         {
-            NativeBumpInitialization first = reservations[0];
+            NativeBumpInitialization first = firstReservation;
             NativeGeneration generation = first.Generation;
             if (first.Allocation.Lifecycle
                 != NativeAllocationLifecycle.Initializing)
@@ -4032,7 +3988,9 @@ internal sealed class NativeOwnerKernel
             for (int index = count - 1; index >= 0; index--)
             {
                 NativeAllocation allocation =
-                    reservations[index].Allocation;
+                    Unsafe.Add(
+                        ref firstReservation,
+                        index).Allocation;
                 allocation.ClearInitializedReferences();
                 allocation.Lifecycle =
                     NativeAllocationLifecycle.Returned;
