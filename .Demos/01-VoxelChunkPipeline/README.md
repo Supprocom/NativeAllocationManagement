@@ -68,7 +68,7 @@ Final GPU stages reference their native payload, vertex, index, and padding
 ranges. The mapped handoff does not copy these ranges into duplicate stage
 records.
 
-The 1000-percent warmup establishes all allocation shapes and stable
+Four 1000-percent warmup passes establish allocation shapes and stable
 capacities. Each later canonical cycle uses the same worker assignment.
 
 Thus, the 10000-percent profile adds storage turnover without adding a new
@@ -85,11 +85,11 @@ access, PID limits, GC mode, and GC heap limits.
 The default profiles are 50, 100, 200, 500, 1000, and 10000 percent of the
 binary cgroup cap.
 
-The 10000-percent entry is one complete stress sample. The smaller profiles
-use the configured paired sample count and confidence calculation.
+The 10000-percent entry uses five complete paired samples. The smaller
+profiles use the configured sample count and confidence calculation.
 
-Each profile uses new Safe and NAM containers. Container startup and the fixed
-1000-percent warmup occur outside measured processing.
+Each profile uses new Safe and NAM containers. Startup and four fixed
+1000-percent warmup passes occur outside measured processing.
 
 The child waits at `ProcessingReady`. The host starts its timer before it sends
 `BeginProcessing`.

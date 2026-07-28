@@ -11,7 +11,7 @@ internal static class PressureMatrixHarness
 {
     private const int WarmupProfilePercent = 1000;
     private const int StressProfilePercent = 10000;
-    private const int StressProfileSamples = 1;
+    private const int StressProfileSamples = 5;
     private const int NonMeasuredOperationTimeoutSeconds = 60;
     private static readonly int[] ProfilePercents =
     [
@@ -341,7 +341,7 @@ internal static class PressureMatrixHarness
             ["pairExecution"] =
                 "sequential with per-profile alternating implementation order",
             ["profileInitialization"] =
-                "fresh container pair, parallel worker start, and one fixed 1000-percent warmup per profile",
+                "fresh container pair, parallel worker start, and four fixed 1000-percent warmup passes per profile",
             ["crossProfileProcessState"] = "none",
             ["memorySwapPolicy"] = "memory-swap equals memory; swappiness 0",
             ["gcServer"] = "1",
@@ -356,7 +356,7 @@ internal static class PressureMatrixHarness
                 CultureInfo.InvariantCulture),
             ["stressProfileSamples"] =
                 $"{StressProfilePercent} percent uses "
-                + $"{StressProfileSamples} complete sample",
+                + $"{StressProfileSamples} complete paired samples",
             ["measurementEvidence"] =
                 "predeclared plan and terminal completion without per-chunk evidence",
             ["measurementBoundary"] =
@@ -391,8 +391,8 @@ internal static class PressureMatrixHarness
                 "The host samples Docker and cgroup metrics outside each worker.",
                 "The child does not run a benchmark timer or scan allocator statistics during processing.",
                 "Measured child results contain no per-chunk evidence.",
-                "Each profile uses a new container pair and one fixed warmup before measurement.",
-                "The 10000-percent stress profile uses one complete sample.",
+                "Each profile uses a new container pair and four fixed warmup passes before measurement.",
+                "The 10000-percent stress profile uses five complete paired samples.",
                 "Each measured profile materializes every output and completes its mapped handoff.",
                 "One exact maximum-demand run follows measurement. It reads every output byte."
             ]);
@@ -656,13 +656,14 @@ internal static class PressureMatrixHarness
                 bool confidenceGate =
                     percent == StressProfilePercent
                         ? sampleCount == StressProfileSamples
+                            && lower > 1.00
                         : lower > 1.00;
                 performanceGate = mean >= requiredSpeedup
                     && confidenceGate;
                 interpretation = percent == StressProfilePercent
                     ? $"Both implementations completed the stress profile. "
                         + $"This profile requires {requiredSpeedup:F2}x "
-                        + "speedup from one complete sample."
+                        + "mean speedup and a positive confidence lower bound."
                     : $"Both implementations completed. This profile requires "
                         + $"{requiredSpeedup:F2}x mean speedup and a positive "
                         + "confidence lower bound.";
@@ -980,7 +981,7 @@ internal static class PressureMatrixHarness
 
     private sealed class DockerWorker : IAsyncDisposable
     {
-        internal const int WarmupPassCount = 1;
+        internal const int WarmupPassCount = 4;
         private readonly object _sampleGate = new();
         private readonly List<RawHostSample> _samples = [];
         private readonly string _implementation;

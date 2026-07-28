@@ -8,6 +8,54 @@ namespace Supprocom.NativeAllocationManagement.Tests;
 public sealed class VoxelSharedContractTests
 {
     [Fact]
+    public void PressureProfilesUseFourWarmupsAndFreshContainers()
+    {
+        string root = FindRepositoryRoot();
+        string harness = File.ReadAllText(
+            Path.Combine(
+                root,
+                ".Demos",
+                "01-VoxelChunkPipeline",
+                "Harness",
+                "PressureMatrixHarness.cs"));
+        int profileLoop = harness.IndexOf(
+            "for (int profileOrdinal = 0;",
+            StringComparison.Ordinal);
+        int safeStart = harness.IndexOf(
+            "Task<DockerWorker> safeStart = DockerWorker.StartAsync(",
+            profileLoop,
+            StringComparison.Ordinal);
+        int sampleLoop = harness.IndexOf(
+            "for (int sampleIndex = 0;",
+            profileLoop,
+            StringComparison.Ordinal);
+
+        Assert.True(profileLoop >= 0);
+        Assert.True(safeStart > profileLoop);
+        Assert.True(sampleLoop > safeStart);
+        Assert.Contains(
+            "internal const int WarmupPassCount = 4;",
+            harness,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "await using DockerWorker safe = await safeStart;",
+            harness,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "await using DockerWorker nam = await namStart;",
+            harness,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "ProfileIsolationPassed(",
+            harness,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "crossProfileProcessState\"] = \"none\"",
+            harness,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void AllAlgorithmAndProtocolTypesComeFromOneSharedAssembly()
     {
         Type[] contractTypes =
@@ -168,7 +216,14 @@ public sealed class VoxelSharedContractTests
         Assert.DoesNotContain("Infinity", failedJson, StringComparison.Ordinal);
 
         string pressureHarness = File.ReadAllText(
-            Path.Combine(demoRoot, "Harness", "PressureMatrixHarness.cs"));
+                Path.Combine(
+                    demoRoot,
+                    "Harness",
+                    "PressureMatrixHarness.cs"))
+            .Replace(
+                "\r\n",
+                "\n",
+                StringComparison.Ordinal);
         Assert.Contains(
             "200 => 1.75",
             pressureHarness,
@@ -240,7 +295,11 @@ public sealed class VoxelSharedContractTests
             pressureHarness,
             StringComparison.Ordinal);
         Assert.Contains(
-            "private const int StressProfileSamples = 1;",
+            "private const int StressProfileSamples = 5;",
+            pressureHarness,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "internal const int WarmupPassCount = 4;",
             pressureHarness,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -249,6 +308,14 @@ public sealed class VoxelSharedContractTests
             StringComparison.Ordinal);
         Assert.Contains(
             "percent == StressProfilePercent",
+            pressureHarness,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "bool safeFirst = ((pairOrdinal + profileOrdinal) & 1) == 0;",
+            pressureHarness,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "pairOrdinal++;",
             pressureHarness,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -528,6 +595,7 @@ public sealed class VoxelSharedContractTests
         Assert.Equal(1000, roundTrip.Verification.WarmupProfilePercent);
         Assert.Equal(capBytes * 10, roundTrip.Verification.WarmupCumulativeDemandBytes);
         Assert.Equal(1000, roundTrip.Verification.Initialization.WarmupProfilePercent);
+        Assert.Equal(4, roundTrip.Verification.Initialization.WarmupPasses);
         Assert.Equal(capBytes * 10, roundTrip.Verification.Initialization.WarmupCumulativeDemandBytes);
         Assert.Equal(capBytes * 100, roundTrip.Verification.RequestedCumulativeDemandBytes);
         PressureBinaryIdentity identity = Assert.Single(
