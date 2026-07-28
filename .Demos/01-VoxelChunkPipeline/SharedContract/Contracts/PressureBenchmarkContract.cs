@@ -112,6 +112,21 @@ public readonly record struct PressureOutcomeDecision(
 
 public static class PressureOutcomePolicy
 {
+    public static bool AllSamplesCompletedWithinDeadline(
+        IReadOnlyList<PressureImplementationObservation> observations)
+    {
+        ArgumentNullException.ThrowIfNull(observations);
+        return observations.Count > 0
+            && observations.All(
+                static observation =>
+                    observation.Outcome == PressureProfileOutcome.Completed
+                    && observation.CorrectnessPassed
+                    && observation.DeadlineMilliseconds > 0
+                    && observation.ProfileElapsedMilliseconds is > 0
+                    && observation.ProfileElapsedMilliseconds
+                        <= observation.DeadlineMilliseconds);
+    }
+
     public static PressureOutcomeDecision Evaluate(
         int profilePercent,
         bool safeCompleted,

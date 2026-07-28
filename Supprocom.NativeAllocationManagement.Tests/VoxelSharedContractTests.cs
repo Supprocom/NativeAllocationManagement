@@ -473,6 +473,38 @@ public sealed class VoxelSharedContractTests
     }
 
     [Fact]
+    public void DeadlineAppliesToEachPressureSample()
+    {
+        PressureImplementationObservation completed =
+            default(PressureImplementationObservation) with
+            {
+                Outcome = PressureProfileOutcome.Completed,
+                CorrectnessPassed = true,
+                DeadlineMilliseconds = 6000,
+                ProfileElapsedMilliseconds = 3100
+            };
+        PressureImplementationObservation[] observations =
+            Enumerable.Repeat(completed, 5).ToArray();
+
+        Assert.True(
+            observations.Sum(
+                static observation =>
+                    observation.ProfileElapsedMilliseconds!.Value)
+                > completed.DeadlineMilliseconds);
+        Assert.True(
+            PressureOutcomePolicy.AllSamplesCompletedWithinDeadline(
+                observations));
+
+        observations[4] = completed with
+        {
+            ProfileElapsedMilliseconds = 6000.1
+        };
+        Assert.False(
+            PressureOutcomePolicy.AllSamplesCompletedWithinDeadline(
+                observations));
+    }
+
+    [Fact]
     public void CompletedOutputMismatchBlocksAResourceFailureResult()
     {
         PressureOutcomeDecision decision = PressureOutcomePolicy.Evaluate(

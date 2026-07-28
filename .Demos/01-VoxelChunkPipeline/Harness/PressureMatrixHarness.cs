@@ -513,22 +513,18 @@ internal static class PressureMatrixHarness
                 nameof(observations));
         }
 
-        double safeElapsedTotal = observations.Sum(
-            static observation =>
-                observation.Safe.ProfileElapsedMilliseconds
-                ?? observation.Safe.ElapsedLowerBoundMilliseconds);
-        double namElapsedTotal = observations.Sum(
-            static observation =>
-                observation.Nam.ProfileElapsedMilliseconds
-                ?? observation.Nam.ElapsedLowerBoundMilliseconds);
-        bool namCompleted = observations.All(
-                static observation =>
-                    IsCompleted(observation.Nam))
-            && namElapsedTotal <= options.DeadlineMilliseconds;
-        bool safeCompleted = observations.All(
-                static observation =>
-                    IsCompleted(observation.Safe))
-            && safeElapsedTotal <= options.DeadlineMilliseconds;
+        PressureImplementationObservation[] safeObservations = observations
+            .Select(static observation => observation.Safe)
+            .ToArray();
+        PressureImplementationObservation[] namObservations = observations
+            .Select(static observation => observation.Nam)
+            .ToArray();
+        bool namCompleted =
+            PressureOutcomePolicy.AllSamplesCompletedWithinDeadline(
+                namObservations);
+        bool safeCompleted =
+            PressureOutcomePolicy.AllSamplesCompletedWithinDeadline(
+                safeObservations);
         bool parity = safeCompleted
             && namCompleted
             && observations.All(
