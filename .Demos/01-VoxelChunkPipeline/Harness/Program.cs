@@ -20,8 +20,18 @@ internal static class Program
                     .GetResult();
             }
 
+            if (args.Contains(
+                    "--sustained-diagnostic",
+                    StringComparer.Ordinal))
+            {
+                return PressureMatrixHarness
+                    .RunSustainedDiagnosticAsync(args)
+                    .GetAwaiter()
+                    .GetResult();
+            }
+
             Console.Error.WriteLine(
-                "Specify --compile-gate or --pressure-matrix.");
+                "Specify --compile-gate, --pressure-matrix, or --sustained-diagnostic.");
             return 2;
         }
         catch (Exception exception)

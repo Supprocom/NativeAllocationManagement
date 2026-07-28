@@ -81,7 +81,11 @@ internal sealed class SafePressureSession :
         Action<PressureProgress> reportProgress)
     {
         bool exactVerification =
-            request.ExecutionMode == PressureExecutionMode.Verification;
+            request.RequiresExactVerification;
+        PressurePhaseRecorder? phaseRecorder =
+            request.Diagnostic is null
+                ? null
+                : new PressurePhaseRecorder();
         if (request.RetentionDepth > PressureWorkContract.DefaultRetentionDepth)
         {
             throw new ArgumentOutOfRangeException(
@@ -134,6 +138,8 @@ internal sealed class SafePressureSession :
                 realizedDemand,
                 minimumWarmupChunks))
             {
+                long phaseStart =
+                    phaseRecorder?.Start() ?? 0;
                 VoxelCell[] cells = _cells.Rent(
                     checked(
                         admission.RetentionDepth
@@ -307,6 +313,11 @@ internal sealed class SafePressureSession :
                         lastChunkId = chunkId;
                     }
 
+                    phaseRecorder?.Record(
+                        PressureDiagnosticPhase.Build,
+                        phaseStart);
+                    phaseStart =
+                        phaseRecorder?.Start() ?? 0;
                     peakBatchCount = Math.Max(peakBatchCount, batchCount);
                     sectionDescriptors = _sectionDescriptors.Rent(
                         totalSectionDescriptors);
@@ -364,6 +375,11 @@ internal sealed class SafePressureSession :
                                 slot.Shape.TransparentMaskWords));
                     }
 
+                    phaseRecorder?.Record(
+                        PressureDiagnosticPhase.SectionPreparation,
+                        phaseStart);
+                    phaseStart =
+                        phaseRecorder?.Start() ?? 0;
                     faces = _faces.Rent(Math.Max(1, totalRecords));
                     for (int batchIndex = 0; batchIndex < batchCount; batchIndex++)
                     {
@@ -427,6 +443,11 @@ internal sealed class SafePressureSession :
                         }
                     }
 
+                    phaseRecorder?.Record(
+                        PressureDiagnosticPhase.FaceGeneration,
+                        phaseStart);
+                    phaseStart =
+                        phaseRecorder?.Start() ?? 0;
                     ReturnBuffer(_sectionValues, sectionValues);
                     sectionValues = null;
                     ReturnBuffer(_sectionWords, sectionWords);
@@ -440,6 +461,11 @@ internal sealed class SafePressureSession :
                         clearArray: false);
                     sectionDescriptors = null;
 
+                    phaseRecorder?.Record(
+                        PressureDiagnosticPhase.FirstRecycle,
+                        phaseStart);
+                    phaseStart =
+                        phaseRecorder?.Start() ?? 0;
                     lastStage = VoxelPipelineStage.Render;
                     _transientBudget.BeginPhase(
                         outputStorageBytes);
@@ -579,6 +605,11 @@ internal sealed class SafePressureSession :
                         lastStage = VoxelPipelineStage.Prerender;
                     }
 
+                    phaseRecorder?.Record(
+                        PressureDiagnosticPhase.Packing,
+                        phaseStart);
+                    phaseStart =
+                        phaseRecorder?.Start() ?? 0;
                     CopyStagesToMappedUpload(
                         mappedUpload,
                         allStages);
@@ -685,6 +716,11 @@ internal sealed class SafePressureSession :
                         _slots[batchIndex] = default;
                     }
 
+                    phaseRecorder?.Record(
+                        PressureDiagnosticPhase.OutputConsumption,
+                        phaseStart);
+                    phaseStart =
+                        phaseRecorder?.Start() ?? 0;
                     ReturnBuffer(_vertices, vertices);
                     vertices = null;
                     ReturnBuffer(_indices, indices);
@@ -705,6 +741,9 @@ internal sealed class SafePressureSession :
                     faces = null;
                     _cells.Return(cells, clearArray: false);
                     cells = [];
+                    phaseRecorder?.Record(
+                        PressureDiagnosticPhase.SecondRecycle,
+                        phaseStart);
                     lastStage = VoxelPipelineStage.Completed;
                     if (batchCount < request.RetentionDepth
                         && request.NeedsChunk(
@@ -792,9 +831,18 @@ internal sealed class SafePressureSession :
                 && evidence.All(
                     static chunk => chunk.ExactVerificationPassed))
             && realizedDemand >= request.RequestedCumulativeDemandBytes;
+        long resetStart =
+            phaseRecorder?.Start() ?? 0;
         PressureSessionState stateAfterReset = ResetLogicalState(
             request,
             evidence);
+        phaseRecorder?.Record(
+            PressureDiagnosticPhase.Reset,
+            resetStart);
+        PressureRequestDiagnostics? diagnostics =
+            CreateRequestDiagnostics(
+                request,
+                phaseRecorder);
         return new PressureProfileResult(
             Implementation,
             outcome,
@@ -835,7 +883,37 @@ internal sealed class SafePressureSession :
             null,
             failure?.GetType().FullName,
             failure?.Message,
-            StateAfterReset: stateAfterReset);
+            StateAfterReset: stateAfterReset,
+            Diagnostics: diagnostics);
+    }
+
+    private static PressureRequestDiagnostics?
+        CreateRequestDiagnostics(
+            PressureProfileRequest request,
+            PressurePhaseRecorder? recorder)
+    {
+        if (request.Diagnostic is not { } diagnostic
+            || recorder is null)
+        {
+            return null;
+        }
+
+        return new PressureRequestDiagnostics(
+        [
+            new PressureWorkerDiagnostic(
+                diagnostic.WorkerIndex,
+                diagnostic.PartitionChunkCount,
+                diagnostic.PartitionLogicalBytes,
+                default,
+                default,
+                default,
+                0,
+                0,
+                recorder.Capture(),
+                default,
+                default,
+                default)
+        ]);
     }
 
     private PressureSessionState ResetLogicalState(

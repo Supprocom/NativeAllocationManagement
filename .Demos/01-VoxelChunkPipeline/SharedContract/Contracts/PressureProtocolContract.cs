@@ -69,13 +69,18 @@ public readonly record struct PressureProfileRequest(
     PressureExecutionMode ExecutionMode =
         PressureExecutionMode.Verification,
     PressureChunkPlanEntry[]? PlannedChunks = null,
-    long RequestOrdinal = 0)
+    long RequestOrdinal = 0,
+    PressureDiagnosticRequest? Diagnostic = null)
 {
     public bool HasPlannedChunks =>
         PlannedChunks is { Length: > 0 };
 
     public int PlannedChunkCount =>
         PlannedChunks?.Length ?? 0;
+
+    public bool RequiresExactVerification =>
+        ExecutionMode == PressureExecutionMode.Verification
+        || Diagnostic is { VerifyExactOutput: true };
 
     public void Validate()
     {
@@ -335,7 +340,8 @@ public readonly record struct PressureProfileResult(
     int ActiveWorkerCount = 1,
     IReadOnlyList<long>? WorkerBudgetBytes = null,
     IReadOnlyList<PressureWorkerCapacity>? WorkerCapacities = null,
-    PressureSessionState? StateAfterReset = null);
+    PressureSessionState? StateAfterReset = null,
+    PressureRequestDiagnostics? Diagnostics = null);
 
 public readonly record struct PressureSessionState(
     string Implementation,

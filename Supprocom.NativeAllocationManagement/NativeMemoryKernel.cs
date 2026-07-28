@@ -260,6 +260,25 @@ public readonly record struct NativeOwnerStatistics(
     long TrimCallCount,
     long FreshSegmentAllocationCount);
 
+internal readonly record struct NativeOwnerDiagnosticSnapshot(
+    NativeOwnerLifecycle Lifecycle,
+    long Generation,
+    long ScopeEpoch,
+    long MetricsEpoch,
+    int ActiveRecords,
+    int ScopedRecords,
+    int ReferenceRoots,
+    int OrdinaryTraversalIndex,
+    int ScopedTraversalIndex,
+    int RetainedSegmentCount,
+    int AvailableSegmentCount,
+    int RetiredGenerationCount,
+    int RetiredSegmentCount,
+    long RetiredBytes,
+    int QuarantinedGenerationCount,
+    int QuarantinedSegmentCount,
+    bool CurrentGenerationQuarantined);
+
 /// <summary>Provides process-local physical storage counters for measurement and diagnostics.</summary>
 public static class NativeMemoryDiagnostics
 {
@@ -2251,6 +2270,72 @@ internal sealed class NativeOwnerKernel
                 _trimmedBytes,
                 _trimCallCount,
                 _freshSegmentAllocationCount);
+        }
+    }
+
+    internal NativeOwnerDiagnosticSnapshot GetDiagnosticSnapshot()
+    {
+        lock (_gate)
+        {
+            NativeGeneration? current = _current;
+            int activeRecords = 0;
+            if (current is not null)
+            {
+                foreach (NativeAllocation allocation
+                    in current.Allocations.Values)
+                {
+                    if (IsCurrentAllocation(current, allocation))
+                    {
+                        activeRecords++;
+                    }
+                }
+            }
+
+            int availableSegmentCount =
+                current?.AvailableSlabs.Count ?? 0;
+            if (current is not null)
+            {
+                foreach (NativeBumpSegment bump
+                    in current.BumpSegments)
+                {
+                    if (bump.IsCompletelyIdle)
+                    {
+                        availableSegmentCount++;
+                    }
+                }
+            }
+
+            int quarantinedSegments = 0;
+            foreach (NativeGeneration generation
+                in _quarantinedGenerations)
+            {
+                quarantinedSegments = checked(
+                    quarantinedSegments
+                    + generation.RetiredSegmentCount);
+            }
+
+            return new NativeOwnerDiagnosticSnapshot(
+                _lifecycle,
+                current?.Number ?? _generation,
+                current?.ScopeEpoch ?? 0,
+                NativeMemoryTestHooks.CurrentMetricsEpoch,
+                activeRecords,
+                current?.ScopedRecordCount ?? 0,
+                current?.ReferenceRoots.Count ?? 0,
+                current?.OrdinaryBumpTraversalIndex ?? 0,
+                current?.ScopedBumpTraversalIndex ?? -1,
+                current is null
+                    ? 0
+                    : checked(
+                        current.Slabs.Count
+                        + current.BumpSegments.Count),
+                availableSegmentCount,
+                _retiredGenerations.Count,
+                CountRetiredSegmentsLocked(),
+                SumRetiredBytesLocked(),
+                _quarantinedGenerations.Count,
+                quarantinedSegments,
+                current?.IsQuarantined == true);
         }
     }
 

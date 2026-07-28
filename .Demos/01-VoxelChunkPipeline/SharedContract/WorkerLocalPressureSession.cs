@@ -78,7 +78,8 @@ public sealed class WorkerLocalPressureSession : IPressureProfileSession
                         request,
                         partition,
                         partitions.Length,
-                        _workerBudgets[index]);
+                        _workerBudgets[index],
+                        index);
                 WorkerExecution execution = new(
                     workerRequest,
                     startGate);
@@ -252,11 +253,12 @@ public sealed class WorkerLocalPressureSession : IPressureProfileSession
             for (int index = 0; index < candidate; index++)
             {
                 PressureProfileRequest workerRequest =
-                    CreateWorkerRequest(
-                        request,
-                        partitions[index],
-                        candidate,
-                        retainedLimit);
+                     CreateWorkerRequest(
+                         request,
+                         partitions[index],
+                         candidate,
+                         retainedLimit,
+                         index);
                 try
                 {
                     capacities[index] =
@@ -372,13 +374,25 @@ public sealed class WorkerLocalPressureSession : IPressureProfileSession
         PressureProfileRequest request,
         WorkerPartition partition,
         int workerCount,
-        long workerBudgetBytes)
+        long workerBudgetBytes,
+        int workerIndex)
     {
         int workerRetentionDepth = Math.Max(
             1,
             (request.RetentionDepth
                 + workerCount - 1)
             / workerCount);
+        PressureDiagnosticRequest? diagnostic =
+            request.Diagnostic is { } requested
+                ? requested with
+                {
+                    WorkerIndex = workerIndex,
+                    PartitionChunkCount =
+                        partition.Chunks.Count,
+                    PartitionLogicalBytes =
+                        partition.LogicalDemandBytes
+                }
+                : null;
         return request with
         {
             CgroupCapBytes = workerBudgetBytes,
@@ -387,7 +401,8 @@ public sealed class WorkerLocalPressureSession : IPressureProfileSession
             RetentionDepth = workerRetentionDepth,
             ProgressEveryChunks = int.MaxValue,
             PlannedChunks =
-                partition.Chunks.ToArray()
+                partition.Chunks.ToArray(),
+            Diagnostic = diagnostic
         };
     }
 
@@ -503,8 +518,7 @@ public sealed class WorkerLocalPressureSession : IPressureProfileSession
                 ? MapFailureOutcome(failedExecution.Failure)
                 : failedResult?.Outcome
                     ?? PressureProfileOutcome.Completed;
-        bool verification = request.ExecutionMode
-            == PressureExecutionMode.Verification;
+        bool verification = request.RequiresExactVerification;
         PressureChunkEvidence[] evidence = verification
             ? results
                 .SelectMany(
@@ -587,6 +601,10 @@ public sealed class WorkerLocalPressureSession : IPressureProfileSession
                 request,
                 results,
                 after);
+        PressureRequestDiagnostics? diagnostics =
+            CreateRequestDiagnostics(
+                request,
+                executions);
         return new PressureProfileResult(
             Implementation,
             outcome,
@@ -676,8 +694,66 @@ public sealed class WorkerLocalPressureSession : IPressureProfileSession
             ActiveWorkerCount: _activeWorkerCount,
             WorkerBudgetBytes: _workerBudgets,
             WorkerCapacities: _workerCapacities,
-            StateAfterReset: stateAfterReset);
+            StateAfterReset: stateAfterReset,
+            Diagnostics: diagnostics);
     }
+
+    private static PressureRequestDiagnostics? CreateRequestDiagnostics(
+        PressureProfileRequest request,
+        IReadOnlyList<WorkerExecution> executions)
+    {
+        if (request.Diagnostic is null)
+        {
+            return null;
+        }
+
+        PressureWorkerDiagnostic[] workers =
+            new PressureWorkerDiagnostic[executions.Count];
+        for (int index = 0; index < executions.Count; index++)
+        {
+            WorkerExecution execution = executions[index];
+            PressureWorkerDiagnostic inner =
+                execution.Result?.Diagnostics?.Workers
+                    .SingleOrDefault()
+                ?? default;
+            PressureDiagnosticRequest workerRequest =
+                execution.Request.Diagnostic
+                ?? throw new InvalidDataException(
+                    "A diagnostic worker request is missing its partition data.");
+            DateTime started = execution.ProcessingStartedUtc;
+            DateTime processingCompleted =
+                execution.ProcessingCompletedUtc;
+            DateTime finished = execution.FinishedUtc;
+            workers[index] = inner with
+            {
+                WorkerIndex = workerRequest.WorkerIndex,
+                PartitionChunkCount =
+                    workerRequest.PartitionChunkCount,
+                PartitionLogicalBytes =
+                    workerRequest.PartitionLogicalBytes,
+                StartedUtc = started,
+                ProcessingCompletedUtc = processingCompleted,
+                FinishedUtc = finished,
+                ProcessingMilliseconds =
+                    GetElapsedMilliseconds(
+                        started,
+                        processingCompleted),
+                FinishLatencyMilliseconds =
+                    GetElapsedMilliseconds(
+                        processingCompleted,
+                        finished)
+            };
+        }
+
+        return new PressureRequestDiagnostics(workers);
+    }
+
+    private static double GetElapsedMilliseconds(
+        DateTime start,
+        DateTime end) =>
+        start == default || end < start
+            ? 0
+            : (end - start).TotalMilliseconds;
 
     private PressureSessionState AggregateResetState(
         PressureProfileRequest request,
@@ -781,8 +857,8 @@ public sealed class WorkerLocalPressureSession : IPressureProfileSession
         long plannedDemand = plan.Sum(
             static chunk =>
                 chunk.LogicalDemandBytes);
-        bool verification = execution.Request.ExecutionMode
-            == PressureExecutionMode.Verification;
+        bool verification =
+            execution.Request.RequiresExactVerification;
         return result.ExecutionMode
                 == execution.Request.ExecutionMode
             && result.CompletedChunks == plan.Length
@@ -881,6 +957,12 @@ public sealed class WorkerLocalPressureSession : IPressureProfileSession
 
         internal Exception? Failure { get; set; }
 
+        internal DateTime ProcessingStartedUtc { get; set; }
+
+        internal DateTime ProcessingCompletedUtc { get; set; }
+
+        internal DateTime FinishedUtc { get; set; }
+
         internal Task<PressureProfileResult>? QueuedResult
         {
             get;
@@ -905,6 +987,7 @@ public sealed class WorkerLocalPressureSession : IPressureProfileSession
             }
             finally
             {
+                FinishedUtc = DateTime.UtcNow;
                 Finished.Set();
             }
         }
@@ -959,6 +1042,7 @@ public sealed class WorkerLocalPressureSession : IPressureProfileSession
                 catch (Exception exception)
                 {
                     execution.Failure = exception;
+                    execution.FinishedUtc = DateTime.UtcNow;
                     execution.Ready.Set();
                     execution.ProcessingCompleted.Set();
                     execution.Finished.Set();
@@ -998,6 +1082,7 @@ public sealed class WorkerLocalPressureSession : IPressureProfileSession
                 }
                 finally
                 {
+                    execution.FinishedUtc = DateTime.UtcNow;
                     execution.Ready.Set();
                     execution.ProcessingCompleted.Set();
                     execution.Finished.Set();
@@ -1014,6 +1099,7 @@ public sealed class WorkerLocalPressureSession : IPressureProfileSession
             {
                 execution.Ready.Set();
                 execution.StartGate.Wait();
+                execution.ProcessingStartedUtc = DateTime.UtcNow;
                 return;
             }
 
@@ -1021,6 +1107,8 @@ public sealed class WorkerLocalPressureSession : IPressureProfileSession
                 == PressureProgressKind.ProcessingCompleted)
             {
                 execution.Progress = progress;
+                execution.ProcessingCompletedUtc =
+                    DateTime.UtcNow;
                 execution.ProcessingCompleted.Set();
             }
         }

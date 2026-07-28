@@ -63,6 +63,44 @@ public sealed class NativeOwnerStatisticsTests
     }
 
     [Fact]
+    public void ArenaDiagnosticSnapshotTracksScopedRecycleState()
+    {
+        using NativeArena arena = new(
+            preAllocateBytes: 4_096,
+            returnMemoryOnDispose:
+                NativeMemoryReturn.ToNativeMemory);
+        NativeOwnerDiagnosticSnapshot initial =
+            arena.CaptureDiagnosticSnapshot();
+        {
+            ArenaLease<byte> bytes =
+                arena.ScratchScoped<byte>(
+                    128,
+                    static writer =>
+                        writer.Fill(default!));
+            NativeOwnerDiagnosticSnapshot active =
+                arena.CaptureDiagnosticSnapshot();
+
+            Assert.Equal(NativeOwnerLifecycle.Active, active.Lifecycle);
+            Assert.Equal(initial.Generation, active.Generation);
+            Assert.Equal(1, active.ActiveRecords);
+            Assert.Equal(1, active.ScopedRecords);
+            Assert.Equal(0, active.ReferenceRoots);
+            Assert.True(active.RetainedSegmentCount >= 1);
+            bytes.Access(static view => view.Fill(0x2A));
+        }
+
+        arena.RecycleScoped();
+        NativeOwnerDiagnosticSnapshot recycled =
+            arena.CaptureDiagnosticSnapshot();
+
+        Assert.Equal(0, recycled.ActiveRecords);
+        Assert.Equal(0, recycled.ScopedRecords);
+        Assert.Equal(0, recycled.ReferenceRoots);
+        Assert.True(recycled.AvailableSegmentCount >= 1);
+        Assert.False(recycled.CurrentGenerationQuarantined);
+    }
+
+    [Fact]
     public void RegionStatisticsReportTheCurrentLexicalAllocation()
     {
         using (NativeRegion region = new(

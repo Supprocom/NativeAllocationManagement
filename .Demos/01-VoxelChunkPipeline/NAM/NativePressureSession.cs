@@ -164,6 +164,15 @@ internal sealed class NativePressureSession :
                                 + $"{PressureWorkContract.DefaultRetentionDepth} chunks.");
                         }
 
+                        PressurePhaseRecorder? phaseRecorder =
+                            request.Diagnostic is null
+                                ? null
+                                : new PressurePhaseRecorder();
+                        PressureAllocatorDiagnosticSnapshot
+                            allocatorBefore =
+                                CaptureAllocatorDiagnostic(
+                                    phaseArena,
+                                    request.Diagnostic is not null);
                         PressureRuntimeSnapshot before = PressureRuntimeSnapshot.Capture();
                         NativeMemoryStatistics nativeBefore = NativeMemoryDiagnostics.Snapshot();
                         NativeOwnerStatistics[] ownerBefore =
@@ -195,6 +204,8 @@ internal sealed class NativePressureSession :
 
                             while (state.NeedsBatch(request))
                             {
+                                long phaseStart =
+                                    phaseRecorder?.Start() ?? 0;
                                 _context.BeginBatch(
                                     request,
                                     reportProgress,
@@ -211,8 +222,13 @@ internal sealed class NativePressureSession :
                                     _context.BuildAction);
                                 state.RecordBuild(request, _context);
                                 outputCapacity.EnsureFits(_context);
+                                phaseRecorder?.Record(
+                                    PressureDiagnosticPhase.Build,
+                                    phaseStart);
                                 try
                                 {
+                                    phaseStart =
+                                        phaseRecorder?.Start() ?? 0;
                                     scoped ArenaLease<
                                         SectionPrerenderDescriptor>
                                         sectionDescriptors;
@@ -263,9 +279,15 @@ internal sealed class NativePressureSession :
                                             sectionWords,
                                             sectionStates,
                                                 _context
-                                                    .SectionRecordAction);
+                                                .SectionRecordAction);
                                     }
 
+                                    phaseRecorder?.Record(
+                                        PressureDiagnosticPhase
+                                            .SectionPreparation,
+                                        phaseStart);
+                                    phaseStart =
+                                        phaseRecorder?.Start() ?? 0;
                                     NativeLeaseOperations.Access(
                                         persistentCells,
                                         persistentFaces,
@@ -285,14 +307,27 @@ internal sealed class NativePressureSession :
                                         sectionMasks.Access(
                                             _context.MaskRecordAction);
                                     }
+
+                                    phaseRecorder?.Record(
+                                        PressureDiagnosticPhase
+                                            .FaceGeneration,
+                                        phaseStart);
                                 }
                                 finally
                                 {
+                                    phaseStart =
+                                        phaseRecorder?.Start() ?? 0;
                                     phaseArena.RecycleScoped();
+                                    phaseRecorder?.Record(
+                                        PressureDiagnosticPhase
+                                            .FirstRecycle,
+                                        phaseStart);
                                 }
 
                                 try
                                 {
+                                    phaseStart =
+                                        phaseRecorder?.Start() ?? 0;
                                     scoped ArenaLease<Vertex>
                                         vertices;
                                     scoped ArenaLease<int>
@@ -313,6 +348,11 @@ internal sealed class NativePressureSession :
                                         out indices,
                                         out slices,
                                         out aliasMarker);
+                                    phaseRecorder?.Record(
+                                        PressureDiagnosticPhase.Packing,
+                                        phaseStart);
+                                    phaseStart =
+                                        phaseRecorder?.Start() ?? 0;
                                     if (_context.ExactVerification)
                                     {
                                         NativeLeaseOperations.Access(
@@ -329,10 +369,20 @@ internal sealed class NativePressureSession :
                                     }
                                     RecordCompletedBatch(state);
                                     state.RecordArena(_context);
+                                    phaseRecorder?.Record(
+                                        PressureDiagnosticPhase
+                                            .OutputConsumption,
+                                        phaseStart);
                                 }
                                 finally
                                 {
+                                    phaseStart =
+                                        phaseRecorder?.Start() ?? 0;
                                     phaseArena.RecycleScoped();
+                                    phaseRecorder?.Record(
+                                        PressureDiagnosticPhase
+                                            .SecondRecycle,
+                                        phaseStart);
                                 }
 
                                 state.LastStage =
@@ -360,6 +410,11 @@ internal sealed class NativePressureSession :
                             failure = exception;
                         }
 
+                        PressureAllocatorDiagnosticSnapshot
+                            allocatorAfterProcessing =
+                                CaptureAllocatorDiagnostic(
+                                    phaseArena,
+                                    request.Diagnostic is not null);
                         reportProgress(new PressureProgress(
                             Implementation,
                             request.ProfilePercent,
@@ -403,6 +458,8 @@ internal sealed class NativePressureSession :
                             static owner => owner.PeakPhysicalBytes);
                         long completedLogicalBytes =
                             _context.CompletedLogicalBytes;
+                        long resetStart =
+                            phaseRecorder?.Start() ?? 0;
                         phaseArena.RecycleScoped();
                         PressureSessionState stateAfterReset =
                             ResetLogicalState(
@@ -411,6 +468,21 @@ internal sealed class NativePressureSession :
                                 phaseArena,
                                 outputCapacity,
                                 persistentAllocationBytes);
+                        phaseRecorder?.Record(
+                            PressureDiagnosticPhase.Reset,
+                            resetStart);
+                        PressureAllocatorDiagnosticSnapshot
+                            allocatorAfterReset =
+                                CaptureAllocatorDiagnostic(
+                                    phaseArena,
+                                    request.Diagnostic is not null);
+                        PressureRequestDiagnostics? diagnostics =
+                            CreateRequestDiagnostics(
+                                request,
+                                phaseRecorder,
+                                allocatorBefore,
+                                allocatorAfterProcessing,
+                                allocatorAfterReset);
                         item.Result = new PressureProfileResult(
                             Implementation,
                             outcome,
@@ -477,7 +549,8 @@ internal sealed class NativePressureSession :
                             owners,
                             failure?.GetType().FullName,
                             failure?.Message,
-                            StateAfterReset: stateAfterReset);
+                            StateAfterReset: stateAfterReset,
+                            Diagnostics: diagnostics);
                     }
                     catch (Exception exception)
                     {
@@ -513,6 +586,72 @@ internal sealed class NativePressureSession :
     {
         state.RecordPack(_context);
         _slots.AsSpan(0, _context.BatchCount).Clear();
+    }
+
+    private static PressureRequestDiagnostics?
+        CreateRequestDiagnostics(
+            PressureProfileRequest request,
+            PressurePhaseRecorder? recorder,
+            PressureAllocatorDiagnosticSnapshot allocatorBefore,
+            PressureAllocatorDiagnosticSnapshot
+                allocatorAfterProcessing,
+            PressureAllocatorDiagnosticSnapshot allocatorAfterReset)
+    {
+        if (request.Diagnostic is not { } diagnostic
+            || recorder is null)
+        {
+            return null;
+        }
+
+        return new PressureRequestDiagnostics(
+        [
+            new PressureWorkerDiagnostic(
+                diagnostic.WorkerIndex,
+                diagnostic.PartitionChunkCount,
+                diagnostic.PartitionLogicalBytes,
+                default,
+                default,
+                default,
+                0,
+                0,
+                recorder.Capture(),
+                allocatorBefore,
+                allocatorAfterProcessing,
+                allocatorAfterReset)
+        ]);
+    }
+
+    private static PressureAllocatorDiagnosticSnapshot
+        CaptureAllocatorDiagnostic(
+            NativeArena arena,
+            bool enabled)
+    {
+        if (!enabled)
+        {
+            return default;
+        }
+
+        NativeOwnerDiagnosticSnapshot snapshot =
+            arena.CaptureDiagnosticSnapshot();
+        return new PressureAllocatorDiagnosticSnapshot(
+            true,
+            snapshot.Lifecycle.ToString(),
+            snapshot.Generation,
+            snapshot.ScopeEpoch,
+            snapshot.MetricsEpoch,
+            snapshot.ActiveRecords,
+            snapshot.ScopedRecords,
+            snapshot.ReferenceRoots,
+            snapshot.OrdinaryTraversalIndex,
+            snapshot.ScopedTraversalIndex,
+            snapshot.RetainedSegmentCount,
+            snapshot.AvailableSegmentCount,
+            snapshot.RetiredGenerationCount,
+            snapshot.RetiredSegmentCount,
+            snapshot.RetiredBytes,
+            snapshot.QuarantinedGenerationCount,
+            snapshot.QuarantinedSegmentCount,
+            snapshot.CurrentGenerationQuarantined);
     }
 
     private PressureSessionState ResetLogicalState(
@@ -649,8 +788,7 @@ internal sealed class NativePressureSession :
                     && !request.HasPlannedChunks
                 ? request.RetentionDepth
                 : 0;
-            Evidence = request.ExecutionMode
-                    == PressureExecutionMode.Verification
+            Evidence = request.RequiresExactVerification
                 ? new List<PressureChunkEvidence>(
                     request.PlannedChunkCount)
                 : null;
@@ -903,7 +1041,7 @@ internal sealed class NativePressureSession :
         internal int BatchCapacity => _batchCapacity;
 
         internal bool ExactVerification =>
-            _request.ExecutionMode == PressureExecutionMode.Verification;
+            _request.RequiresExactVerification;
 
         internal void BeginBatch(
             PressureProfileRequest request,

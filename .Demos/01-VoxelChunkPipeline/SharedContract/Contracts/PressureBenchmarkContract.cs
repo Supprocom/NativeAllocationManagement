@@ -79,7 +79,9 @@ public readonly record struct PressureImplementationObservation(
     PressureEffectiveIsolation Isolation,
     double EffectiveCpuCores = 0,
     long PageFaultsDelta = 0,
-    long MajorPageFaultsDelta = 0);
+    long MajorPageFaultsDelta = 0,
+    PressureExternalProcessSnapshot ExternalBefore = default,
+    PressureExternalProcessSnapshot ExternalAfter = default);
 
 public readonly record struct PressurePairedStatistics(
     int SampleCount,

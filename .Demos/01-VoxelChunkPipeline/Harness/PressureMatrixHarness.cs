@@ -15,6 +15,7 @@ internal static class PressureMatrixHarness
     private const int MeasurementPreparationPassCount = 6;
     private const int TimedMeasurementRequestOrdinal = 11;
     private const int ProfileGateFailureExitCode = 5;
+    private const int DiagnosticFailureExitCode = 6;
     private const int NonMeasuredOperationTimeoutSeconds = 60;
     private static readonly int[] ProfilePercents =
     [
@@ -497,6 +498,606 @@ internal static class PressureMatrixHarness
         Console.WriteLine(JsonSerializer.Serialize(summary, VoxelJson.Options));
         Console.WriteLine(options.OutputPath);
         return options.Enforce && !summary.GatePassed ? 3 : 0;
+    }
+
+    internal static async Task<int> RunSustainedDiagnosticAsync(
+        string[] args)
+    {
+        Options options = Options.Parse(args);
+        if (options.ProfilePercents.Count != 1
+            || options.ProfilePercents[0] != WarmupProfilePercent)
+        {
+            throw new ArgumentException(
+                "The sustained diagnostic requires only the 1000-percent profile.");
+        }
+
+        if (!string.Equals(
+                options.SafeCpuSet,
+                options.NamCpuSet,
+                StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "The sustained diagnostic requires one shared CPU set.");
+        }
+
+        DateTime startedUtc = DateTime.UtcNow;
+        string commit = (await RunCommandAsync(
+            "git",
+            ["-C", options.RepositoryRoot, "rev-parse", "HEAD"],
+            TimeSpan.FromSeconds(10))).StandardOutput.Trim();
+        string workingTreeSourceSha256 =
+            await CaptureWorkingTreeSourceSha256Async(
+                options.RepositoryRoot);
+        IReadOnlyList<PressureBinaryIdentity> binaryIdentities =
+            CaptureBinaryIdentities(
+                options.RepositoryRoot,
+                commit);
+        string imageId = (await RunCommandAsync(
+            "docker",
+            [
+                "image",
+                "inspect",
+                "--format",
+                "{{.Id}}",
+                options.Image
+            ],
+            TimeSpan.FromSeconds(20))).StandardOutput.Trim();
+        PressureSustainedDiagnosticOptionsSnapshot diagnosticOptions =
+            new(
+                options.RepositoryRoot,
+                options.Image,
+                options.OutputPath,
+                options.NamCpuSet,
+                options.CgroupCapBytes,
+                options.DeadlineMilliseconds,
+                options.RetentionDepth,
+                options.Seed,
+                options.PidsLimit,
+                options.GcHeapHardLimitPercent,
+                WarmupProfilePercent,
+                DockerWorker.WarmupPassCount,
+                MeasurementPreparationPassCount,
+                120,
+                10,
+                1,
+                5);
+        List<string> commands = [];
+        List<PressureWorkerLifecycle> lifecycles = [];
+        List<PressureSustainedDiagnosticTrace> traces = [];
+        List<PressureProfileResult> safeBaseline = [];
+        string? failure = null;
+        using WindowsHostProcessorSampler hostSampler = new();
+        List<PressureHostProcessorSample> initialHostSamples = [];
+        for (int index = 0;
+            index < PressureHostStabilityPolicy
+                .RequiredConsecutiveSamples;
+            index++)
+        {
+            initialHostSamples.Add(
+                await hostSampler.SampleAsync());
+        }
+
+        double initialPerformanceMedian =
+            PressureHostStabilityPolicy
+                .MedianProcessorPerformance(
+                    initialHostSamples);
+        (string Label, string Implementation, int WorkerCount)[] plan =
+        [
+            ("Safe-12", "SafeCSharp", 12),
+            ("NAM-10", "NAM", 10),
+            ("NAM-8", "NAM", 8),
+            ("NAM-6", "NAM", 6)
+        ];
+        foreach ((string label, string implementation, int workerCount)
+            in plan)
+        {
+            PressureHostStateGate hostGate =
+                await WaitForStableHostAsync(
+                    hostSampler,
+                    initialPerformanceMedian,
+                    diagnosticOptions);
+            if (!hostGate.Passed)
+            {
+                failure =
+                    $"The host-state gate failed before {label}: "
+                    + hostGate.FailureReason;
+                await WriteSustainedDiagnosticAsync(
+                    options.OutputPath,
+                    commit,
+                    workingTreeSourceSha256,
+                    imageId,
+                    binaryIdentities,
+                    diagnosticOptions,
+                    commands,
+                    initialPerformanceMedian,
+                    initialHostSamples,
+                    traces,
+                    lifecycles,
+                    new PressureSustainedDiagnosticHostGateFailure(
+                        label,
+                        hostGate),
+                    failure,
+                    startedUtc);
+                return DiagnosticFailureExitCode;
+            }
+
+            List<PressureImplementationObservation> warmups = [];
+            List<PressureImplementationObservation> preparations = [];
+            PressureImplementationObservation timed = default;
+            List<bool> exactParityByOrdinal = [];
+            DockerWorker? worker = null;
+            PressureWorkerLifecycle lifecycle = default;
+            try
+            {
+                worker = await DockerWorker.StartAsync(
+                    options,
+                    implementation,
+                    options.NamCpuSet,
+                    imageId,
+                    commands,
+                    lifecycles,
+                    implementation == "NAM"
+                        ? workerCount
+                        : null);
+                if (worker.StartupRuntime.ProcessorCount != 12)
+                {
+                    throw new InvalidOperationException(
+                        "The diagnostic container must expose 12 processors.");
+                }
+
+                PressureProfileRequest request = new(
+                    WarmupProfilePercent,
+                    options.CgroupCapBytes,
+                    checked(
+                        options.CgroupCapBytes
+                        * WarmupProfilePercent
+                        / 100),
+                    options.DeadlineMilliseconds,
+                    options.Seed,
+                    options.RetentionDepth,
+                    options.ProgressEveryChunks,
+                    Diagnostic:
+                        new PressureDiagnosticRequest(
+                            VerifyExactOutput: true));
+                for (int index = 0;
+                    index < DockerWorker.WarmupPassCount;
+                    index++)
+                {
+                    PressureImplementationObservation observation =
+                        await worker.RunDiagnosticRequestAsync(
+                            request with
+                            {
+                                Warmup = true
+                            },
+                            options,
+                            PressureCommandKind.Warmup,
+                            enforceDeadline: false);
+                    ValidateDiagnosticObservation(
+                        observation,
+                        workerCount,
+                        index + 1);
+                    warmups.Add(observation);
+                }
+
+                for (int index = 0;
+                    index < MeasurementPreparationPassCount;
+                    index++)
+                {
+                    PressureImplementationObservation observation =
+                        await worker.RunDiagnosticRequestAsync(
+                            request,
+                            options,
+                            PressureCommandKind.RunProfile,
+                            enforceDeadline: false);
+                    ValidateDiagnosticObservation(
+                        observation,
+                        workerCount,
+                        DockerWorker.WarmupPassCount
+                            + index
+                            + 1);
+                    preparations.Add(observation);
+                }
+
+                timed = await worker.RunDiagnosticRequestAsync(
+                    request,
+                    options,
+                    PressureCommandKind.RunProfile,
+                    enforceDeadline: true);
+                ValidateDiagnosticObservation(
+                    timed,
+                    workerCount,
+                    TimedMeasurementRequestOrdinal);
+                PressureImplementationObservation[] allRequests =
+                    warmups
+                        .Concat(preparations)
+                        .Append(timed)
+                        .ToArray();
+                if (implementation == "SafeCSharp")
+                {
+                    safeBaseline.AddRange(
+                        allRequests.Select(
+                            static observation =>
+                                observation.ChildResult!.Value));
+                    exactParityByOrdinal.AddRange(
+                        Enumerable.Repeat(
+                            true,
+                            allRequests.Length));
+                }
+                else
+                {
+                    if (safeBaseline.Count != allRequests.Length)
+                    {
+                        throw new InvalidDataException(
+                            "The Safe baseline request count is not complete.");
+                    }
+
+                    for (int index = 0;
+                        index < allRequests.Length;
+                        index++)
+                    {
+                        bool parity = DiagnosticExactParity(
+                            safeBaseline[index],
+                            allRequests[index].ChildResult);
+                        exactParityByOrdinal.Add(parity);
+                        if (!parity)
+                        {
+                            throw new InvalidDataException(
+                                $"The {label} output differs at request ordinal {index + 1}.");
+                        }
+                    }
+                }
+            }
+            catch (Exception exception)
+            {
+                failure =
+                    $"{label} failed: {exception.GetType().FullName}: "
+                    + exception.Message;
+            }
+            finally
+            {
+                if (worker is not null)
+                {
+                    await worker.DisposeAsync();
+                    lifecycle = lifecycles[^1];
+                }
+            }
+
+            PressureHostProcessorSample hostAfter =
+                await hostSampler.SampleAsync();
+            bool allRequestsVerified =
+                failure is null
+                && warmups.Count == DockerWorker.WarmupPassCount
+                && preparations.Count
+                    == MeasurementPreparationPassCount
+                && DiagnosticObservationPassed(timed, workerCount)
+                && exactParityByOrdinal.Count
+                    == DockerWorker.WarmupPassCount
+                        + MeasurementPreparationPassCount
+                        + 1
+                && exactParityByOrdinal.All(
+                    static value => value)
+                && lifecycle.DisposalCompleted
+                && lifecycle.ContainerAbsentAfterDisposal;
+            traces.Add(new PressureSustainedDiagnosticTrace(
+                label,
+                implementation,
+                workerCount,
+                hostGate,
+                hostAfter,
+                warmups,
+                preparations,
+                timed,
+                exactParityByOrdinal,
+                allRequestsVerified,
+                lifecycle));
+            await WriteSustainedDiagnosticAsync(
+                options.OutputPath,
+                commit,
+                workingTreeSourceSha256,
+                imageId,
+                binaryIdentities,
+                diagnosticOptions,
+                commands,
+                initialPerformanceMedian,
+                initialHostSamples,
+                traces,
+                lifecycles,
+                null,
+                failure,
+                startedUtc);
+            if (failure is not null || !allRequestsVerified)
+            {
+                return DiagnosticFailureExitCode;
+            }
+        }
+
+        return 0;
+    }
+
+    private static async Task<PressureHostStateGate>
+        WaitForStableHostAsync(
+            WindowsHostProcessorSampler sampler,
+            double initialPerformanceMedian,
+            PressureSustainedDiagnosticOptionsSnapshot options)
+    {
+        List<PressureHostProcessorSample> samples = [];
+        using CancellationTokenSource timeout = new(
+            TimeSpan.FromSeconds(
+                options.HostGateTimeoutSeconds));
+        try
+        {
+            while (true)
+            {
+                samples.Add(
+                    await sampler.SampleAsync(
+                        timeout.Token));
+                if (PressureHostStabilityPolicy.HasStableTail(
+                        samples,
+                        initialPerformanceMedian,
+                        options.MaximumHostCpuPercent,
+                        options.MaximumProcessorQueueLength,
+                        options.MaximumProcessorPerformanceDelta))
+                {
+                    return new PressureHostStateGate(
+                        samples,
+                        true,
+                        string.Empty);
+                }
+            }
+        }
+        catch (OperationCanceledException)
+            when (timeout.IsCancellationRequested)
+        {
+            return new PressureHostStateGate(
+                samples,
+                false,
+                "The host did not supply three stable samples within 120 seconds.");
+        }
+    }
+
+    private static void ValidateDiagnosticObservation(
+        PressureImplementationObservation observation,
+        int expectedWorkerCount,
+        long expectedRequestOrdinal)
+    {
+        if (!DiagnosticObservationPassed(
+                observation,
+                expectedWorkerCount)
+            || observation.ChildResult?.StateAfterReset
+                    ?.RequestOrdinal
+                != expectedRequestOrdinal)
+        {
+            throw new InvalidDataException(
+                $"{observation.Implementation} request ordinal "
+                + $"{expectedRequestOrdinal} did not produce complete diagnostic evidence.");
+        }
+    }
+
+    private static bool DiagnosticObservationPassed(
+        PressureImplementationObservation observation,
+        int expectedWorkerCount)
+    {
+        if (observation.Outcome
+                != PressureProfileOutcome.Completed
+            || !observation.CorrectnessPassed
+            || observation.ChildResult is not { } result
+            || result.ActiveWorkerCount
+                != expectedWorkerCount
+            || result.StateAfterReset is not
+                {
+                    LogicalResetPassed: true
+                }
+            || result.Diagnostics is not { } diagnostics
+            || diagnostics.Workers.Count
+                != expectedWorkerCount
+            || result.ChunkEvidence.Count
+                != result.CompletedChunks
+            || result.ChunkEvidence.Count == 0
+            || result.CanonicalEvidenceHash.Length == 0
+            || result.ChunkEvidence.Any(
+                static chunk =>
+                    !chunk.ExactVerificationPassed)
+            || !observation.ExternalBefore.Cgroup.Available
+            || !observation.ExternalAfter.Cgroup.Available
+            || observation.ExternalBefore.ThreadCount <= 0
+            || observation.ExternalAfter.ThreadCount <= 0
+            || observation.ExternalBefore.ClockTicksPerSecond <= 0
+            || observation.ExternalAfter.ClockTicksPerSecond <= 0)
+        {
+            return false;
+        }
+
+        bool nam = string.Equals(
+            observation.Implementation,
+            "NAM",
+            StringComparison.Ordinal);
+        long partitionBytes = 0;
+        int partitionChunks = 0;
+        HashSet<int> indexes = [];
+        foreach (PressureWorkerDiagnostic worker
+            in diagnostics.Workers)
+        {
+            if (!indexes.Add(worker.WorkerIndex)
+                || worker.PartitionChunkCount <= 0
+                || worker.PartitionLogicalBytes <= 0
+                || worker.StartedUtc == default
+                || worker.ProcessingCompletedUtc
+                    < worker.StartedUtc
+                || worker.FinishedUtc
+                    < worker.ProcessingCompletedUtc
+                || worker.ProcessingMilliseconds <= 0
+                || worker.FinishLatencyMilliseconds < 0
+                || nam
+                    && (!worker.AllocatorBefore.Available
+                        || !worker.AllocatorAfterProcessing.Available
+                        || !worker.AllocatorAfterReset.Available))
+            {
+                return false;
+            }
+
+            partitionBytes = checked(
+                partitionBytes
+                + worker.PartitionLogicalBytes);
+            partitionChunks = checked(
+                partitionChunks
+                + worker.PartitionChunkCount);
+        }
+
+        return partitionBytes
+                == result.RealizedCumulativeDemandBytes
+            && partitionChunks == result.CompletedChunks;
+    }
+
+    private static bool DiagnosticExactParity(
+        PressureProfileResult safe,
+        PressureProfileResult? nam)
+    {
+        if (nam is not { } right)
+        {
+            return false;
+        }
+
+        return CompletionParity(safe, right)
+            && safe.ChunkEvidence.Count
+                == safe.CompletedChunks
+            && right.ChunkEvidence.Count
+                == right.CompletedChunks
+            && safe.ChunkEvidence.Count != 0
+            && safe.ChunkEvidence.SequenceEqual(
+                right.ChunkEvidence)
+            && safe.CanonicalEvidenceHash.Length != 0
+            && string.Equals(
+                safe.CanonicalEvidenceHash,
+                right.CanonicalEvidenceHash,
+                StringComparison.Ordinal);
+    }
+
+    private static async Task WriteSustainedDiagnosticAsync(
+        string outputPath,
+        string commit,
+        string workingTreeSourceSha256,
+        string imageId,
+        IReadOnlyList<PressureBinaryIdentity> binaryIdentities,
+        PressureSustainedDiagnosticOptionsSnapshot options,
+        IReadOnlyList<string> commands,
+        double initialPerformanceMedian,
+        IReadOnlyList<PressureHostProcessorSample>
+            initialHostSamples,
+        IReadOnlyList<PressureSustainedDiagnosticTrace> traces,
+        IReadOnlyList<PressureWorkerLifecycle> lifecycles,
+        PressureSustainedDiagnosticHostGateFailure?
+            hostGateFailure,
+        string? failure,
+        DateTime startedUtc)
+    {
+        int activeContainers =
+            await CountTaskContainersAsync();
+        PressureSustainedDiagnosticCleanup cleanup = new(
+            traces.Count,
+            lifecycles.Count,
+            lifecycles.All(
+                static lifecycle =>
+                    lifecycle.DisposalCompleted),
+            lifecycles.All(
+                static lifecycle =>
+                    lifecycle.ContainerAbsentAfterDisposal),
+            activeContainers);
+        PressureSustainedDiagnosticReport report = new(
+            commit,
+            workingTreeSourceSha256,
+            imageId,
+            binaryIdentities,
+            options,
+            commands.ToArray(),
+            initialPerformanceMedian,
+            initialHostSamples.ToArray(),
+            traces.ToArray(),
+            cleanup,
+            hostGateFailure,
+            failure,
+            startedUtc,
+            DateTime.UtcNow);
+        await AtomicPressureArtifactFile.WriteJsonAsync(
+            outputPath,
+            report,
+            new JsonSerializerOptions(VoxelJson.Options)
+            {
+                WriteIndented = true
+            });
+    }
+
+    private static async Task<int> CountTaskContainersAsync()
+    {
+        CommandResult result = await RunCommandAsync(
+            "docker",
+            [
+                "ps",
+                "-a",
+                "--filter",
+                "name=nam-voxel-",
+                "--format",
+                "{{.ID}}"
+            ],
+            TimeSpan.FromSeconds(10),
+            requireSuccess: false);
+        return result.StandardOutput.Split(
+            ['\r', '\n'],
+            StringSplitOptions.RemoveEmptyEntries).Length;
+    }
+
+    private static async Task<string>
+        CaptureWorkingTreeSourceSha256Async(
+            string repositoryRoot)
+    {
+        CommandResult diff = await RunCommandAsync(
+            "git",
+            [
+                "-C",
+                repositoryRoot,
+                "diff",
+                "--binary",
+                "--no-ext-diff",
+                "HEAD",
+                "--"
+            ],
+            TimeSpan.FromSeconds(20));
+        CommandResult untracked = await RunCommandAsync(
+            "git",
+            [
+                "-C",
+                repositoryRoot,
+                "ls-files",
+                "--others",
+                "--exclude-standard"
+            ],
+            TimeSpan.FromSeconds(10));
+        using IncrementalHash hash =
+            IncrementalHash.CreateHash(
+                HashAlgorithmName.SHA256);
+        hash.AppendData(
+            Encoding.UTF8.GetBytes(
+                diff.StandardOutput));
+        string[] paths = untracked.StandardOutput.Split(
+                ['\r', '\n'],
+                StringSplitOptions.RemoveEmptyEntries)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        foreach (string relativePath in paths)
+        {
+            string fullPath = Path.GetFullPath(
+                Path.Combine(
+                    repositoryRoot,
+                    relativePath));
+            hash.AppendData(
+                Encoding.UTF8.GetBytes(
+                    relativePath));
+            hash.AppendData(
+                await File.ReadAllBytesAsync(
+                    fullPath));
+        }
+
+        return Convert.ToHexString(
+            hash.GetHashAndReset());
     }
 
     private static PressureCurrentProfileCheckpoint
@@ -1766,6 +2367,8 @@ internal static class PressureMatrixHarness
         private readonly string _cpuSet;
         private readonly string _imageId;
         private readonly List<PressureWorkerLifecycle> _lifecycles;
+        private readonly WindowsProcessLifetimeJob
+            _processLifetime = new();
         private Process? _process;
         private Process? _statsProcess;
         private CancellationTokenSource? _statsCancellation;
@@ -1817,15 +2420,27 @@ internal static class PressureMatrixHarness
             string cpuSet,
             string imageId,
             List<string> commands,
-            List<PressureWorkerLifecycle> lifecycles)
+            List<PressureWorkerLifecycle> lifecycles,
+            int? diagnosticWorkerCount = null)
         {
             DockerWorker worker = new(
                 implementation,
                 cpuSet,
                 imageId,
                 lifecycles);
-            await worker.StartProcessAsync(options, commands);
-            return worker;
+            try
+            {
+                await worker.StartProcessAsync(
+                    options,
+                    commands,
+                    diagnosticWorkerCount);
+                return worker;
+            }
+            catch
+            {
+                await worker.DisposeAsync();
+                throw;
+            }
         }
 
         internal async Task WarmAsync(
@@ -1898,7 +2513,23 @@ internal static class PressureMatrixHarness
                 enforceDeadline: false,
                 collectTelemetry: true);
 
-        private async Task StartProcessAsync(Options options, List<string> commands)
+        internal Task<PressureImplementationObservation>
+            RunDiagnosticRequestAsync(
+                PressureProfileRequest request,
+                Options options,
+                PressureCommandKind commandKind,
+                bool enforceDeadline) =>
+                RunProfileCoreAsync(
+                    request,
+                    options,
+                    commandKind,
+                    enforceDeadline,
+                    collectTelemetry: true);
+
+        private async Task StartProcessAsync(
+            Options options,
+            List<string> commands,
+            int? diagnosticWorkerCount)
         {
             _peakResetAttempted = false;
             _requestOrdinal = 0;
@@ -1907,7 +2538,7 @@ internal static class PressureMatrixHarness
             string assembly = _implementation == "NAM"
                 ? "/workspace/.Demos/01-VoxelChunkPipeline/NAM/bin/Release/net10.0/linux-x64/publish/VoxelChunkPipeline.NAM.dll"
                 : "/workspace/.Demos/01-VoxelChunkPipeline/SafeCSharp/bin/Release/net10.0/linux-x64/publish/VoxelChunkPipeline.SafeCSharp.dll";
-            string[] arguments =
+            List<string> arguments =
             [
                 "run",
                 "--rm",
@@ -1934,6 +2565,22 @@ internal static class PressureMatrixHarness
                 "DOTNET_TieredCompilation=0",
                 "--env",
                 "DOTNET_TieredPGO=0",
+            ];
+            if (diagnosticWorkerCount is { } workerCount)
+            {
+                if (_implementation != "NAM")
+                {
+                    throw new InvalidOperationException(
+                        "Only the NAM diagnostic can select a worker count.");
+                }
+
+                arguments.Add("--env");
+                arguments.Add(
+                    $"NAM_DIAGNOSTIC_WORKER_COUNT={workerCount}");
+            }
+
+            arguments.AddRange(
+            [
                 "--volume",
                 $"{options.RepositoryRoot}:/workspace:ro",
                 "--workdir",
@@ -1941,7 +2588,7 @@ internal static class PressureMatrixHarness
                 options.Image,
                 assembly,
                 "--server"
-            ];
+            ]);
             lock (commands)
             {
                 commands.Add($"docker {string.Join(' ', arguments)}");
@@ -1961,6 +2608,7 @@ internal static class PressureMatrixHarness
 
             _process = Process.Start(start)
                 ?? throw new InvalidOperationException($"Could not start {_implementation}.");
+            _processLifetime.Assign(_process);
             _stderrReader = _process.StandardError.ReadToEndAsync();
             PressureEnvelope startup = await ReadEnvelopeAsync(TimeSpan.FromSeconds(20));
             if (startup.Kind != PressureEnvelopeKind.Ready || startup.Runtime is not { } runtime)
@@ -1981,6 +2629,9 @@ internal static class PressureMatrixHarness
             bool enforceDeadline,
             bool collectTelemetry)
         {
+            collectTelemetry =
+                collectTelemetry
+                || request.Diagnostic is not null;
             long commandOrdinal = checked(++_requestOrdinal);
             request = request with
             {
@@ -2002,6 +2653,11 @@ internal static class PressureMatrixHarness
             (CgroupMemorySnapshot initialCgroup, bool peakReset) = collectTelemetry
                 ? await PrepareCgroupProfileAsync()
                 : (default, false);
+            PressureExternalProcessSnapshot externalBefore =
+                request.Diagnostic is not null
+                    ? await ReadExternalProcessSnapshotAsync(
+                        initialCgroup)
+                    : default;
             long sentTick = Stopwatch.GetTimestamp();
             await _process!.StandardInput.WriteLineAsync(
                 JsonSerializer.Serialize(command, VoxelJson.Options));
@@ -2172,6 +2828,11 @@ internal static class PressureMatrixHarness
             CgroupMemorySnapshot finalCgroup = collectTelemetry
                 ? terminalCgroup ?? await ReadCgroupAsync()
                 : default;
+            PressureExternalProcessSnapshot externalAfter =
+                request.Diagnostic is not null
+                    ? await ReadExternalProcessSnapshotAsync(
+                        finalCgroup)
+                    : default;
             IReadOnlyList<PressureHostSample> samples = collectTelemetry
                 ? preservedSamples
                     ?? SelectSamples(
@@ -2298,7 +2959,9 @@ internal static class PressureMatrixHarness
                 Isolation,
                 effectiveCpuCores,
                 pageFaultsDelta,
-                majorPageFaultsDelta);
+                majorPageFaultsDelta,
+                externalBefore,
+                externalAfter);
         }
 
         private async Task<(CgroupMemorySnapshot Snapshot, bool PeakReset)>
@@ -2376,6 +3039,7 @@ internal static class PressureMatrixHarness
                     return;
                 }
 
+                _processLifetime.Assign(_statsProcess);
                 _statsCancellation = new CancellationTokenSource();
                 CancellationToken cancellation = _statsCancellation.Token;
                 _statsErrorReader = _statsProcess.StandardError.ReadToEndAsync();
@@ -2613,6 +3277,83 @@ internal static class PressureMatrixHarness
             }
         }
 
+        private async Task<PressureExternalProcessSnapshot>
+            ReadExternalProcessSnapshotAsync(
+                CgroupMemorySnapshot cgroup)
+        {
+            if (!IsAlive)
+            {
+                return new PressureExternalProcessSnapshot(
+                    DateTime.UtcNow,
+                    cgroup,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0);
+            }
+
+            try
+            {
+                CommandResult result = await RunCommandAsync(
+                    "docker",
+                    [
+                        "exec",
+                        ContainerName,
+                        "sh",
+                        "-c",
+                        "clock=$(getconf CLK_TCK 2>/dev/null || echo 100); set -- $(awk '{print $14, $15}' /proc/1/stat); echo clock_ticks $clock; echo user_ticks $1; echo system_ticks $2; awk '/^Threads:/{print \"threads \" $2} /^voluntary_ctxt_switches:/{print \"voluntary \" $2} /^nonvoluntary_ctxt_switches:/{print \"nonvoluntary \" $2} /^VmRSS:/{print \"working_set_bytes \" ($2 * 1024)}' /proc/1/status"
+                    ],
+                    TimeSpan.FromSeconds(3));
+                string[] lines = result.StandardOutput.Split(
+                    ['\r', '\n'],
+                    StringSplitOptions.RemoveEmptyEntries);
+                long clockTicks = FindCounter(
+                    lines,
+                    "clock_ticks");
+                long userTicks = FindCounter(
+                    lines,
+                    "user_ticks");
+                long systemTicks = FindCounter(
+                    lines,
+                    "system_ticks");
+                double processCpuMilliseconds =
+                    clockTicks <= 0
+                        ? 0
+                        : checked(userTicks + systemTicks)
+                            * 1000.0
+                            / clockTicks;
+                return new PressureExternalProcessSnapshot(
+                    DateTime.UtcNow,
+                    cgroup,
+                    checked((int)FindCounter(lines, "threads")),
+                    FindCounter(lines, "voluntary"),
+                    FindCounter(lines, "nonvoluntary"),
+                    userTicks,
+                    systemTicks,
+                    clockTicks,
+                    processCpuMilliseconds,
+                    FindCounter(lines, "working_set_bytes"));
+            }
+            catch
+            {
+                return new PressureExternalProcessSnapshot(
+                    DateTime.UtcNow,
+                    cgroup,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0);
+            }
+        }
+
         private static long FindCounter(IEnumerable<string> lines, string name)
         {
             foreach (string line in lines)
@@ -2842,6 +3583,20 @@ internal static class PressureMatrixHarness
                 }
             }
 
+            if (_statsProcess is not null)
+            {
+                try
+                {
+                    using CancellationTokenSource timeout =
+                        new(TimeSpan.FromSeconds(3));
+                    await _statsProcess.WaitForExitAsync(
+                        timeout.Token);
+                }
+                catch
+                {
+                }
+            }
+
             if (_statsReader is not null)
             {
                 try
@@ -2874,7 +3629,14 @@ internal static class PressureMatrixHarness
 
         public async ValueTask DisposeAsync()
         {
-            await StopAsync();
+            try
+            {
+                await StopAsync();
+            }
+            finally
+            {
+                _processLifetime.Dispose();
+            }
         }
     }
 
@@ -2905,7 +3667,9 @@ internal static class PressureMatrixHarness
             for (int index = 0; index < args.Count; index++)
             {
                 string argument = args[index];
-                if (argument == "--pressure-matrix")
+                if (argument is
+                    "--pressure-matrix"
+                    or "--sustained-diagnostic")
                 {
                     continue;
                 }

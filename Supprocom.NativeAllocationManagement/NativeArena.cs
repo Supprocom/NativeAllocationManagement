@@ -30,6 +30,9 @@ public sealed class NativeArena : IDisposable
 
     internal long[] CurrentSegmentOrdinalsForTest => _kernel.CurrentSegmentOrdinalsForTest();
 
+    internal NativeOwnerDiagnosticSnapshot CaptureDiagnosticSnapshot() =>
+        _kernel.GetDiagnosticSnapshot();
+
     /// <summary>Reads the current logical and physical state of this owner.</summary>
     public NativeOwnerStatistics GetStatistics() => _kernel.GetStatistics();
 

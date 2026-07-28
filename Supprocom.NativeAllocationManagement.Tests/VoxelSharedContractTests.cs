@@ -135,7 +135,23 @@ public sealed class VoxelSharedContractTests
             typeof(PressureMatrixReport),
             typeof(PressureProfileGateFailure),
             typeof(PressureMatrixCleanupState),
-            typeof(PressureMatrixGateFailureReport)
+            typeof(PressureMatrixGateFailureReport),
+            typeof(PressureDiagnosticRequest),
+            typeof(PressureDiagnosticPhase),
+            typeof(PressurePhaseTimings),
+            typeof(PressurePhaseRecorder),
+            typeof(PressureAllocatorDiagnosticSnapshot),
+            typeof(PressureWorkerDiagnostic),
+            typeof(PressureRequestDiagnostics),
+            typeof(PressureExternalProcessSnapshot),
+            typeof(PressureHostProcessorSample),
+            typeof(PressureHostStateGate),
+            typeof(PressureHostStabilityPolicy),
+            typeof(PressureSustainedDiagnosticOptionsSnapshot),
+            typeof(PressureSustainedDiagnosticTrace),
+            typeof(PressureSustainedDiagnosticCleanup),
+            typeof(PressureSustainedDiagnosticHostGateFailure),
+            typeof(PressureSustainedDiagnosticReport)
         ];
 
         Assembly assembly = typeof(FaceRecord).Assembly;
@@ -1829,8 +1845,12 @@ public sealed class VoxelSharedContractTests
             safeSource,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Evidence = request.ExecutionMode",
+            "Evidence = request.RequiresExactVerification",
             nativeSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "bool verification = request.RequiresExactVerification;",
+            workerSource,
             StringComparison.Ordinal);
         int measuredHandoffStart = nativeSource.IndexOf(
             "internal void CompleteScatterHandoff()",
@@ -3336,6 +3356,293 @@ public sealed class VoxelSharedContractTests
                 + (long)maximumIndices * VoxelMath.IndexBytes
                 + 4_096));
     }
+
+    [Fact]
+    public void SustainedDiagnosticContractSerializesFromTheSharedAssembly()
+    {
+        PressureWorkerDiagnostic worker = new(
+            3,
+            17,
+            4_096,
+            DateTime.UnixEpoch,
+            DateTime.UnixEpoch.AddSeconds(1),
+            DateTime.UnixEpoch.AddSeconds(2),
+            1_000,
+            1_000,
+            new PressurePhaseTimings(
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+                8),
+            default,
+            default,
+            default);
+        PressureSustainedDiagnosticReport report = new(
+            "commit",
+            "source-hash",
+            "image",
+            [],
+            new PressureSustainedDiagnosticOptionsSnapshot(
+                "repository",
+                "image",
+                "output",
+                "0-11",
+                268_435_456,
+                6_000,
+                20,
+                17,
+                128,
+                90,
+                1_000,
+                4,
+                6,
+                120,
+                10,
+                1,
+                5),
+            ["docker run"],
+            100,
+            [
+                new PressureHostProcessorSample(
+                    DateTime.UnixEpoch,
+                    100,
+                    1,
+                    0)
+            ],
+            [
+                new PressureSustainedDiagnosticTrace(
+                    "NAM-10",
+                    "NAM",
+                    10,
+                    new PressureHostStateGate([], true, string.Empty),
+                    default,
+                    [],
+                    [],
+                    default,
+                    [true],
+                    true,
+                    default)
+            ],
+            new PressureSustainedDiagnosticCleanup(
+                1,
+                1,
+                true,
+                true,
+                0),
+            new PressureSustainedDiagnosticHostGateFailure(
+                "Safe-12",
+                new PressureHostStateGate(
+                    [
+                        new PressureHostProcessorSample(
+                            DateTime.UnixEpoch,
+                            100,
+                            20,
+                            0)
+                    ],
+                    false,
+                    "The host is busy.")),
+            "The host is busy.",
+            DateTime.UnixEpoch,
+            DateTime.UnixEpoch.AddSeconds(3));
+        string json = JsonSerializer.Serialize(
+            report,
+            VoxelJson.Options);
+        PressureSustainedDiagnosticReport restored =
+            JsonSerializer.Deserialize<
+                PressureSustainedDiagnosticReport>(
+                json,
+                VoxelJson.Options);
+        PressureRequestDiagnostics diagnostics = new([worker]);
+
+        Assert.Equal("source-hash", restored.WorkingTreeSourceSha256);
+        Assert.Single(restored.Traces);
+        Assert.Equal("NAM-10", restored.Traces[0].Label);
+        Assert.Equal(
+            "Safe-12",
+            restored.HostGateFailure?.TraceLabel);
+        Assert.Equal("docker run", Assert.Single(restored.Commands));
+        Assert.Single(
+            restored.HostGateFailure?.HostGate.Samples
+                ?? []);
+        Assert.Single(diagnostics.Workers);
+        Assert.Same(
+            typeof(FaceRecord).Assembly,
+            diagnostics.GetType().Assembly);
+    }
+
+    [Fact]
+    public void HostStabilityRequiresThreeValidTailSamples()
+    {
+        PressureHostProcessorSample[] baseline =
+        [
+            HostSample(99, 1, 0),
+            HostSample(101, 1, 0),
+            HostSample(100, 1, 0)
+        ];
+        double median =
+            PressureHostStabilityPolicy
+                .MedianProcessorPerformance(baseline);
+        PressureHostProcessorSample[] samples =
+        [
+            HostSample(100, 20, 0),
+            HostSample(96, 9, 1),
+            HostSample(100, 10, 0),
+            HostSample(104, 2, 0)
+        ];
+
+        Assert.Equal(100, median);
+        Assert.True(
+            PressureHostStabilityPolicy.HasStableTail(
+                samples,
+                median,
+                10,
+                1,
+                5));
+        Assert.False(
+            PressureHostStabilityPolicy.HasStableTail(
+                samples[..^1],
+                median,
+                10,
+                1,
+                5));
+        Assert.False(
+            PressureHostStabilityPolicy.IsStable(
+                HostSample(100, 10.1, 0),
+                median,
+                10,
+                1,
+                5));
+        Assert.False(
+            PressureHostStabilityPolicy.IsStable(
+                HostSample(100, 1, 1.1),
+                median,
+                10,
+                1,
+                5));
+        Assert.False(
+            PressureHostStabilityPolicy.IsStable(
+                HostSample(105.1, 1, 0),
+                median,
+                10,
+                1,
+                5));
+    }
+
+    [Fact]
+    public void SustainedDiagnosticUsesTheFixedTracePlan()
+    {
+        string root = FindRepositoryRoot();
+        string demoRoot = Path.Combine(
+            root,
+            ".Demos",
+            "01-VoxelChunkPipeline");
+        string harness = File.ReadAllText(
+            Path.Combine(
+                demoRoot,
+                "Harness",
+                "PressureMatrixHarness.cs"));
+        string nativeProgram = File.ReadAllText(
+            Path.Combine(demoRoot, "NAM", "Program.cs"));
+        string safeProgram = File.ReadAllText(
+            Path.Combine(demoRoot, "SafeCSharp", "Program.cs"));
+        int safe = harness.IndexOf(
+            "(\"Safe-12\", \"SafeCSharp\", 12)",
+            StringComparison.Ordinal);
+        int nativeTen = harness.IndexOf(
+            "(\"NAM-10\", \"NAM\", 10)",
+            StringComparison.Ordinal);
+        int nativeEight = harness.IndexOf(
+            "(\"NAM-8\", \"NAM\", 8)",
+            StringComparison.Ordinal);
+        int nativeSix = harness.IndexOf(
+            "(\"NAM-6\", \"NAM\", 6)",
+            StringComparison.Ordinal);
+
+        Assert.True(safe >= 0);
+        Assert.True(nativeTen > safe);
+        Assert.True(nativeEight > nativeTen);
+        Assert.True(nativeSix > nativeEight);
+        Assert.Contains(
+            "NAM_DIAGNOSTIC_WORKER_COUNT",
+            nativeProgram,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "NAM_DIAGNOSTIC_WORKER_COUNT",
+            safeProgram,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "implementation == \"NAM\"",
+            harness,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "? workerCount",
+            harness,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "The sustained diagnostic requires one shared CPU set.",
+            harness,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "commands.ToArray()",
+            harness,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DockerChildrenUseTheHarnessLifetimeJob()
+    {
+        string root = FindRepositoryRoot();
+        string demoRoot = Path.Combine(
+            root,
+            ".Demos",
+            "01-VoxelChunkPipeline");
+        string harness = File.ReadAllText(
+            Path.Combine(
+                demoRoot,
+                "Harness",
+                "PressureMatrixHarness.cs"));
+        string lifetime = File.ReadAllText(
+            Path.Combine(
+                demoRoot,
+                "Harness",
+                "WindowsProcessLifetimeJob.cs"));
+
+        Assert.Contains(
+            "KillOnJobClose = 0x00002000",
+            lifetime,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "AssignProcessToJobObject",
+            lifetime,
+            StringComparison.Ordinal);
+        Assert.Equal(
+            2,
+            harness.Split(
+                "_processLifetime.Assign(",
+                StringSplitOptions.None).Length - 1);
+        Assert.Contains(
+            "_processLifetime.Dispose();",
+            harness,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "await worker.DisposeAsync();",
+            harness,
+            StringComparison.Ordinal);
+    }
+
+    private static PressureHostProcessorSample HostSample(
+        double performance,
+        double cpu,
+        double queue) =>
+        new(
+            DateTime.UnixEpoch,
+            performance,
+            cpu,
+            queue);
 
     private static PressureMatrixCheckpoint CreatePressureCheckpoint(
         long sequence)

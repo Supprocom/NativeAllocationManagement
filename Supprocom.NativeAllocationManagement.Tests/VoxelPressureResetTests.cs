@@ -38,6 +38,137 @@ public sealed class VoxelPressureResetTests
         VerifyResetSequence(native);
     }
 
+    [Fact]
+    public void SafeDiagnosticRecordsWorkerAndPhaseState()
+    {
+        using WorkerLocalPressureSession session = new(
+            "SafeCSharp",
+            static () => new SafeSession(),
+            maximumWorkerCount: 1);
+
+        VerifyDiagnosticState(
+            session,
+            expectAllocatorState: false);
+    }
+
+    [Fact]
+    public void NativeDiagnosticRecordsWorkerAndAllocatorState()
+    {
+        using WorkerLocalPressureSession session = new(
+            "NAM",
+            static () => new NativeSession(),
+            maximumWorkerCount: 1);
+
+        VerifyDiagnosticState(
+            session,
+            expectAllocatorState: true);
+    }
+
+    private static void VerifyDiagnosticState(
+        IPressureProfileSession session,
+        bool expectAllocatorState)
+    {
+        const long capBytes = 64L * 1024 * 1024;
+        PressureProfileRequest request = new(
+                1,
+                capBytes,
+                1,
+                20_000,
+                0x4E414D,
+                1,
+                int.MaxValue,
+                ExecutionMode:
+                    PressureExecutionMode.Measurement,
+                RequestOrdinal: 1,
+                Diagnostic:
+                    new PressureDiagnosticRequest(
+                        VerifyExactOutput: true));
+        PressureProfileResult warmup = session.Run(
+            request with
+            {
+                Warmup = true
+            },
+            IgnoreProgress);
+        PressureProfileResult result = session.Run(
+            request with
+            {
+                RequestOrdinal = 2
+            },
+            IgnoreProgress);
+
+        Assert.Equal(
+            PressureProfileOutcome.Completed,
+            warmup.Outcome);
+        Assert.Equal(
+            PressureProfileOutcome.Completed,
+            result.Outcome);
+        Assert.True(result.CorrectnessPassed);
+        Assert.Equal(
+            result.CompletedChunks,
+            result.ChunkEvidence.Count);
+        PressureRequestDiagnostics diagnostics =
+            Assert.IsType<PressureRequestDiagnostics>(
+                result.Diagnostics);
+        PressureWorkerDiagnostic worker =
+            Assert.Single(diagnostics.Workers);
+
+        Assert.Equal(0, worker.WorkerIndex);
+        Assert.Equal(
+            result.CompletedChunks,
+            worker.PartitionChunkCount);
+        Assert.Equal(
+            result.RealizedCumulativeDemandBytes,
+            worker.PartitionLogicalBytes);
+        Assert.NotEqual(default, worker.StartedUtc);
+        Assert.True(
+            worker.ProcessingCompletedUtc
+                >= worker.StartedUtc);
+        Assert.True(
+            worker.FinishedUtc
+                >= worker.ProcessingCompletedUtc);
+        Assert.True(worker.ProcessingMilliseconds > 0);
+        Assert.True(worker.FinishLatencyMilliseconds >= 0);
+        Assert.True(worker.Phases.BuildMilliseconds > 0);
+        Assert.True(
+            worker.Phases.SectionPreparationMilliseconds
+                > 0);
+        Assert.True(
+            worker.Phases.FaceGenerationMilliseconds > 0);
+        Assert.True(worker.Phases.PackingMilliseconds > 0);
+        Assert.True(
+            worker.Phases.OutputConsumptionMilliseconds
+                > 0);
+        Assert.Equal(
+            expectAllocatorState,
+            worker.AllocatorBefore.Available);
+        Assert.Equal(
+            expectAllocatorState,
+            worker.AllocatorAfterProcessing.Available);
+        Assert.Equal(
+            expectAllocatorState,
+            worker.AllocatorAfterReset.Available);
+        if (expectAllocatorState)
+        {
+            PressureRequestDiagnostics warmupDiagnostics =
+                Assert.IsType<PressureRequestDiagnostics>(
+                    warmup.Diagnostics);
+            PressureWorkerDiagnostic warmupWorker =
+                Assert.Single(warmupDiagnostics.Workers);
+
+            Assert.True(
+                worker.AllocatorAfterReset.ActiveRecords > 0);
+            Assert.Equal(
+                warmupWorker.AllocatorAfterReset.ActiveRecords,
+                worker.AllocatorAfterReset.ActiveRecords);
+            Assert.Equal(
+                0,
+                worker.AllocatorAfterReset.ScopedRecords);
+            Assert.Equal(
+                0,
+                worker.AllocatorAfterReset.ReferenceRoots);
+        }
+    }
+
     private static void VerifyResetSequence(
         IPressureProfileSession session)
     {

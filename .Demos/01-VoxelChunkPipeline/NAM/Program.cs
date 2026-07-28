@@ -1,4 +1,5 @@
 using Supprocom.NativeAllocationManagement.Demos.VoxelChunkPipeline.SharedContract;
+using System.Globalization;
 using System.Text;
 
 namespace Supprocom.NativeAllocationManagement.Demos.VoxelChunkPipeline.NAM;
@@ -21,11 +22,7 @@ internal static class Program
                         static () =>
                             new NativePressureSession(),
                         maximumWorkerCount:
-                            Math.Max(
-                                1,
-                                Environment.ProcessorCount
-                                    * 5
-                                    / 6)));
+                            GetMaximumWorkerCount()));
             }
 
             Console.Error.WriteLine("Usage: VoxelChunkPipeline.NAM --server");
@@ -36,5 +33,32 @@ internal static class Program
             Console.Error.WriteLine(exception);
             return 2;
         }
+    }
+
+    private static int GetMaximumWorkerCount()
+    {
+        string? diagnosticValue =
+            Environment.GetEnvironmentVariable(
+                "NAM_DIAGNOSTIC_WORKER_COUNT");
+        if (diagnosticValue is null)
+        {
+            return Math.Max(
+                1,
+                Environment.ProcessorCount * 5 / 6);
+        }
+
+        if (!int.TryParse(
+                diagnosticValue,
+                NumberStyles.Integer,
+                CultureInfo.InvariantCulture,
+                out int workerCount)
+            || workerCount <= 0
+            || workerCount > Environment.ProcessorCount)
+        {
+            throw new InvalidOperationException(
+                "NAM_DIAGNOSTIC_WORKER_COUNT must select an available positive worker count.");
+        }
+
+        return workerCount;
     }
 }
