@@ -3072,8 +3072,33 @@ internal static class PressureMatrixHarness
             }
             catch
             {
-                _statsProcess?.Dispose();
-                _statsProcess = null;
+                StopStatsAfterStartFailure();
+            }
+        }
+
+        private void StopStatsAfterStartFailure()
+        {
+            Process? process = _statsProcess;
+            _statsProcess = null;
+            if (process is null)
+            {
+                return;
+            }
+
+            try
+            {
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                    process.WaitForExit(3_000);
+                }
+            }
+            catch
+            {
+            }
+            finally
+            {
+                process.Dispose();
             }
         }
 

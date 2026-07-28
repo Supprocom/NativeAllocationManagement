@@ -3629,6 +3629,14 @@ public sealed class VoxelSharedContractTests
             harness,
             StringComparison.Ordinal);
         Assert.Contains(
+            "StopStatsAfterStartFailure();",
+            harness,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "process.Kill(entireProcessTree: true);",
+            harness,
+            StringComparison.Ordinal);
+        Assert.Contains(
             "await worker.DisposeAsync();",
             harness,
             StringComparison.Ordinal);
