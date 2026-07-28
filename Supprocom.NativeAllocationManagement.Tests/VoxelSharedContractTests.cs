@@ -347,7 +347,12 @@ public sealed class VoxelSharedContractTests
             pressureHarness,
             StringComparison.Ordinal);
         Assert.Contains(
-            "bool safeFirst = ((sampleIndex + profileOrdinal) & 1) == 0;",
+            "bool safeFirst = PressureSamplePolicy.SafeRunsFirst(\n"
+                + "                    sampleIndex);",
+            pressureHarness,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "sampleIndex + profileOrdinal",
             pressureHarness,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -584,6 +589,20 @@ public sealed class VoxelSharedContractTests
     }
 
     [Fact]
+    public void ProfileOrdinalDoesNotChangeImplementationOrder()
+    {
+        bool[] firstProfileOrder = CreateProfileOrder(
+            profileOrdinal: 0);
+        bool[] laterProfileOrder = CreateProfileOrder(
+            profileOrdinal: 5);
+
+        Assert.Equal(firstProfileOrder, laterProfileOrder);
+        Assert.Equal(
+            [true, false, true, false, true, false],
+            firstProfileOrder);
+    }
+
+    [Fact]
     public void StressConfidenceRequiresSixPairsAndPositiveLowerBound()
     {
         Assert.True(
@@ -601,6 +620,14 @@ public sealed class VoxelSharedContractTests
                 5,
                 6,
                 1.20));
+    }
+
+    private static bool[] CreateProfileOrder(int profileOrdinal)
+    {
+        Assert.True(profileOrdinal >= 0);
+        return Enumerable.Range(0, 6)
+            .Select(PressureSamplePolicy.SafeRunsFirst)
+            .ToArray();
     }
 
     [Fact]

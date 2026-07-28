@@ -108,6 +108,12 @@ public readonly record struct PressurePairedObservation(
 
 public static class PressureSamplePolicy
 {
+    public static bool SafeRunsFirst(int sampleIndex)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(sampleIndex);
+        return (sampleIndex & 1) == 0;
+    }
+
     public static bool HasBalancedOrder(
         IReadOnlyList<PressurePairedObservation> observations)
     {

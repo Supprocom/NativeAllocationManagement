@@ -102,7 +102,8 @@ internal static class PressureMatrixHarness
                         "A prior sample container remains active.");
                 }
 
-                bool safeFirst = ((sampleIndex + profileOrdinal) & 1) == 0;
+                bool safeFirst = PressureSamplePolicy.SafeRunsFirst(
+                    sampleIndex);
                 IsolatedPairRun pair = await RunIsolatedPairAsync(
                     options,
                     request,
