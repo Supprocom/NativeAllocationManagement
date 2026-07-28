@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Supprocom.NativeAllocationManagement.Demos.VoxelChunkPipeline.SharedContract;
@@ -31,6 +32,24 @@ internal static class PressureMatrixHarness
             "git",
             ["-C", options.RepositoryRoot, "rev-parse", "HEAD"],
             TimeSpan.FromSeconds(10))).StandardOutput.Trim();
+        string trackedChanges = (await RunCommandAsync(
+            "git",
+            [
+                "-C",
+                options.RepositoryRoot,
+                "status",
+                "--porcelain",
+                "--untracked-files=no"
+            ],
+            TimeSpan.FromSeconds(10))).StandardOutput;
+        if (!string.IsNullOrWhiteSpace(trackedChanges))
+        {
+            throw new InvalidOperationException(
+                "The pressure matrix requires a clean tracked worktree.");
+        }
+
+        IReadOnlyList<PressureBinaryIdentity> binaryIdentities =
+            CaptureBinaryIdentities(options.RepositoryRoot, commit);
         string imageId = (await RunCommandAsync(
             "docker",
             ["image", "inspect", "--format", "{{.Id}}", options.Image],
@@ -287,26 +306,8 @@ internal static class PressureMatrixHarness
         bool profileIsolation = ProfileIsolationPassed(
             profiles,
             verification);
-        bool measuredParity = profiles.All(profile =>
-        {
-            return profile.Observations.All(observation =>
-            {
-                if (observation.Safe.Outcome
-                        == PressureProfileOutcome.Completed
-                    && observation.Nam.Outcome
-                        == PressureProfileOutcome.Completed)
-                {
-                    return observation.StructuralParityPassed;
-                }
-
-                return profile.ProfilePercent >= 200
-                    && observation.Nam.Outcome
-                        == PressureProfileOutcome.Completed
-                    && observation.Nam.CorrectnessPassed
-                    && observation.Safe.Outcome
-                        != PressureProfileOutcome.HarnessFailure;
-            });
-        });
+        bool measuredParity = profiles.All(
+            profile => profile.Statistics.CorrectnessGatePassed);
         bool exactParity = measuredParity && verification.ExactParityPassed;
         bool performanceGate = profiles.All(
             profile => profile.Statistics.PerformanceGatePassed);
@@ -372,6 +373,7 @@ internal static class PressureMatrixHarness
         PressureMatrixReport report = new(
             commit,
             imageId,
+            binaryIdentities,
             options.CgroupCapBytes,
             "binary bytes; 256 MiB = 268435456 bytes",
             options.DeadlineMilliseconds,
@@ -532,12 +534,25 @@ internal static class PressureMatrixHarness
             && observations.All(
                 static observation =>
                     observation.StructuralParityPassed);
-        bool safeHardFailure = observations.Any(
+        bool completedPairOutputMismatch = observations.Any(
             static observation =>
-                IsHardFailure(observation.Safe));
-        bool decisiveNam = percent >= 200
-            && namCompleted
-            && safeHardFailure;
+                IsCompleted(observation.Safe)
+                && IsCompleted(observation.Nam)
+                && !observation.StructuralParityPassed);
+        PressureOutcomeDecision outcomeDecision =
+            PressureOutcomePolicy.Evaluate(
+                percent,
+                safeCompleted,
+                namCompleted,
+                parity,
+                completedPairOutputMismatch,
+                observations.Select(
+                        static observation => observation.Safe.Outcome)
+                    .ToArray(),
+                observations.Select(
+                        static observation => observation.Nam.Outcome)
+                    .ToArray());
+        bool decisiveNam = outcomeDecision.DecisiveNam;
         double[] speedups = observations
             .Where(
                 static observation =>
@@ -607,9 +622,8 @@ internal static class PressureMatrixHarness
                     && IsConstrainedMemoryObservation(
                         observation.Nam,
                         options));
-        bool deadlineGate = namCompleted
-            && (safeCompleted || decisiveNam);
-        bool correctnessGate = parity || decisiveNam;
+        bool deadlineGate = outcomeDecision.DeadlineGatePassed;
+        bool correctnessGate = outcomeDecision.CorrectnessGatePassed;
         bool performanceGate;
         string interpretation;
         if (decisiveNam)
@@ -698,14 +712,6 @@ internal static class PressureMatrixHarness
         observation.Outcome == PressureProfileOutcome.Completed
         && observation.CorrectnessPassed
         && observation.ProfileElapsedMilliseconds is > 0;
-
-    private static bool IsHardFailure(
-        PressureImplementationObservation observation) =>
-        observation.Outcome is
-            PressureProfileOutcome.DeadlineExceeded
-            or PressureProfileOutcome.OutOfMemory
-            or PressureProfileOutcome.IncorrectOutput
-            or PressureProfileOutcome.Crash;
 
     private static bool ExactParity(
         PressureProfileResult? safe,
@@ -831,6 +837,101 @@ internal static class PressureMatrixHarness
         }
 
         return sorted[lower] + (sorted[upper] - sorted[lower]) * (position - lower);
+    }
+
+    private static IReadOnlyList<PressureBinaryIdentity>
+        CaptureBinaryIdentities(
+            string repositoryRoot,
+            string expectedCommit)
+    {
+        (string Component, string RelativePath)[] required =
+        [
+            (
+                "Harness",
+                ".Demos/01-VoxelChunkPipeline/Harness/bin/Release/"
+                    + "net10.0/VoxelChunkPipeline.Harness.dll"),
+            (
+                "SafeCSharp",
+                ".Demos/01-VoxelChunkPipeline/SafeCSharp/bin/Release/"
+                    + "net10.0/linux-x64/publish/"
+                    + "VoxelChunkPipeline.SafeCSharp.dll"),
+            (
+                "SafeSharedContract",
+                ".Demos/01-VoxelChunkPipeline/SafeCSharp/bin/Release/"
+                    + "net10.0/linux-x64/publish/"
+                    + "VoxelChunkPipeline.SharedContract.dll"),
+            (
+                "NAM",
+                ".Demos/01-VoxelChunkPipeline/NAM/bin/Release/"
+                    + "net10.0/linux-x64/publish/"
+                    + "VoxelChunkPipeline.NAM.dll"),
+            (
+                "NamSharedContract",
+                ".Demos/01-VoxelChunkPipeline/NAM/bin/Release/"
+                    + "net10.0/linux-x64/publish/"
+                    + "VoxelChunkPipeline.SharedContract.dll"),
+            (
+                "NativeAllocationManagement",
+                ".Demos/01-VoxelChunkPipeline/NAM/bin/Release/"
+                    + "net10.0/linux-x64/publish/"
+                    + "Supprocom.NativeAllocationManagement.dll")
+        ];
+        List<PressureBinaryIdentity> identities = new(required.Length);
+        foreach ((string component, string relativePath) in required)
+        {
+            string path = Path.Combine(
+                repositoryRoot,
+                relativePath.Replace('/', Path.DirectorySeparatorChar));
+            if (!File.Exists(path))
+            {
+                throw new FileNotFoundException(
+                    $"The required {component} binary does not exist.",
+                    path);
+            }
+
+            FileVersionInfo version = FileVersionInfo.GetVersionInfo(path);
+            string informationalVersion = version.ProductVersion
+                ?? string.Empty;
+            int separator = informationalVersion.LastIndexOf('+');
+            string informationalCommit = separator >= 0
+                ? informationalVersion[(separator + 1)..]
+                : string.Empty;
+            if (!string.Equals(
+                    informationalCommit,
+                    expectedCommit,
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"The {component} binary reports commit "
+                    + $"'{informationalCommit}', but HEAD is "
+                    + $"'{expectedCommit}'.");
+            }
+
+            using FileStream stream = File.OpenRead(path);
+            identities.Add(new PressureBinaryIdentity(
+                component,
+                relativePath,
+                Convert.ToHexString(SHA256.HashData(stream)),
+                informationalVersion,
+                informationalCommit));
+        }
+
+        PressureBinaryIdentity safeContract = identities.Single(
+            static identity =>
+                identity.Component == "SafeSharedContract");
+        PressureBinaryIdentity namContract = identities.Single(
+            static identity =>
+                identity.Component == "NamSharedContract");
+        if (!string.Equals(
+                safeContract.Sha256,
+                namContract.Sha256,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "The Safe and NAM workers contain different SharedContract binaries.");
+        }
+
+        return identities;
     }
 
     private static async Task<CommandResult> RunCommandAsync(

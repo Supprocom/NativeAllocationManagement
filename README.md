@@ -30,8 +30,10 @@ The result confirms the equal binary cap, no swap, and cumulative demand.
 It does not require a garbage collection or a resident-memory threshold.
 
 These estimates are specific to the included workload and test system. The
-[voxel pipeline guide](.Demos/01-VoxelChunkPipeline/README.md) gives the
+[voxel pipeline guide][voxel-guide] gives the
 method, commands, and current evidence.
+
+[voxel-guide]: https://github.com/Supprocom/NativeAllocationManagement/blob/main/.Demos/01-VoxelChunkPipeline/README.md
 
 Install the package with a normal package reference. Version `0.1.0` is the
 first public release.

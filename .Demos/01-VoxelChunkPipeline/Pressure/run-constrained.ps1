@@ -185,6 +185,34 @@ if (-not $SkipBuild) {
         "false") 60000 | Out-Null
 }
 
+$binaryPaths = [ordered]@{
+    Harness = Join-Path $RepoRoot ".Demos\01-VoxelChunkPipeline\Harness\bin\Release\net10.0\VoxelChunkPipeline.Harness.dll"
+    SafeCSharp = Join-Path $RepoRoot ".Demos\01-VoxelChunkPipeline\SafeCSharp\bin\Release\net10.0\linux-x64\publish\VoxelChunkPipeline.SafeCSharp.dll"
+    SafeSharedContract = Join-Path $RepoRoot ".Demos\01-VoxelChunkPipeline\SafeCSharp\bin\Release\net10.0\linux-x64\publish\VoxelChunkPipeline.SharedContract.dll"
+    NAM = Join-Path $RepoRoot ".Demos\01-VoxelChunkPipeline\NAM\bin\Release\net10.0\linux-x64\publish\VoxelChunkPipeline.NAM.dll"
+    NamSharedContract = Join-Path $RepoRoot ".Demos\01-VoxelChunkPipeline\NAM\bin\Release\net10.0\linux-x64\publish\VoxelChunkPipeline.SharedContract.dll"
+    NativeAllocationManagement = Join-Path $RepoRoot ".Demos\01-VoxelChunkPipeline\NAM\bin\Release\net10.0\linux-x64\publish\Supprocom.NativeAllocationManagement.dll"
+}
+foreach ($component in $binaryPaths.Keys) {
+    $binaryPath = $binaryPaths[$component]
+    if (-not (Test-Path -LiteralPath $binaryPath -PathType Leaf)) {
+        throw "The required $component binary does not exist."
+    }
+
+    $informationalVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo(
+        $binaryPath).ProductVersion
+    $informationalCommit = if (
+        $informationalVersion -match '\+([0-9a-f]{40})$'
+    ) {
+        $Matches[1]
+    } else {
+        ""
+    }
+    if ($informationalCommit -ne $commit) {
+        throw "The $component binary does not match HEAD $commit."
+    }
+}
+
 if (-not $SkipImageBuild) {
     Invoke-Bounded "docker" @(
         "build",

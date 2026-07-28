@@ -98,6 +98,80 @@ public readonly record struct PressurePairedObservation(
     PressureImplementationObservation Nam,
     bool StructuralParityPassed);
 
+public readonly record struct PressureOutcomeDecision(
+    bool SafeCompleted,
+    bool NamCompleted,
+    bool PairedParityPassed,
+    bool CompletedPairOutputMismatch,
+    bool SafeOutputIncorrect,
+    bool NamOutputIncorrect,
+    bool SafeResourceFailure,
+    bool DecisiveNam,
+    bool DeadlineGatePassed,
+    bool CorrectnessGatePassed);
+
+public static class PressureOutcomePolicy
+{
+    public static PressureOutcomeDecision Evaluate(
+        int profilePercent,
+        bool safeCompleted,
+        bool namCompleted,
+        bool pairedParityPassed,
+        bool completedPairOutputMismatch,
+        IReadOnlyList<PressureProfileOutcome> safeOutcomes,
+        IReadOnlyList<PressureProfileOutcome> namOutcomes)
+    {
+        ArgumentNullException.ThrowIfNull(safeOutcomes);
+        ArgumentNullException.ThrowIfNull(namOutcomes);
+        if (safeOutcomes.Count == 0
+            || safeOutcomes.Count != namOutcomes.Count)
+        {
+            throw new ArgumentException(
+                "The outcome policy requires equal nonempty outcome sets.");
+        }
+
+        bool safeOutputIncorrect = safeOutcomes.Contains(
+            PressureProfileOutcome.IncorrectOutput);
+        bool namOutputIncorrect = namOutcomes.Contains(
+            PressureProfileOutcome.IncorrectOutput);
+        bool safeResourceFailure = safeOutcomes.Any(IsResourceFailure)
+            && safeOutcomes.All(
+                static outcome =>
+                    outcome == PressureProfileOutcome.Completed
+                    || IsResourceFailure(outcome));
+        bool decisiveNam = profilePercent >= 200
+            && namCompleted
+            && !completedPairOutputMismatch
+            && !safeOutputIncorrect
+            && !namOutputIncorrect
+            && safeResourceFailure;
+        bool deadlineGatePassed = namCompleted
+            && (safeCompleted || decisiveNam);
+        bool correctnessGatePassed =
+            !completedPairOutputMismatch
+            && !safeOutputIncorrect
+            && !namOutputIncorrect
+            && (pairedParityPassed || decisiveNam);
+
+        return new PressureOutcomeDecision(
+            safeCompleted,
+            namCompleted,
+            pairedParityPassed,
+            completedPairOutputMismatch,
+            safeOutputIncorrect,
+            namOutputIncorrect,
+            safeResourceFailure,
+            decisiveNam,
+            deadlineGatePassed,
+            correctnessGatePassed);
+    }
+
+    private static bool IsResourceFailure(PressureProfileOutcome outcome) =>
+        outcome is
+            PressureProfileOutcome.DeadlineExceeded
+            or PressureProfileOutcome.OutOfMemory;
+}
+
 public readonly record struct PressureProfileInitialization(
     int SequenceOrdinal,
     DateTime StartedUtc,
@@ -141,9 +215,17 @@ public readonly record struct PressureMatrixSummary(
     bool PerformanceGatePassed,
     bool GatePassed);
 
+public readonly record struct PressureBinaryIdentity(
+    string Component,
+    string RelativePath,
+    string Sha256,
+    string InformationalVersion,
+    string InformationalCommit);
+
 public readonly record struct PressureMatrixReport(
     string GitCommit,
     string ImageId,
+    IReadOnlyList<PressureBinaryIdentity> BinaryIdentities,
     long CgroupCapBytes,
     string CgroupCapUnit,
     double DeadlineMilliseconds,

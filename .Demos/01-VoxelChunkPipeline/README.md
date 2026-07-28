@@ -115,8 +115,12 @@ Prepare the worker image first. This setup command runs outside the measured
 matrix and writes the compiler artifact.
 
 ```powershell
+$commit = (git rev-parse HEAD).Trim()
+$image = "nam-voxel-pressure:$($commit.Substring(0, 12))"
+
 & .Demos/01-VoxelChunkPipeline/Pressure/run-constrained.ps1 `
   -RepoRoot E:\source\Supprocom\NativeAllocationManagement `
+  -Image $image `
   -CompilationOutputPath artifacts\voxel-compilation-final.json `
   -SetupOnly
 ```
@@ -124,9 +128,12 @@ matrix and writes the compiler artifact.
 Run the fixed matrix from the repository root after setup.
 
 ```powershell
+$commit = (git rev-parse HEAD).Trim()
+$image = "nam-voxel-pressure:$($commit.Substring(0, 12))"
+
 & .Demos/01-VoxelChunkPipeline/Pressure/run-constrained.ps1 `
   -RepoRoot E:\source\Supprocom\NativeAllocationManagement `
-  -Image nam-voxel-pressure:6ce01e47949c `
+  -Image $image `
   -CompilationOutputPath artifacts\voxel-compilation-final.json `
   -OutputPath artifacts\voxel-pressure-final.json `
   -SamplesPerProfile 11 `

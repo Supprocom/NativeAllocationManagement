@@ -57,8 +57,11 @@ public sealed class VoxelSharedContractTests
             typeof(PressureEffectiveIsolation),
             typeof(PressureImplementationObservation),
             typeof(PressurePairedStatistics),
+            typeof(PressureOutcomeDecision),
+            typeof(PressureOutcomePolicy),
             typeof(PressureProfilePair),
             typeof(PressureVerificationPair),
+            typeof(PressureBinaryIdentity),
             typeof(PressureMatrixSummary),
             typeof(PressureMatrixReport)
         ];
@@ -213,6 +216,18 @@ public sealed class VoxelSharedContractTests
             pressureHarness,
             StringComparison.Ordinal);
         Assert.Contains(
+            "CaptureBinaryIdentities(options.RepositoryRoot, commit)",
+            pressureHarness,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "SHA256.HashData(stream)",
+            pressureHarness,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "informationalCommit,\n                    expectedCommit",
+            pressureHarness,
+            StringComparison.Ordinal);
+        Assert.Contains(
             "int warmupPercent = WarmupProfilePercent;",
             pressureHarness,
             StringComparison.Ordinal);
@@ -312,6 +327,14 @@ public sealed class VoxelSharedContractTests
             "Run the matrix with -SkipBuild -SkipImageBuild",
             runner,
             StringComparison.Ordinal);
+        Assert.Contains(
+            "[Diagnostics.FileVersionInfo]::GetVersionInfo(",
+            runner,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "The $component binary does not match HEAD $commit.",
+            runner,
+            StringComparison.Ordinal);
         int compilation = runner.IndexOf(
             "\"--compile-gate\"",
             StringComparison.Ordinal);
@@ -324,6 +347,115 @@ public sealed class VoxelSharedContractTests
         Assert.True(compilation >= 0);
         Assert.True(publish > compilation);
         Assert.True(pressure > publish);
+
+        string guide = File.ReadAllText(
+            Path.Combine(demoRoot, "README.md"));
+        const string derivedImage =
+            "$image = \"nam-voxel-pressure:$($commit.Substring(0, 12))\"";
+        Assert.Equal(
+            2,
+            guide.Split(
+                derivedImage,
+                StringSplitOptions.None).Length - 1);
+        Assert.Equal(
+            2,
+            guide.Split(
+                "-Image $image",
+                StringSplitOptions.None).Length - 1);
+        Assert.DoesNotContain(
+            "-Image nam-voxel-pressure:",
+            guide,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void IncorrectSafeOutputNeverBecomesDecisiveNamResult()
+    {
+        PressureOutcomeDecision decision = PressureOutcomePolicy.Evaluate(
+            200,
+            safeCompleted: false,
+            namCompleted: true,
+            pairedParityPassed: false,
+            completedPairOutputMismatch: false,
+            [PressureProfileOutcome.IncorrectOutput],
+            [PressureProfileOutcome.Completed]);
+
+        Assert.True(decision.SafeOutputIncorrect);
+        Assert.False(decision.SafeResourceFailure);
+        Assert.False(decision.DecisiveNam);
+        Assert.False(decision.CorrectnessGatePassed);
+        Assert.False(decision.DeadlineGatePassed);
+    }
+
+    [Fact]
+    public void SafeResourceFailureCanRemainDecisiveNamResult()
+    {
+        PressureOutcomeDecision decision = PressureOutcomePolicy.Evaluate(
+            200,
+            safeCompleted: false,
+            namCompleted: true,
+            pairedParityPassed: false,
+            completedPairOutputMismatch: false,
+            [PressureProfileOutcome.OutOfMemory],
+            [PressureProfileOutcome.Completed]);
+
+        Assert.True(decision.SafeResourceFailure);
+        Assert.True(decision.DecisiveNam);
+        Assert.True(decision.CorrectnessGatePassed);
+        Assert.True(decision.DeadlineGatePassed);
+    }
+
+    [Fact]
+    public void CompletedOutputMismatchBlocksAResourceFailureResult()
+    {
+        PressureOutcomeDecision decision = PressureOutcomePolicy.Evaluate(
+            200,
+            safeCompleted: false,
+            namCompleted: true,
+            pairedParityPassed: false,
+            completedPairOutputMismatch: true,
+            [
+                PressureProfileOutcome.Completed,
+                PressureProfileOutcome.OutOfMemory
+            ],
+            [
+                PressureProfileOutcome.Completed,
+                PressureProfileOutcome.Completed
+            ]);
+
+        Assert.True(decision.CompletedPairOutputMismatch);
+        Assert.True(decision.SafeResourceFailure);
+        Assert.False(decision.DecisiveNam);
+        Assert.False(decision.CorrectnessGatePassed);
+    }
+
+    [Fact]
+    public void ReleaseDocumentsUseTheDesignatedContactAndAbsoluteGuideLink()
+    {
+        string root = FindRepositoryRoot();
+        string license = File.ReadAllText(
+            Path.Combine(root, "LICENSE.md"));
+        string readme = File.ReadAllText(
+            Path.Combine(root, "README.md"));
+
+        Assert.Contains(
+            "Contact: supprocom@mkn8rn.com",
+            license,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "Contact: mkn8rn@hotmail.com",
+            license,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "[voxel-guide]: https://github.com/Supprocom/"
+                + "NativeAllocationManagement/blob/main/"
+                + ".Demos/01-VoxelChunkPipeline/README.md",
+            readme,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "](.Demos/01-VoxelChunkPipeline/README.md)",
+            readme,
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -351,6 +483,14 @@ public sealed class VoxelSharedContractTests
         PressureMatrixReport report = new(
             "commit",
             "image",
+            [
+                new PressureBinaryIdentity(
+                    "Harness",
+                    "harness.dll",
+                    "HASH",
+                    "1.0.0+commit",
+                    "commit")
+            ],
             capBytes,
             "bytes",
             6000,
@@ -390,6 +530,11 @@ public sealed class VoxelSharedContractTests
         Assert.Equal(1000, roundTrip.Verification.Initialization.WarmupProfilePercent);
         Assert.Equal(capBytes * 10, roundTrip.Verification.Initialization.WarmupCumulativeDemandBytes);
         Assert.Equal(capBytes * 100, roundTrip.Verification.RequestedCumulativeDemandBytes);
+        PressureBinaryIdentity identity = Assert.Single(
+            roundTrip.BinaryIdentities);
+        Assert.Equal("Harness", identity.Component);
+        Assert.Equal("HASH", identity.Sha256);
+        Assert.Equal("commit", identity.InformationalCommit);
     }
 
     [Fact]
