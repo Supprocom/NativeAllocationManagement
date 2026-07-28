@@ -8,7 +8,7 @@ param(
     [long]$CapBytes = 268435456,
     [int]$DeadlineMilliseconds = 6000,
     [int]$RetentionDepth = 20,
-    [int]$TimeoutSeconds = 120,
+    [int]$TimeoutSeconds = 360,
     [int]$CompilationTimeoutSeconds = 120,
     [int]$EndToEndTimeoutSeconds = 420,
     [int]$CompilationPairs = 5,
