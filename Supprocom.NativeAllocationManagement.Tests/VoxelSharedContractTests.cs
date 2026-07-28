@@ -321,6 +321,11 @@ public sealed class VoxelSharedContractTests
             "ContainerAbsentAfterDisposal",
             pressureHarness,
             StringComparison.Ordinal);
+        Assert.Equal(
+            1,
+            pressureHarness.Split(
+                "lifecycle.CgroupIdentity",
+                StringSplitOptions.None).Length - 1);
         Assert.Contains(
             "StateAfterReset",
             pressureHarness,

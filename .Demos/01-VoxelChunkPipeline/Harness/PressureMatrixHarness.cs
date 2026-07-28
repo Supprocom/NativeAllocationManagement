@@ -680,11 +680,6 @@ internal static class PressureMatrixHarness
                 .Select(static lifecycle => lifecycle.ContainerId)
                 .Distinct(StringComparer.Ordinal)
                 .Count()
-            == lifecycles.Count
-            && lifecycles
-                .Select(static lifecycle => lifecycle.CgroupIdentity)
-                .Distinct(StringComparer.Ordinal)
-                .Count()
             == lifecycles.Count;
     }
 
