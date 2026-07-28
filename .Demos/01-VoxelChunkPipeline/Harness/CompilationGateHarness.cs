@@ -47,6 +47,26 @@ internal static class CompilationGateHarness
                 warmups);
         }
 
+        bool warmupGatePassed =
+            CompilationGatePolicy.HasValidWarmups(
+                warmups,
+                options.WarmupPairs);
+        if (!CompilationGatePolicy.CanStartMeasuredBuilds(
+                warmupGatePassed))
+        {
+            CompilationGateSummary warmupFailure =
+                CreateSummary(options, warmups, samples);
+            await WriteReportAsync(
+                options,
+                commit,
+                startedUtc,
+                sdk,
+                warmups,
+                samples,
+                warmupFailure);
+            return 3;
+        }
+
         for (int pair = 0; pair < options.MeasuredPairs; pair++)
         {
             await CompilePairAsync(
@@ -58,37 +78,67 @@ internal static class CompilationGateHarness
                 samples);
         }
 
+        CompilationGateSummary summary =
+            CreateSummary(options, warmups, samples);
+        await WriteReportAsync(
+            options,
+            commit,
+            startedUtc,
+            sdk,
+            warmups,
+            samples,
+            summary);
+        return summary.GatePassed ? 0 : 3;
+    }
+
+    private static CompilationGateSummary CreateSummary(
+        Options options,
+        IReadOnlyList<CompilationSample> warmups,
+        IReadOnlyList<CompilationSample> samples)
+    {
+        bool warmupGatePassed =
+            CompilationGatePolicy.HasValidWarmups(
+                warmups,
+                options.WarmupPairs);
+        bool measuredOrderGate =
+            CompilationGatePolicy.HasBalancedMeasuredOrder(
+                samples,
+                options.MeasuredPairs);
+        bool measuredCompleted =
+            CompilationGatePolicy.HasCompletedMeasuredCompilations(
+                samples,
+                options.MeasuredPairs);
         CompilationSample[] safeSamples = samples
             .Where(sample => sample.Implementation == "SafeCSharp")
             .ToArray();
         CompilationSample[] namSamples = samples
             .Where(sample => sample.Implementation == "NAM")
             .ToArray();
-        bool completed = samples.Count == checked(options.MeasuredPairs * 2)
-            && samples.All(sample => sample.Outcome == CompilationOutcome.Completed)
-            && safeSamples.Length == options.MeasuredPairs
-            && namSamples.Length == options.MeasuredPairs;
-        double? safeMean = completed
+        bool allCompleted =
+            CompilationGatePolicy.AllCompilationsCompleted(
+                warmupGatePassed,
+                measuredCompleted);
+        double? safeMean = measuredCompleted
             ? safeSamples.Average(
                 sample => sample.CompilerElapsedMilliseconds!.Value)
             : null;
-        double? namMean = completed
+        double? namMean = measuredCompleted
             ? namSamples.Average(
                 sample => sample.CompilerElapsedMilliseconds!.Value)
             : null;
-        double? safeWallMean = completed
+        double? safeWallMean = measuredCompleted
             ? safeSamples.Average(sample => sample.WallElapsedMilliseconds)
             : null;
-        double? namWallMean = completed
+        double? namWallMean = measuredCompleted
             ? namSamples.Average(sample => sample.WallElapsedMilliseconds)
             : null;
-        double? ratio = completed && safeMean > 0
+        double? ratio = measuredCompleted && safeMean > 0
             ? namMean / safeMean
             : null;
-        double? wallRatio = completed && safeWallMean > 0
+        double? wallRatio = measuredCompleted && safeWallMean > 0
             ? namWallMean / safeWallMean
             : null;
-        CompilationCompilerDiagnostics diagnostics = completed
+        CompilationCompilerDiagnostics diagnostics = measuredCompleted
             ? new CompilationCompilerDiagnostics(
                 SampleStandardDeviation(safeSamples),
                 SampleStandardDeviation(namSamples),
@@ -103,17 +153,13 @@ internal static class CompilationGateHarness
                 samples,
                 options.WarmupPairs,
                 options.MeasuredPairs);
-        bool measuredOrderGate =
-            CompilationGatePolicy.HasBalancedMeasuredOrder(
-                samples,
-                options.MeasuredPairs);
-        bool compilerGate = completed
+        bool compilerGate = measuredCompleted
             && ratio.HasValue
             && CompilationGatePolicy.IsWithinRatioLimit(ratio.Value);
-        bool wallGate = completed
+        bool wallGate = measuredCompleted
             && wallRatio.HasValue
             && CompilationGatePolicy.IsWithinRatioLimit(wallRatio.Value);
-        CompilationGateSummary summary = new(
+        return new CompilationGateSummary(
             options.MeasuredPairs,
             CompilationGatePolicy.MaximumNamToSafeRatio,
             safeMean,
@@ -123,22 +169,36 @@ internal static class CompilationGateHarness
             ratio,
             wallRatio,
             diagnostics,
-            completed,
+            warmupGatePassed,
+            allCompleted,
             childConfigurationGate,
             measuredOrderGate,
             compilerGate,
             wallGate,
-            childConfigurationGate
-                && measuredOrderGate
-                && compilerGate
-                && wallGate);
+            CompilationGatePolicy.AllGatesPassed(
+                warmupGatePassed,
+                childConfigurationGate,
+                measuredOrderGate,
+                compilerGate,
+                wallGate));
+    }
+
+    private static async Task WriteReportAsync(
+        Options options,
+        string commit,
+        DateTime startedUtc,
+        string sdk,
+        IReadOnlyList<CompilationSample> warmups,
+        IReadOnlyList<CompilationSample> samples,
+        CompilationGateSummary summary)
+    {
         CompilationGateReport report = new(
             commit,
             startedUtc,
             DateTime.UtcNow,
             sdk,
             "Release",
-            "Each command performs a single-project Rebuild without dependency builds. Build-server reuse and compiler sharing are disabled. NAM uses the built runtime and analyzer files. Each child process disables tiered compilation and tiered PGO. Six measured pairs give each implementation three first positions. The Csc task ratio and command wall-time ratio must not exceed 1.10.",
+            "Each command performs a single-project Rebuild without dependency builds. Build-server reuse and compiler sharing are disabled. NAM uses the built runtime and analyzer files. Each child process disables tiered compilation and tiered PGO. Both warmup builds must complete before measured builds start. Six measured pairs give each implementation three first positions. The Csc task ratio and command wall-time ratio must not exceed 1.10.",
             options.WarmupPairs,
             options.MeasuredPairs,
             options.PerCompilationTimeout.TotalMilliseconds,
@@ -161,7 +221,6 @@ internal static class CompilationGateHarness
             JsonSerializer.Serialize(report, json));
         Console.WriteLine(JsonSerializer.Serialize(summary, VoxelJson.Options));
         Console.WriteLine(options.OutputPath);
-        return summary.GatePassed ? 0 : 3;
     }
 
     private static async Task CompilePairAsync(
@@ -457,13 +516,14 @@ internal static class CompilationGateHarness
                 out string? timeout)
                 ? int.Parse(timeout, CultureInfo.InvariantCulture)
                 : 30_000;
-            if (warmups < 0
+            if (warmups
+                    != CompilationGatePolicy.DefaultWarmupPairCount
                 || !CompilationGatePolicy.IsValidMeasuredPairCount(pairs)
                 || timeoutMilliseconds <= 0)
             {
                 throw new ArgumentOutOfRangeException(
                     nameof(args),
-                    "The compilation gate requires a nonnegative warmup count, a positive even measured count, and a positive timeout.");
+                    "The compilation gate requires one warmup pair, a positive even measured count, and a positive timeout.");
             }
 
             return new Options(

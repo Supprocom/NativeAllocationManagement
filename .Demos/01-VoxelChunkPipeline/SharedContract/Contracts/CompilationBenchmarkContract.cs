@@ -40,6 +40,7 @@ public readonly record struct CompilationGateSummary(
     double? NamToSafeRatio,
     double? NamToSafeWallRatio,
     CompilationCompilerDiagnostics CompilerDiagnostics,
+    bool WarmupGatePassed,
     bool AllCompilationsCompleted,
     bool ChildConfigurationGatePassed,
     bool MeasuredOrderGatePassed,
@@ -85,6 +86,21 @@ public static class CompilationGatePolicy
         return (measuredPair & 1) == 0;
     }
 
+    public static bool HasValidWarmups(
+        IReadOnlyList<CompilationSample> warmups,
+        int warmupPairCount)
+    {
+        ArgumentNullException.ThrowIfNull(warmups);
+        return warmupPairCount == DefaultWarmupPairCount
+            && warmups.Count == checked(warmupPairCount * 2)
+            && HasExpectedPairStructure(warmups, warmupPairCount)
+            && warmups.All(IsCompletedCompilation)
+            && warmups.All(HasRequiredChildConfiguration);
+    }
+
+    public static bool CanStartMeasuredBuilds(bool warmupGatePassed) =>
+        warmupGatePassed;
+
     public static bool HasBalancedMeasuredOrder(
         IReadOnlyList<CompilationSample> samples,
         int measuredPairCount)
@@ -96,7 +112,66 @@ public static class CompilationGatePolicy
             return false;
         }
 
-        for (int pair = 0; pair < measuredPairCount; pair++)
+        return HasExpectedPairStructure(samples, measuredPairCount)
+            && samples.Count(
+            static sample =>
+                sample.Position == 0
+                && sample.Implementation == "SafeCSharp")
+            == measuredPairCount / 2;
+    }
+
+    public static bool HasCompletedMeasuredCompilations(
+        IReadOnlyList<CompilationSample> samples,
+        int measuredPairCount)
+    {
+        ArgumentNullException.ThrowIfNull(samples);
+        return HasBalancedMeasuredOrder(samples, measuredPairCount)
+            && samples.All(IsCompletedCompilation);
+    }
+
+    public static bool AllCompilationsCompleted(
+        bool warmupGatePassed,
+        bool measuredCompilationsCompleted) =>
+        warmupGatePassed && measuredCompilationsCompleted;
+
+    public static bool HasRequiredChildConfiguration(
+        IReadOnlyList<CompilationSample> warmups,
+        IReadOnlyList<CompilationSample> samples,
+        int warmupPairCount,
+        int measuredPairCount)
+    {
+        ArgumentNullException.ThrowIfNull(warmups);
+        ArgumentNullException.ThrowIfNull(samples);
+        if (warmupPairCount != DefaultWarmupPairCount
+            || !IsValidMeasuredPairCount(measuredPairCount)
+            || warmups.Count != checked(warmupPairCount * 2)
+            || samples.Count != checked(measuredPairCount * 2))
+        {
+            return false;
+        }
+
+        return warmups
+            .Concat(samples)
+            .All(HasRequiredChildConfiguration);
+    }
+
+    public static bool AllGatesPassed(
+        bool warmupGatePassed,
+        bool childConfigurationGatePassed,
+        bool measuredOrderGatePassed,
+        bool compilerGatePassed,
+        bool wallGatePassed) =>
+        warmupGatePassed
+        && childConfigurationGatePassed
+        && measuredOrderGatePassed
+        && compilerGatePassed
+        && wallGatePassed;
+
+    private static bool HasExpectedPairStructure(
+        IReadOnlyList<CompilationSample> samples,
+        int pairCount)
+    {
+        for (int pair = 0; pair < pairCount; pair++)
         {
             CompilationSample[] pairSamples = samples
                 .Where(sample => sample.Pair == pair)
@@ -123,41 +198,28 @@ public static class CompilationGatePolicy
             }
         }
 
-        return samples.Count(
-            static sample =>
-                sample.Position == 0
-                && sample.Implementation == "SafeCSharp")
-            == measuredPairCount / 2;
+        return true;
     }
 
-    public static bool HasRequiredChildConfiguration(
-        IReadOnlyList<CompilationSample> warmups,
-        IReadOnlyList<CompilationSample> samples,
-        int warmupPairCount,
-        int measuredPairCount)
-    {
-        ArgumentNullException.ThrowIfNull(warmups);
-        ArgumentNullException.ThrowIfNull(samples);
-        if (warmupPairCount < 0
-            || !IsValidMeasuredPairCount(measuredPairCount)
-            || warmups.Count != checked(warmupPairCount * 2)
-            || samples.Count != checked(measuredPairCount * 2))
-        {
-            return false;
-        }
+    private static bool IsCompletedCompilation(
+        CompilationSample sample) =>
+        sample.Outcome == CompilationOutcome.Completed
+        && sample.CompilerElapsedMilliseconds is > 0
+        && sample.WallElapsedMilliseconds > 0
+        && sample.ExitCode == 0;
 
+    private static bool HasRequiredChildConfiguration(
+        CompilationSample sample)
+    {
         PressureCompilationConfiguration required =
             RequiredChildCompilationConfiguration;
-        return warmups
-            .Concat(samples)
-            .All(sample =>
-                string.Equals(
-                    sample.ChildCompilationConfiguration.TieredCompilation,
-                    required.TieredCompilation,
-                    StringComparison.Ordinal)
-                && string.Equals(
-                    sample.ChildCompilationConfiguration.TieredPgo,
-                    required.TieredPgo,
-                    StringComparison.Ordinal));
+        return string.Equals(
+                sample.ChildCompilationConfiguration.TieredCompilation,
+                required.TieredCompilation,
+                StringComparison.Ordinal)
+            && string.Equals(
+                sample.ChildCompilationConfiguration.TieredPgo,
+                required.TieredPgo,
+                StringComparison.Ordinal);
     }
 }

@@ -235,6 +235,24 @@ public sealed class VoxelSharedContractTests
             "options.WarmupPairs + options.MeasuredPairs",
             compilationHarness,
             StringComparison.Ordinal);
+        int warmupGuard = compilationHarness.IndexOf(
+            "if (!CompilationGatePolicy.CanStartMeasuredBuilds(",
+            StringComparison.Ordinal);
+        Assert.True(warmupGuard >= 0);
+        int failureWrite = compilationHarness.IndexOf(
+            "await WriteReportAsync(",
+            warmupGuard,
+            StringComparison.Ordinal);
+        int failureReturn = compilationHarness.IndexOf(
+            "return 3;",
+            failureWrite,
+            StringComparison.Ordinal);
+        int measuredLoop = compilationHarness.IndexOf(
+            "for (int pair = 0; pair < options.MeasuredPairs; pair++)",
+            StringComparison.Ordinal);
+        Assert.True(failureWrite > warmupGuard);
+        Assert.True(failureReturn > failureWrite);
+        Assert.True(measuredLoop > failureReturn);
 
         CompilationGateSummary failedSummary = default;
         string failedJson = System.Text.Json.JsonSerializer.Serialize(
@@ -778,6 +796,137 @@ public sealed class VoxelSharedContractTests
                 samples,
                 CompilationGatePolicy.DefaultWarmupPairCount,
                 CompilationGatePolicy.DefaultMeasuredPairCount));
+    }
+
+    [Fact]
+    public void CompilationWarmupFailureBlocksTheCompleteGate()
+    {
+        PressureCompilationConfiguration configuration =
+            CompilationGatePolicy.RequiredChildCompilationConfiguration;
+        List<CompilationSample> warmups =
+        [
+            CompilationSampleForTest(
+                0,
+                0,
+                "SafeCSharp",
+                configuration),
+            CompilationSampleForTest(
+                0,
+                1,
+                "NAM",
+                configuration)
+        ];
+        List<CompilationSample> measured = [];
+        for (int pair = 0;
+            pair < CompilationGatePolicy.DefaultMeasuredPairCount;
+            pair++)
+        {
+            bool safeFirst =
+                CompilationGatePolicy.SafeRunsFirst(pair);
+            measured.Add(
+                CompilationSampleForTest(
+                    pair,
+                    0,
+                    safeFirst ? "SafeCSharp" : "NAM",
+                    configuration));
+            measured.Add(
+                CompilationSampleForTest(
+                    pair,
+                    1,
+                    safeFirst ? "NAM" : "SafeCSharp",
+                    configuration));
+        }
+
+        Assert.True(
+            CompilationGatePolicy.HasCompletedMeasuredCompilations(
+                measured,
+                CompilationGatePolicy.DefaultMeasuredPairCount));
+
+        warmups[0] = warmups[0] with
+        {
+            CompilerElapsedMilliseconds = null,
+            Outcome = CompilationOutcome.BuildFailure,
+            ExitCode = 1
+        };
+        bool warmupGate =
+            CompilationGatePolicy.HasValidWarmups(
+                warmups,
+                CompilationGatePolicy.DefaultWarmupPairCount);
+
+        Assert.False(warmupGate);
+        Assert.False(
+            CompilationGatePolicy.CanStartMeasuredBuilds(
+                warmupGate));
+        Assert.False(
+            CompilationGatePolicy.AllCompilationsCompleted(
+                warmupGate,
+                measuredCompilationsCompleted: true));
+        Assert.False(
+            CompilationGatePolicy.AllGatesPassed(
+                warmupGate,
+                childConfigurationGatePassed: true,
+                measuredOrderGatePassed: true,
+                compilerGatePassed: true,
+                wallGatePassed: true));
+    }
+
+    [Fact]
+    public void CompilationWarmupPolicyRejectsMalformedPairsAndResults()
+    {
+        PressureCompilationConfiguration configuration =
+            CompilationGatePolicy.RequiredChildCompilationConfiguration;
+        CompilationSample safe = CompilationSampleForTest(
+            0,
+            0,
+            "SafeCSharp",
+            configuration);
+        CompilationSample nam = CompilationSampleForTest(
+            0,
+            1,
+            "NAM",
+            configuration);
+
+        Assert.True(
+            CompilationGatePolicy.HasValidWarmups(
+                [safe, nam],
+                CompilationGatePolicy.DefaultWarmupPairCount));
+        Assert.False(
+            CompilationGatePolicy.HasValidWarmups(
+                [safe],
+                CompilationGatePolicy.DefaultWarmupPairCount));
+        Assert.False(
+            CompilationGatePolicy.HasValidWarmups(
+                [safe, nam],
+                warmupPairCount: 0));
+        Assert.False(
+            CompilationGatePolicy.HasValidWarmups(
+                [safe with { Pair = 1 }, nam],
+                CompilationGatePolicy.DefaultWarmupPairCount));
+        Assert.False(
+            CompilationGatePolicy.HasValidWarmups(
+                [safe, nam with { Position = 0 }],
+                CompilationGatePolicy.DefaultWarmupPairCount));
+        Assert.False(
+            CompilationGatePolicy.HasValidWarmups(
+                [
+                    safe with { Implementation = "NAM" },
+                    nam with { Implementation = "SafeCSharp" }
+                ],
+                CompilationGatePolicy.DefaultWarmupPairCount));
+        Assert.False(
+            CompilationGatePolicy.HasValidWarmups(
+                [
+                    safe with
+                    {
+                        CompilerElapsedMilliseconds = null
+                    },
+                    nam
+                ],
+                CompilationGatePolicy.DefaultWarmupPairCount));
+        Assert.False(
+            CompilationGatePolicy.HasValidWarmups(
+                [safe with { ExitCode = 1 }, nam],
+                CompilationGatePolicy.DefaultWarmupPairCount));
     }
 
     [Fact]

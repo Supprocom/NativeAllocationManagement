@@ -83,6 +83,9 @@ complete build time must each remain within 1.10 times the Safe result.
 The gate uses one warmup pair and six measured pairs. Each implementation has
 three first positions and three second positions.
 
+Both warmup builds must complete with compiler timing and exit code zero. A
+warmup failure writes the artifact and stops before measured builds.
+
 Each child build disables tiered compilation and dynamic tiered PGO. The
 artifact records these settings for every warmup and measured build.
 
