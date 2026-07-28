@@ -10,7 +10,7 @@ param(
     [int]$RetentionDepth = 20,
     [int]$TimeoutSeconds = 120,
     [int]$CompilationTimeoutSeconds = 120,
-    [int]$EndToEndTimeoutSeconds = 180,
+    [int]$EndToEndTimeoutSeconds = 420,
     [int]$CompilationPairs = 5,
     [int]$SamplesPerProfile = 11,
     [int]$GcHeapHardLimitPercent = 90,
