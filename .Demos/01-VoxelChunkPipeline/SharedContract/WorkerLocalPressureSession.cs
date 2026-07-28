@@ -582,6 +582,11 @@ public sealed class WorkerLocalPressureSession : IPressureProfileSession
                 ? VoxelPipelineStage.Completed
                 : failedResult?.LastCompletedStage
                     ?? VoxelPipelineStage.None;
+        PressureSessionState stateAfterReset =
+            AggregateResetState(
+                request,
+                results,
+                after);
         return new PressureProfileResult(
             Implementation,
             outcome,
@@ -670,7 +675,98 @@ public sealed class WorkerLocalPressureSession : IPressureProfileSession
             exceptionMessage,
             ActiveWorkerCount: _activeWorkerCount,
             WorkerBudgetBytes: _workerBudgets,
-            WorkerCapacities: _workerCapacities);
+            WorkerCapacities: _workerCapacities,
+            StateAfterReset: stateAfterReset);
+    }
+
+    private PressureSessionState AggregateResetState(
+        PressureProfileRequest request,
+        IReadOnlyList<PressureProfileResult> results,
+        PressureRuntimeSnapshot runtimeBaseline)
+    {
+        PressureSessionState[] states = results
+            .Select(
+                static result =>
+                    result.StateAfterReset
+                    ?? throw new InvalidDataException(
+                        "A worker did not report its reset state."))
+            .ToArray();
+        long[] fingerprintValues = new long[
+            checked(
+                3
+                + _workerBudgets.Length
+                + states.Length)];
+        fingerprintValues[0] = _canonicalPlan.Length;
+        fingerprintValues[1] = _activeWorkerCount;
+        fingerprintValues[2] = _planSeed;
+        _workerBudgets.CopyTo(
+            fingerprintValues,
+            3);
+        for (int index = 0; index < states.Length; index++)
+        {
+            fingerprintValues[
+                3 + _workerBudgets.Length + index] =
+                    states[index].AllocationPlanFingerprint;
+        }
+
+        long completedRequestCount = states.Length == 0
+            ? 0
+            : states[0].CompletedRequestCount;
+        if (states.Any(
+                state =>
+                    state.RequestOrdinal != request.RequestOrdinal
+                    || state.CompletedRequestCount
+                        != completedRequestCount))
+        {
+            completedRequestCount = 0;
+        }
+
+        return new PressureSessionState(
+            Implementation,
+            request.RequestOrdinal,
+            completedRequestCount,
+            states.Sum(
+                static state =>
+                    state.ActiveRetentionSlots),
+            states.Sum(
+                static state =>
+                    state.ActiveSectionEntries),
+            states.Sum(
+                static state =>
+                    state.EvidenceEntries),
+            states.Sum(
+                static state =>
+                    state.HashStateEntries),
+            states.Sum(
+                static state =>
+                    state.LogicalCursorBytes),
+            states.Sum(
+                static state =>
+                    state.CompletedLogicalBytes),
+            states.Sum(
+                static state =>
+                    state.MappedUploadPosition),
+            states.Sum(
+                static state =>
+                    state.ActiveAllocationBytes),
+            states.Sum(
+                static state =>
+                    state.RetainedCapacityBytes),
+            states.Sum(
+                static state =>
+                    state.PersistentAllocationBytes),
+            PressureStateFingerprint.Compute(
+                fingerprintValues),
+            states
+                .Select(
+                    static state =>
+                        state.AllocationGeneration)
+                .DefaultIfEmpty()
+                .Max(),
+            states.Sum(
+                static state =>
+                    state.PendingCommandCount),
+            runtimeBaseline);
     }
 
     private static bool ResultMatchesWorkerPlan(
@@ -699,6 +795,12 @@ public sealed class WorkerLocalPressureSession : IPressureProfileSession
                 == VoxelPipelineStage.Completed
             && result.LastCompletedChunkId
                 == plan[^1].ChunkId
+            && result.StateAfterReset is
+            {
+                LogicalResetPassed: true
+            } reset
+            && reset.RequestOrdinal
+                == execution.Request.RequestOrdinal
             && (verification
                 ? result.ChunkEvidence.Count == plan.Length
                 : result.ChunkEvidence.Count == 0

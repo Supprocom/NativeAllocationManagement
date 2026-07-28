@@ -94,6 +94,7 @@ public sealed class VoxelSharedContractTests
             typeof(PressureChunkEvidence),
             typeof(PressureRuntimeSnapshot),
             typeof(PressureProfileResult),
+            typeof(PressureSessionState),
             typeof(PressureEnvelope),
             typeof(PressureOutputEvidence),
             typeof(PressureChunkShape),
@@ -107,6 +108,8 @@ public sealed class VoxelSharedContractTests
             typeof(PressurePairedStatistics),
             typeof(PressureOutcomeDecision),
             typeof(PressureOutcomePolicy),
+            typeof(PressureMeasurementPreparation),
+            typeof(PressureWorkerLifecycle),
             typeof(PressureProfilePair),
             typeof(PressureVerificationPair),
             typeof(PressureBinaryIdentity),
@@ -308,6 +311,18 @@ public sealed class VoxelSharedContractTests
             StringComparison.Ordinal);
         Assert.Contains(
             "percent == StressProfilePercent",
+            pressureHarness,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "PrepareMeasurementAsync(",
+            pressureHarness,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "ContainerAbsentAfterDisposal",
+            pressureHarness,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "StateAfterReset",
             pressureHarness,
             StringComparison.Ordinal);
         Assert.Contains(

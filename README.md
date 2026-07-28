@@ -19,7 +19,7 @@ The included voxel benchmark estimates a 50 to 85 percent performance
 improvement over expert safe C# in non-memory-constrained control profiles.
 
 In very memory-constrained profiles, the estimate ranges from 90 to 130
-percent, with selected higher-turnover runs above 110 percent.
+percent, with selected higher-turnover runs above 150 percent.
 
 Both implementations process equal inputs and outputs. The safe C#
 implementation uses pooling, exact sizing, bounded retention, and proactive

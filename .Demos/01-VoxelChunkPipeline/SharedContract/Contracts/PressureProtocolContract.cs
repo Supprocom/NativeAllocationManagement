@@ -68,7 +68,8 @@ public readonly record struct PressureProfileRequest(
     bool Warmup = false,
     PressureExecutionMode ExecutionMode =
         PressureExecutionMode.Verification,
-    PressureChunkPlanEntry[]? PlannedChunks = null)
+    PressureChunkPlanEntry[]? PlannedChunks = null,
+    long RequestOrdinal = 0)
 {
     public bool HasPlannedChunks =>
         PlannedChunks is { Length: > 0 };
@@ -83,7 +84,8 @@ public readonly record struct PressureProfileRequest(
             || RequestedCumulativeDemandBytes <= 0
             || DeadlineMilliseconds <= 0
             || RetentionDepth <= 0
-            || ProgressEveryChunks <= 0)
+            || ProgressEveryChunks <= 0
+            || RequestOrdinal < 0)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(PressureProfileRequest),
@@ -157,7 +159,8 @@ public readonly record struct PressureProfileRequest(
 public readonly record struct PressureCommand(
     string RequestId,
     PressureCommandKind Kind,
-    PressureProfileRequest? Profile = null);
+    PressureProfileRequest? Profile = null,
+    long CommandOrdinal = 0);
 
 public readonly record struct PressureProgress(
     string Implementation,
@@ -283,7 +286,59 @@ public readonly record struct PressureProfileResult(
     string? ExceptionMessage = null,
     int ActiveWorkerCount = 1,
     IReadOnlyList<long>? WorkerBudgetBytes = null,
-    IReadOnlyList<PressureWorkerCapacity>? WorkerCapacities = null);
+    IReadOnlyList<PressureWorkerCapacity>? WorkerCapacities = null,
+    PressureSessionState? StateAfterReset = null);
+
+public readonly record struct PressureSessionState(
+    string Implementation,
+    long RequestOrdinal,
+    long CompletedRequestCount,
+    int ActiveRetentionSlots,
+    int ActiveSectionEntries,
+    int EvidenceEntries,
+    int HashStateEntries,
+    long LogicalCursorBytes,
+    long CompletedLogicalBytes,
+    long MappedUploadPosition,
+    long ActiveAllocationBytes,
+    long RetainedCapacityBytes,
+    long PersistentAllocationBytes,
+    long AllocationPlanFingerprint,
+    long AllocationGeneration,
+    int PendingCommandCount,
+    PressureRuntimeSnapshot RuntimeBaseline)
+{
+    public bool LogicalResetPassed =>
+        ActiveRetentionSlots == 0
+        && ActiveSectionEntries == 0
+        && EvidenceEntries == 0
+        && HashStateEntries == 0
+        && LogicalCursorBytes == 0
+        && CompletedLogicalBytes == 0
+        && MappedUploadPosition == 0
+        && ActiveAllocationBytes == 0
+        && PendingCommandCount == 0;
+}
+
+public static class PressureStateFingerprint
+{
+    public static long Compute(params long[] values)
+    {
+        ArgumentNullException.ThrowIfNull(values);
+        unchecked
+        {
+            ulong hash = 14_695_981_039_346_656_037;
+            for (int index = 0; index < values.Length; index++)
+            {
+                hash ^= (ulong)values[index];
+                hash *= 1_099_511_628_211;
+            }
+
+            long result = (long)(hash & long.MaxValue);
+            return result == 0 ? 1 : result;
+        }
+    }
+}
 
 public readonly record struct PressureEnvelope(
     string RequestId,
@@ -367,6 +422,12 @@ public static class PressureProtocolServer
                         case PressureCommandKind.VerifyProfile:
                             PressureProfileRequest request = command.Profile
                                 ?? throw new InvalidDataException("A profile command requires a profile request.");
+                            if (command.CommandOrdinal <= 0)
+                            {
+                                throw new InvalidDataException(
+                                    "A profile command requires a positive command ordinal.");
+                            }
+
                             request.Validate();
                             PressureProfileResult result = session.Run(
                                 request with
@@ -376,10 +437,12 @@ public static class PressureProtocolServer
                                     ExecutionMode = command.Kind
                                         == PressureCommandKind.VerifyProfile
                                         ? PressureExecutionMode.Verification
-                                        : PressureExecutionMode.Measurement
+                                        : PressureExecutionMode.Measurement,
+                                    RequestOrdinal = command.CommandOrdinal
                                 },
                                 progress => ReportProgress(
                                     command.RequestId,
+                                    command.CommandOrdinal,
                                     session.Implementation,
                                     progress));
                             Write(new PressureEnvelope(
@@ -425,6 +488,7 @@ public static class PressureProtocolServer
 
     private static void ReportProgress(
         string requestId,
+        long commandOrdinal,
         string implementation,
         PressureProgress progress)
     {
@@ -454,10 +518,11 @@ public static class PressureProtocolServer
         }
 
         if (begin.Kind != PressureCommandKind.BeginProcessing
-            || begin.Profile is not null)
+            || begin.Profile is not null
+            || begin.CommandOrdinal != commandOrdinal)
         {
             throw new InvalidDataException(
-                "ProcessingReady requires BeginProcessing without a profile.");
+                "ProcessingReady requires the matching BeginProcessing command without a profile.");
         }
     }
 

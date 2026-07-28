@@ -14,6 +14,8 @@
     <ProjectReference Include="..\Supprocom.NativeAllocationManagement\Supprocom.NativeAllocationManagement.csproj" />
     <ProjectReference Include="..\Supprocom.NativeAllocationManagement.Analyzers\Supprocom.NativeAllocationManagement.Analyzers.csproj" />
     <ProjectReference Include="..\.Demos\01-VoxelChunkPipeline\SharedContract\SharedContract.csproj" />
+    <ProjectReference Include="..\.Demos\01-VoxelChunkPipeline\SafeCSharp\SafeCSharp.csproj" />
+    <ProjectReference Include="..\.Demos\01-VoxelChunkPipeline\NAM\NAM.csproj" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" PrivateAssets="all" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.13.0" />
     <PackageReference Include="xunit" Version="2.9.3" />

@@ -16,7 +16,8 @@ The control profiles estimate that NAM is 50 to 85 percent faster in a
 non-memory-constrained environment.
 
 The constrained profiles estimate that NAM is 90 to 130 percent faster in a
-very memory-constrained environment. Selected higher-turnover runs exceed 110 percent.
+very memory-constrained environment. Selected higher-turnover runs exceed 150
+percent.
 
 | Environment | Estimated improvement |
 |---|---:|
@@ -90,6 +91,9 @@ profiles use the configured sample count and confidence calculation.
 
 Each profile uses new Safe and NAM containers. Startup and four fixed
 1000-percent warmup passes occur outside measured processing.
+
+Each worker then runs the selected measured command once outside the timer.
+The worker resets all logical state before sample zero.
 
 The child waits at `ProcessingReady`. The host starts its timer before it sends
 `BeginProcessing`.

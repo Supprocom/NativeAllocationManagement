@@ -49,6 +49,7 @@ internal sealed class SafePressureSession :
     private MappedGpuBuffer? _mappedUpload;
     private UnmanagedMemoryStream? _mappedUploadStream;
     private long _fixedRetainedBytes;
+    private long _completedRequestCount;
 
     internal SafePressureSession()
     {
@@ -777,10 +778,13 @@ internal sealed class SafePressureSession :
             lastStage,
             lastChunkId));
         PressureRuntimeSnapshot after = PressureRuntimeSnapshot.Capture();
+        PressureChunkEvidence[] capturedEvidence = evidence is null
+            ? []
+            : evidence.ToArray();
         string evidenceHash = evidence is null
             ? string.Empty
             : PressureWorkContract.ComputeProfileEvidenceHash(
-                evidence);
+                capturedEvidence);
         bool correctness = outcome == PressureProfileOutcome.Completed
             && builtChunks != 0
             && (evidence is null
@@ -788,6 +792,9 @@ internal sealed class SafePressureSession :
                 && evidence.All(
                     static chunk => chunk.ExactVerificationPassed))
             && realizedDemand >= request.RequestedCumulativeDemandBytes;
+        PressureSessionState stateAfterReset = ResetLogicalState(
+            request,
+            evidence);
         return new PressureProfileResult(
             Implementation,
             outcome,
@@ -811,9 +818,7 @@ internal sealed class SafePressureSession :
             lastChunkId,
             correctness,
             evidenceHash,
-            evidence is { } capturedEvidence
-                ? capturedEvidence
-                : Array.Empty<PressureChunkEvidence>(),
+            capturedEvidence,
             before,
             after,
             Math.Max(0, after.TotalAllocatedBytes - before.TotalAllocatedBytes),
@@ -829,7 +834,56 @@ internal sealed class SafePressureSession :
             0,
             null,
             failure?.GetType().FullName,
-            failure?.Message);
+            failure?.Message,
+            StateAfterReset: stateAfterReset);
+    }
+
+    private PressureSessionState ResetLogicalState(
+        PressureProfileRequest request,
+        List<PressureChunkEvidence>? evidence)
+    {
+        evidence?.Clear();
+        _slots.AsSpan().Clear();
+        _sections.AsSpan().Clear();
+        UnmanagedMemoryStream mappedUpload =
+            _mappedUploadStream
+            ?? throw new InvalidOperationException(
+                "The managed GPU upload range is not ready.");
+        mappedUpload.Position = 0;
+        _transientBudget.ResetPhase();
+        if (_cells.IsRented
+            || _faces.IsRented
+            || _masks.IsRented
+            || _sectionDescriptors.IsRented)
+        {
+            throw new InvalidOperationException(
+                "A tracked managed array remains active after processing.");
+        }
+
+        SafeCapacityPlan plan = _capacityPlan
+            ?? throw new InvalidOperationException(
+                "The managed capacity plan is not ready.");
+        _completedRequestCount++;
+        return new PressureSessionState(
+            Implementation,
+            request.RequestOrdinal,
+            _completedRequestCount,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            mappedUpload.Position,
+            _transientBudget.ActiveBytes,
+            checked(
+                _fixedRetainedBytes
+                + _transientBudget.CachedBytes),
+            _fixedRetainedBytes,
+            plan.Fingerprint,
+            0,
+            0,
+            PressureRuntimeSnapshot.Capture());
     }
 
     private SafeAdmissionPlan EnsureCapacityPlan(
@@ -1236,6 +1290,27 @@ internal sealed class SafePressureSession :
 
         internal long MappedUploadCapacityBytes { get; private set; }
 
+        internal long Fingerprint => PressureStateFingerprint.Compute(
+            Seed,
+            RetentionDepth,
+            RetentionBudgetBytes,
+            CellCapacity,
+            FaceCapacity,
+            MaskCapacity,
+            SectionDescriptorCapacity,
+            SectionValueCapacity,
+            SectionWordCapacity,
+            SectionStateCapacity,
+            VertexCapacity,
+            IndexCapacity,
+            SliceCapacity,
+            Stage160Capacity,
+            Stage168Capacity,
+            Stage176Capacity,
+            Stage192Capacity,
+            Stage224Capacity,
+            MappedUploadCapacityBytes);
+
         internal static SafeCapacityPlan Create(
             PressureProfileRequest request,
             int maximumRetentionDepth,
@@ -1599,6 +1674,21 @@ internal sealed class SafePressureSession :
             }
         }
 
+        internal long ActiveBytes => _activeBytes;
+
+        internal long CachedBytes => _cachedBytes;
+
+        internal void ResetPhase()
+        {
+            if (_activeBytes != 0)
+            {
+                throw new InvalidOperationException(
+                    "A managed array remains active after processing.");
+            }
+
+            _phaseRemainingBytes = 0;
+        }
+
         internal void ReserveActive(long bytes)
         {
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(bytes);
@@ -1918,6 +2008,8 @@ internal sealed class SafePressureSession :
                 PoolLength(maximumLength),
                 maxArraysPerBucket);
         }
+
+        internal bool IsRented => _rented;
 
         internal long RetainedBytes =>
             _persistent is null

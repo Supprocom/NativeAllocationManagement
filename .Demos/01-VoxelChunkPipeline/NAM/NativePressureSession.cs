@@ -18,6 +18,7 @@ internal sealed class NativePressureSession :
     private readonly Thread _worker;
     private Exception? _startupFailure;
     private int _disposed;
+    private long _completedRequestCount;
 
     internal NativePressureSession()
     {
@@ -143,6 +144,12 @@ internal sealed class NativePressureSession :
                         PressureWorkContract.PayloadPatternTableBytes,
                         static writer => writer.Write(
                             PressureWorkContract.PayloadPatternTable));
+                long persistentAllocationBytes = checked(
+                    (long)outputCapacity.CellCapacity
+                        * VoxelMath.VoxelCellBytes
+                    + (long)outputCapacity.FaceCapacity
+                        * VoxelMath.FaceRecordBytes
+                    + PressureWorkContract.PayloadPatternTableBytes);
                 while (true)
                 {
                     try
@@ -167,298 +174,311 @@ internal sealed class NativePressureSession :
                         Exception? failure = null;
                         PressureProfileOutcome outcome = PressureProfileOutcome.Completed;
 
-                    reportProgress(new PressureProgress(
-                        Implementation,
-                        request.ProfilePercent,
-                        PressureProgressKind.ProcessingReady,
-                        0,
-                        0,
-                        VoxelPipelineStage.None,
-                        -1));
-                    try
-                    {
-                        if (!outputCapacity.IsReady
-                            || outputCapacity.Seed != request.Seed
-                            || outputCapacity.RetentionDepth
-                                != nativeRetentionDepth)
+                        reportProgress(new PressureProgress(
+                            Implementation,
+                            request.ProfilePercent,
+                            PressureProgressKind.ProcessingReady,
+                            0,
+                            0,
+                            VoxelPipelineStage.None,
+                            -1));
+                        try
                         {
-                            throw new InvalidOperationException(
-                                "The native worker requires an equal warmup plan.");
-                        }
-
-                        while (state.NeedsBatch(request))
-                        {
-                            _context.BeginBatch(
-                                request,
-                                reportProgress,
-                                state.Evidence,
-                                state.BuiltChunks,
-                                state.RealizedDemand,
-                                Math.Max(
-                                    0,
-                                    state.MinimumWarmupChunks
-                                        - state.BuiltChunks),
-                                nativeRetentionDepth,
-                                sectionAdmissionCapacity);
-                            persistentCells.Access(
-                                _context.BuildAction);
-                            state.RecordBuild(request, _context);
-                            outputCapacity.EnsureFits(_context);
-                            try
+                            if (!outputCapacity.IsReady
+                                || outputCapacity.Seed != request.Seed
+                                || outputCapacity.RetentionDepth
+                                    != nativeRetentionDepth)
                             {
-                                scoped ArenaLease<
-                                    SectionPrerenderDescriptor>
-                                    sectionDescriptors;
-                                scoped ArenaLease<ushort>
-                                    sectionValues;
-                                scoped ArenaLease<uint>
-                                    sectionWords;
-                                scoped ArenaLease<ulong>
-                                    sectionStates;
-                                scoped ArenaLease<ulong>
-                                    sectionMasks;
-                                scoped ArenaLease<byte>
-                                    firstMaskMarker;
-                                scoped ArenaLease<byte>
-                                    secondMaskMarker;
-                                scoped ArenaLease<byte>
-                                    thirdMaskMarker;
-                                NativeLeaseOperations
-                                    .InitializeScoped(
-                                        persistentCells,
-                                        phaseArena,
-                                        _context
-                                            .TotalSectionDescriptors,
-                                        _context.TotalSectionValues,
-                                        _context.TotalSectionWords,
-                                        _context
-                                            .TotalSectionStateWords,
-                                        _context.TotalMaskWords,
+                                throw new InvalidOperationException(
+                                    "The native worker requires an equal warmup plan.");
+                            }
+
+                            while (state.NeedsBatch(request))
+                            {
+                                _context.BeginBatch(
+                                    request,
+                                    reportProgress,
+                                    state.Evidence,
+                                    state.BuiltChunks,
+                                    state.RealizedDemand,
+                                    Math.Max(
                                         0,
-                                        0,
-                                        0,
-                                        _context
-                                            .SectionInitializeAction,
-                                        out sectionDescriptors,
-                                        out sectionValues,
-                                        out sectionWords,
-                                        out sectionStates,
-                                        out sectionMasks,
-                                        out firstMaskMarker,
-                                        out secondMaskMarker,
-                                        out thirdMaskMarker);
-                                if (_context.ExactVerification)
+                                        state.MinimumWarmupChunks
+                                            - state.BuiltChunks),
+                                    nativeRetentionDepth,
+                                    sectionAdmissionCapacity);
+                                persistentCells.Access(
+                                    _context.BuildAction);
+                                state.RecordBuild(request, _context);
+                                outputCapacity.EnsureFits(_context);
+                                try
                                 {
-                                    NativeLeaseOperations.Access(
-                                        persistentCells,
-                                        sectionDescriptors,
-                                        sectionValues,
-                                        sectionWords,
-                                        sectionStates,
+                                    scoped ArenaLease<
+                                        SectionPrerenderDescriptor>
+                                        sectionDescriptors;
+                                    scoped ArenaLease<ushort>
+                                        sectionValues;
+                                    scoped ArenaLease<uint>
+                                        sectionWords;
+                                    scoped ArenaLease<ulong>
+                                        sectionStates;
+                                    scoped ArenaLease<ulong>
+                                        sectionMasks;
+                                    scoped ArenaLease<byte>
+                                        firstMaskMarker;
+                                    scoped ArenaLease<byte>
+                                        secondMaskMarker;
+                                    scoped ArenaLease<byte>
+                                        thirdMaskMarker;
+                                    NativeLeaseOperations
+                                        .InitializeScoped(
+                                            persistentCells,
+                                            phaseArena,
                                             _context
-                                                .SectionRecordAction);
-                                }
+                                                .TotalSectionDescriptors,
+                                            _context.TotalSectionValues,
+                                            _context.TotalSectionWords,
+                                            _context
+                                                .TotalSectionStateWords,
+                                            _context.TotalMaskWords,
+                                            0,
+                                            0,
+                                            0,
+                                            _context
+                                                .SectionInitializeAction,
+                                            out sectionDescriptors,
+                                            out sectionValues,
+                                            out sectionWords,
+                                            out sectionStates,
+                                            out sectionMasks,
+                                            out firstMaskMarker,
+                                            out secondMaskMarker,
+                                            out thirdMaskMarker);
+                                    if (_context.ExactVerification)
+                                    {
+                                        NativeLeaseOperations.Access(
+                                            persistentCells,
+                                            sectionDescriptors,
+                                            sectionValues,
+                                            sectionWords,
+                                            sectionStates,
+                                                _context
+                                                    .SectionRecordAction);
+                                    }
 
-                                NativeLeaseOperations.Access(
-                                    persistentCells,
-                                    persistentFaces,
-                                    sectionDescriptors,
-                                    _context.FaceMaskAction);
-                                state.RecordRender(_context);
-                                if (_context.ExactVerification)
-                                {
                                     NativeLeaseOperations.Access(
                                         persistentCells,
-                                        sectionDescriptors,
-                                        sectionValues,
-                                        sectionWords,
-                                        sectionStates,
-                                        _context
-                                            .SectionVerifyAction);
-                                    sectionMasks.Access(
-                                        _context.MaskRecordAction);
-                                }
-                            }
-                            finally
-                            {
-                                phaseArena.RecycleScoped();
-                            }
-
-                            try
-                            {
-                                scoped ArenaLease<Vertex>
-                                    vertices;
-                                scoped ArenaLease<int>
-                                    indices;
-                                scoped ArenaLease<PayloadSlice>
-                                    slices;
-                                scoped ArenaLease<byte>
-                                    aliasMarker;
-                                NativeLeaseOperations.InitializeScoped(
-                                    persistentFaces,
-                                    phaseArena,
-                                    _context.TotalVertices,
-                                    _context.TotalIndices,
-                                    _context.TotalFaces,
-                                    0,
-                                    _context.PackInitializeAction,
-                                    out vertices,
-                                    out indices,
-                                    out slices,
-                                    out aliasMarker);
-                                if (_context.ExactVerification)
-                                {
-                                    NativeLeaseOperations.Access(
                                         persistentFaces,
-                                        persistentPayloadPatterns,
-                                        vertices,
-                                        indices,
-                                        slices,
-                                        _context.PackCompleteAction);
+                                        sectionDescriptors,
+                                        _context.FaceMaskAction);
+                                    state.RecordRender(_context);
+                                    if (_context.ExactVerification)
+                                    {
+                                        NativeLeaseOperations.Access(
+                                            persistentCells,
+                                            sectionDescriptors,
+                                            sectionValues,
+                                            sectionWords,
+                                            sectionStates,
+                                            _context
+                                                .SectionVerifyAction);
+                                        sectionMasks.Access(
+                                            _context.MaskRecordAction);
+                                    }
                                 }
-                                else
+                                finally
                                 {
-                                    _context.CompleteScatterHandoff();
+                                    phaseArena.RecycleScoped();
                                 }
-                                RecordCompletedBatch(state);
-                                state.RecordArena(_context);
-                            }
-                            finally
-                            {
-                                phaseArena.RecycleScoped();
-                            }
 
-                            state.LastStage =
-                                VoxelPipelineStage.Completed;
+                                try
+                                {
+                                    scoped ArenaLease<Vertex>
+                                        vertices;
+                                    scoped ArenaLease<int>
+                                        indices;
+                                    scoped ArenaLease<PayloadSlice>
+                                        slices;
+                                    scoped ArenaLease<byte>
+                                        aliasMarker;
+                                    NativeLeaseOperations.InitializeScoped(
+                                        persistentFaces,
+                                        phaseArena,
+                                        _context.TotalVertices,
+                                        _context.TotalIndices,
+                                        _context.TotalFaces,
+                                        0,
+                                        _context.PackInitializeAction,
+                                        out vertices,
+                                        out indices,
+                                        out slices,
+                                        out aliasMarker);
+                                    if (_context.ExactVerification)
+                                    {
+                                        NativeLeaseOperations.Access(
+                                            persistentFaces,
+                                            persistentPayloadPatterns,
+                                            vertices,
+                                            indices,
+                                            slices,
+                                            _context.PackCompleteAction);
+                                    }
+                                    else
+                                    {
+                                        _context.CompleteScatterHandoff();
+                                    }
+                                    RecordCompletedBatch(state);
+                                    state.RecordArena(_context);
+                                }
+                                finally
+                                {
+                                    phaseArena.RecycleScoped();
+                                }
+
+                                state.LastStage =
+                                    VoxelPipelineStage.Completed;
+                            }
                         }
-                    }
-                    catch (OutOfMemoryException exception)
-                    {
-                        outcome = PressureProfileOutcome.OutOfMemory;
-                        failure = exception;
-                    }
-                    catch (NativeAllocationFailedException exception)
-                    {
-                        outcome = PressureProfileOutcome.OutOfMemory;
-                        failure = exception;
-                    }
-                    catch (InvalidDataException exception)
-                    {
-                        outcome = PressureProfileOutcome.IncorrectOutput;
-                        failure = exception;
-                    }
-                    catch (Exception exception)
-                    {
-                        outcome = PressureProfileOutcome.Crash;
-                        failure = exception;
-                    }
+                        catch (OutOfMemoryException exception)
+                        {
+                            outcome = PressureProfileOutcome.OutOfMemory;
+                            failure = exception;
+                        }
+                        catch (NativeAllocationFailedException exception)
+                        {
+                            outcome = PressureProfileOutcome.OutOfMemory;
+                            failure = exception;
+                        }
+                        catch (InvalidDataException exception)
+                        {
+                            outcome = PressureProfileOutcome.IncorrectOutput;
+                            failure = exception;
+                        }
+                        catch (Exception exception)
+                        {
+                            outcome = PressureProfileOutcome.Crash;
+                            failure = exception;
+                        }
 
-                    reportProgress(new PressureProgress(
-                        Implementation,
-                        request.ProfilePercent,
-                        PressureProgressKind.ProcessingCompleted,
-                        state.BuiltChunks,
-                        _context.CompletedLogicalBytes,
-                        state.LastStage,
-                        state.LastChunkId));
-                    PressureRuntimeSnapshot after = PressureRuntimeSnapshot.Capture();
-                    NativeMemoryStatistics nativeAfter = NativeMemoryDiagnostics.Snapshot();
-                    NativeOwnerStatistics[] ownerAfter =
-                    [
-                        phaseArena.GetStatistics()
-                    ];
-                    IReadOnlyList<NativeOwnerProfile> owners = BuildOwnerProfiles(
-                        ownerBefore,
-                        ownerAfter,
+                        reportProgress(new PressureProgress(
+                            Implementation,
+                            request.ProfilePercent,
+                            PressureProgressKind.ProcessingCompleted,
+                            state.BuiltChunks,
+                            _context.CompletedLogicalBytes,
+                            state.LastStage,
+                            state.LastChunkId));
+                        PressureRuntimeSnapshot after = PressureRuntimeSnapshot.Capture();
+                        NativeMemoryStatistics nativeAfter = NativeMemoryDiagnostics.Snapshot();
+                        NativeOwnerStatistics[] ownerAfter =
                         [
-                            state.PhaseArenaPeakRequest
-                        ]);
-                    string evidenceHash = state.Evidence is null
-                        ? string.Empty
-                        : PressureWorkContract.ComputeProfileEvidenceHash(
-                            state.Evidence);
-                    bool correctness = outcome == PressureProfileOutcome.Completed
-                        && state.BuiltChunks != 0
-                        && (state.Evidence is null
-                            || state.Evidence.Count == state.BuiltChunks
-                            && state.Evidence.All(
-                                static chunk =>
-                                    chunk.ExactVerificationPassed))
-                        && state.RealizedDemand
-                            >= request.RequestedCumulativeDemandBytes;
-                    long retainedBytes = ownerAfter.Sum(
-                        static owner => owner.RetainedBytes);
-                    long physicalPeak = owners.Sum(
-                        static owner => owner.PeakPhysicalBytes);
-                    item.Result = new PressureProfileResult(
-                        Implementation,
-                        outcome,
-                        request.ProfilePercent,
-                        request.ExecutionMode,
-                        request.CgroupCapBytes,
-                        request.RequestedCumulativeDemandBytes,
-                        state.RealizedDemand,
-                        Math.Max(
+                            phaseArena.GetStatistics()
+                        ];
+                        IReadOnlyList<NativeOwnerProfile> owners = BuildOwnerProfiles(
+                            ownerBefore,
+                            ownerAfter,
+                            [
+                                state.PhaseArenaPeakRequest
+                            ]);
+                        PressureChunkEvidence[] capturedEvidence =
+                            state.Evidence is null
+                                ? []
+                                : state.Evidence.ToArray();
+                        string evidenceHash = state.Evidence is null
+                            ? string.Empty
+                            : PressureWorkContract.ComputeProfileEvidenceHash(
+                                capturedEvidence);
+                        bool correctness = outcome == PressureProfileOutcome.Completed
+                            && state.BuiltChunks != 0
+                            && (state.Evidence is null
+                                || state.Evidence.Count == state.BuiltChunks
+                                && state.Evidence.All(
+                                    static chunk =>
+                                        chunk.ExactVerificationPassed))
+                            && state.RealizedDemand
+                                >= request.RequestedCumulativeDemandBytes;
+                        long retainedBytes = ownerAfter.Sum(
+                            static owner => owner.RetainedBytes);
+                        long physicalPeak = owners.Sum(
+                            static owner => owner.PeakPhysicalBytes);
+                        long completedLogicalBytes =
+                            _context.CompletedLogicalBytes;
+                        phaseArena.RecycleScoped();
+                        PressureSessionState stateAfterReset =
+                            ResetLogicalState(
+                                request,
+                                state,
+                                phaseArena,
+                                outputCapacity,
+                                persistentAllocationBytes);
+                        item.Result = new PressureProfileResult(
+                            Implementation,
+                            outcome,
+                            request.ProfilePercent,
+                            request.ExecutionMode,
+                            request.CgroupCapBytes,
+                            request.RequestedCumulativeDemandBytes,
+                            state.RealizedDemand,
+                            Math.Max(
+                                0,
+                                state.RealizedDemand
+                                    - request.RequestedCumulativeDemandBytes),
+                            request.DeadlineMilliseconds,
+                            state.BuiltChunks,
+                            completedLogicalBytes,
+                            state.SourceInputBytes,
+                            state.PeakLiveLogicalBytes,
+                            state.PeakLiveLogicalBytes == 0
+                                ? 0
+                                : state.RealizedDemand
+                                    / (double)state.PeakLiveLogicalBytes,
+                            request.RetentionDepth,
+                            state.PeakBatchCount,
+                            state.PhaseArenaPeakRequest,
+                            state.AdmissionThrottleCount,
+                            state.LastStage,
+                            state.LastChunkId,
+                            correctness,
+                            evidenceHash,
+                            capturedEvidence,
+                            before,
+                            after,
+                            Math.Max(
+                                0,
+                                after.TotalAllocatedBytes - before.TotalAllocatedBytes),
+                            Math.Max(
+                                0,
+                                after.Gen0Collections - before.Gen0Collections),
+                            Math.Max(
+                                0,
+                                after.Gen1Collections - before.Gen1Collections),
+                            Math.Max(
+                                0,
+                                after.Gen2Collections - before.Gen2Collections),
+                            Math.Max(
+                                0,
+                                after.TotalPauseMilliseconds
+                                    - before.TotalPauseMilliseconds),
+                            physicalPeak,
+                            retainedBytes,
                             0,
-                            state.RealizedDemand
-                                - request.RequestedCumulativeDemandBytes),
-                        request.DeadlineMilliseconds,
-                        state.BuiltChunks,
-                        _context.CompletedLogicalBytes,
-                        state.SourceInputBytes,
-                        state.PeakLiveLogicalBytes,
-                        state.PeakLiveLogicalBytes == 0
-                            ? 0
-                            : state.RealizedDemand
-                                / (double)state.PeakLiveLogicalBytes,
-                        request.RetentionDepth,
-                        state.PeakBatchCount,
-                        state.PhaseArenaPeakRequest,
-                        state.AdmissionThrottleCount,
-                        state.LastStage,
-                        state.LastChunkId,
-                        correctness,
-                        evidenceHash,
-                        state.Evidence is { } evidence
-                            ? evidence
-                            : Array.Empty<PressureChunkEvidence>(),
-                        before,
-                        after,
-                        Math.Max(
-                            0,
-                            after.TotalAllocatedBytes - before.TotalAllocatedBytes),
-                        Math.Max(
-                            0,
-                            after.Gen0Collections - before.Gen0Collections),
-                        Math.Max(
-                            0,
-                            after.Gen1Collections - before.Gen1Collections),
-                        Math.Max(
-                            0,
-                            after.Gen2Collections - before.Gen2Collections),
-                        Math.Max(
-                            0,
-                            after.TotalPauseMilliseconds
-                                - before.TotalPauseMilliseconds),
-                        physicalPeak,
-                        retainedBytes,
-                        0,
-                        Math.Max(
-                            0,
-                            nativeAfter.ReusedNativeSegmentCount
-                                - nativeBefore.ReusedNativeSegmentCount),
-                        Math.Max(
-                            0,
-                            nativeAfter.ReclaimedRangeReuseCount
-                                - nativeBefore.ReclaimedRangeReuseCount),
-                        Math.Max(
-                            0,
-                            nativeAfter.ReclaimedRangeReuseBytes
-                                - nativeBefore.ReclaimedRangeReuseBytes),
-                        owners,
-                        failure?.GetType().FullName,
-                        failure?.Message);
-                }
+                            Math.Max(
+                                0,
+                                nativeAfter.ReusedNativeSegmentCount
+                                    - nativeBefore.ReusedNativeSegmentCount),
+                            Math.Max(
+                                0,
+                                nativeAfter.ReclaimedRangeReuseCount
+                                    - nativeBefore.ReclaimedRangeReuseCount),
+                            Math.Max(
+                                0,
+                                nativeAfter.ReclaimedRangeReuseBytes
+                                    - nativeBefore.ReclaimedRangeReuseBytes),
+                            owners,
+                            failure?.GetType().FullName,
+                            failure?.Message,
+                            StateAfterReset: stateAfterReset);
+                    }
                     catch (Exception exception)
                     {
                         item.Failure = exception;
@@ -493,6 +513,48 @@ internal sealed class NativePressureSession :
     {
         state.RecordPack(_context);
         _slots.AsSpan(0, _context.BatchCount).Clear();
+    }
+
+    private PressureSessionState ResetLogicalState(
+        PressureProfileRequest request,
+        NativeProfileState state,
+        NativeArena phaseArena,
+        OutputCapacityPlan outputCapacity,
+        long persistentAllocationBytes)
+    {
+        state.Evidence?.Clear();
+        _slots.AsSpan().Clear();
+        _sections.AsSpan().Clear();
+        _context.ResetLogicalState();
+        NativeOwnerStatistics owner = phaseArena.GetStatistics();
+        long activeAllocationBytes = Math.Max(
+            0,
+            owner.RequestedBytes - persistentAllocationBytes);
+        if (activeAllocationBytes != 0)
+        {
+            throw new InvalidOperationException(
+                "A scoped native allocation remains active after processing.");
+        }
+
+        _completedRequestCount++;
+        return new PressureSessionState(
+            Implementation,
+            request.RequestOrdinal,
+            _completedRequestCount,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            activeAllocationBytes,
+            owner.RetainedBytes,
+            persistentAllocationBytes,
+            outputCapacity.Fingerprint,
+            owner.Generation,
+            _requests.Count,
+            PressureRuntimeSnapshot.Capture());
     }
 
     private static OutputCapacityPlan CreateNativeCapacityPlan(
@@ -750,21 +812,24 @@ internal sealed class NativePressureSession :
             ulong,
             byte,
             byte,
-            byte> SectionInitializeAction { get; }
+            byte> SectionInitializeAction
+        { get; }
 
         internal NativeLeaseQuintupleAction<
             VoxelCell,
             SectionPrerenderDescriptor,
             ushort,
             uint,
-            ulong> SectionRecordAction { get; }
+            ulong> SectionRecordAction
+        { get; }
 
         internal NativeLeaseQuintupleAction<
             VoxelCell,
             SectionPrerenderDescriptor,
             ushort,
             uint,
-            ulong> SectionVerifyAction { get; }
+            ulong> SectionVerifyAction
+        { get; }
 
         internal NativeLeaseAction<ulong> MaskRecordAction { get; }
 
@@ -772,21 +837,24 @@ internal sealed class NativePressureSession :
             VoxelCell,
             FaceRecord,
             SectionPrerenderDescriptor>
-            FaceMaskAction { get; }
+            FaceMaskAction
+        { get; }
 
         internal NativeLeaseSourceQuadSpanInitializer<
             FaceRecord,
             Vertex,
             int,
             PayloadSlice,
-            byte> PackInitializeAction { get; }
+            byte> PackInitializeAction
+        { get; }
 
         internal NativeLeaseQuintupleAction<
             FaceRecord,
             byte,
             Vertex,
             int,
-            PayloadSlice> PackCompleteAction { get; }
+            PayloadSlice> PackCompleteAction
+        { get; }
 
         internal int BatchCount { get; private set; }
 
@@ -868,6 +936,31 @@ internal sealed class NativePressureSession :
             TotalVertices = 0;
             TotalIndices = 0;
             CompletedLogicalBytes = startingDemand;
+        }
+
+        internal void ResetLogicalState()
+        {
+            _request = default;
+            _reportProgress = static _ => { };
+            _evidence = null;
+            _startingChunkId = 0;
+            _startingDemand = 0;
+            _minimumChunks = 0;
+            _batchCapacity = 0;
+            _arenaCapacityBytes = 0;
+            BatchCount = 0;
+            BatchDemand = 0;
+            TotalRecords = 0;
+            TotalMaskWords = 0;
+            TotalFaces = 0;
+            TotalUploadBytes = 0;
+            TotalSectionDescriptors = 0;
+            TotalSectionValues = 0;
+            TotalSectionWords = 0;
+            TotalSectionStateWords = 0;
+            TotalVertices = 0;
+            TotalIndices = 0;
+            CompletedLogicalBytes = 0;
         }
 
         private void Build(scoped NativeLeaseView<VoxelCell> cells)
@@ -1458,6 +1551,22 @@ internal sealed class NativePressureSession :
         internal int Seed { get; set; }
 
         internal int RetentionDepth { get; set; }
+
+        internal long Fingerprint => PressureStateFingerprint.Compute(
+            CellCapacity,
+            FaceCapacity,
+            MaskCapacity,
+            SectionDescriptorCapacity,
+            SectionValueCapacity,
+            SectionWordCapacity,
+            SectionStateCapacity,
+            SectionAdmissionCapacityBytes,
+            VertexCapacity,
+            IndexCapacity,
+            SliceCapacity,
+            Seed,
+            RetentionDepth,
+            checked((long)RequiredPhaseArenaCapacity));
 
         private long RequiredOutputTailCapacity => checked(
             NativeBatchContext.AlignmentAllowanceBytes

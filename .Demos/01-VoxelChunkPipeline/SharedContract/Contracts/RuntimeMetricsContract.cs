@@ -56,7 +56,15 @@ public readonly record struct CgroupMemorySnapshot(
     long OomKillEvents,
     long OomGroupKillEvents,
     long AnonBytes,
-    long FileBytes)
+    long FileBytes,
+    long SwapCurrentBytes = 0,
+    long SwapPeakBytes = 0,
+    long CpuUsageMicroseconds = 0,
+    long CpuUserMicroseconds = 0,
+    long CpuSystemMicroseconds = 0,
+    long CpuPeriods = 0,
+    long CpuThrottledPeriods = 0,
+    long CpuThrottledMicroseconds = 0)
 {
     public static CgroupMemorySnapshot Read()
     {
@@ -89,6 +97,10 @@ public readonly record struct CgroupMemorySnapshot(
             long oomKill,
             long oomGroupKill) = ReadEvents(root);
         (long anon, long file) = ReadStat(root);
+        long swapCurrent = ReadLong(
+            Path.Combine(root, "memory.swap.current"));
+        long swapPeak = ReadLong(
+            Path.Combine(root, "memory.swap.peak"));
         return new CgroupMemorySnapshot(
             limit > 0 || current > 0 || peak > 0,
             limit,
@@ -101,7 +113,15 @@ public readonly record struct CgroupMemorySnapshot(
             oomKill,
             oomGroupKill,
             anon,
-            file);
+            file,
+            swapCurrent,
+            swapPeak,
+            ReadCounter(root, "cpu.stat", "usage_usec"),
+            ReadCounter(root, "cpu.stat", "user_usec"),
+            ReadCounter(root, "cpu.stat", "system_usec"),
+            ReadCounter(root, "cpu.stat", "nr_periods"),
+            ReadCounter(root, "cpu.stat", "nr_throttled"),
+            ReadCounter(root, "cpu.stat", "throttled_usec"));
     }
 
     private static string? FindCgroupRoot()
@@ -243,6 +263,38 @@ public readonly record struct CgroupMemorySnapshot(
         {
             return default;
         }
+    }
+
+    private static long ReadCounter(
+        string root,
+        string fileName,
+        string counterName)
+    {
+        string path = Path.Combine(root, fileName);
+        try
+        {
+            foreach (string line in File.ReadLines(path))
+            {
+                string[] parts = line.Split(
+                    ' ',
+                    StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length == 2
+                    && parts[0] == counterName
+                    && long.TryParse(parts[1], out long value)
+                    && value >= 0)
+                {
+                    return value;
+                }
+            }
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+
+        return 0;
     }
 }
 

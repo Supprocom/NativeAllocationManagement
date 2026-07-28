@@ -37,7 +37,11 @@ public readonly record struct PressureEffectiveIsolation(
     int PidsLimit,
     int LogicalProcessorCount,
     IReadOnlyDictionary<string, string> GcConfiguration,
-    IReadOnlyDictionary<string, string> DockerInspect);
+    IReadOnlyDictionary<string, string> DockerInspect,
+    string ContainerId = "",
+    int ContainerProcessId = 0,
+    string CgroupIdentity = "",
+    PressureRuntimeSnapshot StartupRuntime = default);
 
 public readonly record struct PressureImplementationObservation(
     string Implementation,
@@ -96,7 +100,8 @@ public readonly record struct PressurePairedObservation(
     int SampleIndex,
     PressureImplementationObservation Safe,
     PressureImplementationObservation Nam,
-    bool StructuralParityPassed);
+    bool StructuralParityPassed,
+    bool SafeRanFirst = false);
 
 public readonly record struct PressureOutcomeDecision(
     bool SafeCompleted,
@@ -195,7 +200,31 @@ public readonly record struct PressureProfileInitialization(
     string NamContainerName,
     int WarmupPasses,
     int WarmupProfilePercent,
-    long WarmupCumulativeDemandBytes);
+    long WarmupCumulativeDemandBytes,
+    PressureMeasurementPreparation? MeasurementPreparation = null);
+
+public readonly record struct PressureMeasurementPreparation(
+    int ProfilePercent,
+    long RequestedCumulativeDemandBytes,
+    double ElapsedMilliseconds,
+    PressureImplementationObservation Safe,
+    PressureImplementationObservation Nam,
+    bool EquivalentMeasuredPathPassed,
+    bool LogicalResetPassed);
+
+public readonly record struct PressureWorkerLifecycle(
+    string Implementation,
+    string ContainerName,
+    string ContainerId,
+    int ContainerProcessId,
+    string CgroupIdentity,
+    PressureRuntimeSnapshot StartupRuntime,
+    long FirstRequestOrdinal,
+    long LastRequestOrdinal,
+    int RequestCount,
+    bool DisposalCompleted,
+    bool ContainerAbsentAfterDisposal,
+    DateTime DisposedUtc);
 
 public readonly record struct PressureProfilePair(
     int ProfilePercent,
@@ -254,4 +283,5 @@ public readonly record struct PressureMatrixReport(
     PressureMatrixSummary Summary,
     IReadOnlyDictionary<string, string> HostConfiguration,
     IReadOnlyList<string> Commands,
-    IReadOnlyList<string> Limitations);
+    IReadOnlyList<string> Limitations,
+    IReadOnlyList<PressureWorkerLifecycle>? WorkerLifecycles = null);
