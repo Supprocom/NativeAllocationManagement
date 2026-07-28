@@ -92,8 +92,13 @@ sample counts because each implementation must run first equally often.
 Each paired sample uses new Safe and NAM containers. Startup and four fixed
 1000-percent warmup passes occur outside measured processing.
 
-Each worker then runs one selected-profile preparation request. Its timed
-request starts immediately after preparation.
+Each worker then runs six to eight selected-profile preparation requests.
+The host checks elapsed-time direction changes with a bounded fluctuation
+policy.
+
+The series stops after four direction changes or its eighth request. The
+timed request starts immediately after the series. All preparation
+observations remain in the artifact.
 
 The worker resets all logical state after each request. The harness removes
 both sample containers before it starts the next pair.

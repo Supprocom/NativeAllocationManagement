@@ -12,6 +12,9 @@ internal static class PressureMatrixHarness
     private const int WarmupProfilePercent = 1000;
     private const int StressProfilePercent = 10000;
     private const int StressProfileSamples = 6;
+    private const int MinimumPreparationPassCount = 6;
+    private const int MaximumPreparationPassCount = 8;
+    private const int RequiredPreparationFluctuationCount = 4;
     private const int NonMeasuredOperationTimeoutSeconds = 60;
     private static readonly int[] ProfilePercents =
     [
@@ -339,7 +342,7 @@ internal static class PressureMatrixHarness
             ["pairExecution"] =
                 "sequential with an even alternating order in each profile",
             ["profileInitialization"] =
-                "fresh containers per pair, four fixed warmups, and one immediate measured-path preparation per implementation",
+                "fresh containers per pair, four fixed warmups, and a bounded measured-path preparation series per implementation",
             ["crossProfileProcessState"] = "none",
             ["crossSampleProcessState"] = "none",
             ["memorySwapPolicy"] = "memory-swap equals memory; swappiness 0",
@@ -357,7 +360,7 @@ internal static class PressureMatrixHarness
                 $"{StressProfilePercent} percent uses "
                 + $"{StressProfileSamples} complete paired samples",
             ["measurementPreparation"] =
-                "each timed request follows its selected-profile preparation request in the same fresh container",
+                "each timed request follows a preparation series that reaches four direction changes or the eight-request bound",
             ["measurementEvidence"] =
                 "predeclared plan and terminal completion without per-chunk evidence",
             ["measurementBoundary"] =
@@ -392,7 +395,7 @@ internal static class PressureMatrixHarness
                 "The host samples Docker and cgroup metrics outside each worker.",
                 "The child does not run a benchmark timer or scan allocator statistics during processing.",
                 "Measured child results contain no per-chunk evidence.",
-                "Each paired sample uses new containers, four fixed warmups, and one measured-path preparation.",
+                "Each paired sample uses new containers, four fixed warmups, and six to eight measured-path preparations.",
                 "The 10000-percent stress profile uses six complete paired samples.",
                 "Each measured profile materializes every output and completes its mapped handoff.",
                 "One exact maximum-demand run follows measurement. It reads every output byte."
@@ -465,8 +468,8 @@ internal static class PressureMatrixHarness
         DockerWorker nam = await namStart;
         string safeContainerName = safe.ContainerName;
         string namContainerName = nam.ContainerName;
-        PressureImplementationObservation safePreparation = default;
-        PressureImplementationObservation namPreparation = default;
+        PreparationSeries safePreparation = default;
+        PreparationSeries namPreparation = default;
         PressureImplementationObservation safeObservation = default;
         PressureImplementationObservation namObservation = default;
         double initializationMilliseconds = 0;
@@ -480,44 +483,44 @@ internal static class PressureMatrixHarness
                 initializationStart).TotalMilliseconds;
             if (safeFirst)
             {
-                long preparationStart = Stopwatch.GetTimestamp();
-                safePreparation = await safe.PrepareMeasurementAsync(
+                safePreparation = await PrepareMeasurementSeriesAsync(
+                    safe,
                     request,
                     options);
-                preparationMilliseconds += Stopwatch.GetElapsedTime(
-                    preparationStart).TotalMilliseconds;
+                preparationMilliseconds +=
+                    safePreparation.ElapsedMilliseconds;
                 safeObservation = await safe.RunProfileAsync(
                     request,
                     options);
 
-                preparationStart = Stopwatch.GetTimestamp();
-                namPreparation = await nam.PrepareMeasurementAsync(
+                namPreparation = await PrepareMeasurementSeriesAsync(
+                    nam,
                     request,
                     options);
-                preparationMilliseconds += Stopwatch.GetElapsedTime(
-                    preparationStart).TotalMilliseconds;
+                preparationMilliseconds +=
+                    namPreparation.ElapsedMilliseconds;
                 namObservation = await nam.RunProfileAsync(
                     request,
                     options);
             }
             else
             {
-                long preparationStart = Stopwatch.GetTimestamp();
-                namPreparation = await nam.PrepareMeasurementAsync(
+                namPreparation = await PrepareMeasurementSeriesAsync(
+                    nam,
                     request,
                     options);
-                preparationMilliseconds += Stopwatch.GetElapsedTime(
-                    preparationStart).TotalMilliseconds;
+                preparationMilliseconds +=
+                    namPreparation.ElapsedMilliseconds;
                 namObservation = await nam.RunProfileAsync(
                     request,
                     options);
 
-                preparationStart = Stopwatch.GetTimestamp();
-                safePreparation = await safe.PrepareMeasurementAsync(
+                safePreparation = await PrepareMeasurementSeriesAsync(
+                    safe,
                     request,
                     options);
-                preparationMilliseconds += Stopwatch.GetElapsedTime(
-                    preparationStart).TotalMilliseconds;
+                preparationMilliseconds +=
+                    safePreparation.ElapsedMilliseconds;
                 safeObservation = await safe.RunProfileAsync(
                     request,
                     options);
@@ -526,15 +529,15 @@ internal static class PressureMatrixHarness
             initializationMilliseconds += preparationMilliseconds;
             bool equivalentMeasuredPath = PreparationPathPassed(
                 request,
-                safePreparation,
-                namPreparation);
-            bool preparationReset = PreparationResetPassed(
-                safePreparation,
-                namPreparation);
+                safePreparation.Attempts[^1],
+                namPreparation.Attempts[^1]);
+            bool preparationReset =
+                PreparationSeriesResetPassed(safePreparation)
+                && PreparationSeriesResetPassed(namPreparation);
             if (!equivalentMeasuredPath
                 || !preparationReset
-                || !PreparationOrdinalPassed(safePreparation)
-                || !PreparationOrdinalPassed(namPreparation))
+                || !safePreparation.Assessment.Accepted
+                || !namPreparation.Assessment.Accepted)
             {
                 throw new InvalidOperationException(
                     "The isolated measurement preparation is not valid.");
@@ -554,10 +557,16 @@ internal static class PressureMatrixHarness
 
         if (!CompletedLifecyclePassed(
                 workerLifecycles,
-                safeContainerName)
+                safeContainerName,
+                DockerWorker.WarmupPassCount
+                    + safePreparation.Attempts.Count
+                    + 1)
             || !CompletedLifecyclePassed(
                 workerLifecycles,
-                namContainerName))
+                namContainerName,
+                DockerWorker.WarmupPassCount
+                    + namPreparation.Attempts.Count
+                    + 1))
         {
             throw new InvalidOperationException(
                 "An isolated sample container did not complete disposal.");
@@ -579,10 +588,17 @@ internal static class PressureMatrixHarness
                 request.ProfilePercent,
                 request.RequestedCumulativeDemandBytes,
                 preparationMilliseconds,
-                safePreparation,
-                namPreparation,
+                safePreparation.Attempts[^1],
+                namPreparation.Attempts[^1],
                 true,
-                true));
+                true,
+                safePreparation.Attempts,
+                namPreparation.Attempts,
+                safePreparation.Assessment,
+                namPreparation.Assessment,
+                MinimumPreparationPassCount,
+                MaximumPreparationPassCount,
+                RequiredPreparationFluctuationCount));
         PressurePairedObservation observation = new(
             sampleIndex,
             safeObservation,
@@ -594,14 +610,73 @@ internal static class PressureMatrixHarness
         return new IsolatedPairRun(observation, initialization);
     }
 
-    private static bool PreparationOrdinalPassed(
-        PressureImplementationObservation preparation) =>
-        preparation.ChildResult?.StateAfterReset?.RequestOrdinal
-            == DockerWorker.WarmupPassCount + 1;
+    private static async Task<PreparationSeries>
+        PrepareMeasurementSeriesAsync(
+            DockerWorker worker,
+            PressureProfileRequest request,
+            Options options)
+    {
+        long preparationStart = Stopwatch.GetTimestamp();
+        List<PressureImplementationObservation> attempts =
+            new(MaximumPreparationPassCount);
+        List<double> elapsedMilliseconds =
+            new(MaximumPreparationPassCount);
+        PressurePreparationAssessment assessment = default;
+        for (int attemptIndex = 0;
+            attemptIndex < MaximumPreparationPassCount;
+            attemptIndex++)
+        {
+            PressureImplementationObservation observation =
+                await worker.PrepareMeasurementAsync(
+                    request,
+                    options);
+            int expectedOrdinal =
+                DockerWorker.WarmupPassCount + attemptIndex + 1;
+            if (!PreparationObservationPassed(
+                    request,
+                    observation)
+                || !ResetStatePassed(
+                    observation.ChildResult?.StateAfterReset)
+                || observation.ChildResult?.StateAfterReset?.RequestOrdinal
+                    != expectedOrdinal
+                || observation.ProfileElapsedMilliseconds is not > 0)
+            {
+                throw new InvalidOperationException(
+                    "A measurement preparation attempt is not valid.");
+            }
+
+            attempts.Add(observation);
+            elapsedMilliseconds.Add(
+                observation.ProfileElapsedMilliseconds.Value);
+            assessment = PressurePreparationPolicy.Evaluate(
+                elapsedMilliseconds,
+                MinimumPreparationPassCount,
+                MaximumPreparationPassCount,
+                RequiredPreparationFluctuationCount);
+            if (!assessment.ShouldContinue)
+            {
+                break;
+            }
+        }
+
+        return new PreparationSeries(
+            attempts.ToArray(),
+            assessment,
+            Stopwatch.GetElapsedTime(
+                preparationStart).TotalMilliseconds);
+    }
+
+    private static bool PreparationSeriesResetPassed(
+        PreparationSeries preparation) =>
+        preparation.Attempts.Count > 0
+        && preparation.Attempts.All(
+            static attempt => ResetStatePassed(
+                attempt.ChildResult?.StateAfterReset));
 
     private static bool CompletedLifecyclePassed(
         IReadOnlyList<PressureWorkerLifecycle> lifecycles,
-        string containerName)
+        string containerName,
+        int expectedRequestCount)
     {
         PressureWorkerLifecycle[] matches = lifecycles
             .Where(
@@ -612,9 +687,27 @@ internal static class PressureMatrixHarness
             && matches[0].ContainerAbsentAfterDisposal
             && matches[0].FirstRequestOrdinal == 1
             && matches[0].LastRequestOrdinal
-                == DockerWorker.WarmupPassCount + 2
+                == expectedRequestCount
             && matches[0].RequestCount
-                == DockerWorker.WarmupPassCount + 2;
+                == expectedRequestCount;
+    }
+
+    private static int ExpectedSampleRequestCount(
+        PressureProfileInitialization initialization,
+        bool safe)
+    {
+        if (initialization.MeasurementPreparation is not { } preparation)
+        {
+            return -1;
+        }
+
+        IReadOnlyList<PressureImplementationObservation>? attempts =
+            safe
+                ? preparation.SafeAttempts
+                : preparation.NamAttempts;
+        return initialization.WarmupPasses
+            + (attempts?.Count ?? 1)
+            + 1;
     }
 
     private static bool ProfileCompleted(PressureProfilePair profile) =>
@@ -713,10 +806,16 @@ internal static class PressureMatrixHarness
                         sampleOwner)
                     || !CompletedLifecyclePassed(
                         lifecycles,
-                        initialization.SafeContainerName)
+                        initialization.SafeContainerName,
+                        ExpectedSampleRequestCount(
+                            initialization,
+                            safe: true))
                     || !CompletedLifecyclePassed(
                         lifecycles,
-                        initialization.NamContainerName))
+                        initialization.NamContainerName,
+                        ExpectedSampleRequestCount(
+                            initialization,
+                            safe: false)))
                 {
                     return false;
                 }
@@ -2517,4 +2616,9 @@ internal static class PressureMatrixHarness
     private readonly record struct IsolatedPairRun(
         PressurePairedObservation Observation,
         PressureProfileInitialization Initialization);
+
+    private readonly record struct PreparationSeries(
+        IReadOnlyList<PressureImplementationObservation> Attempts,
+        PressurePreparationAssessment Assessment,
+        double ElapsedMilliseconds);
 }

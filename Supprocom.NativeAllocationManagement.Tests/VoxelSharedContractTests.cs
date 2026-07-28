@@ -112,6 +112,8 @@ public sealed class VoxelSharedContractTests
             typeof(PressurePairedStatistics),
             typeof(PressureOutcomeDecision),
             typeof(PressureOutcomePolicy),
+            typeof(PressurePreparationAssessment),
+            typeof(PressurePreparationPolicy),
             typeof(PressureMeasurementPreparation),
             typeof(PressureWorkerLifecycle),
             typeof(PressureProfilePair),
@@ -319,6 +321,22 @@ public sealed class VoxelSharedContractTests
             StringComparison.Ordinal);
         Assert.Contains(
             "internal const int WarmupPassCount = 4;",
+            pressureHarness,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "private const int MinimumPreparationPassCount = 6;",
+            pressureHarness,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "private const int MaximumPreparationPassCount = 8;",
+            pressureHarness,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "private const int RequiredPreparationFluctuationCount = 4;",
+            pressureHarness,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "PrepareMeasurementSeriesAsync(",
             pressureHarness,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -620,6 +638,107 @@ public sealed class VoxelSharedContractTests
                 5,
                 6,
                 1.20));
+    }
+
+    [Fact]
+    public void PreparationPolicyRequiresSixObservationsAndFourFluctuations()
+    {
+        PressurePreparationAssessment shortSeries =
+            PressurePreparationPolicy.Evaluate(
+                [10, 9, 10, 9, 10],
+                6,
+                8,
+                4);
+        PressurePreparationAssessment accepted =
+            PressurePreparationPolicy.Evaluate(
+                [10, 9, 10, 9, 10, 9],
+                6,
+                8,
+                4);
+
+        Assert.False(shortSeries.MinimumReached);
+        Assert.False(shortSeries.Accepted);
+        Assert.True(shortSeries.ShouldContinue);
+        Assert.True(accepted.MinimumReached);
+        Assert.Equal(4, accepted.FluctuationCount);
+        Assert.True(accepted.FluctuationTargetReached);
+        Assert.True(accepted.Accepted);
+        Assert.False(accepted.ShouldContinue);
+    }
+
+    [Fact]
+    public void PreparationPolicyStopsAtBoundForMonotonicSeries()
+    {
+        PressurePreparationAssessment assessment =
+            PressurePreparationPolicy.Evaluate(
+                [8, 7, 6, 5, 4, 3, 2, 1],
+                6,
+                8,
+                4);
+
+        Assert.True(assessment.MinimumReached);
+        Assert.True(assessment.MaximumReached);
+        Assert.Equal(0, assessment.FluctuationCount);
+        Assert.False(assessment.FluctuationTargetReached);
+        Assert.True(assessment.Accepted);
+        Assert.False(assessment.ShouldContinue);
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => PressurePreparationPolicy.Evaluate(
+                [9, 8, 7, 6, 5, 4, 3, 2, 1],
+                6,
+                8,
+                4));
+    }
+
+    [Fact]
+    public void PreparationMetadataRoundTripsEveryAttemptAndAssessment()
+    {
+        PressurePreparationAssessment accepted =
+            PressurePreparationPolicy.Evaluate(
+                [10, 9, 10, 9, 10, 9],
+                6,
+                8,
+                4);
+        PressureImplementationObservation[] attempts =
+        [
+            default,
+            default,
+            default,
+            default,
+            default,
+            default
+        ];
+        PressureMeasurementPreparation preparation = new(
+            1000,
+            2_684_354_560,
+            60,
+            default,
+            default,
+            true,
+            true,
+            attempts,
+            attempts,
+            accepted,
+            accepted,
+            6,
+            8,
+            4);
+
+        string json = JsonSerializer.Serialize(
+            preparation,
+            VoxelJson.Options);
+        PressureMeasurementPreparation roundTrip =
+            JsonSerializer.Deserialize<PressureMeasurementPreparation>(
+                json,
+                VoxelJson.Options);
+
+        Assert.Equal(6, roundTrip.SafeAttempts?.Count);
+        Assert.Equal(6, roundTrip.NamAttempts?.Count);
+        Assert.Equal(accepted, roundTrip.SafeAssessment);
+        Assert.Equal(accepted, roundTrip.NamAssessment);
+        Assert.Equal(6, roundTrip.MinimumAttemptCount);
+        Assert.Equal(8, roundTrip.MaximumAttemptCount);
+        Assert.Equal(4, roundTrip.RequiredFluctuationCount);
     }
 
     private static bool[] CreateProfileOrder(int profileOrdinal)

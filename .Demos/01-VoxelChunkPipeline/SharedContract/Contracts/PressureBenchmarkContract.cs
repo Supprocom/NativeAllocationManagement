@@ -135,6 +135,82 @@ public static class PressureSamplePolicy
         && confidenceLower95 > 1.00;
 }
 
+public readonly record struct PressurePreparationAssessment(
+    int ObservationCount,
+    int FluctuationCount,
+    bool MinimumReached,
+    bool MaximumReached,
+    bool FluctuationTargetReached,
+    bool Accepted)
+{
+    public bool ShouldContinue => !Accepted;
+}
+
+public static class PressurePreparationPolicy
+{
+    public static PressurePreparationAssessment Evaluate(
+        IReadOnlyList<double> elapsedMilliseconds,
+        int minimumObservationCount,
+        int maximumObservationCount,
+        int requiredFluctuationCount)
+    {
+        ArgumentNullException.ThrowIfNull(elapsedMilliseconds);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
+            minimumObservationCount);
+        if (maximumObservationCount < minimumObservationCount)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maximumObservationCount));
+        }
+
+        if (elapsedMilliseconds.Count > maximumObservationCount)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(elapsedMilliseconds));
+        }
+
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
+            requiredFluctuationCount);
+        if (elapsedMilliseconds.Any(
+                static value => !double.IsFinite(value) || value <= 0))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(elapsedMilliseconds));
+        }
+
+        int direction = -1;
+        int fluctuationCount = 0;
+        for (int index = 1;
+            index < elapsedMilliseconds.Count;
+            index++)
+        {
+            int nextDirection = Math.Sign(
+                elapsedMilliseconds[index]
+                    - elapsedMilliseconds[index - 1]);
+            if (nextDirection != direction || nextDirection == 0)
+            {
+                direction = nextDirection;
+                fluctuationCount++;
+            }
+        }
+
+        bool minimumReached =
+            elapsedMilliseconds.Count >= minimumObservationCount;
+        bool maximumReached =
+            elapsedMilliseconds.Count >= maximumObservationCount;
+        bool fluctuationTargetReached =
+            fluctuationCount >= requiredFluctuationCount;
+        return new PressurePreparationAssessment(
+            elapsedMilliseconds.Count,
+            fluctuationCount,
+            minimumReached,
+            maximumReached,
+            fluctuationTargetReached,
+            minimumReached
+                && (fluctuationTargetReached || maximumReached));
+    }
+}
+
 public readonly record struct PressureOutcomeDecision(
     bool SafeCompleted,
     bool NamCompleted,
@@ -242,7 +318,14 @@ public readonly record struct PressureMeasurementPreparation(
     PressureImplementationObservation Safe,
     PressureImplementationObservation Nam,
     bool EquivalentMeasuredPathPassed,
-    bool LogicalResetPassed);
+    bool LogicalResetPassed,
+    IReadOnlyList<PressureImplementationObservation>? SafeAttempts = null,
+    IReadOnlyList<PressureImplementationObservation>? NamAttempts = null,
+    PressurePreparationAssessment SafeAssessment = default,
+    PressurePreparationAssessment NamAssessment = default,
+    int MinimumAttemptCount = 1,
+    int MaximumAttemptCount = 1,
+    int RequiredFluctuationCount = 0);
 
 public readonly record struct PressureWorkerLifecycle(
     string Implementation,
