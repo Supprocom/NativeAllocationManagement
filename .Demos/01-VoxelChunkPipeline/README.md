@@ -80,6 +80,15 @@ resident allocation shape.
 The compiler gate runs before the runtime matrix. The NAM compiler time and
 complete build time must each remain within 1.10 times the Safe result.
 
+The gate uses one warmup pair and six measured pairs. Each implementation has
+three first positions and three second positions.
+
+Each child build disables tiered compilation and dynamic tiered PGO. The
+artifact records these settings for every warmup and measured build.
+
+The artifact records compiler standard deviation. It also records the compiler
+mean for each implementation in each command position.
+
 Runtime containers receive equal 256 MiB memory limits, swap policy, CPU
 access, PID limits, GC mode, and GC heap limits.
 

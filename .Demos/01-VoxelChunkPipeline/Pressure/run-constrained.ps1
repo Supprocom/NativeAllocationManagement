@@ -11,7 +11,7 @@ param(
     [int]$InactivityTimeoutSeconds = 120,
     [long]$AbsoluteFailSafeTimeoutSeconds = 0,
     [int]$CompilationTimeoutSeconds = 120,
-    [int]$CompilationPairs = 5,
+    [int]$CompilationPairs = 6,
     [int]$SamplesPerProfile = 6,
     [int]$GcHeapHardLimitPercent = 90,
     [switch]$ValidateTimeoutsOnly,
@@ -27,6 +27,10 @@ $warmupPassCount = 4
 $preparationPassCount = 6
 $stressProfilePercent = 10000
 $stressProfileSamples = 6
+
+if ($CompilationPairs -le 0 -or ($CompilationPairs -band 1) -ne 0) {
+    throw "The compilation pair count must be positive and even."
+}
 
 function Get-ProfileValues {
     param([string]$Value)

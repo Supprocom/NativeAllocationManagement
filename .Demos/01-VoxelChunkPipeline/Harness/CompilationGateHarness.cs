@@ -8,8 +8,6 @@ namespace Supprocom.NativeAllocationManagement.Demos.VoxelChunkPipeline.Harness;
 
 internal static class CompilationGateHarness
 {
-    private const double MaximumRatio = 1.10;
-
     internal static async Task<int> RunAsync(string[] args)
     {
         Options options = Options.Parse(args);
@@ -38,28 +36,26 @@ internal static class CompilationGateHarness
 
         List<CompilationSample> warmups = [];
         List<CompilationSample> samples = [];
-        int totalPairs = checked(
-            options.WarmupPairs + options.MeasuredPairs);
-        for (int ordinal = 0; ordinal < totalPairs; ordinal++)
+        for (int pair = 0; pair < options.WarmupPairs; pair++)
         {
-            bool measured = ordinal >= options.WarmupPairs;
-            int displayPair = measured
-                ? ordinal - options.WarmupPairs
-                : ordinal;
-            bool safeFirst = (ordinal & 1) == 0;
-            (string Name, string Project)[] order = safeFirst
-                ? [("SafeCSharp", safeProject), ("NAM", namProject)]
-                : [("NAM", namProject), ("SafeCSharp", safeProject)];
-            for (int position = 0; position < order.Length; position++)
-            {
-                CompilationSample sample = await CompileAsync(
-                    options,
-                    displayPair,
-                    position,
-                    order[position].Name,
-                    order[position].Project);
-                (measured ? samples : warmups).Add(sample);
-            }
+            await CompilePairAsync(
+                options,
+                pair,
+                CompilationGatePolicy.SafeRunsFirst(pair),
+                safeProject,
+                namProject,
+                warmups);
+        }
+
+        for (int pair = 0; pair < options.MeasuredPairs; pair++)
+        {
+            await CompilePairAsync(
+                options,
+                pair,
+                CompilationGatePolicy.SafeRunsFirst(pair),
+                safeProject,
+                namProject,
+                samples);
         }
 
         CompilationSample[] safeSamples = samples
@@ -92,32 +88,57 @@ internal static class CompilationGateHarness
         double? wallRatio = completed && safeWallMean > 0
             ? namWallMean / safeWallMean
             : null;
+        CompilationCompilerDiagnostics diagnostics = completed
+            ? new CompilationCompilerDiagnostics(
+                SampleStandardDeviation(safeSamples),
+                SampleStandardDeviation(namSamples),
+                MeanForPosition(safeSamples, 0),
+                MeanForPosition(safeSamples, 1),
+                MeanForPosition(namSamples, 0),
+                MeanForPosition(namSamples, 1))
+            : default;
+        bool childConfigurationGate =
+            CompilationGatePolicy.HasRequiredChildConfiguration(
+                warmups,
+                samples,
+                options.WarmupPairs,
+                options.MeasuredPairs);
+        bool measuredOrderGate =
+            CompilationGatePolicy.HasBalancedMeasuredOrder(
+                samples,
+                options.MeasuredPairs);
         bool compilerGate = completed
             && ratio.HasValue
-            && ratio.Value <= MaximumRatio;
+            && CompilationGatePolicy.IsWithinRatioLimit(ratio.Value);
         bool wallGate = completed
             && wallRatio.HasValue
-            && wallRatio.Value <= MaximumRatio;
+            && CompilationGatePolicy.IsWithinRatioLimit(wallRatio.Value);
         CompilationGateSummary summary = new(
             options.MeasuredPairs,
-            MaximumRatio,
+            CompilationGatePolicy.MaximumNamToSafeRatio,
             safeMean,
             namMean,
             safeWallMean,
             namWallMean,
             ratio,
             wallRatio,
+            diagnostics,
             completed,
+            childConfigurationGate,
+            measuredOrderGate,
             compilerGate,
             wallGate,
-            compilerGate && wallGate);
+            childConfigurationGate
+                && measuredOrderGate
+                && compilerGate
+                && wallGate);
         CompilationGateReport report = new(
             commit,
             startedUtc,
             DateTime.UtcNow,
             sdk,
             "Release",
-            "Alternating single-project Rebuild commands do not restore or rebuild dependencies. Compiler sharing and build-server reuse are disabled. NAM uses the built runtime and analyzer files. This configuration measures package-consumer compilation without evaluation of their source projects. The Csc task ratio and command wall-time ratio must not exceed 1.10.",
+            "Each command performs a single-project Rebuild without dependency builds. Build-server reuse and compiler sharing are disabled. NAM uses the built runtime and analyzer files. Each child process disables tiered compilation and tiered PGO. Six measured pairs give each implementation three first positions. The Csc task ratio and command wall-time ratio must not exceed 1.10.",
             options.WarmupPairs,
             options.MeasuredPairs,
             options.PerCompilationTimeout.TotalMilliseconds,
@@ -141,6 +162,29 @@ internal static class CompilationGateHarness
         Console.WriteLine(JsonSerializer.Serialize(summary, VoxelJson.Options));
         Console.WriteLine(options.OutputPath);
         return summary.GatePassed ? 0 : 3;
+    }
+
+    private static async Task CompilePairAsync(
+        Options options,
+        int pair,
+        bool safeFirst,
+        string safeProject,
+        string namProject,
+        ICollection<CompilationSample> destination)
+    {
+        (string Name, string Project)[] order = safeFirst
+            ? [("SafeCSharp", safeProject), ("NAM", namProject)]
+            : [("NAM", namProject), ("SafeCSharp", safeProject)];
+        for (int position = 0; position < order.Length; position++)
+        {
+            destination.Add(
+                await CompileAsync(
+                    options,
+                    pair,
+                    position,
+                    order[position].Name,
+                    order[position].Project));
+        }
     }
 
     private static async Task<CompilationSample> CompileAsync(
@@ -176,6 +220,8 @@ internal static class CompilationGateHarness
                 "compilation-gate",
                 implementation)
         ];
+        PressureCompilationConfiguration childConfiguration =
+            CompilationGatePolicy.RequiredChildCompilationConfiguration;
         string command = FormatCommand("dotnet", arguments);
         Stopwatch stopwatch = Stopwatch.StartNew();
         CommandResult result;
@@ -184,7 +230,8 @@ internal static class CompilationGateHarness
             result = await RunCommandAsync(
                 "dotnet",
                 arguments,
-                options.PerCompilationTimeout);
+                options.PerCompilationTimeout,
+                childConfiguration);
         }
         catch (TimeoutException exception)
         {
@@ -193,6 +240,7 @@ internal static class CompilationGateHarness
                 pair,
                 position,
                 implementation,
+                childConfiguration,
                 startedUtc,
                 stopwatch.Elapsed.TotalMilliseconds,
                 null,
@@ -209,6 +257,7 @@ internal static class CompilationGateHarness
                 pair,
                 position,
                 implementation,
+                childConfiguration,
                 startedUtc,
                 stopwatch.Elapsed.TotalMilliseconds,
                 null,
@@ -238,6 +287,7 @@ internal static class CompilationGateHarness
             pair,
             position,
             implementation,
+            childConfiguration,
             startedUtc,
             stopwatch.Elapsed.TotalMilliseconds,
             compilerElapsed,
@@ -251,7 +301,8 @@ internal static class CompilationGateHarness
     private static async Task<CommandResult> RunCommandAsync(
         string fileName,
         IReadOnlyList<string> arguments,
-        TimeSpan timeout)
+        TimeSpan timeout,
+        PressureCompilationConfiguration? childConfiguration = null)
     {
         ProcessStartInfo start = new(fileName)
         {
@@ -263,6 +314,14 @@ internal static class CompilationGateHarness
         foreach (string argument in arguments)
         {
             start.ArgumentList.Add(argument);
+        }
+
+        if (childConfiguration is { } configuration)
+        {
+            start.Environment["DOTNET_TieredCompilation"] =
+                configuration.TieredCompilation;
+            start.Environment["DOTNET_TieredPGO"] =
+                configuration.TieredPgo;
         }
 
         using Process process = Process.Start(start)
@@ -318,6 +377,46 @@ internal static class CompilationGateHarness
             : value[^maximumCharacters..];
     }
 
+    private static double? SampleStandardDeviation(
+        IReadOnlyList<CompilationSample> samples)
+    {
+        if (samples.Count < 2
+            || samples.Any(
+                static sample =>
+                    !sample.CompilerElapsedMilliseconds.HasValue))
+        {
+            return null;
+        }
+
+        double mean = samples.Average(
+            static sample =>
+                sample.CompilerElapsedMilliseconds!.Value);
+        double sum = samples.Sum(sample =>
+        {
+            double delta =
+                sample.CompilerElapsedMilliseconds!.Value - mean;
+            return delta * delta;
+        });
+        return Math.Sqrt(sum / (samples.Count - 1));
+    }
+
+    private static double? MeanForPosition(
+        IReadOnlyList<CompilationSample> samples,
+        int position)
+    {
+        CompilationSample[] positionSamples = samples
+            .Where(sample => sample.Position == position)
+            .ToArray();
+        return positionSamples.Length > 0
+            && positionSamples.All(
+                static sample =>
+                    sample.CompilerElapsedMilliseconds.HasValue)
+            ? positionSamples.Average(
+                static sample =>
+                    sample.CompilerElapsedMilliseconds!.Value)
+            : null;
+    }
+
     private sealed record Options(
         string RepositoryRoot,
         string OutputPath,
@@ -349,20 +448,22 @@ internal static class CompilationGateHarness
             string output = Required(values, "--output");
             int warmups = values.TryGetValue("--warmup-pairs", out string? warmup)
                 ? int.Parse(warmup, CultureInfo.InvariantCulture)
-                : 1;
+                : CompilationGatePolicy.DefaultWarmupPairCount;
             int pairs = values.TryGetValue("--pairs", out string? pairCount)
                 ? int.Parse(pairCount, CultureInfo.InvariantCulture)
-                : 5;
+                : CompilationGatePolicy.DefaultMeasuredPairCount;
             int timeoutMilliseconds = values.TryGetValue(
                 "--compile-timeout-ms",
                 out string? timeout)
                 ? int.Parse(timeout, CultureInfo.InvariantCulture)
                 : 30_000;
-            if (warmups < 0 || pairs < 3 || timeoutMilliseconds <= 0)
+            if (warmups < 0
+                || !CompilationGatePolicy.IsValidMeasuredPairCount(pairs)
+                || timeoutMilliseconds <= 0)
             {
                 throw new ArgumentOutOfRangeException(
                     nameof(args),
-                    "Compilation warmups must be nonnegative, measured pairs at least three, and the timeout positive.");
+                    "The compilation gate requires a nonnegative warmup count, a positive even measured count, and a positive timeout.");
             }
 
             return new Options(

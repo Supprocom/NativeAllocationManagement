@@ -106,8 +106,10 @@ public sealed class VoxelSharedContractTests
             typeof(PressureOutputEvidence),
             typeof(PressureChunkShape),
             typeof(CompilationSample),
+            typeof(CompilationCompilerDiagnostics),
             typeof(CompilationGateSummary),
             typeof(CompilationGateReport),
+            typeof(CompilationGatePolicy),
             typeof(PressureHostProgress),
             typeof(PressureHostSample),
             typeof(PressureEffectiveIsolation),
@@ -217,20 +219,24 @@ public sealed class VoxelSharedContractTests
             "\"-property:UseAppHost=false\"",
             compilationHarness,
             StringComparison.Ordinal);
+        Assert.Contains(
+            "start.Environment[\"DOTNET_TieredCompilation\"]",
+            compilationHarness,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "start.Environment[\"DOTNET_TieredPGO\"]",
+            compilationHarness,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "for (int pair = 0; pair < options.MeasuredPairs; pair++)",
+            compilationHarness,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "options.WarmupPairs + options.MeasuredPairs",
+            compilationHarness,
+            StringComparison.Ordinal);
 
-        CompilationGateSummary failedSummary = new(
-            5,
-            1.10,
-            null,
-            null,
-            null,
-            null,
-            null,
-            null,
-            false,
-            false,
-            false,
-            false);
+        CompilationGateSummary failedSummary = default;
         string failedJson = System.Text.Json.JsonSerializer.Serialize(
             failedSummary,
             VoxelJson.Options);
@@ -600,6 +606,178 @@ public sealed class VoxelSharedContractTests
             "-Image nam-voxel-pressure:",
             guide,
             StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CompilationGateUsesSixMeasuredPairsAndUnchangedLimits()
+    {
+        Assert.Equal(
+            1,
+            CompilationGatePolicy.DefaultWarmupPairCount);
+        Assert.Equal(
+            6,
+            CompilationGatePolicy.DefaultMeasuredPairCount);
+        Assert.True(
+            CompilationGatePolicy.IsValidMeasuredPairCount(6));
+        Assert.False(
+            CompilationGatePolicy.IsValidMeasuredPairCount(0));
+        Assert.False(
+            CompilationGatePolicy.IsValidMeasuredPairCount(5));
+        Assert.Equal(
+            1.10,
+            CompilationGatePolicy.MaximumNamToSafeRatio);
+        Assert.True(
+            CompilationGatePolicy.IsWithinRatioLimit(1.10));
+        Assert.False(
+            CompilationGatePolicy.IsWithinRatioLimit(1.100_001));
+
+        string root = FindRepositoryRoot();
+        string runner = File.ReadAllText(
+            Path.Combine(
+                root,
+                ".Demos",
+                "01-VoxelChunkPipeline",
+                "Pressure",
+                "run-constrained.ps1"));
+        Assert.Contains(
+            "[int]$CompilationPairs = 6",
+            runner,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "$CompilationPairs -le 0",
+            runner,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "($CompilationPairs -band 1) -ne 0",
+            runner,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CompilationGateMeasuredOrderIsBalanced()
+    {
+        PressureCompilationConfiguration configuration =
+            CompilationGatePolicy.RequiredChildCompilationConfiguration;
+        List<CompilationSample> samples = [];
+        for (int pair = 0;
+            pair < CompilationGatePolicy.DefaultMeasuredPairCount;
+            pair++)
+        {
+            bool safeFirst =
+                CompilationGatePolicy.SafeRunsFirst(pair);
+            samples.Add(
+                CompilationSampleForTest(
+                    pair,
+                    0,
+                    safeFirst ? "SafeCSharp" : "NAM",
+                    configuration));
+            samples.Add(
+                CompilationSampleForTest(
+                    pair,
+                    1,
+                    safeFirst ? "NAM" : "SafeCSharp",
+                    configuration));
+        }
+
+        Assert.True(
+            CompilationGatePolicy.HasBalancedMeasuredOrder(
+                samples,
+                CompilationGatePolicy.DefaultMeasuredPairCount));
+        Assert.Equal(
+            3,
+            samples.Count(
+                sample =>
+                    sample.Position == 0
+                    && sample.Implementation == "SafeCSharp"));
+        Assert.Equal(
+            3,
+            samples.Count(
+                sample =>
+                    sample.Position == 0
+                    && sample.Implementation == "NAM"));
+
+        samples[0] = samples[0] with
+        {
+            Implementation = "NAM"
+        };
+        Assert.False(
+            CompilationGatePolicy.HasBalancedMeasuredOrder(
+                samples,
+                CompilationGatePolicy.DefaultMeasuredPairCount));
+    }
+
+    [Fact]
+    public void CompilationGateRequiresDisabledEqualChildSettings()
+    {
+        PressureCompilationConfiguration disabled =
+            CompilationGatePolicy.RequiredChildCompilationConfiguration;
+        List<CompilationSample> warmups =
+        [
+            CompilationSampleForTest(0, 0, "SafeCSharp", disabled),
+            CompilationSampleForTest(0, 1, "NAM", disabled)
+        ];
+        List<CompilationSample> samples = [];
+        for (int pair = 0;
+            pair < CompilationGatePolicy.DefaultMeasuredPairCount;
+            pair++)
+        {
+            samples.Add(
+                CompilationSampleForTest(
+                    pair,
+                    0,
+                    "SafeCSharp",
+                    disabled));
+            samples.Add(
+                CompilationSampleForTest(
+                    pair,
+                    1,
+                    "NAM",
+                    disabled));
+        }
+
+        Assert.True(
+            CompilationGatePolicy.HasRequiredChildConfiguration(
+                warmups,
+                samples,
+                CompilationGatePolicy.DefaultWarmupPairCount,
+                CompilationGatePolicy.DefaultMeasuredPairCount));
+        string json = JsonSerializer.Serialize(
+            samples[0],
+            VoxelJson.Options);
+        CompilationSample roundTrip =
+            JsonSerializer.Deserialize<CompilationSample>(
+                json,
+                VoxelJson.Options);
+        Assert.Equal(
+            "0",
+            roundTrip.ChildCompilationConfiguration.TieredCompilation);
+        Assert.Equal(
+            "0",
+            roundTrip.ChildCompilationConfiguration.TieredPgo);
+
+        samples[0] = samples[0] with
+        {
+            ChildCompilationConfiguration =
+                new PressureCompilationConfiguration("1", "0")
+        };
+        Assert.False(
+            CompilationGatePolicy.HasRequiredChildConfiguration(
+                warmups,
+                samples,
+                CompilationGatePolicy.DefaultWarmupPairCount,
+                CompilationGatePolicy.DefaultMeasuredPairCount));
+
+        samples[0] = samples[0] with
+        {
+            ChildCompilationConfiguration =
+                new PressureCompilationConfiguration(string.Empty, "0")
+        };
+        Assert.False(
+            CompilationGatePolicy.HasRequiredChildConfiguration(
+                warmups,
+                samples,
+                CompilationGatePolicy.DefaultWarmupPairCount,
+                CompilationGatePolicy.DefaultMeasuredPairCount));
     }
 
     [Fact]
@@ -3054,6 +3232,25 @@ public sealed class VoxelSharedContractTests
             DateTime.UnixEpoch,
             DateTime.UnixEpoch.AddSeconds(sequence));
     }
+
+    private static CompilationSample CompilationSampleForTest(
+        int pair,
+        int position,
+        string implementation,
+        PressureCompilationConfiguration configuration) =>
+        new(
+            pair,
+            position,
+            implementation,
+            configuration,
+            DateTime.UnixEpoch,
+            1,
+            1,
+            CompilationOutcome.Completed,
+            0,
+            "dotnet build",
+            string.Empty,
+            string.Empty);
 
     private static string CreateTestArtifactDirectory()
     {
