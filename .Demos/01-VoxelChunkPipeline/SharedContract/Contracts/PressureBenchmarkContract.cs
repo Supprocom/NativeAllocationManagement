@@ -76,7 +76,10 @@ public readonly record struct PressureImplementationObservation(
     long ExternalCgroupPeakBytes,
     double ExternalCpuPercentMean,
     double ExternalCpuPercentPeak,
-    PressureEffectiveIsolation Isolation);
+    PressureEffectiveIsolation Isolation,
+    double EffectiveCpuCores = 0,
+    long PageFaultsDelta = 0,
+    long MajorPageFaultsDelta = 0);
 
 public readonly record struct PressurePairedStatistics(
     int SampleCount,
@@ -102,6 +105,29 @@ public readonly record struct PressurePairedObservation(
     PressureImplementationObservation Nam,
     bool StructuralParityPassed,
     bool SafeRanFirst = false);
+
+public static class PressureSamplePolicy
+{
+    public static bool HasBalancedOrder(
+        IReadOnlyList<PressurePairedObservation> observations)
+    {
+        ArgumentNullException.ThrowIfNull(observations);
+        return observations.Count > 0
+            && (observations.Count & 1) == 0
+            && observations.Count(
+                static observation => observation.SafeRanFirst)
+                == observations.Count / 2;
+    }
+
+    public static bool StressConfidencePassed(
+        int sampleCount,
+        int requiredSampleCount,
+        double confidenceLower95) =>
+        sampleCount == requiredSampleCount
+        && requiredSampleCount > 0
+        && (requiredSampleCount & 1) == 0
+        && confidenceLower95 > 1.00;
+}
 
 public readonly record struct PressureOutcomeDecision(
     bool SafeCompleted,
@@ -232,7 +258,8 @@ public readonly record struct PressureProfilePair(
     long RequestedCumulativeDemandBytes,
     PressureProfileInitialization Initialization,
     IReadOnlyList<PressurePairedObservation> Observations,
-    PressurePairedStatistics Statistics);
+    PressurePairedStatistics Statistics,
+    IReadOnlyList<PressureProfileInitialization>? SampleInitializations = null);
 
 public readonly record struct PressureVerificationPair(
     int ProfilePercent,

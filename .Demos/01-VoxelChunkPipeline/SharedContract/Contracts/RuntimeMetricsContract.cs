@@ -64,7 +64,9 @@ public readonly record struct CgroupMemorySnapshot(
     long CpuSystemMicroseconds = 0,
     long CpuPeriods = 0,
     long CpuThrottledPeriods = 0,
-    long CpuThrottledMicroseconds = 0)
+    long CpuThrottledMicroseconds = 0,
+    long PageFaults = 0,
+    long MajorPageFaults = 0)
 {
     public static CgroupMemorySnapshot Read()
     {
@@ -96,7 +98,11 @@ public readonly record struct CgroupMemorySnapshot(
             long oom,
             long oomKill,
             long oomGroupKill) = ReadEvents(root);
-        (long anon, long file) = ReadStat(root);
+        (
+            long anon,
+            long file,
+            long pageFaults,
+            long majorPageFaults) = ReadStat(root);
         long swapCurrent = ReadLong(
             Path.Combine(root, "memory.swap.current"));
         long swapPeak = ReadLong(
@@ -121,7 +127,9 @@ public readonly record struct CgroupMemorySnapshot(
             ReadCounter(root, "cpu.stat", "system_usec"),
             ReadCounter(root, "cpu.stat", "nr_periods"),
             ReadCounter(root, "cpu.stat", "nr_throttled"),
-            ReadCounter(root, "cpu.stat", "throttled_usec"));
+            ReadCounter(root, "cpu.stat", "throttled_usec"),
+            pageFaults,
+            majorPageFaults);
     }
 
     private static string? FindCgroupRoot()
@@ -228,13 +236,19 @@ public readonly record struct CgroupMemorySnapshot(
         }
     }
 
-    private static (long Anon, long File) ReadStat(string root)
+    private static (
+        long Anon,
+        long File,
+        long PageFaults,
+        long MajorPageFaults) ReadStat(string root)
     {
         string path = Path.Combine(root, "memory.stat");
         try
         {
             long anon = 0;
             long file = 0;
+            long pageFaults = 0;
+            long majorPageFaults = 0;
             foreach (string line in File.ReadLines(path))
             {
                 string[] parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
@@ -251,9 +265,17 @@ public readonly record struct CgroupMemorySnapshot(
                 {
                     file = value;
                 }
+                else if (parts[0] == "pgfault")
+                {
+                    pageFaults = value;
+                }
+                else if (parts[0] == "pgmajfault")
+                {
+                    majorPageFaults = value;
+                }
             }
 
-            return (anon, file);
+            return (anon, file, pageFaults, majorPageFaults);
         }
         catch (IOException)
         {

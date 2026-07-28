@@ -11,7 +11,7 @@ internal static class PressureMatrixHarness
 {
     private const int WarmupProfilePercent = 1000;
     private const int StressProfilePercent = 10000;
-    private const int StressProfileSamples = 5;
+    private const int StressProfileSamples = 6;
     private const int NonMeasuredOperationTimeoutSeconds = 60;
     private static readonly int[] ProfilePercents =
     [
@@ -70,15 +70,6 @@ internal static class PressureMatrixHarness
             profileOrdinal < options.ProfilePercents.Count;
             profileOrdinal++)
         {
-            if (workerLifecycles.Any(
-                    static lifecycle =>
-                        !lifecycle.DisposalCompleted
-                        || !lifecycle.ContainerAbsentAfterDisposal))
-            {
-                throw new InvalidOperationException(
-                    "A prior profile container remains active.");
-            }
-
             int percent = options.ProfilePercents[profileOrdinal];
             long target = checked(
                 options.CgroupCapBytes * percent / 100);
@@ -90,170 +81,54 @@ internal static class PressureMatrixHarness
                 options.Seed,
                 options.RetentionDepth,
                 options.ProgressEveryChunks);
-            DateTime initializationStartedUtc = DateTime.UtcNow;
-            long initializationStart = Stopwatch.GetTimestamp();
-            Task<DockerWorker> safeStart = DockerWorker.StartAsync(
-                options,
-                "SafeCSharp",
-                options.SafeCpuSet,
-                imageId,
-                commands,
-                workerLifecycles);
-            Task<DockerWorker> namStart = DockerWorker.StartAsync(
-                options,
-                "NAM",
-                options.NamCpuSet,
-                imageId,
-                commands,
-                workerLifecycles);
-            try
-            {
-                await Task.WhenAll(safeStart, namStart);
-            }
-            catch
-            {
-                if (safeStart.IsCompletedSuccessfully)
-                {
-                    await (await safeStart).DisposeAsync();
-                }
-
-                if (namStart.IsCompletedSuccessfully)
-                {
-                    await (await namStart).DisposeAsync();
-                }
-
-                throw;
-            }
-            await using DockerWorker safe = await safeStart;
-            await using DockerWorker nam = await namStart;
-            await Task.WhenAll(
-                safe.WarmAsync(options),
-                nam.WarmAsync(options));
-            long preparationStart = Stopwatch.GetTimestamp();
-            Task<PressureImplementationObservation> safePreparationTask =
-                safe.PrepareMeasurementAsync(request, options);
-            Task<PressureImplementationObservation> namPreparationTask =
-                nam.PrepareMeasurementAsync(request, options);
-            await Task.WhenAll(
-                safePreparationTask,
-                namPreparationTask);
-            PressureImplementationObservation safePreparation =
-                await safePreparationTask;
-            PressureImplementationObservation namPreparation =
-                await namPreparationTask;
-            double preparationMilliseconds = Stopwatch.GetElapsedTime(
-                preparationStart).TotalMilliseconds;
-            bool equivalentMeasuredPath = PreparationPathPassed(
-                request,
-                safePreparation,
-                namPreparation);
-            bool preparationReset = PreparationResetPassed(
-                safePreparation,
-                namPreparation);
-            if (!equivalentMeasuredPath || !preparationReset)
-            {
-                throw new InvalidOperationException(
-                    "The measurement preparation did not produce an equal reset state.");
-            }
-
-            double initializationMilliseconds =
-                Stopwatch.GetElapsedTime(
-                    initializationStart).TotalMilliseconds;
-            totalInitializationMilliseconds +=
-                initializationMilliseconds;
-            PressureProfileInitialization initialization = new(
-                profileOrdinal,
-                initializationStartedUtc,
-                initializationMilliseconds,
-                safe.ContainerName,
-                nam.ContainerName,
-                DockerWorker.WarmupPassCount,
-                WarmupProfilePercent,
-                checked(
-                    options.CgroupCapBytes
-                    * WarmupProfilePercent
-                    / 100),
-                new PressureMeasurementPreparation(
-                    percent,
-                    target,
-                    preparationMilliseconds,
-                    safePreparation,
-                    namPreparation,
-                    equivalentMeasuredPath,
-                    preparationReset));
             int samplesInProfile =
                 percent == StressProfilePercent
                     ? StressProfileSamples
                     : options.SamplesPerProfile;
             List<PressurePairedObservation> observations = new(
                 samplesInProfile);
+            List<PressureProfileInitialization> sampleInitializations =
+                new(samplesInProfile);
             for (int sampleIndex = 0;
                 sampleIndex < samplesInProfile;
                 sampleIndex++)
             {
-                if (!safe.IsAlive || safe.RequiresRestart)
+                if (workerLifecycles.Any(
+                        static lifecycle =>
+                            !lifecycle.DisposalCompleted
+                            || !lifecycle.ContainerAbsentAfterDisposal))
                 {
-                    await safe.RestartAsync(options, commands);
-                    await safe.WarmAsync(options);
-                    PressureImplementationObservation preparation =
-                        await safe.PrepareMeasurementAsync(
-                            request,
-                            options);
-                    ValidateRestartPreparation(
-                        request,
-                        preparation);
+                    throw new InvalidOperationException(
+                        "A prior sample container remains active.");
                 }
 
-                if (!nam.IsAlive || nam.RequiresRestart)
-                {
-                    await nam.RestartAsync(options, commands);
-                    await nam.WarmAsync(options);
-                    PressureImplementationObservation preparation =
-                        await nam.PrepareMeasurementAsync(
-                            request,
-                            options);
-                    ValidateRestartPreparation(
-                        request,
-                        preparation);
-                }
-
-                PressureImplementationObservation safeObservation;
-                PressureImplementationObservation namObservation;
-                bool safeFirst = ((pairOrdinal + profileOrdinal) & 1) == 0;
-                if (safeFirst)
-                {
-                    safeObservation = await safe.RunProfileAsync(
-                        request,
-                        options);
-                    namObservation = await nam.RunProfileAsync(
-                        request,
-                        options);
-                }
-                else
-                {
-                    namObservation = await nam.RunProfileAsync(
-                        request,
-                        options);
-                    safeObservation = await safe.RunProfileAsync(
-                        request,
-                        options);
-                }
-
-                pairOrdinal++;
-                observations.Add(new PressurePairedObservation(
+                bool safeFirst = ((sampleIndex + profileOrdinal) & 1) == 0;
+                IsolatedPairRun pair = await RunIsolatedPairAsync(
+                    options,
+                    request,
+                    imageId,
+                    commands,
+                    workerLifecycles,
+                    pairOrdinal,
                     sampleIndex,
-                    safeObservation,
-                    namObservation,
-                    StructuralParity(
-                        safeObservation.ChildResult,
-                        namObservation.ChildResult),
-                    safeFirst));
+                    safeFirst);
+                pairOrdinal++;
+                observations.Add(pair.Observation);
+                sampleInitializations.Add(pair.Initialization);
+                totalInitializationMilliseconds +=
+                    pair.Initialization.ElapsedMilliseconds;
                 totalMeasuredMilliseconds +=
-                    safeObservation.ProfileElapsedMilliseconds
-                        ?? safeObservation.ElapsedLowerBoundMilliseconds;
+                    pair.Observation.Safe.ProfileElapsedMilliseconds
+                        ?? pair.Observation.Safe.ElapsedLowerBoundMilliseconds;
                 totalMeasuredMilliseconds +=
-                    namObservation.ProfileElapsedMilliseconds
-                        ?? namObservation.ElapsedLowerBoundMilliseconds;
+                    pair.Observation.Nam.ProfileElapsedMilliseconds
+                        ?? pair.Observation.Nam.ElapsedLowerBoundMilliseconds;
+            }
+
+            if (!PressureSamplePolicy.HasBalancedOrder(observations))
+            {
+                throw new InvalidOperationException(
+                    "The profile does not have an even paired run order.");
             }
 
             PressurePairedStatistics statistics = SummarizeProfile(
@@ -264,9 +139,10 @@ internal static class PressureMatrixHarness
                 percent,
                 options.CgroupCapBytes,
                 target,
-                initialization,
+                sampleInitializations[0],
                 observations,
-                statistics));
+                statistics,
+                sampleInitializations));
         }
 
         if (workerLifecycles.Any(
@@ -460,10 +336,11 @@ internal static class PressureMatrixHarness
             ["namCpuSet"] = options.NamCpuSet,
             ["cpuQuota"] = "none",
             ["pairExecution"] =
-                "sequential with per-profile alternating implementation order",
+                "sequential with an even alternating order in each profile",
             ["profileInitialization"] =
-                "fresh containers, four fixed warmups, one measured-path preparation, and a logical reset",
+                "fresh containers per pair, four fixed warmups, and one immediate measured-path preparation per implementation",
             ["crossProfileProcessState"] = "none",
+            ["crossSampleProcessState"] = "none",
             ["memorySwapPolicy"] = "memory-swap equals memory; swappiness 0",
             ["gcServer"] = "1",
             ["gcHeapCount"] = "4",
@@ -479,7 +356,7 @@ internal static class PressureMatrixHarness
                 $"{StressProfilePercent} percent uses "
                 + $"{StressProfileSamples} complete paired samples",
             ["measurementPreparation"] =
-                "the host runs the measured command before sample zero and records the post-run reset",
+                "each timed request follows its selected-profile preparation request in the same fresh container",
             ["measurementEvidence"] =
                 "predeclared plan and terminal completion without per-chunk evidence",
             ["measurementBoundary"] =
@@ -514,8 +391,8 @@ internal static class PressureMatrixHarness
                 "The host samples Docker and cgroup metrics outside each worker.",
                 "The child does not run a benchmark timer or scan allocator statistics during processing.",
                 "Measured child results contain no per-chunk evidence.",
-                "Each profile uses a new container pair, four fixed warmups, and one measured-path preparation.",
-                "The 10000-percent stress profile uses five complete paired samples.",
+                "Each paired sample uses new containers, four fixed warmups, and one measured-path preparation.",
+                "The 10000-percent stress profile uses six complete paired samples.",
                 "Each measured profile materializes every output and completes its mapped handoff.",
                 "One exact maximum-demand run follows measurement. It reads every output byte."
             ],
@@ -536,6 +413,207 @@ internal static class PressureMatrixHarness
         Console.WriteLine(JsonSerializer.Serialize(summary, VoxelJson.Options));
         Console.WriteLine(options.OutputPath);
         return options.Enforce && !summary.GatePassed ? 3 : 0;
+    }
+
+    private static async Task<IsolatedPairRun> RunIsolatedPairAsync(
+        Options options,
+        PressureProfileRequest request,
+        string imageId,
+        List<string> commands,
+        List<PressureWorkerLifecycle> workerLifecycles,
+        int pairOrdinal,
+        int sampleIndex,
+        bool safeFirst)
+    {
+        DateTime initializationStartedUtc = DateTime.UtcNow;
+        long initializationStart = Stopwatch.GetTimestamp();
+        Task<DockerWorker> safeStart = DockerWorker.StartAsync(
+            options,
+            "SafeCSharp",
+            options.SafeCpuSet,
+            imageId,
+            commands,
+            workerLifecycles);
+        Task<DockerWorker> namStart = DockerWorker.StartAsync(
+            options,
+            "NAM",
+            options.NamCpuSet,
+            imageId,
+            commands,
+            workerLifecycles);
+        try
+        {
+            await Task.WhenAll(safeStart, namStart);
+        }
+        catch
+        {
+            if (safeStart.IsCompletedSuccessfully)
+            {
+                await (await safeStart).DisposeAsync();
+            }
+
+            if (namStart.IsCompletedSuccessfully)
+            {
+                await (await namStart).DisposeAsync();
+            }
+
+            throw;
+        }
+
+        DockerWorker safe = await safeStart;
+        DockerWorker nam = await namStart;
+        string safeContainerName = safe.ContainerName;
+        string namContainerName = nam.ContainerName;
+        PressureImplementationObservation safePreparation = default;
+        PressureImplementationObservation namPreparation = default;
+        PressureImplementationObservation safeObservation = default;
+        PressureImplementationObservation namObservation = default;
+        double initializationMilliseconds = 0;
+        double preparationMilliseconds = 0;
+        try
+        {
+            await Task.WhenAll(
+                safe.WarmAsync(options),
+                nam.WarmAsync(options));
+            initializationMilliseconds = Stopwatch.GetElapsedTime(
+                initializationStart).TotalMilliseconds;
+            if (safeFirst)
+            {
+                long preparationStart = Stopwatch.GetTimestamp();
+                safePreparation = await safe.PrepareMeasurementAsync(
+                    request,
+                    options);
+                preparationMilliseconds += Stopwatch.GetElapsedTime(
+                    preparationStart).TotalMilliseconds;
+                safeObservation = await safe.RunProfileAsync(
+                    request,
+                    options);
+
+                preparationStart = Stopwatch.GetTimestamp();
+                namPreparation = await nam.PrepareMeasurementAsync(
+                    request,
+                    options);
+                preparationMilliseconds += Stopwatch.GetElapsedTime(
+                    preparationStart).TotalMilliseconds;
+                namObservation = await nam.RunProfileAsync(
+                    request,
+                    options);
+            }
+            else
+            {
+                long preparationStart = Stopwatch.GetTimestamp();
+                namPreparation = await nam.PrepareMeasurementAsync(
+                    request,
+                    options);
+                preparationMilliseconds += Stopwatch.GetElapsedTime(
+                    preparationStart).TotalMilliseconds;
+                namObservation = await nam.RunProfileAsync(
+                    request,
+                    options);
+
+                preparationStart = Stopwatch.GetTimestamp();
+                safePreparation = await safe.PrepareMeasurementAsync(
+                    request,
+                    options);
+                preparationMilliseconds += Stopwatch.GetElapsedTime(
+                    preparationStart).TotalMilliseconds;
+                safeObservation = await safe.RunProfileAsync(
+                    request,
+                    options);
+            }
+
+            initializationMilliseconds += preparationMilliseconds;
+            bool equivalentMeasuredPath = PreparationPathPassed(
+                request,
+                safePreparation,
+                namPreparation);
+            bool preparationReset = PreparationResetPassed(
+                safePreparation,
+                namPreparation);
+            if (!equivalentMeasuredPath
+                || !preparationReset
+                || !PreparationOrdinalPassed(safePreparation)
+                || !PreparationOrdinalPassed(namPreparation))
+            {
+                throw new InvalidOperationException(
+                    "The isolated measurement preparation is not valid.");
+            }
+        }
+        finally
+        {
+            try
+            {
+                await safe.DisposeAsync();
+            }
+            finally
+            {
+                await nam.DisposeAsync();
+            }
+        }
+
+        if (!CompletedLifecyclePassed(
+                workerLifecycles,
+                safeContainerName)
+            || !CompletedLifecyclePassed(
+                workerLifecycles,
+                namContainerName))
+        {
+            throw new InvalidOperationException(
+                "An isolated sample container did not complete disposal.");
+        }
+
+        PressureProfileInitialization initialization = new(
+            pairOrdinal,
+            initializationStartedUtc,
+            initializationMilliseconds,
+            safeContainerName,
+            namContainerName,
+            DockerWorker.WarmupPassCount,
+            WarmupProfilePercent,
+            checked(
+                options.CgroupCapBytes
+                * WarmupProfilePercent
+                / 100),
+            new PressureMeasurementPreparation(
+                request.ProfilePercent,
+                request.RequestedCumulativeDemandBytes,
+                preparationMilliseconds,
+                safePreparation,
+                namPreparation,
+                true,
+                true));
+        PressurePairedObservation observation = new(
+            sampleIndex,
+            safeObservation,
+            namObservation,
+            StructuralParity(
+                safeObservation.ChildResult,
+                namObservation.ChildResult),
+            safeFirst);
+        return new IsolatedPairRun(observation, initialization);
+    }
+
+    private static bool PreparationOrdinalPassed(
+        PressureImplementationObservation preparation) =>
+        preparation.ChildResult?.StateAfterReset?.RequestOrdinal
+            == DockerWorker.WarmupPassCount + 1;
+
+    private static bool CompletedLifecyclePassed(
+        IReadOnlyList<PressureWorkerLifecycle> lifecycles,
+        string containerName)
+    {
+        PressureWorkerLifecycle[] matches = lifecycles
+            .Where(
+                lifecycle => lifecycle.ContainerName == containerName)
+            .ToArray();
+        return matches.Length == 1
+            && matches[0].DisposalCompleted
+            && matches[0].ContainerAbsentAfterDisposal
+            && matches[0].FirstRequestOrdinal == 1
+            && matches[0].LastRequestOrdinal
+                == DockerWorker.WarmupPassCount + 2
+            && matches[0].RequestCount
+                == DockerWorker.WarmupPassCount + 2;
     }
 
     private static bool ProfileCompleted(PressureProfilePair profile) =>
@@ -584,19 +662,6 @@ internal static class PressureMatrixHarness
         && captured.AllocationPlanFingerprint > 0
         && captured.LogicalResetPassed;
 
-    private static void ValidateRestartPreparation(
-        PressureProfileRequest request,
-        PressureImplementationObservation observation)
-    {
-        if (!PreparationObservationPassed(request, observation)
-            || !ResetStatePassed(
-                observation.ChildResult?.StateAfterReset))
-        {
-            throw new InvalidOperationException(
-                "A restarted worker did not complete its measurement preparation.");
-        }
-    }
-
     private static bool ProfileIsolationPassed(
         IReadOnlyList<PressureProfilePair> profiles,
         PressureVerificationPair verification,
@@ -604,31 +669,53 @@ internal static class PressureMatrixHarness
     {
         Dictionary<string, int> containerOwners =
             new(StringComparer.Ordinal);
-        foreach (PressureProfilePair profile in profiles)
+        for (int profileIndex = 0;
+            profileIndex < profiles.Count;
+            profileIndex++)
         {
-            if (!RegisterContainer(
-                    containerOwners,
-                    profile.Initialization.SafeContainerName,
-                    profile.ProfilePercent)
-                || !RegisterContainer(
-                    containerOwners,
-                    profile.Initialization.NamContainerName,
-                    profile.ProfilePercent))
+            PressureProfilePair profile = profiles[profileIndex];
+            IReadOnlyList<PressureProfileInitialization>? initializations =
+                profile.SampleInitializations;
+            if (initializations is null
+                || initializations.Count != profile.Observations.Count
+                || !PressureSamplePolicy.HasBalancedOrder(
+                    profile.Observations))
             {
                 return false;
             }
 
-            foreach (PressurePairedObservation observation
-                in profile.Observations)
+            for (int sampleIndex = 0;
+                sampleIndex < profile.Observations.Count;
+                sampleIndex++)
             {
+                PressurePairedObservation observation =
+                    profile.Observations[sampleIndex];
+                PressureProfileInitialization initialization =
+                    initializations[sampleIndex];
+                int sampleOwner = checked(
+                    ((profileIndex + 1) * 100_000) + sampleIndex);
+                if (initialization.SafeContainerName
+                        != observation.Safe.Isolation.ContainerName
+                    || initialization.NamContainerName
+                        != observation.Nam.Isolation.ContainerName)
+                {
+                    return false;
+                }
+
                 if (!RegisterContainer(
                         containerOwners,
-                        observation.Safe.Isolation.ContainerName,
-                        profile.ProfilePercent)
+                        initialization.SafeContainerName,
+                        sampleOwner)
                     || !RegisterContainer(
                         containerOwners,
-                        observation.Nam.Isolation.ContainerName,
-                        profile.ProfilePercent))
+                        initialization.NamContainerName,
+                        sampleOwner)
+                    || !CompletedLifecyclePassed(
+                        lifecycles,
+                        initialization.SafeContainerName)
+                    || !CompletedLifecyclePassed(
+                        lifecycles,
+                        initialization.NamContainerName))
                 {
                     return false;
                 }
@@ -652,9 +739,11 @@ internal static class PressureMatrixHarness
                 containerOwners,
                 verification.Nam.Isolation.ContainerName,
                 verificationOwner);
+        int measuredPairCount = profiles.Sum(
+            static profile => profile.Observations.Count);
         if (!namedContainersPassed
-            || lifecycles.Count < checked(
-                (profiles.Count + 1) * 2)
+            || lifecycles.Count != checked(
+                (measuredPairCount + 1) * 2)
             || lifecycles.Any(
                 static lifecycle =>
                     !lifecycle.DisposalCompleted
@@ -822,7 +911,8 @@ internal static class PressureMatrixHarness
                         observation.Nam,
                         options));
         bool deadlineGate = outcomeDecision.DeadlineGatePassed;
-        bool correctnessGate = outcomeDecision.CorrectnessGatePassed;
+        bool correctnessGate = outcomeDecision.CorrectnessGatePassed
+            && PressureSamplePolicy.HasBalancedOrder(observations);
         bool performanceGate;
         string interpretation;
         if (decisiveNam)
@@ -854,14 +944,18 @@ internal static class PressureMatrixHarness
                 double requiredSpeedup = RequiredSpeedup(percent);
                 bool confidenceGate =
                     percent == StressProfilePercent
-                        ? sampleCount == StressProfileSamples
+                        ? PressureSamplePolicy.StressConfidencePassed(
+                            sampleCount,
+                            StressProfileSamples,
+                            lower ?? double.NegativeInfinity)
                         : lower > 1.00;
                 performanceGate = mean >= requiredSpeedup
                     && confidenceGate;
                 interpretation = percent == StressProfilePercent
                     ? $"Both implementations completed the stress profile. "
                         + $"This profile requires {requiredSpeedup:F2}x "
-                        + "speedup from one complete sample."
+                        + $"mean speedup from {StressProfileSamples} pairs "
+                        + "and a positive confidence lower bound."
                     : $"Both implementations completed. This profile requires "
                         + $"{requiredSpeedup:F2}x mean speedup and a positive "
                         + "confidence lower bound.";
@@ -1193,7 +1287,6 @@ internal static class PressureMatrixHarness
         private Task? _statsReader;
         private Task<string>? _statsErrorReader;
         private Task<string>? _stderrReader;
-        private int _restart;
         private bool _peakResetAttempted;
         private long _requestOrdinal;
 
@@ -1210,8 +1303,6 @@ internal static class PressureMatrixHarness
         }
 
         internal bool IsAlive => _process is { HasExited: false };
-
-        internal bool RequiresRestart { get; private set; }
 
         internal string ContainerName { get; private set; } = string.Empty;
 
@@ -1234,14 +1325,6 @@ internal static class PressureMatrixHarness
                 lifecycles);
             await worker.StartProcessAsync(options, commands);
             return worker;
-        }
-
-        internal async Task RestartAsync(Options options, List<string> commands)
-        {
-            await StopAsync();
-            _restart++;
-            RequiresRestart = false;
-            await StartProcessAsync(options, commands);
         }
 
         internal async Task WarmAsync(Options options)
@@ -1314,8 +1397,8 @@ internal static class PressureMatrixHarness
         {
             _peakResetAttempted = false;
             _requestOrdinal = 0;
-            string suffix = _restart == 0 ? "initial" : $"restart-{_restart}";
-            ContainerName = $"nam-voxel-{_implementation.ToLowerInvariant()}-{suffix}-{Guid.NewGuid():N}";
+            ContainerName =
+                $"nam-voxel-{_implementation.ToLowerInvariant()}-{Guid.NewGuid():N}";
             string assembly = _implementation == "NAM"
                 ? "/workspace/.Demos/01-VoxelChunkPipeline/NAM/bin/Release/net10.0/linux-x64/publish/VoxelChunkPipeline.NAM.dll"
                 : "/workspace/.Demos/01-VoxelChunkPipeline/SafeCSharp/bin/Release/net10.0/linux-x64/publish/VoxelChunkPipeline.SafeCSharp.dll";
@@ -1606,6 +1689,22 @@ internal static class PressureMatrixHarness
             double cpuPeak = samples.Count == 0
                 ? 0
                 : samples.Max(sample => sample.CpuPercent);
+            long cgroupCpuMicroseconds = Math.Max(
+                0,
+                finalCgroup.CpuUsageMicroseconds
+                    - initialCgroup.CpuUsageMicroseconds);
+            double effectiveCpuCores =
+                elapsedMilliseconds is > 0
+                    ? (cgroupCpuMicroseconds / 1000.0)
+                        / elapsedMilliseconds.Value
+                    : 0;
+            long pageFaultsDelta = Math.Max(
+                0,
+                finalCgroup.PageFaults - initialCgroup.PageFaults);
+            long majorPageFaultsDelta = Math.Max(
+                0,
+                finalCgroup.MajorPageFaults
+                    - initialCgroup.MajorPageFaults);
             PressureFailureAttribution attribution = outcome == PressureProfileOutcome.Completed
                 ? PressureFailureAttribution.None
                 : outcome == PressureProfileOutcome.HarnessFailure
@@ -1647,9 +1746,6 @@ internal static class PressureMatrixHarness
                     Stopwatch.GetElapsedTime(startTick.Value, item.Tick).TotalMilliseconds))
                     .ToArray()
                 : [];
-            RequiresRestart = enforceDeadline
-                && (outcome != PressureProfileOutcome.Completed
-                    || childResult?.CorrectnessPassed != true);
             return new PressureImplementationObservation(
                 _implementation,
                 request.ProfilePercent,
@@ -1690,7 +1786,10 @@ internal static class PressureMatrixHarness
                 externalPeak,
                 cpuMean,
                 cpuPeak,
-                Isolation);
+                Isolation,
+                effectiveCpuCores,
+                pageFaultsDelta,
+                majorPageFaultsDelta);
         }
 
         private async Task<(CgroupMemorySnapshot Snapshot, bool PeakReset)>
@@ -1995,7 +2094,9 @@ internal static class PressureMatrixHarness
                     FindCounter(lines, "system_usec"),
                     FindCounter(lines, "nr_periods"),
                     FindCounter(lines, "nr_throttled"),
-                    FindCounter(lines, "throttled_usec"));
+                    FindCounter(lines, "throttled_usec"),
+                    FindCounter(lines, "pgfault"),
+                    FindCounter(lines, "pgmajfault"));
             }
             catch
             {
@@ -2334,10 +2435,10 @@ internal static class PressureMatrixHarness
                 ParseInt(values.GetValueOrDefault("--seed", "17")),
                 ParseInt(values.GetValueOrDefault("--pids-limit", "128")),
                 ParseInt(values.GetValueOrDefault("--gc-hard-limit-percent", "90")),
-                ParsePositiveInt(
+                ParseEvenPositiveInt(
                     values.GetValueOrDefault(
                         "--samples-per-profile",
-                        "5"),
+                        "6"),
                     "--samples-per-profile"),
                 ParseProfiles(values.GetValueOrDefault(
                     "--profiles",
@@ -2355,16 +2456,16 @@ internal static class PressureMatrixHarness
         private static int ParseInt(string value) =>
             int.Parse(value, NumberStyles.Integer, CultureInfo.InvariantCulture);
 
-        private static int ParsePositiveInt(
+        private static int ParseEvenPositiveInt(
             string value,
             string name)
         {
             int result = ParseInt(value);
-            if (result <= 0)
+            if (result <= 0 || (result & 1) != 0)
             {
                 throw new ArgumentOutOfRangeException(
                     name,
-                    "The sample count must be positive.");
+                    "The sample count must be positive and even.");
             }
 
             return result;
@@ -2411,4 +2512,8 @@ internal static class PressureMatrixHarness
         int ExitCode,
         string StandardOutput,
         string StandardError);
+
+    private readonly record struct IsolatedPairRun(
+        PressurePairedObservation Observation,
+        PressureProfileInitialization Initialization);
 }

@@ -31,18 +31,18 @@ public sealed class VoxelSharedContractTests
             StringComparison.Ordinal);
 
         Assert.True(profileLoop >= 0);
-        Assert.True(safeStart > profileLoop);
-        Assert.True(sampleLoop > safeStart);
+        Assert.True(sampleLoop > profileLoop);
+        Assert.True(safeStart > sampleLoop);
         Assert.Contains(
             "internal const int WarmupPassCount = 4;",
             harness,
             StringComparison.Ordinal);
         Assert.Contains(
-            "await using DockerWorker safe = await safeStart;",
+            "await safe.DisposeAsync();",
             harness,
             StringComparison.Ordinal);
         Assert.Contains(
-            "await using DockerWorker nam = await namStart;",
+            "await nam.DisposeAsync();",
             harness,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -51,6 +51,10 @@ public sealed class VoxelSharedContractTests
             StringComparison.Ordinal);
         Assert.Contains(
             "crossProfileProcessState\"] = \"none\"",
+            harness,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "crossSampleProcessState\"] = \"none\"",
             harness,
             StringComparison.Ordinal);
     }
@@ -259,10 +263,14 @@ public sealed class VoxelSharedContractTests
             profileRound,
             StringComparison.Ordinal);
         Assert.True(profileRound >= 0);
-        Assert.True(safeStart > profileRound);
-        Assert.True(sampleRound > safeStart);
+        Assert.True(sampleRound > profileRound);
+        Assert.True(safeStart > sampleRound);
         Assert.Contains(
             "crossProfileProcessState\"] = \"none\"",
+            pressureHarness,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "crossSampleProcessState\"] = \"none\"",
             pressureHarness,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -294,11 +302,19 @@ public sealed class VoxelSharedContractTests
             pressureHarness,
             StringComparison.Ordinal);
         Assert.Contains(
-            "WarmupProfilePercent,\n                checked(",
+            "WarmupProfilePercent,\n            checked(",
             pressureHarness,
             StringComparison.Ordinal);
         Assert.Contains(
-            "private const int StressProfileSamples = 5;",
+            "private const int StressProfileSamples = 6;",
+            pressureHarness,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "ParseEvenPositiveInt(",
+            pressureHarness,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "result <= 0 || (result & 1) != 0",
             pressureHarness,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -331,7 +347,7 @@ public sealed class VoxelSharedContractTests
             pressureHarness,
             StringComparison.Ordinal);
         Assert.Contains(
-            "bool safeFirst = ((pairOrdinal + profileOrdinal) & 1) == 0;",
+            "bool safeFirst = ((sampleIndex + profileOrdinal) & 1) == 0;",
             pressureHarness,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -404,6 +420,10 @@ public sealed class VoxelSharedContractTests
             Path.Combine(demoRoot, "Pressure", "run-constrained.ps1"));
         Assert.Contains(
             "[string]$Profiles = \"50,100,200,500,1000,10000\"",
+            runner,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "[int]$SamplesPerProfile = 6",
             runner,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -522,6 +542,65 @@ public sealed class VoxelSharedContractTests
         Assert.False(
             PressureOutcomePolicy.AllSamplesCompletedWithinDeadline(
                 observations));
+    }
+
+    [Fact]
+    public void PressureSampleOrderRequiresAnEvenSplit()
+    {
+        PressurePairedObservation safeFirst =
+            default(PressurePairedObservation) with
+            {
+                SafeRanFirst = true
+            };
+        PressurePairedObservation namFirst =
+            default(PressurePairedObservation) with
+            {
+                SafeRanFirst = false
+            };
+
+        Assert.True(
+            PressureSamplePolicy.HasBalancedOrder(
+                [
+                    safeFirst,
+                    namFirst,
+                    safeFirst,
+                    namFirst,
+                    safeFirst,
+                    namFirst
+                ]));
+        Assert.False(
+            PressureSamplePolicy.HasBalancedOrder(
+                [safeFirst, namFirst, safeFirst, namFirst, safeFirst]));
+        Assert.False(
+            PressureSamplePolicy.HasBalancedOrder(
+                [
+                    safeFirst,
+                    safeFirst,
+                    safeFirst,
+                    safeFirst,
+                    namFirst,
+                    namFirst
+                ]));
+    }
+
+    [Fact]
+    public void StressConfidenceRequiresSixPairsAndPositiveLowerBound()
+    {
+        Assert.True(
+            PressureSamplePolicy.StressConfidencePassed(
+                6,
+                6,
+                1.01));
+        Assert.False(
+            PressureSamplePolicy.StressConfidencePassed(
+                6,
+                6,
+                1.00));
+        Assert.False(
+            PressureSamplePolicy.StressConfidencePassed(
+                5,
+                6,
+                1.20));
     }
 
     [Fact]

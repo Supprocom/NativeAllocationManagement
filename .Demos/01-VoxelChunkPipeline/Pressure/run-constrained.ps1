@@ -12,7 +12,7 @@ param(
     [int]$CompilationTimeoutSeconds = 120,
     [int]$EndToEndTimeoutSeconds = 420,
     [int]$CompilationPairs = 5,
-    [int]$SamplesPerProfile = 11,
+    [int]$SamplesPerProfile = 6,
     [int]$GcHeapHardLimitPercent = 90,
     [switch]$SetupOnly,
     [switch]$SkipBuild,

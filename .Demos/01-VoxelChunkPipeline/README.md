@@ -86,14 +86,17 @@ access, PID limits, GC mode, and GC heap limits.
 The default profiles are 50, 100, 200, 500, 1000, and 10000 percent of the
 binary cgroup cap.
 
-The 10000-percent entry uses five complete paired samples. The smaller
-profiles use the configured sample count and confidence calculation.
+Each profile uses six paired samples by default. The harness rejects odd
+sample counts because each implementation must run first equally often.
 
-Each profile uses new Safe and NAM containers. Startup and four fixed
+Each paired sample uses new Safe and NAM containers. Startup and four fixed
 1000-percent warmup passes occur outside measured processing.
 
-Each worker then runs the selected measured command once outside the timer.
-The worker resets all logical state before sample zero.
+Each worker then runs one selected-profile preparation request. Its timed
+request starts immediately after preparation.
+
+The worker resets all logical state after each request. The harness removes
+both sample containers before it starts the next pair.
 
 The child waits at `ProcessingReady`. The host starts its timer before it sends
 `BeginProcessing`.
@@ -140,7 +143,7 @@ $image = "nam-voxel-pressure:$($commit.Substring(0, 12))"
   -Image $image `
   -CompilationOutputPath artifacts\voxel-compilation-final.json `
   -OutputPath artifacts\voxel-pressure-final.json `
-  -SamplesPerProfile 11 `
+  -SamplesPerProfile 6 `
   -SkipBuild `
   -SkipImageBuild `
   -Enforce
