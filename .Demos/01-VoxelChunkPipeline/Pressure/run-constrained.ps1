@@ -24,7 +24,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $longestHarnessOperationSeconds = 60
 $warmupPassCount = 4
-$maximumPreparationPassCount = 50
+$preparationPassCount = 6
 $stressProfilePercent = 10000
 $stressProfileSamples = 6
 
@@ -69,7 +69,7 @@ function Get-MinimumHarnessFailSafeSeconds {
     }
 
     [long]$operationsPerPair =
-        2 * ($warmupPassCount + $maximumPreparationPassCount + 1)
+        2 * ($warmupPassCount + $preparationPassCount + 1)
     [long]$verificationOperations = 2 * ($warmupPassCount + 2)
     [long]$operationCount =
         $pairCount * $operationsPerPair + $verificationOperations

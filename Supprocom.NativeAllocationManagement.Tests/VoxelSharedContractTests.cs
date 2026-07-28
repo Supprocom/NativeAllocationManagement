@@ -97,6 +97,8 @@ public sealed class VoxelSharedContractTests
             typeof(PressureCommand),
             typeof(PressureProgress),
             typeof(PressureChunkEvidence),
+            typeof(PressureCompilationConfiguration),
+            typeof(PressureCompilationPolicy),
             typeof(PressureRuntimeSnapshot),
             typeof(PressureProfileResult),
             typeof(PressureSessionState),
@@ -114,10 +116,8 @@ public sealed class VoxelSharedContractTests
             typeof(PressureOutcomeDecision),
             typeof(PressureOutcomePolicy),
             typeof(PressureProfileOrderPolicy),
-            typeof(PressurePreparationAssessment),
-            typeof(PressurePreparationPolicy),
+            typeof(PressureProfileContinuationPolicy),
             typeof(PressureMeasurementPreparation),
-            typeof(PressurePreparationFailure),
             typeof(PressureWorkerLifecycle),
             typeof(PressureProfilePair),
             typeof(PressureVerificationPair),
@@ -131,7 +131,9 @@ public sealed class VoxelSharedContractTests
             typeof(PressureMatrixCheckpoint),
             typeof(AtomicPressureArtifactFile),
             typeof(PressureMatrixReport),
-            typeof(PressureMatrixFailureReport)
+            typeof(PressureProfileGateFailure),
+            typeof(PressureMatrixCleanupState),
+            typeof(PressureMatrixGateFailureReport)
         ];
 
         Assembly assembly = typeof(FaceRecord).Assembly;
@@ -335,15 +337,15 @@ public sealed class VoxelSharedContractTests
             pressureHarness,
             StringComparison.Ordinal);
         Assert.Contains(
-            "private const int MinimumPreparationPassCount = 6;",
+            "private const int MeasurementPreparationPassCount = 6;",
             pressureHarness,
             StringComparison.Ordinal);
         Assert.Contains(
-            "private const int MaximumPreparationPassCount = 50;",
+            "private const int TimedMeasurementRequestOrdinal = 11;",
             pressureHarness,
             StringComparison.Ordinal);
-        Assert.Contains(
-            "private const int RequiredPreparationFluctuationCount = 4;",
+        Assert.DoesNotContain(
+            "PressurePreparationPolicy",
             pressureHarness,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -351,21 +353,43 @@ public sealed class VoxelSharedContractTests
             pressureHarness,
             StringComparison.Ordinal);
         Assert.Contains(
-            "WritePreparationFailureReportAsync(",
+            "attemptIndex < MeasurementPreparationPassCount",
             pressureHarness,
             StringComparison.Ordinal);
-        Assert.Equal(
-            2,
-            pressureHarness.Split(
-                "if (safePreparation.Assessment.Accepted)",
-                StringSplitOptions.None).Length - 1);
-        Assert.Equal(
-            2,
-            pressureHarness.Split(
-                "if (namPreparation.Assessment.Accepted)",
-                StringSplitOptions.None).Length - 1);
         Assert.Contains(
-            "return 4;",
+            "safePreparation.Attempts.Count\n                    == MeasurementPreparationPassCount",
+            pressureHarness,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "namPreparation.Attempts.Count\n                    == MeasurementPreparationPassCount",
+            pressureHarness,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "safeTimedRequestOrdinal\n                    != TimedMeasurementRequestOrdinal",
+            pressureHarness,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "namTimedRequestOrdinal\n                    != TimedMeasurementRequestOrdinal",
+            pressureHarness,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "WriteProfileGateFailureReportAsync(",
+            pressureHarness,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "return ProfileGateFailureExitCode;",
+            pressureHarness,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "DOTNET_TieredCompilation=0",
+            pressureHarness,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "DOTNET_TieredPGO=0",
+            pressureHarness,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "PressureCompilationPolicy.HasEquivalentDisabledTiering(",
             pressureHarness,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -740,93 +764,10 @@ public sealed class VoxelSharedContractTests
     }
 
     [Fact]
-    public void PreparationPolicyRequiresSixObservationsAndFourFluctuations()
+    public void PreparationMetadataUsesEqualFixedCountsAndOrdinalEleven()
     {
-        PressurePreparationAssessment shortSeries =
-            PressurePreparationPolicy.Evaluate(
-                [10, 9, 10, 9, 10],
-                6,
-                50,
-                4);
-        PressurePreparationAssessment accepted =
-            PressurePreparationPolicy.Evaluate(
-                [10, 9, 10, 9, 10, 9],
-                6,
-                50,
-                4);
-
-        Assert.False(shortSeries.MinimumReached);
-        Assert.False(shortSeries.Accepted);
-        Assert.True(shortSeries.ShouldContinue);
-        Assert.True(accepted.MinimumReached);
-        Assert.Equal(4, accepted.FluctuationCount);
-        Assert.True(accepted.FluctuationTargetReached);
-        Assert.True(accepted.Accepted);
-        Assert.False(accepted.ShouldContinue);
-    }
-
-    [Fact]
-    public void PreparationPolicyRejectsMonotonicSeriesAtMaximum()
-    {
-        double[] increasing = Enumerable.Range(1, 50)
-            .Select(static value => (double)value)
-            .ToArray();
-        double[] decreasing = Enumerable.Range(1, 50)
-            .Select(static value => (double)(51 - value))
-            .ToArray();
-        PressurePreparationAssessment increasingAssessment =
-            PressurePreparationPolicy.Evaluate(
-                increasing,
-                6,
-                50,
-                4);
-        PressurePreparationAssessment decreasingAssessment =
-            PressurePreparationPolicy.Evaluate(
-                decreasing,
-                6,
-                50,
-                4);
-
-        Assert.True(increasingAssessment.MaximumReached);
-        Assert.Equal(1, increasingAssessment.FluctuationCount);
-        Assert.False(increasingAssessment.FluctuationTargetReached);
-        Assert.True(increasingAssessment.Exhausted);
-        Assert.False(increasingAssessment.Accepted);
-        Assert.False(increasingAssessment.ShouldContinue);
-        Assert.True(decreasingAssessment.MaximumReached);
-        Assert.Equal(0, decreasingAssessment.FluctuationCount);
-        Assert.False(decreasingAssessment.FluctuationTargetReached);
-        Assert.True(decreasingAssessment.Exhausted);
-        Assert.False(decreasingAssessment.Accepted);
-        Assert.False(decreasingAssessment.ShouldContinue);
-        Assert.Throws<ArgumentOutOfRangeException>(
-            () => PressurePreparationPolicy.Evaluate(
-                Enumerable.Range(1, 51)
-                    .Select(static value => (double)value)
-                    .ToArray(),
-                6,
-                50,
-                4));
-    }
-
-    [Fact]
-    public void PreparationMetadataRoundTripsEveryAttemptAndAssessment()
-    {
-        PressurePreparationAssessment accepted =
-            PressurePreparationPolicy.Evaluate(
-                [10, 9, 10, 9, 10, 9],
-                6,
-                50,
-                4);
         PressureImplementationObservation[] attempts =
-        [
-            default,
-            default,
-            default,
-            default,
-            default,
-            default
-        ];
+            new PressureImplementationObservation[6];
         PressureMeasurementPreparation preparation = new(
             1000,
             2_684_354_560,
@@ -837,11 +778,9 @@ public sealed class VoxelSharedContractTests
             true,
             attempts,
             attempts,
-            accepted,
-            accepted,
             6,
-            50,
-            4);
+            11,
+            11);
 
         string json = JsonSerializer.Serialize(
             preparation,
@@ -853,100 +792,135 @@ public sealed class VoxelSharedContractTests
 
         Assert.Equal(6, roundTrip.SafeAttempts?.Count);
         Assert.Equal(6, roundTrip.NamAttempts?.Count);
-        Assert.Equal(accepted, roundTrip.SafeAssessment);
-        Assert.Equal(accepted, roundTrip.NamAssessment);
-        Assert.Equal(6, roundTrip.MinimumAttemptCount);
-        Assert.Equal(50, roundTrip.MaximumAttemptCount);
-        Assert.Equal(4, roundTrip.RequiredFluctuationCount);
+        Assert.Equal(6, roundTrip.RequiredAttemptCount);
+        Assert.Equal(11, roundTrip.SafeTimedRequestOrdinal);
+        Assert.Equal(11, roundTrip.NamTimedRequestOrdinal);
         Assert.True(roundTrip.SafeTimedRequestStarted);
         Assert.True(roundTrip.NamTimedRequestStarted);
-        Assert.Null(roundTrip.FailureMessage);
+    }
 
-        double[] monotonic = Enumerable.Range(1, 50)
-            .Select(static value => (double)value)
-            .ToArray();
-        PressurePreparationAssessment exhausted =
-            PressurePreparationPolicy.Evaluate(
-                monotonic,
-                6,
-                50,
-                4);
-        PressureImplementationObservation[] failureAttempts =
-            new PressureImplementationObservation[50];
-        PressureMeasurementPreparation failedMetadata = new(
-            1000,
-            2_684_354_560,
-            500,
-            default,
-            default,
-            false,
-            false,
-            failureAttempts,
-            [],
-            exhausted,
-            default,
-            6,
-            50,
-            4,
-            false,
-            false,
-            "Preparation failed.");
-        PressureProfileInitialization initialization = new(
-            0,
-            DateTime.UnixEpoch,
-            60,
-            "safe",
-            "nam",
-            4,
-            1000,
-            2_684_354_560,
-            failedMetadata);
-        PressureProfilePair failedProfile = new(
-            1000,
-            268_435_456,
-            2_684_354_560,
-            initialization,
-            [default],
-            default,
-            [initialization]);
-        PressureMatrixFailureReport failureReport = new(
-            "commit",
-            "image",
-            [],
-            268_435_456,
-            6000,
-            17,
-            [1000, 10000],
-            [],
-            failedProfile,
-            new PressurePreparationFailure(
-                "SafeCSharp",
-                1000,
-                0,
-                "Preparation failed."),
-            [],
-            [],
-            DateTime.UnixEpoch,
-            DateTime.UnixEpoch,
-            60);
-        string failureJson = JsonSerializer.Serialize(
-            failureReport,
-            VoxelJson.Options);
-        PressureMatrixFailureReport failureRoundTrip =
-            JsonSerializer.Deserialize<PressureMatrixFailureReport>(
-                failureJson,
+    [Fact]
+    public void CompilationPolicyRequiresEqualDisabledTiering()
+    {
+        PressureRuntimeSnapshot disabled =
+            default(PressureRuntimeSnapshot) with
+            {
+                CompilationConfiguration =
+                    new PressureCompilationConfiguration("0", "0")
+            };
+        PressureRuntimeSnapshot enabled = disabled with
+        {
+            CompilationConfiguration =
+                new PressureCompilationConfiguration("1", "1")
+        };
+        PressureRuntimeSnapshot missing = disabled with
+        {
+            CompilationConfiguration =
+                new PressureCompilationConfiguration(string.Empty, string.Empty)
+        };
+        PressureRuntimeSnapshot unequal = disabled with
+        {
+            CompilationConfiguration =
+                new PressureCompilationConfiguration("0", "1")
+        };
+
+        Assert.True(
+            PressureCompilationPolicy.HasEquivalentDisabledTiering(
+                disabled,
+                disabled));
+        Assert.False(
+            PressureCompilationPolicy.HasEquivalentDisabledTiering(
+                enabled,
+                disabled));
+        Assert.False(
+            PressureCompilationPolicy.HasEquivalentDisabledTiering(
+                disabled,
+                enabled));
+        Assert.False(
+            PressureCompilationPolicy.HasEquivalentDisabledTiering(
+                missing,
+                disabled));
+        Assert.False(
+            PressureCompilationPolicy.HasEquivalentDisabledTiering(
+                disabled,
+                missing));
+        Assert.False(
+            PressureCompilationPolicy.HasEquivalentDisabledTiering(
+                disabled,
+                unequal));
+
+        string json = JsonSerializer.Serialize(disabled, VoxelJson.Options);
+        PressureRuntimeSnapshot roundTrip =
+            JsonSerializer.Deserialize<PressureRuntimeSnapshot>(
+                json,
                 VoxelJson.Options);
-
-        PressureMeasurementPreparation? failedPreparation =
-            failureRoundTrip.FailedProfile.SampleInitializations?[0]
-                .MeasurementPreparation;
-        Assert.Equal(50, failedPreparation?.SafeAttempts?.Count);
-        Assert.Empty(failedPreparation?.NamAttempts ?? []);
-        Assert.True(failedPreparation?.SafeAssessment.Exhausted);
-        Assert.False(failedPreparation?.SafeTimedRequestStarted);
         Assert.Equal(
-            "Preparation failed.",
-            failureRoundTrip.Failure.Message);
+            "0",
+            roundTrip.CompilationConfiguration.TieredCompilation);
+        Assert.Equal(
+            "0",
+            roundTrip.CompilationConfiguration.TieredPgo);
+    }
+
+    [Fact]
+    public void EnforcedProfileFailureStopsProfileContinuation()
+    {
+        PressurePairedStatistics failed = default;
+        PressurePairedStatistics passed = failed with
+        {
+            GatePassed = true
+        };
+
+        Assert.False(
+            PressureProfileContinuationPolicy.CanStartNextProfile(
+                enforce: true,
+                failed));
+        Assert.True(
+            PressureProfileContinuationPolicy.CanStartNextProfile(
+                enforce: true,
+                passed));
+        Assert.True(
+            PressureProfileContinuationPolicy.CanStartNextProfile(
+                enforce: false,
+                failed));
+    }
+
+    [Fact]
+    public void GateFailurePathReturnsBeforeVerificationOrAnotherProfile()
+    {
+        string root = FindRepositoryRoot();
+        string harness = File.ReadAllText(
+            Path.Combine(
+                root,
+                ".Demos",
+                "01-VoxelChunkPipeline",
+                "Harness",
+                "PressureMatrixHarness.cs"));
+        int profileLoop = harness.IndexOf(
+            "for (int profileOrdinal = 0;",
+            StringComparison.Ordinal);
+        int gateCheck = harness.IndexOf(
+            "if (!PressureProfileContinuationPolicy.CanStartNextProfile(",
+            profileLoop,
+            StringComparison.Ordinal);
+        int terminalWrite = harness.IndexOf(
+            "await WriteProfileGateFailureReportAsync(",
+            gateCheck,
+            StringComparison.Ordinal);
+        int terminalReturn = harness.IndexOf(
+            "return ProfileGateFailureExitCode;",
+            terminalWrite,
+            StringComparison.Ordinal);
+        int verification = harness.IndexOf(
+            "int verificationPercent =",
+            terminalReturn,
+            StringComparison.Ordinal);
+
+        Assert.True(profileLoop >= 0);
+        Assert.True(gateCheck > profileLoop);
+        Assert.True(terminalWrite > gateCheck);
+        Assert.True(terminalReturn > terminalWrite);
+        Assert.True(verification > terminalReturn);
     }
 
     [Fact]
@@ -996,12 +970,6 @@ public sealed class VoxelSharedContractTests
                         ProfileElapsedMilliseconds = milliseconds
                     })
             .ToArray();
-        PressurePreparationAssessment assessment =
-            PressurePreparationPolicy.Evaluate(
-                elapsed,
-                6,
-                50,
-                4);
         PressurePreparationSeriesCheckpoint preparation = new(
             3,
             1,
@@ -1011,7 +979,8 @@ public sealed class VoxelSharedContractTests
             26_843_545_600,
             57,
             attempts,
-            assessment);
+            6,
+            true);
         PressurePreparationSeriesCheckpoint safePreparation =
             preparation with
             {
@@ -1063,8 +1032,10 @@ public sealed class VoxelSharedContractTests
             attempts.Length,
             roundTrip.CurrentPair?.Preparations[1].Attempts.Count);
         Assert.Equal(
-            assessment,
-            roundTrip.CurrentPair?.Preparations[1].Assessment);
+            6,
+            roundTrip.CurrentPair?.Preparations[1].RequiredAttemptCount);
+        Assert.True(
+            roundTrip.CurrentPair?.Preparations[1].Complete);
         Assert.Equal(
             "SafeCSharp",
             roundTrip.CurrentPair?.SafeObservation?.Implementation);
@@ -1159,45 +1130,103 @@ public sealed class VoxelSharedContractTests
         string path = Path.Combine(directory, "final.json");
         try
         {
+            PressureMatrixCheckpoint checkpoint =
+                CreatePressureCheckpoint(sequence: 6);
             await AtomicPressureArtifactFile.WriteJsonAsync(
                 path,
-                CreatePressureCheckpoint(sequence: 6));
+                checkpoint);
+            PressurePairedStatistics statistics = new(
+                SampleCount: 6,
+                MeanSpeedup: 1.9769,
+                ConfidenceLower95: 1.3992,
+                ConfidenceUpper95: 2.5546,
+                SafeMeanMillisecondsPerGiB: 150,
+                NamMeanMillisecondsPerGiB: 75,
+                SafeP95MillisecondsPerGiB: 160,
+                SafeP99MillisecondsPerGiB: 165,
+                NamP95MillisecondsPerGiB: 80,
+                NamP99MillisecondsPerGiB: 82,
+                PressureQualified: true,
+                DeadlineGatePassed: true,
+                CorrectnessGatePassed: true,
+                PerformanceGatePassed: false,
+                GatePassed: false,
+                Interpretation: "The profile failed its mean gate.");
             PressureProfilePair failedProfile = new(
                 1000,
                 268_435_456,
                 2_684_354_560,
                 default,
                 [],
-                default);
-            PressureMatrixFailureReport report = new(
+                statistics);
+            PressureProfileGateFailure failure = new(
+                1000,
+                6,
+                2.00,
+                1.00,
+                statistics);
+            PressureWorkerLifecycle lifecycle = new(
+                "SafeCSharp",
+                "safe-container",
+                "safe-id",
+                41,
+                "/cgroup/safe",
+                default,
+                1,
+                11,
+                11,
+                true,
+                true,
+                DateTime.UnixEpoch);
+            PressureMatrixGateFailureReport report = new(
                 "final-commit",
                 "final-image",
-                [],
-                268_435_456,
-                6000,
-                17,
-                [1000],
-                [],
+                checkpoint.BinaryIdentities,
+                checkpoint.Options,
+                [failedProfile],
                 failedProfile,
-                new PressurePreparationFailure(
-                    "NAM",
+                failure,
+                ["docker run safe", "docker run nam"],
+                [lifecycle],
+                new PressureMatrixCleanupState(
+                    1,
+                    1,
+                    true,
+                    true,
+                    true,
+                    0),
+                new PressureCurrentProfileCheckpoint(
                     1000,
-                    0,
-                    "Preparation failed."),
-                [],
-                [],
+                    268_435_456,
+                    2_684_354_560,
+                    [],
+                    []),
+                null,
                 DateTime.UnixEpoch,
                 DateTime.UnixEpoch.AddSeconds(1),
+                500,
+                250,
                 1000);
 
             await AtomicPressureArtifactFile.WriteJsonAsync(path, report);
 
             string json = await File.ReadAllTextAsync(path);
-            PressureMatrixFailureReport roundTrip =
-                JsonSerializer.Deserialize<PressureMatrixFailureReport>(
+            PressureMatrixGateFailureReport roundTrip =
+                JsonSerializer.Deserialize<PressureMatrixGateFailureReport>(
                     json,
                     VoxelJson.Options);
             Assert.Equal("final-commit", roundTrip.GitCommit);
+            Assert.Equal(1.9769, roundTrip.Failure.Actual.MeanSpeedup);
+            Assert.Equal(2.00, roundTrip.Failure.RequiredMeanSpeedup);
+            Assert.Equal(1, roundTrip.Cleanup.RecordedWorkerLifecycleCount);
+            Assert.True(roundTrip.Cleanup.LifecycleCountPassed);
+            Assert.True(roundTrip.Cleanup.EveryContainerAbsent);
+            Assert.Equal(2, roundTrip.Commands.Count);
+            Assert.Single(roundTrip.WorkerLifecycles);
+            Assert.Single(roundTrip.BinaryIdentities);
+            Assert.Equal(
+                1000,
+                roundTrip.PreservedCurrentProfile?.ProfilePercent);
             Assert.DoesNotContain(
                 "\"formatVersion\"",
                 json,
@@ -3007,7 +3036,7 @@ public sealed class VoxelSharedContractTests
             6,
             [1000, 10000],
             120,
-            80_220,
+            16_860,
             true);
         return new PressureMatrixCheckpoint(
             1,

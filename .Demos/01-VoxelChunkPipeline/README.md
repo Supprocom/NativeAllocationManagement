@@ -83,6 +83,9 @@ complete build time must each remain within 1.10 times the Safe result.
 Runtime containers receive equal 256 MiB memory limits, swap policy, CPU
 access, PID limits, GC mode, and GC heap limits.
 
+Both containers disable tiered compilation and dynamic tiered PGO. Each worker
+records these settings in its startup runtime data.
+
 The default profiles are 50, 100, 200, 500, 1000, and 10000 percent of the
 binary cgroup cap.
 
@@ -95,14 +98,11 @@ sample counts because each implementation must run first equally often.
 Each paired sample uses new Safe and NAM containers. Startup and four fixed
 1000-percent warmup passes occur outside measured processing.
 
-Each worker then runs from six through 50 selected-profile preparation
-requests. The host applies a bounded elapsed-time fluctuation policy.
+Each worker then runs six selected-profile preparation requests. The timed
+request always has request ordinal 11.
 
-The series stops after four fluctuations. If it has fewer than four after 50
-requests, preparation fails and the timed request does not start.
-
-The failure artifact keeps every preparation observation. A successful timed
-request starts immediately after its accepted preparation series.
+Safe and NAM use equal preparation counts. Elapsed-time noise does not change
+the count or accept a different runtime state.
 
 The output path contains an atomic progress checkpoint until the run
 completes. The harness writes a checkpoint after each preparation series.
@@ -113,6 +113,12 @@ commands, binary identities, and completed worker lifecycles.
 
 Each preparation checkpoint includes all attempts and the current worker
 state. The final report atomically replaces the latest checkpoint.
+
+In enforce mode, the harness evaluates each completed profile immediately. A
+failed gate writes a terminal artifact before another profile can start.
+
+The terminal artifact records exact gates, identities, commands, lifecycles,
+cleanup state, and the preserved profile state.
 
 The worker resets all logical state after each request. The harness removes
 both sample containers before it starts the next pair.
@@ -173,7 +179,7 @@ The wrapper stops a harness that has no activity for 120 seconds. This limit
 exceeds the longest internal operation limit.
 
 The wrapper derives a separate absolute fail-safe from the selected profiles,
-sample count, warmups, preparation maximum, and operation limits.
+sample count, fixed warmups, fixed preparations, and operation limits.
 
 A smaller supplied fail-safe is invalid. A timeout keeps the latest checkpoint
 and writes its path, SHA-256, standard output, and standard error.

@@ -49,7 +49,8 @@ public readonly record struct PressurePreparationSeriesCheckpoint(
     long RequestedCumulativeDemandBytes,
     double ElapsedMilliseconds,
     IReadOnlyList<PressureImplementationObservation> Attempts,
-    PressurePreparationAssessment Assessment);
+    int RequiredAttemptCount,
+    bool Complete);
 
 public readonly record struct PressureCurrentPairCheckpoint(
     int PairOrdinal,

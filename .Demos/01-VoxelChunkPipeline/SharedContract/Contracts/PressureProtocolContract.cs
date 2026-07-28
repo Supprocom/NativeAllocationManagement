@@ -190,6 +190,18 @@ public readonly record struct PressureChunkEvidence(
     string ExactEvidenceHash,
     bool ExactVerificationPassed);
 
+public readonly record struct PressureCompilationConfiguration(
+    string TieredCompilation,
+    string TieredPgo)
+{
+    public static PressureCompilationConfiguration Capture() =>
+        new(
+            Environment.GetEnvironmentVariable(
+                "DOTNET_TieredCompilation") ?? string.Empty,
+            Environment.GetEnvironmentVariable(
+                "DOTNET_TieredPGO") ?? string.Empty);
+}
+
 public readonly record struct PressureRuntimeSnapshot(
     DateTime Utc,
     long TotalAllocatedBytes,
@@ -208,7 +220,8 @@ public readonly record struct PressureRuntimeSnapshot(
     double ProcessCpuMilliseconds,
     int ProcessorCount,
     CgroupMemorySnapshot Cgroup,
-    IReadOnlyDictionary<string, string> GcConfiguration)
+    IReadOnlyDictionary<string, string> GcConfiguration,
+    PressureCompilationConfiguration CompilationConfiguration = default)
 {
     public static PressureRuntimeSnapshot Capture()
     {
@@ -240,8 +253,43 @@ public readonly record struct PressureRuntimeSnapshot(
             process.TotalProcessorTime.TotalMilliseconds,
             Environment.ProcessorCount,
             CgroupMemorySnapshot.Read(),
-            configuration);
+            configuration,
+            PressureCompilationConfiguration.Capture());
     }
+}
+
+public static class PressureCompilationPolicy
+{
+    public static bool HasEquivalentDisabledTiering(
+        PressureRuntimeSnapshot safe,
+        PressureRuntimeSnapshot nam)
+    {
+        PressureCompilationConfiguration safeConfiguration =
+            safe.CompilationConfiguration;
+        PressureCompilationConfiguration namConfiguration =
+            nam.CompilationConfiguration;
+        return IsDisabled(safeConfiguration)
+            && IsDisabled(namConfiguration)
+            && string.Equals(
+                safeConfiguration.TieredCompilation,
+                namConfiguration.TieredCompilation,
+                StringComparison.Ordinal)
+            && string.Equals(
+                safeConfiguration.TieredPgo,
+                namConfiguration.TieredPgo,
+                StringComparison.Ordinal);
+    }
+
+    private static bool IsDisabled(
+        PressureCompilationConfiguration configuration) =>
+        string.Equals(
+            configuration.TieredCompilation,
+            "0",
+            StringComparison.Ordinal)
+        && string.Equals(
+            configuration.TieredPgo,
+            "0",
+            StringComparison.Ordinal);
 }
 
 public readonly record struct PressureProfileResult(

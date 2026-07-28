@@ -12,9 +12,9 @@ internal static class PressureMatrixHarness
     private const int WarmupProfilePercent = 1000;
     private const int StressProfilePercent = 10000;
     private const int StressProfileSamples = 6;
-    private const int MinimumPreparationPassCount = 6;
-    private const int MaximumPreparationPassCount = 50;
-    private const int RequiredPreparationFluctuationCount = 4;
+    private const int MeasurementPreparationPassCount = 6;
+    private const int TimedMeasurementRequestOrdinal = 11;
+    private const int ProfileGateFailureExitCode = 5;
     private const int NonMeasuredOperationTimeoutSeconds = 60;
     private static readonly int[] ProfilePercents =
     [
@@ -164,41 +164,6 @@ internal static class PressureMatrixHarness
                 totalMeasuredMilliseconds +=
                     pair.Observation.Nam.ProfileElapsedMilliseconds
                         ?? pair.Observation.Nam.ElapsedLowerBoundMilliseconds;
-                if (pair.PreparationFailure is { } preparationFailure)
-                {
-                    PressurePairedStatistics failureStatistics =
-                        SummarizeProfile(
-                            percent,
-                            options,
-                            observations);
-                    PressureProfilePair failedProfile = new(
-                        percent,
-                        options.CgroupCapBytes,
-                        target,
-                        sampleInitializations[0],
-                        observations,
-                        failureStatistics,
-                        sampleInitializations);
-                    await WritePreparationFailureReportAsync(
-                        options,
-                        commit,
-                        imageId,
-                        binaryIdentities,
-                        profiles,
-                        failedProfile,
-                        preparationFailure,
-                        commands,
-                        workerLifecycles,
-                        startedUtc,
-                        endToEndStart,
-                        checkpointWriter);
-                    Console.WriteLine(
-                        JsonSerializer.Serialize(
-                            preparationFailure,
-                            VoxelJson.Options));
-                    Console.WriteLine(options.OutputPath);
-                    return 4;
-                }
             }
 
             if (!PressureSamplePolicy.HasBalancedOrder(observations))
@@ -211,14 +176,15 @@ internal static class PressureMatrixHarness
                 percent,
                 options,
                 observations);
-            profiles.Add(new PressureProfilePair(
+            PressureProfilePair profile = new(
                 percent,
                 options.CgroupCapBytes,
                 target,
                 sampleInitializations[0],
                 observations,
                 statistics,
-                sampleInitializations));
+                sampleInitializations);
+            profiles.Add(profile);
             await checkpointWriter.WriteCheckpointAsync(
                 profiles,
                 currentProfile: null,
@@ -226,6 +192,37 @@ internal static class PressureMatrixHarness
                 commands,
                 workerLifecycles,
                 activeWorkers: []);
+            if (!PressureProfileContinuationPolicy.CanStartNextProfile(
+                    options.Enforce,
+                    statistics))
+            {
+                PressureProfileGateFailure failure =
+                    CreateProfileGateFailure(
+                        profile,
+                        samplesInProfile);
+                await WriteProfileGateFailureReportAsync(
+                    options,
+                    commit,
+                    imageId,
+                    binaryIdentities,
+                    profiles,
+                    profile,
+                    failure,
+                    commands,
+                    workerLifecycles,
+                    startedUtc,
+                    endToEndStart,
+                    totalMeasuredMilliseconds,
+                    totalInitializationMilliseconds,
+                    pairOrdinal,
+                    checkpointWriter);
+                Console.WriteLine(
+                    JsonSerializer.Serialize(
+                        failure,
+                        VoxelJson.Options));
+                Console.WriteLine(options.OutputPath);
+                return ProfileGateFailureExitCode;
+            }
         }
 
         if (workerLifecycles.Any(
@@ -288,6 +285,14 @@ internal static class PressureMatrixHarness
             await safeVerificationStart;
         await using DockerWorker namVerificationWorker =
             await namVerificationStart;
+        if (!PressureCompilationPolicy.HasEquivalentDisabledTiering(
+                safeVerificationWorker.StartupRuntime,
+                namVerificationWorker.StartupRuntime))
+        {
+            throw new InvalidOperationException(
+                "Both workers must disable tiered compilation and tiered PGO.");
+        }
+
         await Task.WhenAll(
             safeVerificationWorker.WarmAsync(
                 options,
@@ -426,12 +431,14 @@ internal static class PressureMatrixHarness
             ["pairExecution"] =
                 "sequential with an even alternating order in each profile",
             ["profileInitialization"] =
-                "fresh containers per pair, four fixed warmups, and a bounded measured-path preparation series per implementation",
+                "fresh containers per pair, four fixed warmups, and six fixed measured-path preparations per implementation",
             ["crossProfileProcessState"] = "none",
             ["crossSampleProcessState"] = "none",
             ["memorySwapPolicy"] = "memory-swap equals memory; swappiness 0",
             ["gcServer"] = "1",
             ["gcHeapCount"] = "4",
+            ["tieredCompilation"] = "0",
+            ["tieredPgo"] = "0",
             ["pipelineWorkersPerImplementation"] = "1",
             ["safeTransientArrayPoolArraysPerBucket"] = "1",
             ["safeAdmission"] = "runtime tracked ArrayPool bucket budget",
@@ -444,7 +451,7 @@ internal static class PressureMatrixHarness
                 $"{StressProfilePercent} percent uses "
                 + $"{StressProfileSamples} complete paired samples",
             ["measurementPreparation"] =
-                "each timed request starts only after four preparation fluctuations. Exhaustion at 50 writes a failure artifact",
+                "each timed request has ordinal 11 after four warmups and six selected-profile preparations",
             ["measurementEvidence"] =
                 "predeclared plan and terminal completion without per-chunk evidence",
             ["measurementBoundary"] =
@@ -479,8 +486,8 @@ internal static class PressureMatrixHarness
                 "The host samples Docker and cgroup metrics outside each worker.",
                 "The child does not run a benchmark timer or scan allocator statistics during processing.",
                 "Measured child results contain no per-chunk evidence.",
-                "Each paired sample uses new containers, four fixed warmups, and from six through 50 measured-path preparations.",
-                "Preparation exhaustion writes every attempt and does not start the timed request.",
+                "Each paired sample uses new containers, four fixed warmups, and six measured-path preparations.",
+                "Both workers disable tiered compilation and tiered PGO.",
                 "The 10000-percent stress profile uses six complete paired samples.",
                 "Each measured profile materializes every output and completes its mapped handoff.",
                 "One exact maximum-demand run follows measurement. It reads every output byte."
@@ -504,35 +511,74 @@ internal static class PressureMatrixHarness
             observations.ToArray(),
             initializations.ToArray());
 
-    private static async Task WritePreparationFailureReportAsync(
+    private static PressureProfileGateFailure CreateProfileGateFailure(
+        PressureProfilePair failedProfile,
+        int requiredSampleCount) =>
+        new(
+            failedProfile.ProfilePercent,
+            requiredSampleCount,
+            failedProfile.ProfilePercent <= 100
+                ? 1.00
+                : RequiredSpeedup(failedProfile.ProfilePercent),
+            1.00,
+            failedProfile.Statistics);
+
+    private static async Task WriteProfileGateFailureReportAsync(
         Options options,
         string commit,
         string imageId,
         IReadOnlyList<PressureBinaryIdentity> binaryIdentities,
-        IReadOnlyList<PressureProfilePair> completedProfiles,
+        IReadOnlyList<PressureProfilePair> profiles,
         PressureProfilePair failedProfile,
-        PressurePreparationFailure failure,
+        PressureProfileGateFailure failure,
         IReadOnlyList<string> commands,
         IReadOnlyList<PressureWorkerLifecycle> workerLifecycles,
         DateTime startedUtc,
         long endToEndStart,
+        double totalMeasuredMilliseconds,
+        double totalInitializationMilliseconds,
+        int completedPairCount,
         MatrixCheckpointWriter checkpointWriter)
     {
-        PressureMatrixFailureReport report = new(
+        int expectedLifecycleCount = checked(completedPairCount * 2);
+        int activeWorkerCount = workerLifecycles.Count(
+            static lifecycle =>
+                !lifecycle.DisposalCompleted
+                || !lifecycle.ContainerAbsentAfterDisposal);
+        PressureCurrentProfileCheckpoint preservedCurrentProfile = new(
+            failedProfile.ProfilePercent,
+            failedProfile.CgroupCapBytes,
+            failedProfile.RequestedCumulativeDemandBytes,
+            failedProfile.Observations.ToArray(),
+            (failedProfile.SampleInitializations
+                ?? [failedProfile.Initialization]).ToArray());
+        PressureMatrixCleanupState cleanup = new(
+            expectedLifecycleCount,
+            workerLifecycles.Count,
+            workerLifecycles.Count == expectedLifecycleCount,
+            workerLifecycles.All(
+                static lifecycle => lifecycle.DisposalCompleted),
+            workerLifecycles.All(
+                static lifecycle =>
+                    lifecycle.ContainerAbsentAfterDisposal),
+            activeWorkerCount);
+        PressureMatrixGateFailureReport report = new(
             commit,
             imageId,
             binaryIdentities,
-            options.CgroupCapBytes,
-            options.DeadlineMilliseconds,
-            options.Seed,
-            options.ProfilePercents,
-            completedProfiles.ToArray(),
+            options.ToSnapshot(),
+            profiles.ToArray(),
             failedProfile,
             failure,
             commands.ToArray(),
             workerLifecycles.ToArray(),
+            cleanup,
+            preservedCurrentProfile,
+            PreservedCurrentPair: null,
             startedUtc,
             DateTime.UtcNow,
+            totalMeasuredMilliseconds,
+            totalInitializationMilliseconds,
             Stopwatch.GetElapsedTime(
                 endToEndStart).TotalMilliseconds);
         await checkpointWriter.WriteFinalReportAsync(report);
@@ -595,9 +641,10 @@ internal static class PressureMatrixHarness
         PreparationSeries namPreparation = PreparationSeries.Empty;
         PressureImplementationObservation safeObservation = default;
         PressureImplementationObservation namObservation = default;
-        PressurePreparationFailure? preparationFailure = null;
         bool safeTimedRequestStarted = false;
         bool namTimedRequestStarted = false;
+        long safeTimedRequestOrdinal = 0;
+        long namTimedRequestOrdinal = 0;
         bool equivalentMeasuredPath = false;
         bool preparationReset = false;
         double initializationMilliseconds = 0;
@@ -640,13 +687,23 @@ internal static class PressureMatrixHarness
                 request.RequestedCumulativeDemandBytes,
                 series.ElapsedMilliseconds,
                 series.Attempts,
-                series.Assessment);
+                MeasurementPreparationPassCount,
+                series.Attempts.Count
+                    == MeasurementPreparationPassCount);
             completedPreparations.Add(preparation);
             await CheckpointCurrentPairAsync();
         }
 
         try
         {
+            if (!PressureCompilationPolicy.HasEquivalentDisabledTiering(
+                    safe.StartupRuntime,
+                    nam.StartupRuntime))
+            {
+                throw new InvalidOperationException(
+                    "Both workers must disable tiered compilation and tiered PGO.");
+            }
+
             await Task.WhenAll(
                 safe.WarmAsync(
                     options,
@@ -668,52 +725,29 @@ internal static class PressureMatrixHarness
                 await CheckpointPreparationAsync(
                     safe,
                     safePreparation);
-                if (safePreparation.Assessment.Accepted)
-                {
-                    safeObservation = await safe.RunProfileAsync(
-                        request,
-                        options);
-                    safeTimedRequestStarted = true;
-                    await CheckpointCurrentPairAsync();
-                }
-                else
-                {
-                    preparationFailure = CreatePreparationFailure(
-                        safe,
-                        request,
-                        sampleIndex,
-                        safePreparation);
-                }
+                safeObservation = await safe.RunProfileAsync(
+                    request,
+                    options);
+                safeTimedRequestStarted = true;
+                safeTimedRequestOrdinal = safe.CurrentRequestOrdinal;
+                await CheckpointCurrentPairAsync();
 
-                if (preparationFailure is null)
-                {
-                    namPreparation = await PrepareMeasurementSeriesAsync(
-                        nam,
-                        request,
-                        options,
-                        checkpointWriter.SignalActivity);
-                    preparationMilliseconds +=
-                        namPreparation.ElapsedMilliseconds;
-                    await CheckpointPreparationAsync(
-                        nam,
-                        namPreparation);
-                    if (namPreparation.Assessment.Accepted)
-                    {
-                        namObservation = await nam.RunProfileAsync(
-                            request,
-                            options);
-                        namTimedRequestStarted = true;
-                        await CheckpointCurrentPairAsync();
-                    }
-                    else
-                    {
-                        preparationFailure = CreatePreparationFailure(
-                            nam,
-                            request,
-                            sampleIndex,
-                            namPreparation);
-                    }
-                }
+                namPreparation = await PrepareMeasurementSeriesAsync(
+                    nam,
+                    request,
+                    options,
+                    checkpointWriter.SignalActivity);
+                preparationMilliseconds +=
+                    namPreparation.ElapsedMilliseconds;
+                await CheckpointPreparationAsync(
+                    nam,
+                    namPreparation);
+                namObservation = await nam.RunProfileAsync(
+                    request,
+                    options);
+                namTimedRequestStarted = true;
+                namTimedRequestOrdinal = nam.CurrentRequestOrdinal;
+                await CheckpointCurrentPairAsync();
             }
             else
             {
@@ -727,58 +761,37 @@ internal static class PressureMatrixHarness
                 await CheckpointPreparationAsync(
                     nam,
                     namPreparation);
-                if (namPreparation.Assessment.Accepted)
-                {
-                    namObservation = await nam.RunProfileAsync(
-                        request,
-                        options);
-                    namTimedRequestStarted = true;
-                    await CheckpointCurrentPairAsync();
-                }
-                else
-                {
-                    preparationFailure = CreatePreparationFailure(
-                        nam,
-                        request,
-                        sampleIndex,
-                        namPreparation);
-                }
+                namObservation = await nam.RunProfileAsync(
+                    request,
+                    options);
+                namTimedRequestStarted = true;
+                namTimedRequestOrdinal = nam.CurrentRequestOrdinal;
+                await CheckpointCurrentPairAsync();
 
-                if (preparationFailure is null)
-                {
-                    safePreparation = await PrepareMeasurementSeriesAsync(
-                        safe,
-                        request,
-                        options,
-                        checkpointWriter.SignalActivity);
-                    preparationMilliseconds +=
-                        safePreparation.ElapsedMilliseconds;
-                    await CheckpointPreparationAsync(
-                        safe,
-                        safePreparation);
-                    if (safePreparation.Assessment.Accepted)
-                    {
-                        safeObservation = await safe.RunProfileAsync(
-                            request,
-                            options);
-                        safeTimedRequestStarted = true;
-                        await CheckpointCurrentPairAsync();
-                    }
-                    else
-                    {
-                        preparationFailure = CreatePreparationFailure(
-                            safe,
-                            request,
-                            sampleIndex,
-                            safePreparation);
-                    }
-                }
+                safePreparation = await PrepareMeasurementSeriesAsync(
+                    safe,
+                    request,
+                    options,
+                    checkpointWriter.SignalActivity);
+                preparationMilliseconds +=
+                    safePreparation.ElapsedMilliseconds;
+                await CheckpointPreparationAsync(
+                    safe,
+                    safePreparation);
+                safeObservation = await safe.RunProfileAsync(
+                    request,
+                    options);
+                safeTimedRequestStarted = true;
+                safeTimedRequestOrdinal = safe.CurrentRequestOrdinal;
+                await CheckpointCurrentPairAsync();
             }
 
             initializationMilliseconds += preparationMilliseconds;
             equivalentMeasuredPath =
-                safePreparation.Attempts.Count > 0
-                && namPreparation.Attempts.Count > 0
+                safePreparation.Attempts.Count
+                    == MeasurementPreparationPassCount
+                && namPreparation.Attempts.Count
+                    == MeasurementPreparationPassCount
                 && PreparationPathPassed(
                     request,
                     safePreparation.Attempts[^1],
@@ -786,35 +799,15 @@ internal static class PressureMatrixHarness
             preparationReset =
                 PreparationSeriesResetPassed(safePreparation)
                 && PreparationSeriesResetPassed(namPreparation);
-            if (preparationFailure is null
-                && (!equivalentMeasuredPath
-                    || !preparationReset
-                    || !safePreparation.Assessment.Accepted
-                    || !namPreparation.Assessment.Accepted))
+            if (!equivalentMeasuredPath
+                || !preparationReset
+                || safeTimedRequestOrdinal
+                    != TimedMeasurementRequestOrdinal
+                || namTimedRequestOrdinal
+                    != TimedMeasurementRequestOrdinal)
             {
                 throw new InvalidOperationException(
                     "The isolated measurement preparation is not valid.");
-            }
-
-            if (preparationFailure is { } failure)
-            {
-                if (!safeTimedRequestStarted)
-                {
-                    safeObservation =
-                        CreatePreparationFailureObservation(
-                            safe,
-                            request,
-                            failure);
-                }
-
-                if (!namTimedRequestStarted)
-                {
-                    namObservation =
-                        CreatePreparationFailureObservation(
-                            nam,
-                            request,
-                            failure);
-                }
             }
         }
         finally
@@ -868,14 +861,11 @@ internal static class PressureMatrixHarness
                 preparationReset,
                 safePreparation.Attempts,
                 namPreparation.Attempts,
-                safePreparation.Assessment,
-                namPreparation.Assessment,
-                MinimumPreparationPassCount,
-                MaximumPreparationPassCount,
-                RequiredPreparationFluctuationCount,
+                MeasurementPreparationPassCount,
+                safeTimedRequestOrdinal,
+                namTimedRequestOrdinal,
                 safeTimedRequestStarted,
-                namTimedRequestStarted,
-                preparationFailure?.Message));
+                namTimedRequestStarted));
         PressurePairedObservation observation = new(
             sampleIndex,
             safeObservation,
@@ -884,10 +874,7 @@ internal static class PressureMatrixHarness
                 safeObservation.ChildResult,
                 namObservation.ChildResult),
             safeFirst);
-        return new IsolatedPairRun(
-            observation,
-            initialization,
-            preparationFailure);
+        return new IsolatedPairRun(observation, initialization);
     }
 
     private static async Task<PreparationSeries>
@@ -899,12 +886,9 @@ internal static class PressureMatrixHarness
     {
         long preparationStart = Stopwatch.GetTimestamp();
         List<PressureImplementationObservation> attempts =
-            new(MaximumPreparationPassCount);
-        List<double> elapsedMilliseconds =
-            new(MaximumPreparationPassCount);
-        PressurePreparationAssessment assessment = default;
+            new(MeasurementPreparationPassCount);
         for (int attemptIndex = 0;
-            attemptIndex < MaximumPreparationPassCount;
+            attemptIndex < MeasurementPreparationPassCount;
             attemptIndex++)
         {
             PressureImplementationObservation observation =
@@ -927,101 +911,19 @@ internal static class PressureMatrixHarness
             }
 
             attempts.Add(observation);
-            elapsedMilliseconds.Add(
-                observation.ProfileElapsedMilliseconds.Value);
-            assessment = PressurePreparationPolicy.Evaluate(
-                elapsedMilliseconds,
-                MinimumPreparationPassCount,
-                MaximumPreparationPassCount,
-                RequiredPreparationFluctuationCount);
             signalActivity();
-            if (!assessment.ShouldContinue)
-            {
-                break;
-            }
         }
 
         return new PreparationSeries(
             attempts.ToArray(),
-            assessment,
             Stopwatch.GetElapsedTime(
                 preparationStart).TotalMilliseconds);
     }
 
-    private static PressurePreparationFailure CreatePreparationFailure(
-        DockerWorker worker,
-        PressureProfileRequest request,
-        int sampleIndex,
-        PreparationSeries preparation)
-    {
-        if (!preparation.Assessment.Exhausted
-            || preparation.Attempts.Count
-                != MaximumPreparationPassCount)
-        {
-            throw new InvalidOperationException(
-                "Preparation failure requires maximum exhaustion.");
-        }
-
-        return new PressurePreparationFailure(
-            worker.Implementation,
-            request.ProfilePercent,
-            sampleIndex,
-            $"{worker.Implementation} preparation reached "
-                + $"{MaximumPreparationPassCount} attempts without "
-                + $"{RequiredPreparationFluctuationCount} fluctuations.");
-    }
-
-    private static PressureImplementationObservation
-        CreatePreparationFailureObservation(
-            DockerWorker worker,
-            PressureProfileRequest request,
-            PressurePreparationFailure failure)
-    {
-        string message = worker.Implementation == failure.Implementation
-            ? failure.Message
-            : $"The timed request did not start because "
-                + $"{failure.Implementation} preparation failed.";
-        return new PressureImplementationObservation(
-            Implementation: worker.Implementation,
-            ProfilePercent: request.ProfilePercent,
-            Outcome: PressureProfileOutcome.HarnessFailure,
-            FailureAttribution:
-                PressureFailureAttribution.HarnessInfrastructure,
-            CgroupCapBytes: request.CgroupCapBytes,
-            RequestedCumulativeDemandBytes:
-                request.RequestedCumulativeDemandBytes,
-            RealizedCumulativeDemandBytes: 0,
-            DeadlineMilliseconds: request.DeadlineMilliseconds,
-            ProfileElapsedMilliseconds: null,
-            ElapsedLowerBoundMilliseconds: 0,
-            SetupMilliseconds: 0,
-            ResultTransferMilliseconds: 0,
-            CompletedChunks: 0,
-            CompletedLogicalBytes: 0,
-            LastCompletedStage: VoxelPipelineStage.None,
-            LastCompletedChunkId: -1,
-            CorrectnessPassed: false,
-            ExitCode: null,
-            ExceptionType: typeof(InvalidOperationException).FullName,
-            ExceptionMessage: message,
-            ChildResult: null,
-            ManagedAllocatedSinceWorkerStart: 0,
-            Gen2CollectionsSinceWorkerStart: 0,
-            CpuMillisecondsSinceWorkerStart: 0,
-            Progress: [],
-            HostSamples: [],
-            InitialCgroup: default,
-            FinalCgroup: default,
-            CgroupPeakReset: false,
-            ExternalCgroupPeakBytes: 0,
-            ExternalCpuPercentMean: 0,
-            ExternalCpuPercentPeak: 0,
-            Isolation: worker.Isolation);
-    }
-
     private static bool PreparationSeriesResetPassed(
         PreparationSeries preparation) =>
-        preparation.Attempts.Count > 0
+        preparation.Attempts.Count
+            == MeasurementPreparationPassCount
         && preparation.Attempts.All(
             static attempt => ResetStatePassed(
                 attempt.ChildResult?.StateAfterReset));
@@ -1895,6 +1797,8 @@ internal static class PressureMatrixHarness
 
         internal PressureEffectiveIsolation Isolation { get; private set; }
 
+        internal long CurrentRequestOrdinal => _requestOrdinal;
+
         internal PressureWorkerCheckpoint CaptureCheckpoint() =>
             new(
                 _implementation,
@@ -2026,6 +1930,10 @@ internal static class PressureMatrixHarness
                 "DOTNET_GCHeapCount=4",
                 "--env",
                 $"DOTNET_GCHeapHardLimitPercent={options.GcHeapHardLimitPercent:X}",
+                "--env",
+                "DOTNET_TieredCompilation=0",
+                "--env",
+                "DOTNET_TieredPGO=0",
                 "--volume",
                 $"{options.RepositoryRoot}:/workspace:ro",
                 "--workdir",
@@ -3150,15 +3058,13 @@ internal static class PressureMatrixHarness
 
     private readonly record struct IsolatedPairRun(
         PressurePairedObservation Observation,
-        PressureProfileInitialization Initialization,
-        PressurePreparationFailure? PreparationFailure);
+        PressureProfileInitialization Initialization);
 
     private readonly record struct PreparationSeries(
         IReadOnlyList<PressureImplementationObservation> Attempts,
-        PressurePreparationAssessment Assessment,
         double ElapsedMilliseconds)
     {
         internal static PreparationSeries Empty { get; } =
-            new([], default, 0);
+            new([], 0);
     }
 }

@@ -170,81 +170,12 @@ public static class PressureProfileOrderPolicy
     }
 }
 
-public readonly record struct PressurePreparationAssessment(
-    int ObservationCount,
-    int FluctuationCount,
-    bool MinimumReached,
-    bool MaximumReached,
-    bool FluctuationTargetReached,
-    bool Accepted)
+public static class PressureProfileContinuationPolicy
 {
-    public bool Exhausted => MaximumReached && !FluctuationTargetReached;
-
-    public bool ShouldContinue => !Accepted && !MaximumReached;
-}
-
-public static class PressurePreparationPolicy
-{
-    public static PressurePreparationAssessment Evaluate(
-        IReadOnlyList<double> elapsedMilliseconds,
-        int minimumObservationCount,
-        int maximumObservationCount,
-        int requiredFluctuationCount)
-    {
-        ArgumentNullException.ThrowIfNull(elapsedMilliseconds);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
-            minimumObservationCount);
-        if (maximumObservationCount < minimumObservationCount)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(maximumObservationCount));
-        }
-
-        if (elapsedMilliseconds.Count > maximumObservationCount)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(elapsedMilliseconds));
-        }
-
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
-            requiredFluctuationCount);
-        if (elapsedMilliseconds.Any(
-                static value => !double.IsFinite(value) || value <= 0))
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(elapsedMilliseconds));
-        }
-
-        int direction = -1;
-        int fluctuationCount = 0;
-        for (int index = 1;
-            index < elapsedMilliseconds.Count;
-            index++)
-        {
-            int nextDirection = Math.Sign(
-                elapsedMilliseconds[index]
-                    - elapsedMilliseconds[index - 1]);
-            if (nextDirection != direction || nextDirection == 0)
-            {
-                direction = nextDirection;
-                fluctuationCount++;
-            }
-        }
-
-        bool minimumReached =
-            elapsedMilliseconds.Count >= minimumObservationCount;
-        bool maximumReached =
-            elapsedMilliseconds.Count >= maximumObservationCount;
-        bool fluctuationTargetReached =
-            fluctuationCount >= requiredFluctuationCount;
-        return new PressurePreparationAssessment(
-            elapsedMilliseconds.Count,
-            fluctuationCount,
-            minimumReached,
-            maximumReached,
-            fluctuationTargetReached,
-            minimumReached && fluctuationTargetReached);
-    }
+    public static bool CanStartNextProfile(
+        bool enforce,
+        PressurePairedStatistics statistics) =>
+        !enforce || statistics.GatePassed;
 }
 
 public readonly record struct PressureOutcomeDecision(
@@ -357,20 +288,11 @@ public readonly record struct PressureMeasurementPreparation(
     bool LogicalResetPassed,
     IReadOnlyList<PressureImplementationObservation>? SafeAttempts = null,
     IReadOnlyList<PressureImplementationObservation>? NamAttempts = null,
-    PressurePreparationAssessment SafeAssessment = default,
-    PressurePreparationAssessment NamAssessment = default,
-    int MinimumAttemptCount = 1,
-    int MaximumAttemptCount = 1,
-    int RequiredFluctuationCount = 0,
+    int RequiredAttemptCount = 1,
+    long SafeTimedRequestOrdinal = 0,
+    long NamTimedRequestOrdinal = 0,
     bool SafeTimedRequestStarted = true,
-    bool NamTimedRequestStarted = true,
-    string? FailureMessage = null);
-
-public readonly record struct PressurePreparationFailure(
-    string Implementation,
-    int ProfilePercent,
-    int SampleIndex,
-    string Message);
+    bool NamTimedRequestStarted = true);
 
 public readonly record struct PressureWorkerLifecycle(
     string Implementation,
@@ -447,19 +369,36 @@ public readonly record struct PressureMatrixReport(
     IReadOnlyList<string> Limitations,
     IReadOnlyList<PressureWorkerLifecycle>? WorkerLifecycles = null);
 
-public readonly record struct PressureMatrixFailureReport(
+public readonly record struct PressureProfileGateFailure(
+    int ProfilePercent,
+    int RequiredSampleCount,
+    double RequiredMeanSpeedup,
+    double RequiredConfidenceLower95Exclusive,
+    PressurePairedStatistics Actual);
+
+public readonly record struct PressureMatrixCleanupState(
+    int ExpectedWorkerLifecycleCount,
+    int RecordedWorkerLifecycleCount,
+    bool LifecycleCountPassed,
+    bool EveryDisposalCompleted,
+    bool EveryContainerAbsent,
+    int ActiveWorkerCount);
+
+public readonly record struct PressureMatrixGateFailureReport(
     string GitCommit,
     string ImageId,
     IReadOnlyList<PressureBinaryIdentity> BinaryIdentities,
-    long CgroupCapBytes,
-    double DeadlineMilliseconds,
-    int Seed,
-    IReadOnlyList<int> PredeclaredProfilePercents,
-    IReadOnlyList<PressureProfilePair> CompletedProfiles,
+    PressureMatrixOptionsSnapshot Options,
+    IReadOnlyList<PressureProfilePair> Profiles,
     PressureProfilePair FailedProfile,
-    PressurePreparationFailure Failure,
+    PressureProfileGateFailure Failure,
     IReadOnlyList<string> Commands,
     IReadOnlyList<PressureWorkerLifecycle> WorkerLifecycles,
+    PressureMatrixCleanupState Cleanup,
+    PressureCurrentProfileCheckpoint? PreservedCurrentProfile,
+    PressureCurrentPairCheckpoint? PreservedCurrentPair,
     DateTime StartedUtc,
     DateTime CompletedUtc,
+    double TotalMeasuredMilliseconds,
+    double TotalInitializationMilliseconds,
     double TotalEndToEndElapsedMilliseconds);
