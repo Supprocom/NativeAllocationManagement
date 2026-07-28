@@ -86,19 +86,23 @@ access, PID limits, GC mode, and GC heap limits.
 The default profiles are 50, 100, 200, 500, 1000, and 10000 percent of the
 binary cgroup cap.
 
+Requested subsets must keep this canonical order. The harness rejects
+reversed, rotated, duplicate, or unknown profile lists.
+
 Each profile uses six paired samples by default. The harness rejects odd
 sample counts because each implementation must run first equally often.
 
 Each paired sample uses new Safe and NAM containers. Startup and four fixed
 1000-percent warmup passes occur outside measured processing.
 
-Each worker then runs six to eight selected-profile preparation requests.
-The host checks elapsed-time direction changes with a bounded fluctuation
-policy.
+Each worker then runs from six through 50 selected-profile preparation
+requests. The host applies a bounded elapsed-time fluctuation policy.
 
-The series stops after four direction changes or its eighth request. The
-timed request starts immediately after the series. All preparation
-observations remain in the artifact.
+The series stops after four fluctuations. If it has fewer than four after 50
+requests, preparation fails and the timed request does not start.
+
+The failure artifact keeps every preparation observation. A successful timed
+request starts immediately after its accepted preparation series.
 
 The worker resets all logical state after each request. The harness removes
 both sample containers before it starts the next pair.

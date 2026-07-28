@@ -135,6 +135,41 @@ public static class PressureSamplePolicy
         && confidenceLower95 > 1.00;
 }
 
+public static class PressureProfileOrderPolicy
+{
+    public static bool FollowsCanonicalOrder(
+        IReadOnlyList<int> requestedProfiles,
+        IReadOnlyList<int> canonicalProfiles)
+    {
+        ArgumentNullException.ThrowIfNull(requestedProfiles);
+        ArgumentNullException.ThrowIfNull(canonicalProfiles);
+        if (requestedProfiles.Count == 0
+            || canonicalProfiles.Count == 0)
+        {
+            return false;
+        }
+
+        int canonicalIndex = 0;
+        foreach (int requestedProfile in requestedProfiles)
+        {
+            while (canonicalIndex < canonicalProfiles.Count
+                && canonicalProfiles[canonicalIndex] != requestedProfile)
+            {
+                canonicalIndex++;
+            }
+
+            if (canonicalIndex >= canonicalProfiles.Count)
+            {
+                return false;
+            }
+
+            canonicalIndex++;
+        }
+
+        return true;
+    }
+}
+
 public readonly record struct PressurePreparationAssessment(
     int ObservationCount,
     int FluctuationCount,
@@ -143,7 +178,9 @@ public readonly record struct PressurePreparationAssessment(
     bool FluctuationTargetReached,
     bool Accepted)
 {
-    public bool ShouldContinue => !Accepted;
+    public bool Exhausted => MaximumReached && !FluctuationTargetReached;
+
+    public bool ShouldContinue => !Accepted && !MaximumReached;
 }
 
 public static class PressurePreparationPolicy
@@ -206,8 +243,7 @@ public static class PressurePreparationPolicy
             minimumReached,
             maximumReached,
             fluctuationTargetReached,
-            minimumReached
-                && (fluctuationTargetReached || maximumReached));
+            minimumReached && fluctuationTargetReached);
     }
 }
 
@@ -325,7 +361,16 @@ public readonly record struct PressureMeasurementPreparation(
     PressurePreparationAssessment NamAssessment = default,
     int MinimumAttemptCount = 1,
     int MaximumAttemptCount = 1,
-    int RequiredFluctuationCount = 0);
+    int RequiredFluctuationCount = 0,
+    bool SafeTimedRequestStarted = true,
+    bool NamTimedRequestStarted = true,
+    string? FailureMessage = null);
+
+public readonly record struct PressurePreparationFailure(
+    string Implementation,
+    int ProfilePercent,
+    int SampleIndex,
+    string Message);
 
 public readonly record struct PressureWorkerLifecycle(
     string Implementation,
@@ -401,3 +446,20 @@ public readonly record struct PressureMatrixReport(
     IReadOnlyList<string> Commands,
     IReadOnlyList<string> Limitations,
     IReadOnlyList<PressureWorkerLifecycle>? WorkerLifecycles = null);
+
+public readonly record struct PressureMatrixFailureReport(
+    string GitCommit,
+    string ImageId,
+    IReadOnlyList<PressureBinaryIdentity> BinaryIdentities,
+    long CgroupCapBytes,
+    double DeadlineMilliseconds,
+    int Seed,
+    IReadOnlyList<int> PredeclaredProfilePercents,
+    IReadOnlyList<PressureProfilePair> CompletedProfiles,
+    PressureProfilePair FailedProfile,
+    PressurePreparationFailure Failure,
+    IReadOnlyList<string> Commands,
+    IReadOnlyList<PressureWorkerLifecycle> WorkerLifecycles,
+    DateTime StartedUtc,
+    DateTime CompletedUtc,
+    double TotalEndToEndElapsedMilliseconds);
