@@ -66,6 +66,19 @@ internal static class PressureMatrixHarness
         List<PressureWorkerLifecycle> workerLifecycles = [];
         List<PressureProfilePair> profiles = new(
             options.ProfilePercents.Count);
+        MatrixCheckpointWriter checkpointWriter = new(
+            options,
+            commit,
+            imageId,
+            binaryIdentities,
+            startedUtc);
+        await checkpointWriter.WriteCheckpointAsync(
+            profiles,
+            currentProfile: null,
+            currentPair: null,
+            commands,
+            workerLifecycles,
+            activeWorkers: []);
         double totalMeasuredMilliseconds = 0;
         double totalInitializationMilliseconds = 0;
         int pairOrdinal = 0;
@@ -92,6 +105,16 @@ internal static class PressureMatrixHarness
                 samplesInProfile);
             List<PressureProfileInitialization> sampleInitializations =
                 new(samplesInProfile);
+            await checkpointWriter.WriteCheckpointAsync(
+                profiles,
+                CreateCurrentProfileCheckpoint(
+                    request,
+                    observations,
+                    sampleInitializations),
+                currentPair: null,
+                commands,
+                workerLifecycles,
+                activeWorkers: []);
             for (int sampleIndex = 0;
                 sampleIndex < samplesInProfile;
                 sampleIndex++)
@@ -115,10 +138,24 @@ internal static class PressureMatrixHarness
                     workerLifecycles,
                     pairOrdinal,
                     sampleIndex,
-                    safeFirst);
+                    safeFirst,
+                    checkpointWriter,
+                    profiles,
+                    observations,
+                    sampleInitializations);
                 pairOrdinal++;
                 observations.Add(pair.Observation);
                 sampleInitializations.Add(pair.Initialization);
+                await checkpointWriter.WriteCheckpointAsync(
+                    profiles,
+                    CreateCurrentProfileCheckpoint(
+                        request,
+                        observations,
+                        sampleInitializations),
+                    currentPair: null,
+                    commands,
+                    workerLifecycles,
+                    activeWorkers: []);
                 totalInitializationMilliseconds +=
                     pair.Initialization.ElapsedMilliseconds;
                 totalMeasuredMilliseconds +=
@@ -153,7 +190,8 @@ internal static class PressureMatrixHarness
                         commands,
                         workerLifecycles,
                         startedUtc,
-                        endToEndStart);
+                        endToEndStart,
+                        checkpointWriter);
                     Console.WriteLine(
                         JsonSerializer.Serialize(
                             preparationFailure,
@@ -181,6 +219,13 @@ internal static class PressureMatrixHarness
                 observations,
                 statistics,
                 sampleInitializations));
+            await checkpointWriter.WriteCheckpointAsync(
+                profiles,
+                currentProfile: null,
+                currentPair: null,
+                commands,
+                workerLifecycles,
+                activeWorkers: []);
         }
 
         if (workerLifecycles.Any(
@@ -244,8 +289,12 @@ internal static class PressureMatrixHarness
         await using DockerWorker namVerificationWorker =
             await namVerificationStart;
         await Task.WhenAll(
-            safeVerificationWorker.WarmAsync(options),
-            namVerificationWorker.WarmAsync(options));
+            safeVerificationWorker.WarmAsync(
+                options,
+                checkpointWriter.SignalActivity),
+            namVerificationWorker.WarmAsync(
+                options,
+                checkpointWriter.SignalActivity));
         long verificationPreparationStart = Stopwatch.GetTimestamp();
         Task<PressureImplementationObservation>
             safeVerificationPreparationTask =
@@ -260,6 +309,7 @@ internal static class PressureMatrixHarness
         await Task.WhenAll(
             safeVerificationPreparationTask,
             namVerificationPreparationTask);
+        checkpointWriter.SignalActivity();
         PressureImplementationObservation safeVerificationPreparation =
             await safeVerificationPreparationTask;
         PressureImplementationObservation namVerificationPreparation =
@@ -436,23 +486,23 @@ internal static class PressureMatrixHarness
                 "One exact maximum-demand run follows measurement. It reads every output byte."
             ],
             workerLifecycles);
-        string? directory = Path.GetDirectoryName(options.OutputPath);
-        if (!string.IsNullOrEmpty(directory))
-        {
-            Directory.CreateDirectory(directory);
-        }
-
-        JsonSerializerOptions outputOptions = new(VoxelJson.Options)
-        {
-            WriteIndented = true
-        };
-        await File.WriteAllTextAsync(
-            options.OutputPath,
-            JsonSerializer.Serialize(report, outputOptions));
+        await checkpointWriter.WriteFinalReportAsync(report);
         Console.WriteLine(JsonSerializer.Serialize(summary, VoxelJson.Options));
         Console.WriteLine(options.OutputPath);
         return options.Enforce && !summary.GatePassed ? 3 : 0;
     }
+
+    private static PressureCurrentProfileCheckpoint
+        CreateCurrentProfileCheckpoint(
+            PressureProfileRequest request,
+            IReadOnlyList<PressurePairedObservation> observations,
+            IReadOnlyList<PressureProfileInitialization> initializations) =>
+        new(
+            request.ProfilePercent,
+            request.CgroupCapBytes,
+            request.RequestedCumulativeDemandBytes,
+            observations.ToArray(),
+            initializations.ToArray());
 
     private static async Task WritePreparationFailureReportAsync(
         Options options,
@@ -465,7 +515,8 @@ internal static class PressureMatrixHarness
         IReadOnlyList<string> commands,
         IReadOnlyList<PressureWorkerLifecycle> workerLifecycles,
         DateTime startedUtc,
-        long endToEndStart)
+        long endToEndStart,
+        MatrixCheckpointWriter checkpointWriter)
     {
         PressureMatrixFailureReport report = new(
             commit,
@@ -484,19 +535,7 @@ internal static class PressureMatrixHarness
             DateTime.UtcNow,
             Stopwatch.GetElapsedTime(
                 endToEndStart).TotalMilliseconds);
-        string? directory = Path.GetDirectoryName(options.OutputPath);
-        if (!string.IsNullOrEmpty(directory))
-        {
-            Directory.CreateDirectory(directory);
-        }
-
-        JsonSerializerOptions outputOptions = new(VoxelJson.Options)
-        {
-            WriteIndented = true
-        };
-        await File.WriteAllTextAsync(
-            options.OutputPath,
-            JsonSerializer.Serialize(report, outputOptions));
+        await checkpointWriter.WriteFinalReportAsync(report);
     }
 
     private static async Task<IsolatedPairRun> RunIsolatedPairAsync(
@@ -507,7 +546,11 @@ internal static class PressureMatrixHarness
         List<PressureWorkerLifecycle> workerLifecycles,
         int pairOrdinal,
         int sampleIndex,
-        bool safeFirst)
+        bool safeFirst,
+        MatrixCheckpointWriter checkpointWriter,
+        IReadOnlyList<PressureProfilePair> completedProfiles,
+        IReadOnlyList<PressurePairedObservation> completedObservations,
+        IReadOnlyList<PressureProfileInitialization> completedInitializations)
     {
         DateTime initializationStartedUtc = DateTime.UtcNow;
         long initializationStart = Stopwatch.GetTimestamp();
@@ -559,11 +602,58 @@ internal static class PressureMatrixHarness
         bool preparationReset = false;
         double initializationMilliseconds = 0;
         double preparationMilliseconds = 0;
+        List<PressurePreparationSeriesCheckpoint> completedPreparations = [];
+
+        async Task CheckpointCurrentPairAsync()
+        {
+            PressureCurrentPairCheckpoint currentPair = new(
+                pairOrdinal,
+                sampleIndex,
+                safeFirst,
+                safeTimedRequestStarted ? safeObservation : null,
+                namTimedRequestStarted ? namObservation : null,
+                safeTimedRequestStarted,
+                namTimedRequestStarted,
+                completedPreparations.ToArray());
+            await checkpointWriter.WriteCheckpointAsync(
+                completedProfiles,
+                CreateCurrentProfileCheckpoint(
+                    request,
+                    completedObservations,
+                    completedInitializations),
+                currentPair,
+                commands,
+                workerLifecycles,
+                [safe.CaptureCheckpoint(), nam.CaptureCheckpoint()]);
+        }
+
+        async Task CheckpointPreparationAsync(
+            DockerWorker worker,
+            PreparationSeries series)
+        {
+            PressurePreparationSeriesCheckpoint preparation = new(
+                pairOrdinal,
+                sampleIndex,
+                safeFirst,
+                worker.Implementation,
+                request.ProfilePercent,
+                request.RequestedCumulativeDemandBytes,
+                series.ElapsedMilliseconds,
+                series.Attempts,
+                series.Assessment);
+            completedPreparations.Add(preparation);
+            await CheckpointCurrentPairAsync();
+        }
+
         try
         {
             await Task.WhenAll(
-                safe.WarmAsync(options),
-                nam.WarmAsync(options));
+                safe.WarmAsync(
+                    options,
+                    checkpointWriter.SignalActivity),
+                nam.WarmAsync(
+                    options,
+                    checkpointWriter.SignalActivity));
             initializationMilliseconds = Stopwatch.GetElapsedTime(
                 initializationStart).TotalMilliseconds;
             if (safeFirst)
@@ -571,15 +661,20 @@ internal static class PressureMatrixHarness
                 safePreparation = await PrepareMeasurementSeriesAsync(
                     safe,
                     request,
-                    options);
+                    options,
+                    checkpointWriter.SignalActivity);
                 preparationMilliseconds +=
                     safePreparation.ElapsedMilliseconds;
+                await CheckpointPreparationAsync(
+                    safe,
+                    safePreparation);
                 if (safePreparation.Assessment.Accepted)
                 {
                     safeObservation = await safe.RunProfileAsync(
                         request,
                         options);
                     safeTimedRequestStarted = true;
+                    await CheckpointCurrentPairAsync();
                 }
                 else
                 {
@@ -595,15 +690,20 @@ internal static class PressureMatrixHarness
                     namPreparation = await PrepareMeasurementSeriesAsync(
                         nam,
                         request,
-                        options);
+                        options,
+                        checkpointWriter.SignalActivity);
                     preparationMilliseconds +=
                         namPreparation.ElapsedMilliseconds;
+                    await CheckpointPreparationAsync(
+                        nam,
+                        namPreparation);
                     if (namPreparation.Assessment.Accepted)
                     {
                         namObservation = await nam.RunProfileAsync(
                             request,
                             options);
                         namTimedRequestStarted = true;
+                        await CheckpointCurrentPairAsync();
                     }
                     else
                     {
@@ -620,15 +720,20 @@ internal static class PressureMatrixHarness
                 namPreparation = await PrepareMeasurementSeriesAsync(
                     nam,
                     request,
-                    options);
+                    options,
+                    checkpointWriter.SignalActivity);
                 preparationMilliseconds +=
                     namPreparation.ElapsedMilliseconds;
+                await CheckpointPreparationAsync(
+                    nam,
+                    namPreparation);
                 if (namPreparation.Assessment.Accepted)
                 {
                     namObservation = await nam.RunProfileAsync(
                         request,
                         options);
                     namTimedRequestStarted = true;
+                    await CheckpointCurrentPairAsync();
                 }
                 else
                 {
@@ -644,15 +749,20 @@ internal static class PressureMatrixHarness
                     safePreparation = await PrepareMeasurementSeriesAsync(
                         safe,
                         request,
-                        options);
+                        options,
+                        checkpointWriter.SignalActivity);
                     preparationMilliseconds +=
                         safePreparation.ElapsedMilliseconds;
+                    await CheckpointPreparationAsync(
+                        safe,
+                        safePreparation);
                     if (safePreparation.Assessment.Accepted)
                     {
                         safeObservation = await safe.RunProfileAsync(
                             request,
                             options);
                         safeTimedRequestStarted = true;
+                        await CheckpointCurrentPairAsync();
                     }
                     else
                     {
@@ -784,7 +894,8 @@ internal static class PressureMatrixHarness
         PrepareMeasurementSeriesAsync(
             DockerWorker worker,
             PressureProfileRequest request,
-            Options options)
+            Options options,
+            Action signalActivity)
     {
         long preparationStart = Stopwatch.GetTimestamp();
         List<PressureImplementationObservation> attempts =
@@ -823,6 +934,7 @@ internal static class PressureMatrixHarness
                 MinimumPreparationPassCount,
                 MaximumPreparationPassCount,
                 RequiredPreparationFluctuationCount);
+            signalActivity();
             if (!assessment.ShouldContinue)
             {
                 break;
@@ -1616,6 +1728,133 @@ internal static class PressureMatrixHarness
         return new CommandResult(process.ExitCode, standardOutput, standardError);
     }
 
+    private sealed class MatrixCheckpointWriter
+    {
+        private const int FormatVersion = 1;
+        private readonly SemaphoreSlim _writeGate = new(1, 1);
+        private readonly object _activityGate = new();
+        private readonly Options _options;
+        private readonly string _commit;
+        private readonly string _imageId;
+        private readonly IReadOnlyList<PressureBinaryIdentity>
+            _binaryIdentities;
+        private readonly DateTime _startedUtc;
+        private long _sequence;
+
+        internal MatrixCheckpointWriter(
+            Options options,
+            string commit,
+            string imageId,
+            IReadOnlyList<PressureBinaryIdentity> binaryIdentities,
+            DateTime startedUtc)
+        {
+            _options = options;
+            _commit = commit;
+            _imageId = imageId;
+            _binaryIdentities = binaryIdentities.ToArray();
+            _startedUtc = startedUtc;
+            string? activityDirectory =
+                Path.GetDirectoryName(options.ActivityPath);
+            if (!string.IsNullOrEmpty(activityDirectory))
+            {
+                Directory.CreateDirectory(activityDirectory);
+            }
+
+            SignalActivity();
+        }
+
+        internal void SignalActivity()
+        {
+            lock (_activityGate)
+            {
+                File.WriteAllText(
+                    _options.ActivityPath,
+                    DateTime.UtcNow.ToString(
+                        "O",
+                        CultureInfo.InvariantCulture),
+                    Encoding.UTF8);
+            }
+        }
+
+        internal async Task WriteCheckpointAsync(
+            IReadOnlyList<PressureProfilePair> completedProfiles,
+            PressureCurrentProfileCheckpoint? currentProfile,
+            PressureCurrentPairCheckpoint? currentPair,
+            IReadOnlyList<string> commands,
+            IReadOnlyList<PressureWorkerLifecycle> workerLifecycles,
+            IReadOnlyList<PressureWorkerCheckpoint> activeWorkers)
+        {
+            await _writeGate.WaitAsync();
+            try
+            {
+                string[] commandSnapshot;
+                lock (commands)
+                {
+                    commandSnapshot = commands.ToArray();
+                }
+
+                PressureWorkerLifecycle[] lifecycleSnapshot;
+                lock (workerLifecycles)
+                {
+                    lifecycleSnapshot = workerLifecycles
+                        .Where(
+                            static lifecycle =>
+                                lifecycle.DisposalCompleted
+                                && lifecycle.ContainerAbsentAfterDisposal)
+                        .ToArray();
+                }
+
+                PressureMatrixCheckpoint checkpoint = new(
+                    FormatVersion,
+                    checked(++_sequence),
+                    _commit,
+                    _imageId,
+                    _binaryIdentities,
+                    _options.ToSnapshot(),
+                    completedProfiles.ToArray(),
+                    currentProfile,
+                    currentPair,
+                    commandSnapshot,
+                    lifecycleSnapshot,
+                    activeWorkers.ToArray(),
+                    _startedUtc,
+                    DateTime.UtcNow);
+                await AtomicPressureArtifactFile.WriteJsonAsync(
+                    _options.OutputPath,
+                    checkpoint,
+                    CreateOutputOptions());
+                SignalActivity();
+            }
+            finally
+            {
+                _writeGate.Release();
+            }
+        }
+
+        internal async Task WriteFinalReportAsync<T>(T report)
+        {
+            await _writeGate.WaitAsync();
+            try
+            {
+                await AtomicPressureArtifactFile.WriteJsonAsync(
+                    _options.OutputPath,
+                    report,
+                    CreateOutputOptions());
+                SignalActivity();
+            }
+            finally
+            {
+                _writeGate.Release();
+            }
+        }
+
+        private static JsonSerializerOptions CreateOutputOptions() =>
+            new(VoxelJson.Options)
+            {
+                WriteIndented = true
+            };
+    }
+
     private sealed class DockerWorker : IAsyncDisposable
     {
         internal const int WarmupPassCount = 4;
@@ -1656,6 +1895,18 @@ internal static class PressureMatrixHarness
 
         internal PressureEffectiveIsolation Isolation { get; private set; }
 
+        internal PressureWorkerCheckpoint CaptureCheckpoint() =>
+            new(
+                _implementation,
+                ContainerName,
+                Isolation.ContainerId,
+                Isolation.ContainerProcessId,
+                Isolation.CgroupIdentity,
+                StartupRuntime,
+                Isolation,
+                _requestOrdinal,
+                IsAlive);
+
         internal static async Task<DockerWorker> StartAsync(
             Options options,
             string implementation,
@@ -1673,7 +1924,9 @@ internal static class PressureMatrixHarness
             return worker;
         }
 
-        internal async Task WarmAsync(Options options)
+        internal async Task WarmAsync(
+            Options options,
+            Action signalActivity)
         {
             int warmupPercent = WarmupProfilePercent;
             long warmupDemand = checked(
@@ -1705,6 +1958,8 @@ internal static class PressureMatrixHarness
                         + $"{observation.Outcome}: "
                         + observation.ExceptionMessage);
                 }
+
+                signalActivity();
             }
         }
 
@@ -2719,6 +2974,7 @@ internal static class PressureMatrixHarness
         string RepositoryRoot,
         string Image,
         string OutputPath,
+        string ActivityPath,
         string SafeCpuSet,
         string NamCpuSet,
         long CgroupCapBytes,
@@ -2730,6 +2986,8 @@ internal static class PressureMatrixHarness
         int GcHeapHardLimitPercent,
         int SamplesPerProfile,
         IReadOnlyList<int> ProfilePercents,
+        int InactivityTimeoutSeconds,
+        long AbsoluteFailSafeTimeoutSeconds,
         bool Enforce)
     {
         internal static Options Parse(IReadOnlyList<string> args)
@@ -2762,10 +3020,14 @@ internal static class PressureMatrixHarness
             string repository = Required(values, "--repo");
             string image = Required(values, "--image");
             string output = Required(values, "--output");
+            string activity = values.GetValueOrDefault(
+                "--activity",
+                output + ".activity");
             return new Options(
                 Path.GetFullPath(repository),
                 image,
                 Path.GetFullPath(output),
+                Path.GetFullPath(activity),
                 values.GetValueOrDefault("--safe-cpuset", "0-3"),
                 values.GetValueOrDefault("--nam-cpuset", "4-7"),
                 ParseLong(values.GetValueOrDefault("--cap-bytes", "268435456")),
@@ -2789,8 +3051,35 @@ internal static class PressureMatrixHarness
                 ParseProfiles(values.GetValueOrDefault(
                     "--profiles",
                     string.Join(',', PressureMatrixHarness.ProfilePercents))),
+                ParseInt(values.GetValueOrDefault(
+                    "--inactivity-timeout-seconds",
+                    "120")),
+                ParseLong(values.GetValueOrDefault(
+                    "--absolute-fail-safe-timeout-seconds",
+                    "0")),
                 enforce);
         }
+
+        internal PressureMatrixOptionsSnapshot ToSnapshot() =>
+            new(
+                RepositoryRoot,
+                Image,
+                OutputPath,
+                ActivityPath,
+                SafeCpuSet,
+                NamCpuSet,
+                CgroupCapBytes,
+                DeadlineMilliseconds,
+                RetentionDepth,
+                ProgressEveryChunks,
+                Seed,
+                PidsLimit,
+                GcHeapHardLimitPercent,
+                SamplesPerProfile,
+                ProfilePercents.ToArray(),
+                InactivityTimeoutSeconds,
+                AbsoluteFailSafeTimeoutSeconds,
+                Enforce);
 
         private static string Required(
             IReadOnlyDictionary<string, string> values,

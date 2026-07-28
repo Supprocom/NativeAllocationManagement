@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
@@ -122,6 +123,13 @@ public sealed class VoxelSharedContractTests
             typeof(PressureVerificationPair),
             typeof(PressureBinaryIdentity),
             typeof(PressureMatrixSummary),
+            typeof(PressureMatrixOptionsSnapshot),
+            typeof(PressureWorkerCheckpoint),
+            typeof(PressureCurrentProfileCheckpoint),
+            typeof(PressurePreparationSeriesCheckpoint),
+            typeof(PressureCurrentPairCheckpoint),
+            typeof(PressureMatrixCheckpoint),
+            typeof(AtomicPressureArtifactFile),
             typeof(PressureMatrixReport),
             typeof(PressureMatrixFailureReport)
         ];
@@ -463,6 +471,33 @@ public sealed class VoxelSharedContractTests
             "consumes every upload byte",
             pressureHarness,
             StringComparison.Ordinal);
+        Assert.Contains(
+            "AtomicPressureArtifactFile.WriteJsonAsync(",
+            pressureHarness,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "File.WriteAllTextAsync(",
+            pressureHarness,
+            StringComparison.Ordinal);
+        Assert.Equal(
+            4,
+            pressureHarness.Split(
+                "await CheckpointPreparationAsync(",
+                StringSplitOptions.None).Length - 1);
+        int addObservation = pressureHarness.IndexOf(
+            "observations.Add(pair.Observation);",
+            StringComparison.Ordinal);
+        int pairCheckpoint = pressureHarness.IndexOf(
+            "await checkpointWriter.WriteCheckpointAsync(",
+            addObservation,
+            StringComparison.Ordinal);
+        Assert.True(addObservation >= 0);
+        Assert.True(pairCheckpoint > addObservation);
+        Assert.Equal(
+            2,
+            pressureHarness.Split(
+                "await checkpointWriter.WriteFinalReportAsync(report);",
+                StringSplitOptions.None).Length - 1);
 
         string runner = File.ReadAllText(
             Path.Combine(demoRoot, "Pressure", "run-constrained.ps1"));
@@ -488,6 +523,26 @@ public sealed class VoxelSharedContractTests
             StringComparison.Ordinal);
         Assert.Contains(
             "The $component binary does not match HEAD $commit.",
+            runner,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "function Invoke-HarnessWatchdog",
+            runner,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "LatestCheckpointSha256",
+            runner,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Write-AtomicJson $timeoutEvidencePath $timeoutEvidence",
+            runner,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "[switch]$ValidateTimeoutsOnly",
+            runner,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "EndToEndTimeoutSeconds",
             runner,
             StringComparison.Ordinal);
         int compilation = runner.IndexOf(
@@ -892,6 +947,333 @@ public sealed class VoxelSharedContractTests
         Assert.Equal(
             "Preparation failed.",
             failureRoundTrip.Failure.Message);
+    }
+
+    [Fact]
+    public async Task AtomicCheckpointReplacementKeepsOnlyTheLatestDocument()
+    {
+        string directory = CreateTestArtifactDirectory();
+        string path = Path.Combine(directory, "checkpoint.json");
+        try
+        {
+            PressureMatrixCheckpoint first =
+                CreatePressureCheckpoint(sequence: 1);
+            PressureMatrixCheckpoint second = first with
+            {
+                Sequence = 2,
+                UpdatedUtc = DateTime.UnixEpoch.AddSeconds(2)
+            };
+
+            await AtomicPressureArtifactFile.WriteJsonAsync(path, first);
+            await AtomicPressureArtifactFile.WriteJsonAsync(path, second);
+
+            PressureMatrixCheckpoint roundTrip =
+                JsonSerializer.Deserialize<PressureMatrixCheckpoint>(
+                    await File.ReadAllTextAsync(path),
+                    VoxelJson.Options);
+            Assert.Equal(2, roundTrip.Sequence);
+            Assert.Single(Directory.EnumerateFiles(directory));
+            Assert.Empty(
+                Directory.EnumerateFiles(directory, "*.tmp"));
+        }
+        finally
+        {
+            DeleteTestArtifactDirectory(directory);
+        }
+    }
+
+    [Fact]
+    public void PreparationCheckpointKeepsAllAttemptsAndLiveWorkerState()
+    {
+        double[] elapsed = [10, 9, 10, 9, 10, 9];
+        PressureImplementationObservation[] attempts = elapsed
+            .Select(
+                milliseconds =>
+                    default(PressureImplementationObservation) with
+                    {
+                        Implementation = "NAM",
+                        ProfilePercent = 10000,
+                        ProfileElapsedMilliseconds = milliseconds
+                    })
+            .ToArray();
+        PressurePreparationAssessment assessment =
+            PressurePreparationPolicy.Evaluate(
+                elapsed,
+                6,
+                50,
+                4);
+        PressurePreparationSeriesCheckpoint preparation = new(
+            3,
+            1,
+            false,
+            "NAM",
+            10000,
+            26_843_545_600,
+            57,
+            attempts,
+            assessment);
+        PressurePreparationSeriesCheckpoint safePreparation =
+            preparation with
+            {
+                SafeRanFirst = true,
+                Implementation = "SafeCSharp"
+            };
+        PressureImplementationObservation safeObservation =
+            default(PressureImplementationObservation) with
+            {
+                Implementation = "SafeCSharp",
+                ProfilePercent = 10000,
+                ProfileElapsedMilliseconds = 20
+            };
+        PressureWorkerCheckpoint worker = new(
+            "NAM",
+            "nam-container",
+            "container-id",
+            42,
+            "/cgroup/nam",
+            default,
+            default,
+            10,
+            true);
+        PressureMatrixCheckpoint checkpoint =
+            CreatePressureCheckpoint(sequence: 4) with
+            {
+                CurrentPair = new PressureCurrentPairCheckpoint(
+                    3,
+                    1,
+                    false,
+                    safeObservation,
+                    null,
+                    true,
+                    false,
+                    [safePreparation, preparation]),
+                ActiveWorkers = [worker]
+            };
+
+        string json = JsonSerializer.Serialize(
+            checkpoint,
+            VoxelJson.Options);
+        PressureMatrixCheckpoint roundTrip =
+            JsonSerializer.Deserialize<PressureMatrixCheckpoint>(
+                json,
+                VoxelJson.Options);
+
+        Assert.Equal(2, roundTrip.CurrentPair?.Preparations.Count);
+        Assert.Equal(
+            attempts.Length,
+            roundTrip.CurrentPair?.Preparations[1].Attempts.Count);
+        Assert.Equal(
+            assessment,
+            roundTrip.CurrentPair?.Preparations[1].Assessment);
+        Assert.Equal(
+            "SafeCSharp",
+            roundTrip.CurrentPair?.SafeObservation?.Implementation);
+        PressureWorkerCheckpoint active = Assert.Single(
+            roundTrip.ActiveWorkers);
+        Assert.Equal(10, active.CurrentRequestOrdinal);
+        Assert.True(active.IsAlive);
+    }
+
+    [Fact]
+    public async Task CompletedPairCheckpointSurvivesSimulatedTermination()
+    {
+        string directory = CreateTestArtifactDirectory();
+        string path = Path.Combine(directory, "interrupted.json");
+        try
+        {
+            PressureProfileInitialization initialization = new(
+                2,
+                DateTime.UnixEpoch,
+                120,
+                "safe-container",
+                "nam-container",
+                4,
+                1000,
+                2_684_354_560);
+            PressurePairedObservation observation = new(
+                0,
+                default,
+                default,
+                true,
+                true);
+            PressureCurrentProfileCheckpoint currentProfile = new(
+                10000,
+                268_435_456,
+                26_843_545_600,
+                [observation],
+                [initialization]);
+            PressureWorkerLifecycle lifecycle = new(
+                "SafeCSharp",
+                "safe-container",
+                "safe-id",
+                41,
+                "/cgroup/safe",
+                default,
+                1,
+                11,
+                11,
+                true,
+                true,
+                DateTime.UnixEpoch);
+            PressureMatrixCheckpoint checkpoint =
+                CreatePressureCheckpoint(sequence: 5) with
+                {
+                    CurrentProfile = currentProfile,
+                    Commands = ["docker run safe"],
+                    CompletedLifecycles = [lifecycle]
+                };
+
+            await AtomicPressureArtifactFile.WriteJsonAsync(
+                path,
+                checkpoint);
+
+            PressureMatrixCheckpoint recovered =
+                JsonSerializer.Deserialize<PressureMatrixCheckpoint>(
+                    await File.ReadAllTextAsync(path),
+                    VoxelJson.Options);
+            Assert.Equal("commit", recovered.GitCommit);
+            Assert.Equal("image", recovered.ImageId);
+            Assert.Single(recovered.BinaryIdentities);
+            Assert.Single(
+                recovered.CurrentProfile?.CompletedPairs ?? []);
+            Assert.Single(
+                recovered.CurrentProfile?.Initializations ?? []);
+            Assert.Equal(
+                "docker run safe",
+                Assert.Single(recovered.Commands));
+            Assert.True(
+                Assert.Single(
+                    recovered.CompletedLifecycles)
+                    .ContainerAbsentAfterDisposal);
+        }
+        finally
+        {
+            DeleteTestArtifactDirectory(directory);
+        }
+    }
+
+    [Fact]
+    public async Task FinalReportAtomicallyReplacesTheCheckpoint()
+    {
+        string directory = CreateTestArtifactDirectory();
+        string path = Path.Combine(directory, "final.json");
+        try
+        {
+            await AtomicPressureArtifactFile.WriteJsonAsync(
+                path,
+                CreatePressureCheckpoint(sequence: 6));
+            PressureProfilePair failedProfile = new(
+                1000,
+                268_435_456,
+                2_684_354_560,
+                default,
+                [],
+                default);
+            PressureMatrixFailureReport report = new(
+                "final-commit",
+                "final-image",
+                [],
+                268_435_456,
+                6000,
+                17,
+                [1000],
+                [],
+                failedProfile,
+                new PressurePreparationFailure(
+                    "NAM",
+                    1000,
+                    0,
+                    "Preparation failed."),
+                [],
+                [],
+                DateTime.UnixEpoch,
+                DateTime.UnixEpoch.AddSeconds(1),
+                1000);
+
+            await AtomicPressureArtifactFile.WriteJsonAsync(path, report);
+
+            string json = await File.ReadAllTextAsync(path);
+            PressureMatrixFailureReport roundTrip =
+                JsonSerializer.Deserialize<PressureMatrixFailureReport>(
+                    json,
+                    VoxelJson.Options);
+            Assert.Equal("final-commit", roundTrip.GitCommit);
+            Assert.DoesNotContain(
+                "\"formatVersion\"",
+                json,
+                StringComparison.Ordinal);
+            Assert.Empty(
+                Directory.EnumerateFiles(directory, "*.tmp"));
+        }
+        finally
+        {
+            DeleteTestArtifactDirectory(directory);
+        }
+    }
+
+    [Fact]
+    public void WrapperTimeoutValidationRejectsUnsafeBounds()
+    {
+        string root = FindRepositoryRoot();
+        string script = Path.Combine(
+            root,
+            ".Demos",
+            "01-VoxelChunkPipeline",
+            "Pressure",
+            "run-constrained.ps1");
+        (int validExitCode, string validOutput, _) =
+            RunPowerShell(
+                script,
+                "-ValidateTimeoutsOnly",
+                "-Profiles",
+                "1000,10000",
+                "-SamplesPerProfile",
+                "6",
+                "-InactivityTimeoutSeconds",
+                "120");
+        (int inactivityExitCode, _, string inactivityError) =
+            RunPowerShell(
+                script,
+                "-ValidateTimeoutsOnly",
+                "-Profiles",
+                "1000,10000",
+                "-SamplesPerProfile",
+                "6",
+                "-InactivityTimeoutSeconds",
+                "60");
+        (int absoluteExitCode, _, string absoluteError) =
+            RunPowerShell(
+                script,
+                "-ValidateTimeoutsOnly",
+                "-Profiles",
+                "1000,10000",
+                "-SamplesPerProfile",
+                "6",
+                "-InactivityTimeoutSeconds",
+                "120",
+                "-AbsoluteFailSafeTimeoutSeconds",
+                "1");
+
+        Assert.Equal(0, validExitCode);
+        using JsonDocument valid = JsonDocument.Parse(validOutput);
+        Assert.True(valid.RootElement.GetProperty("Valid").GetBoolean());
+        Assert.True(
+            valid.RootElement
+                .GetProperty("AbsoluteFailSafeTimeoutSeconds")
+                .GetInt64()
+            >= valid.RootElement
+                .GetProperty("MinimumAbsoluteFailSafeTimeoutSeconds")
+                .GetInt64());
+        Assert.NotEqual(0, inactivityExitCode);
+        Assert.Contains(
+            "must exceed the 60-second internal operation bound",
+            inactivityError,
+            StringComparison.Ordinal);
+        Assert.NotEqual(0, absoluteExitCode);
+        Assert.Contains(
+            "below the derived minimum",
+            absoluteError,
+            StringComparison.Ordinal);
     }
 
     private static bool[] CreateProfileOrder(int profileOrdinal)
@@ -2597,6 +2979,121 @@ public sealed class VoxelSharedContractTests
                 + (long)maximumVertices * VoxelMath.VertexBytes
                 + (long)maximumIndices * VoxelMath.IndexBytes
                 + 4_096));
+    }
+
+    private static PressureMatrixCheckpoint CreatePressureCheckpoint(
+        long sequence)
+    {
+        PressureBinaryIdentity identity = new(
+            "Harness",
+            "Harness.dll",
+            "sha256",
+            "1.0.0+commit",
+            "commit");
+        PressureMatrixOptionsSnapshot options = new(
+            "repository",
+            "image",
+            "checkpoint.json",
+            "checkpoint.json.activity",
+            "0-3",
+            "0-3",
+            268_435_456,
+            6000,
+            20,
+            4,
+            17,
+            128,
+            90,
+            6,
+            [1000, 10000],
+            120,
+            80_220,
+            true);
+        return new PressureMatrixCheckpoint(
+            1,
+            sequence,
+            "commit",
+            "image",
+            [identity],
+            options,
+            [],
+            null,
+            null,
+            [],
+            [],
+            [],
+            DateTime.UnixEpoch,
+            DateTime.UnixEpoch.AddSeconds(sequence));
+    }
+
+    private static string CreateTestArtifactDirectory()
+    {
+        string directory = Path.Combine(
+            Path.GetTempPath(),
+            $"nam-pressure-checkpoint-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        return directory;
+    }
+
+    private static void DeleteTestArtifactDirectory(string directory)
+    {
+        foreach (string path in Directory.EnumerateFiles(directory))
+        {
+            File.Delete(path);
+        }
+
+        Directory.Delete(directory);
+    }
+
+    private static (
+        int ExitCode,
+        string StandardOutput,
+        string StandardError)
+        RunPowerShell(
+            string script,
+            params string[] arguments)
+    {
+        string executable = OperatingSystem.IsWindows()
+            ? "powershell.exe"
+            : "pwsh";
+        ProcessStartInfo start = new(executable)
+        {
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        start.ArgumentList.Add("-NoProfile");
+        if (OperatingSystem.IsWindows())
+        {
+            start.ArgumentList.Add("-ExecutionPolicy");
+            start.ArgumentList.Add("Bypass");
+        }
+
+        start.ArgumentList.Add("-File");
+        start.ArgumentList.Add(script);
+        foreach (string argument in arguments)
+        {
+            start.ArgumentList.Add(argument);
+        }
+
+        using Process process = Process.Start(start)
+            ?? throw new InvalidOperationException(
+                "Could not start PowerShell.");
+        Task<string> output = process.StandardOutput.ReadToEndAsync();
+        Task<string> error = process.StandardError.ReadToEndAsync();
+        if (!process.WaitForExit(10_000))
+        {
+            process.Kill(entireProcessTree: true);
+            throw new TimeoutException(
+                "The timeout validation did not complete.");
+        }
+
+        process.WaitForExit();
+        return (
+            process.ExitCode,
+            output.GetAwaiter().GetResult(),
+            error.GetAwaiter().GetResult());
     }
 
     private static int PoolLength(int requestedElements)

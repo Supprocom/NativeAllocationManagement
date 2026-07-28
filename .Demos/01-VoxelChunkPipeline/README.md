@@ -104,6 +104,16 @@ requests, preparation fails and the timed request does not start.
 The failure artifact keeps every preparation observation. A successful timed
 request starts immediately after its accepted preparation series.
 
+The output path contains an atomic progress checkpoint until the run
+completes. The harness writes a checkpoint after each preparation series.
+
+The harness writes another checkpoint after each isolated pair. This
+checkpoint includes completed profiles, current pairs, initialization data,
+commands, binary identities, and completed worker lifecycles.
+
+Each preparation checkpoint includes all attempts and the current worker
+state. The final report atomically replaces the latest checkpoint.
+
 The worker resets all logical state after each request. The harness removes
 both sample containers before it starts the next pair.
 
@@ -114,6 +124,7 @@ The host stops its timer at `ProcessingCompleted`. The child does not run a
 benchmark timer or scan allocator statistics during processing.
 
 Untimed warmup and exact verification use a separate 60-second host timeout.
+Each completed warmup and preparation request updates a host activity file.
 
 Each result records completion, deadline, correctness, process, GC, cgroup,
 CPU, and native-memory data. A failed result remains in the artifact.
@@ -158,8 +169,16 @@ $image = "nam-voxel-pressure:$($commit.Substring(0, 12))"
   -Enforce
 ```
 
-The setup and matrix commands use hard timeouts for compilation and profile
-execution. The matrix command returns a nonzero exit code when any gate fails.
+The wrapper stops a harness that has no activity for 120 seconds. This limit
+exceeds the longest internal operation limit.
+
+The wrapper derives a separate absolute fail-safe from the selected profiles,
+sample count, warmups, preparation maximum, and operation limits.
+
+A smaller supplied fail-safe is invalid. A timeout keeps the latest checkpoint
+and writes its path, SHA-256, standard output, and standard error.
+
+The matrix command returns a nonzero exit code when any gate fails.
 
 The command creates local evidence only. It does not change or publish the
 package.
