@@ -250,6 +250,31 @@ public sealed class NativeBuilderAnalyzerTests
         Assert.Contains("NAM1042", NativeDiagnostics(diagnostics));
     }
 
+    [Fact]
+    public async Task IndirectBorrowWriteCallbackIsRejected()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run(NativePool<int> pool)
+                {
+                    NativeBuilderWriteAction<int> action =
+                        static writer => writer.Commit(0);
+                    using NativeBuilder<int> builder = pool.CreateBuilder();
+                    builder.Borrow(
+                        (scoped ref NativeBuilderBorrow<int> borrow) =>
+                            borrow.Write(0, action));
+                    builder.Dispose();
+                }
+            }
+            """);
+
+        Assert.Contains("NAM1042", NativeDiagnostics(diagnostics));
+    }
+
     [Theory]
     [InlineData("NativeBuilderBorrow<int> borrow")]
     [InlineData("in NativeBuilderBorrow<int> borrow")]

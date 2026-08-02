@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Diagnostics;
 using Microsoft.CodeAnalysis.Operations;
 using Microsoft.CodeAnalysis.Text;
@@ -55,136 +57,236 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
                 return;
             }
 
-            startContext.RegisterOperationBlockAction(blockContext =>
-            {
-                if (blockContext.OwningSymbol is not IMethodSymbol method
-                    || method.MethodKind == MethodKind.AnonymousFunction)
-                {
-                    return;
-                }
-
-                IParameterSymbol[] writers = method.Parameters
-                    .Where(parameter => symbols.IsWriter(parameter.Type))
-                    .ToArray();
-                IParameterSymbol[] borrows = method.Parameters
-                    .Where(parameter => symbols.IsBorrow(parameter.Type))
-                    .ToArray();
-                if (writers.Length == 0 && borrows.Length == 0)
-                {
-                    return;
-                }
-
-                if (writers.Length != 0)
-                {
-                    WriterUsageWalker writerWalker = new(
-                        symbols,
-                        writers,
-                        blockContext.ReportDiagnostic);
-                    foreach (IOperation block
-                        in blockContext.OperationBlocks)
-                    {
-                        writerWalker.Visit(block);
-                    }
-                }
-
-                if (borrows.Length != 0)
-                {
-                    ReportInvalidBorrowParameters(
-                        borrows,
-                        blockContext.ReportDiagnostic);
-                    BorrowUsageWalker borrowWalker = new(
-                        symbols,
-                        borrows,
-                        blockContext.ReportDiagnostic);
-                    foreach (IOperation block
-                        in blockContext.OperationBlocks)
-                    {
-                        borrowWalker.Visit(block);
-                    }
-                }
-            });
-            startContext.RegisterOperationAction(operationContext =>
-            {
-                if (operationContext.Operation
-                    is not IAnonymousFunctionOperation callback)
-                {
-                    return;
-                }
-
-                IParameterSymbol[] writers = callback.Symbol.Parameters
-                    .Where(parameter => symbols.IsWriter(parameter.Type))
-                    .ToArray();
-                IParameterSymbol[] borrows = callback.Symbol.Parameters
-                    .Where(parameter => symbols.IsBorrow(parameter.Type))
-                    .ToArray();
-                if (writers.Length == 0 && borrows.Length == 0)
-                {
-                    return;
-                }
-
-                if (writers.Length != 0)
-                {
-                    WriterUsageWalker writerWalker = new(
-                        symbols,
-                        writers,
-                        operationContext.ReportDiagnostic);
-                    writerWalker.Visit(callback.Body);
-                }
-
-                if (borrows.Length != 0)
-                {
-                    ReportInvalidBorrowParameters(
-                        borrows,
-                        operationContext.ReportDiagnostic);
-                    BorrowUsageWalker borrowWalker = new(
-                        symbols,
-                        borrows,
-                        operationContext.ReportDiagnostic);
-                    borrowWalker.Visit(callback.Body);
-                }
-            }, OperationKind.AnonymousFunction);
-            startContext.RegisterOperationAction(operationContext =>
-            {
-                if (operationContext.Operation
-                    is not IInvocationOperation invocation)
-                {
-                    return;
-                }
-
-                if (symbols.IsBuilderWrite(invocation.TargetMethod))
-                {
-                    ValidateCallbackArgument(
-                        operationContext,
-                        invocation,
-                        symbols,
-                        symbols.IsWriteAction,
-                        symbols.IsWriter,
-                        RefKind.None,
-                        InvalidAuthority,
-                        "writer");
-                    return;
-                }
-
-                if (symbols.IsBuilderBorrow(invocation.TargetMethod))
-                {
-                    ValidateCallbackArgument(
-                        operationContext,
-                        invocation,
-                        symbols,
-                        symbols.IsBorrowAction,
-                        symbols.IsBorrow,
-                        RefKind.Ref,
-                        InvalidBorrowAuthority,
-                        "borrow");
-                }
-            }, OperationKind.Invocation);
+            startContext.RegisterSyntaxNodeAction(
+                nodeContext => AnalyzeDeclaredMethod(
+                    nodeContext,
+                    symbols),
+                SyntaxKind.MethodDeclaration,
+                SyntaxKind.ConstructorDeclaration,
+                SyntaxKind.DestructorDeclaration,
+                SyntaxKind.OperatorDeclaration,
+                SyntaxKind.ConversionOperatorDeclaration,
+                SyntaxKind.LocalFunctionStatement);
+            startContext.RegisterSyntaxNodeAction(
+                nodeContext => AnalyzeInvocation(
+                    nodeContext,
+                    symbols),
+                SyntaxKind.InvocationExpression);
+            startContext.RegisterOperationAction(
+                operationContext => AnalyzeAnonymousFunction(
+                    operationContext,
+                    symbols),
+                OperationKind.AnonymousFunction);
         });
     }
 
-    private static void ValidateCallbackArgument(
+    private static void AnalyzeAnonymousFunction(
         OperationAnalysisContext context,
-        IInvocationOperation invocation,
+        Symbols symbols)
+    {
+        if (context.Operation
+                is not IAnonymousFunctionOperation anonymous
+            || anonymous.Symbol.Parameters.Length != 1)
+        {
+            return;
+        }
+
+        IParameterSymbol parameter = anonymous.Symbol.Parameters[0];
+        if (symbols.IsWriter(parameter.Type))
+        {
+            AnalyzeAuthorityBody(
+                anonymous.Body,
+                [parameter],
+                [],
+                symbols,
+                context.ReportDiagnostic,
+                expressionReturn: false);
+            return;
+        }
+
+        if (!symbols.IsBorrow(parameter.Type))
+        {
+            return;
+        }
+
+        ReportInvalidBorrowParameters(
+            [parameter],
+            context.ReportDiagnostic);
+        AnalyzeAuthorityBody(
+            anonymous.Body,
+            [],
+            [parameter],
+            symbols,
+            context.ReportDiagnostic,
+            expressionReturn: false);
+    }
+
+    private static void AnalyzeDeclaredMethod(
+        SyntaxNodeAnalysisContext context,
+        Symbols symbols)
+    {
+        SyntaxNode? body;
+        IMethodSymbol? method;
+        bool expressionBody;
+        if (context.Node is BaseMethodDeclarationSyntax baseMethod)
+        {
+            method = context.SemanticModel.GetDeclaredSymbol(
+                baseMethod,
+                context.CancellationToken) as IMethodSymbol;
+            body = (SyntaxNode?)baseMethod.Body
+                ?? baseMethod.ExpressionBody?.Expression;
+            expressionBody = baseMethod.ExpressionBody is not null;
+        }
+        else if (context.Node
+            is LocalFunctionStatementSyntax localFunction)
+        {
+            method = context.SemanticModel.GetDeclaredSymbol(
+                localFunction,
+                context.CancellationToken) as IMethodSymbol;
+            body = (SyntaxNode?)localFunction.Body
+                ?? localFunction.ExpressionBody?.Expression;
+            expressionBody = localFunction.ExpressionBody is not null;
+        }
+        else
+        {
+            return;
+        }
+
+        if (method is null)
+        {
+            return;
+        }
+
+        IParameterSymbol[] writers = method.Parameters
+            .Where(parameter => symbols.IsWriter(parameter.Type))
+            .ToArray();
+        IParameterSymbol[] borrows = method.Parameters
+            .Where(parameter => symbols.IsBorrow(parameter.Type))
+            .ToArray();
+        if (writers.Length == 0 && borrows.Length == 0)
+        {
+            return;
+        }
+
+        if (borrows.Length != 0)
+        {
+            ReportInvalidBorrowParameters(
+                borrows,
+                context.ReportDiagnostic);
+        }
+
+        if (body is null
+            || context.SemanticModel.GetOperation(
+                body,
+                context.CancellationToken)
+                is not { } operation)
+        {
+            return;
+        }
+
+        AnalyzeAuthorityBody(
+            operation,
+            writers,
+            borrows,
+            symbols,
+            context.ReportDiagnostic,
+            expressionBody && !method.ReturnsVoid);
+    }
+
+    private static bool IsPotentialBuilderInvocation(
+        InvocationExpressionSyntax invocation)
+    {
+        SimpleNameSyntax? name = invocation.Expression switch
+        {
+            MemberAccessExpressionSyntax member => member.Name,
+            MemberBindingExpressionSyntax binding => binding.Name,
+            IdentifierNameSyntax identifier => identifier,
+            GenericNameSyntax generic => generic,
+            _ => null
+        };
+        return name?.Identifier.ValueText is "Write" or "Borrow";
+    }
+
+    private static void AnalyzeInvocation(
+        SyntaxNodeAnalysisContext context,
+        Symbols symbols)
+    {
+        if (context.Node is not InvocationExpressionSyntax syntax
+            || !IsPotentialBuilderInvocation(syntax)
+            || context.SemanticModel.GetOperation(
+                syntax,
+                context.CancellationToken)
+                is not IInvocationOperation invocation)
+        {
+            return;
+        }
+
+        if (symbols.IsBuilderWrite(invocation.TargetMethod))
+        {
+            ValidateCallbackArgument(
+                context.ReportDiagnostic,
+                invocation,
+                symbols.IsWriteAction,
+                symbols.IsWriter,
+                RefKind.None,
+                InvalidAuthority,
+                "writer");
+            return;
+        }
+
+        if (symbols.IsBuilderBorrow(invocation.TargetMethod))
+        {
+            ValidateCallbackArgument(
+                context.ReportDiagnostic,
+                invocation,
+                symbols.IsBorrowAction,
+                symbols.IsBorrow,
+                RefKind.Ref,
+                InvalidBorrowAuthority,
+                "borrow");
+        }
+    }
+
+    private static void AnalyzeAuthorityBody(
+        IOperation body,
+        IParameterSymbol[] writers,
+        IParameterSymbol[] borrows,
         Symbols symbols,
+        Action<Diagnostic> report,
+        bool expressionReturn)
+    {
+        if (writers.Length != 0)
+        {
+            WriterUsageWalker writerWalker = new(
+                symbols,
+                writers,
+                report);
+            if (expressionReturn)
+            {
+                writerWalker.ReportExpressionReturn(body);
+            }
+
+            writerWalker.Visit(body);
+        }
+
+        if (borrows.Length != 0)
+        {
+            BorrowUsageWalker borrowWalker = new(
+                symbols,
+                borrows,
+                report);
+            if (expressionReturn)
+            {
+                borrowWalker.ReportExpressionReturn(body);
+            }
+
+            borrowWalker.Visit(body);
+        }
+    }
+
+    private static void ValidateCallbackArgument(
+        Action<Diagnostic> report,
+        IInvocationOperation invocation,
         Func<ITypeSymbol?, bool> isAction,
         Func<ITypeSymbol?, bool> isAuthority,
         RefKind refKind,
@@ -197,14 +299,13 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
         if (callback is null
             || IsDirectCallback(
                 callback.Value,
-                symbols,
                 isAuthority,
                 refKind))
         {
             return;
         }
 
-        context.ReportDiagnostic(Diagnostic.Create(
+        report(Diagnostic.Create(
             descriptor,
             callback.Syntax.GetLocation(),
             name,
@@ -213,7 +314,6 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
 
     private static bool IsDirectCallback(
         IOperation value,
-        Symbols symbols,
         Func<ITypeSymbol?, bool> isAuthority,
         RefKind refKind)
     {
@@ -333,7 +433,8 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
 
         internal bool IsBuilderWrite(IMethodSymbol method) =>
             method.Name == "Write"
-            && Is(method.ContainingType, Builder)
+            && (Is(method.ContainingType, Builder)
+                || Is(method.ContainingType, Borrow))
             && method.Parameters.Any(parameter =>
                 IsWriteAction(parameter.Type));
 
@@ -424,6 +525,18 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
             _symbols = symbols;
             _writers = writers;
             _report = report;
+        }
+
+        internal void ReportExpressionReturn(IOperation operation)
+        {
+            if (IsViewDerived(operation))
+            {
+                Report(
+                    ViewEscape,
+                    operation.Syntax,
+                    ViewName(operation),
+                    "the helper return");
+            }
         }
 
         public override void VisitVariableDeclarator(
@@ -675,6 +788,18 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
             _symbols = symbols;
             _borrows = borrows;
             _report = report;
+        }
+
+        internal void ReportExpressionReturn(IOperation operation)
+        {
+            if (ContainsBorrow(operation))
+            {
+                Report(
+                    BorrowEscape,
+                    operation.Syntax,
+                    BorrowName(operation),
+                    "the helper return");
+            }
         }
 
         public override void VisitParameterReference(
