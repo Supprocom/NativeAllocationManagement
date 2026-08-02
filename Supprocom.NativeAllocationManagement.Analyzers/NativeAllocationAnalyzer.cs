@@ -33,6 +33,11 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 return;
             }
 
+            NativeRegionManagedAllocationAnalysis managedAllocationAnalysis = new(
+                startContext.Compilation,
+                symbols);
+            managedAllocationAnalysis.Register(startContext);
+
             startContext.RegisterOperationBlockAction(blockContext =>
             {
                 blockContext.CancellationToken.ThrowIfCancellationRequested();
@@ -58,7 +63,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         });
     }
 
-    private sealed class NativeSymbols
+    internal sealed class NativeSymbols
     {
         private const string Namespace =
             "Supprocom.NativeAllocationManagement.";
@@ -4099,7 +4104,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             Target target = FindTarget(operation);
             bool isRegion = IsNativeRegion(operation.Type);
             bool isUsing = isRegion
-                ? IsDirectBracedRegionUsingStatement(operation.Syntax, target.Symbol)
+                ? IsDirectRegionUsingSyntax(operation.Syntax, target.Symbol)
                 : IsUsingSyntax(operation.Syntax, target.Symbol);
             bool requiresDeterministicReturn = IsNativeArena(operation.Type) || RequiresDeterministicReturn(operation);
             TextSpan? regionScope = isRegion && isUsing ? GetUsingScope(operation.Syntax, target.Symbol) : null;
@@ -4157,18 +4162,6 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
             if (isRegion && isUsing && GetUsingScope(operation.Syntax, target.Symbol) is TextSpan scope)
             {
-                foreach (RegionScope previous in _regions)
-                {
-                    if (previous.Scope.Contains(operation.Syntax.Span.Start) && previous.Start < operation.Syntax.Span.Start)
-                    {
-                        Report(
-                            NativeAllocationDiagnosticDescriptors.NestedRegion,
-                            operation.Syntax,
-                            target.Symbol.Name,
-                            previous.Name);
-                    }
-                }
-
                 _regions.Add(new RegionScope(target.Symbol.Name, scope, operation.Syntax.Span.Start));
             }
         }
@@ -6117,15 +6110,41 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     : null;
             }
 
-            return null;
+            LocalDeclarationStatementSyntax? declaration = syntax.AncestorsAndSelf()
+                .OfType<LocalDeclarationStatementSyntax>()
+                .FirstOrDefault(statement => statement.UsingKeyword.IsKind(SyntaxKind.UsingKeyword)
+                    && IsDirectUsingDeclarationInitializer(statement, syntax, symbol));
+            if (declaration is null)
+            {
+                return null;
+            }
+
+            SyntaxNode lexicalScope = declaration.Parent switch
+            {
+                GlobalStatementSyntax global => global.Parent ?? global,
+                SyntaxNode parent => parent,
+                null => declaration.SyntaxTree.GetRoot(_context.CancellationToken)
+            };
+            int start = declaration.Span.End;
+            return TextSpan.FromBounds(start, lexicalScope.Span.End);
+
         }
 
-        private static bool IsDirectBracedRegionUsingStatement(SyntaxNode syntax, ISymbol? symbol)
+        private static bool IsDirectRegionUsingSyntax(SyntaxNode syntax, ISymbol? symbol)
         {
-            return syntax.AncestorsAndSelf()
+            bool bracedUsing = syntax.AncestorsAndSelf()
                 .OfType<UsingStatementSyntax>()
                 .Any(statement => statement.Statement is BlockSyntax
                     && IsDirectUsingInitializer(statement, syntax, symbol));
+            if (bracedUsing)
+            {
+                return true;
+            }
+
+            return syntax.AncestorsAndSelf()
+                .OfType<LocalDeclarationStatementSyntax>()
+                .Any(statement => statement.UsingKeyword.IsKind(SyntaxKind.UsingKeyword)
+                    && IsDirectUsingDeclarationInitializer(statement, syntax, symbol));
         }
 
         private static bool IsDirectUsingInitializer(UsingStatementSyntax statement, SyntaxNode syntax, ISymbol? symbol)

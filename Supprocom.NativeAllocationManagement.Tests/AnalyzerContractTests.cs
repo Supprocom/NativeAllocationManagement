@@ -148,7 +148,7 @@ public sealed class AnalyzerContractTests
     }
 
     [Fact]
-    public async Task RegionRequiresUsingAndRejectsNestedRegions()
+    public async Task RegionRequiresUsingAndAcceptsNestedRegions()
     {
         ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
             """
@@ -180,7 +180,7 @@ public sealed class AnalyzerContractTests
 
         string[] ids = NativeDiagnostics(diagnostics);
         Assert.Contains("NAM1006", ids);
-        Assert.Contains("NAM1010", ids);
+        Assert.DoesNotContain("NAM1010", ids);
     }
 
     [Fact]
@@ -827,7 +827,7 @@ public sealed class AnalyzerContractTests
     }
 
     [Fact]
-    public async Task ExplicitRegionUsingStatementWithDelayedActivationIsAccepted()
+    public async Task ExplicitRegionUsingStatementIsAccepted()
     {
         ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
             """
@@ -835,9 +835,8 @@ public sealed class AnalyzerContractTests
 
                 public static void Run()
                 {
-                    using (NativeRegion region = new(doNotLeaseOnDeclaration: true))
+                    using (NativeRegion region = new())
                     {
-                        region.LeaseFromMemory();
                         Local<int> value = region.Lease<int>(1, static writer => writer.Fill(default!));
                         value[0] = 42;
                     }
@@ -848,7 +847,7 @@ public sealed class AnalyzerContractTests
     }
 
     [Fact]
-    public async Task DelayedPoolAndRegionActivationAreAcceptedOnlyAfterPublication()
+    public async Task DelayedPoolAndActiveRegionAreAccepted()
     {
         ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
             """
@@ -862,9 +861,8 @@ public sealed class AnalyzerContractTests
                     pool.LeaseFromMemory();
                     using Pooled<int> values = pool.Rent(1, static writer => writer.Fill(default!));
 
-                    using (NativeRegion region = new(doNotLeaseOnDeclaration: true))
+                    using (NativeRegion region = new())
                     {
-                        region.LeaseFromMemory();
                         Local<int> local = region.Lease<int>(1, static writer => writer.Fill(default!));
                         local[0] = values[0];
                     }
@@ -876,7 +874,7 @@ public sealed class AnalyzerContractTests
     }
 
     [Fact]
-    public async Task UnleasedPoolAndRegionRejectUseBeforeActivation()
+    public async Task UnleasedPoolRejectsUseBeforeActivation()
     {
         ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
             """
@@ -890,7 +888,7 @@ public sealed class AnalyzerContractTests
                     Pooled<int> values = pool.Rent(1, static writer => writer.Fill(default!));
                     pool.Dispose();
 
-                    using (NativeRegion region = new(doNotLeaseOnDeclaration: true))
+                    using (NativeRegion region = new())
                     {
                         Local<int> local = region.Lease<int>(1, static writer => writer.Fill(default!));
                         _ = local.Length;
@@ -900,7 +898,7 @@ public sealed class AnalyzerContractTests
             """);
 
         string[] ids = NativeDiagnostics(diagnostics);
-        Assert.Equal(2, ids.Count(id => id == "NAM1009"));
+        Assert.Single(ids, id => id == "NAM1009");
     }
 
     [Fact]
@@ -931,25 +929,24 @@ public sealed class AnalyzerContractTests
     }
 
     [Fact]
-    public async Task TopLevelRegionUsingDeclarationIsRejectedWithoutLocalEscape()
+    public async Task TopLevelRegionUsingDeclarationIsAccepted()
     {
         ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
             """
             using Supprocom.NativeAllocationManagement;
 
-            using NativeRegion region = new(doNotLeaseOnDeclaration: true);
-            region.LeaseFromMemory();
+            using NativeRegion region = new();
             Local<int> value = region.Lease<int>(1, static writer => writer.Fill(default!));
             value[0] = 42;
             """);
 
         string[] ids = NativeDiagnostics(diagnostics);
-        Assert.Contains("NAM1006", ids);
+        Assert.DoesNotContain("NAM1006", ids);
         Assert.DoesNotContain("NAM1012", ids);
     }
 
     [Fact]
-    public async Task BlockRegionUsingDeclarationIsRejectedWithoutLocalEscape()
+    public async Task BlockRegionUsingDeclarationIsAccepted()
     {
         ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
             """
@@ -959,8 +956,7 @@ public sealed class AnalyzerContractTests
             {
                 public static void Run()
                 {
-                    using NativeRegion region = new(doNotLeaseOnDeclaration: true);
-                    region.LeaseFromMemory();
+                    using NativeRegion region = new();
                     Local<int> value = region.Lease<int>(1, static writer => writer.Fill(default!));
                     value[0] = 42;
                 }
@@ -968,7 +964,7 @@ public sealed class AnalyzerContractTests
             """);
 
         string[] ids = NativeDiagnostics(diagnostics);
-        Assert.Contains("NAM1006", ids);
+        Assert.DoesNotContain("NAM1006", ids);
         Assert.DoesNotContain("NAM1012", ids);
     }
 
@@ -979,16 +975,14 @@ public sealed class AnalyzerContractTests
             """
             using Supprocom.NativeAllocationManagement;
 
-            using NativeRegion outer = new(doNotLeaseOnDeclaration: true);
-            using NativeRegion inner = new(doNotLeaseOnDeclaration: true);
-            outer.LeaseFromMemory();
-            inner.LeaseFromMemory();
+            using NativeRegion outer = new();
+            using NativeRegion inner = new();
             Local<int> value = outer.Lease<int>(1, static writer => writer.Fill(default!));
             value[0] = 42;
             """);
 
         string[] ids = NativeDiagnostics(diagnostics);
-        Assert.Equal(2, ids.Count(id => id == "NAM1006"));
+        Assert.DoesNotContain("NAM1006", ids);
         Assert.DoesNotContain("NAM1010", ids);
         Assert.DoesNotContain("NAM1012", ids);
     }
@@ -2277,7 +2271,8 @@ public sealed class AnalyzerContractTests
 
     internal static async Task<ImmutableArray<Diagnostic>> AnalyzeAsync(
         string source,
-        OutputKind outputKind = OutputKind.DynamicallyLinkedLibrary)
+        OutputKind outputKind = OutputKind.DynamicallyLinkedLibrary,
+        bool treatWarningsAsErrors = false)
     {
         CSharpParseOptions parseOptions = new(LanguageVersion.Preview);
         SyntaxTree tree = CSharpSyntaxTree.ParseText(source, parseOptions);
@@ -2287,15 +2282,26 @@ public sealed class AnalyzerContractTests
             MetadataReference.CreateFromFile(typeof(NativePool<int>).Assembly.Location)
         ];
 
+        CSharpCompilationOptions options = new(
+            outputKind,
+            allowUnsafe: true);
+        if (treatWarningsAsErrors)
+        {
+            options = options.WithGeneralDiagnosticOption(
+                ReportDiagnostic.Error);
+        }
+
         CSharpCompilation compilation = CSharpCompilation.Create(
             assemblyName: "NativeAllocationAnalyzerContract",
             syntaxTrees: [tree],
             references: references,
-            options: new CSharpCompilationOptions(outputKind, allowUnsafe: true));
+            options: options);
 
         CompilationWithAnalyzers analyzed = compilation.WithAnalyzers(
             ImmutableArray.Create<DiagnosticAnalyzer>(new NativeAllocationAnalyzer()));
-        return await analyzed.GetAnalyzerDiagnosticsAsync();
+        return treatWarningsAsErrors
+            ? await analyzed.GetAllDiagnosticsAsync()
+            : await analyzed.GetAnalyzerDiagnosticsAsync();
     }
 
     private static IEnumerable<MetadataReference> GetTrustedPlatformReferences()

@@ -33,7 +33,7 @@ internal static class NativeAllocationDiagnosticDescriptors
     internal static readonly DiagnosticDescriptor RegionMustBeUsing = Create(
         "NAM1006",
         "Region construction must be lexical",
-        "NativeRegion '{0}' must be the direct resource of a braced using statement. A region is a non-transferable lexical allocation boundary.");
+        "NativeRegion '{0}' must be the direct resource of a using statement or using declaration. A region is a non-transferable lexical allocation boundary.");
 
     internal static readonly DiagnosticDescriptor GenerationReturnLiveValue = Create(
         "NAM1007",
@@ -44,11 +44,6 @@ internal static class NativeAllocationDiagnosticDescriptors
         "NAM1009",
         "Native owner lifecycle transition is invalid",
         "'{0}' cannot call '{1}' in its current generation state. Return a current generation before LeaseFromMemory and do not use returned values.");
-
-    internal static readonly DiagnosticDescriptor NestedRegion = Create(
-        "NAM1010",
-        "Nested NativeRegion is not permitted",
-        "NativeRegion '{0}' overlaps active region '{1}'. NativeRegion ownership is explicit, braced, and non-nesting.");
 
     internal static readonly DiagnosticDescriptor AcrossAsync = Create(
         "NAM1011",
@@ -168,6 +163,12 @@ internal static class NativeAllocationDiagnosticDescriptors
         "Native builder completion requires a typed transfer destination",
         "NativeBuilder<T>.Complete for '{0}' must publish directly to an exact NativeTransfer<T> destination.");
 
+    internal static readonly DiagnosticDescriptor ManagedAllocationInRegion = Create(
+        "NAM1035",
+        "NativeRegion scope has a managed allocation",
+        "Managed allocation '{0}' occurs at '{1}' in NativeRegion scope '{2}'. The allocation source is '{3}'.",
+        DiagnosticSeverity.Warning);
+
     internal static readonly DiagnosticDescriptor AnalyzerMissing = Create(
         "NAM9001",
         "Bundled analyzer is required",
@@ -182,7 +183,6 @@ internal static class NativeAllocationDiagnosticDescriptors
         RegionMustBeUsing,
         GenerationReturnLiveValue,
         InvalidLifecycle,
-        NestedRegion,
         AcrossAsync,
         LocalEscape,
         PooledEscape,
@@ -206,6 +206,7 @@ internal static class NativeAllocationDiagnosticDescriptors
         BuilderAcquisitionEscape,
         UnsupportedBuilderParameter,
         BuilderCompletionEscape,
+        ManagedAllocationInRegion,
         AnalyzerMissing);
 
     private static DiagnosticDescriptor Create(

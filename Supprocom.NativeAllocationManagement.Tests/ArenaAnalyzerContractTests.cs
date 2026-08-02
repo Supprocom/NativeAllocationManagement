@@ -147,7 +147,7 @@ public sealed class ArenaAnalyzerContractTests
     }
 
     [Fact]
-    public async Task RegionRequiresTheExplicitBracedUsingStatement()
+    public async Task RegionAcceptsBothLexicalUsingForms()
     {
         ImmutableArray<Diagnostic> valid = await AnalyzerContractTests.AnalyzeAsync(
             """
@@ -179,9 +179,7 @@ public sealed class ArenaAnalyzerContractTests
                 }
             }
             """);
-        string[] ids = AnalyzerContractTests.NativeDiagnostics(declaration);
-        Assert.Contains("NAM1006", ids);
-        Assert.DoesNotContain("NAM1012", ids);
+        Assert.Empty(AnalyzerContractTests.NativeDiagnostics(declaration));
     }
 
     [Fact]
@@ -205,7 +203,7 @@ public sealed class ArenaAnalyzerContractTests
     }
 
     [Fact]
-    public async Task PoolAndRegionScopedAcquisitionsRequireTheMatchingCompletion()
+    public async Task PoolScopedAcquisitionsRequireTheMatchingCompletion()
     {
         ImmutableArray<Diagnostic> valid = await AnalyzerContractTests.AnalyzeAsync(
             """
@@ -217,11 +215,6 @@ public sealed class ArenaAnalyzerContractTests
                     NativePool<int> pool = new();
                     { scoped Pooled<int> pooled = pool.LeaseScoped(2, static writer => writer.Fill(default!)); pooled[0] = 1; }
                     pool.RecycleScoped();
-                    using (NativeRegion region = new())
-                    {
-                        { scoped Local<int> local = region.LeaseScoped<int>(2, static writer => writer.Fill(default!)); local[0] = 1; }
-                        region.RecycleScoped();
-                    }
                     pool.Dispose();
                 }
             }
@@ -316,7 +309,7 @@ public sealed class ArenaAnalyzerContractTests
     }
 
     [Fact]
-    public async Task RegionGarbageCollectorReturnUsesTheSharedWarningSeverityForALiveRoot()
+    public async Task RegionManualDisposeEndsTheAnalyzerScope()
     {
         ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
             """
@@ -327,15 +320,13 @@ public sealed class ArenaAnalyzerContractTests
                 {
                     using (NativeRegion region = new())
                     {
-                        Local<int> value = region.Lease<int>(1, static writer => writer.Fill(default!));
-                        region.ReturnMemoryToGarbageCollector();
+                        region.Dispose();
+                        object afterDispose = new object();
                     }
                 }
             }
             """);
-        Diagnostic warning = Assert.Single(diagnostics.Where(diagnostic => diagnostic.Id == "NAM1017"));
-        Assert.Equal(DiagnosticSeverity.Warning, warning.Severity);
-        Assert.DoesNotContain(diagnostics, diagnostic => diagnostic.Id == "NAM1007");
+        Assert.Empty(AnalyzerContractTests.NativeDiagnostics(diagnostics));
     }
 
     [Fact]

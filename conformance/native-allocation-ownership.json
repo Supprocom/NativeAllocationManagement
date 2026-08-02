@@ -327,26 +327,24 @@
     "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativePool<int> pool = new(doNotLeaseOnDeclaration: true); pool.LeaseFromMemory(); Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!)); value.Dispose(); pool.Dispose(); } }"
   },
   {
-    "name": "delayed-region-explicit-using-statement",
+    "name": "simple-region-using-declaration",
     "compilerRejected": false,
     "expectedDiagnostics": [],
-    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { using (NativeRegion region = new(doNotLeaseOnDeclaration: true)) { region.LeaseFromMemory(); Local<int> value = region.Lease<int>(1, static writer => writer.Fill(default!)); value[0] = 42; } } }"
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { using NativeRegion region = new(); Local<int> value = region.Lease<int>(1, static writer => writer.Fill(default!)); value[0] = 42; } }"
   },
   {
-    "name": "region-native-return-live-root-error",
+    "name": "region-managed-allocation-warning",
     "compilerRejected": false,
     "expectedDiagnostics": [
-      { "id": "NAM1007", "count": 1, "severity": "Error", "facts": [{ "line": 2, "column": 176, "provenance": "region -> value" }] }
+      { "id": "NAM1035", "count": 1, "severity": "Warning", "facts": [{ "line": 2, "column": 107, "provenance": "class object creation" }] }
     ],
-    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { using (NativeRegion region = new()) { Local<int> value = region.Lease<int>(1, static writer => writer.Fill(default!)); region.ReturnMemoryToNativeMemory(); } } }"
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { using NativeRegion region = new(); object value = new object(); } }"
   },
   {
-    "name": "region-garbage-return-live-root-warning",
+    "name": "region-managed-allocation-allowed",
     "compilerRejected": false,
-    "expectedDiagnostics": [
-      { "id": "NAM1017", "count": 1, "severity": "Warning", "facts": [{ "line": 2, "column": 176, "provenance": "region -> value" }] }
-    ],
-    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { using (NativeRegion region = new()) { Local<int> value = region.Lease<int>(1, static writer => writer.Fill(default!)); region.ReturnMemoryToGarbageCollector(); } } }"
+    "expectedDiagnostics": [],
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { using NativeRegion region = new();\n// NAMALLOW\nobject value = new object(); } }"
   },
   {
     "name": "region-field-compiler-boundary",
