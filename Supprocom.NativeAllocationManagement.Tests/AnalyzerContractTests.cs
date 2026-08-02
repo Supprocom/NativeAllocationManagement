@@ -2294,7 +2294,9 @@ public sealed class AnalyzerContractTests
             options: new CSharpCompilationOptions(outputKind, allowUnsafe: true));
 
         CompilationWithAnalyzers analyzed = compilation.WithAnalyzers(
-            ImmutableArray.Create<DiagnosticAnalyzer>(new NativeAllocationAnalyzer()));
+            ImmutableArray.Create<DiagnosticAnalyzer>(
+                new NativeAllocationAnalyzer(),
+                new NativeBuilderWriteAnalyzer()));
         return await analyzed.GetAnalyzerDiagnosticsAsync();
     }
 

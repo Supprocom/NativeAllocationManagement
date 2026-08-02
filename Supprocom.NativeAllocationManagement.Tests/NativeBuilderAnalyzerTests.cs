@@ -33,6 +33,180 @@ public sealed class NativeBuilderAnalyzerTests
     }
 
     [Fact]
+    public async Task BoundedDirectWriteIsAccepted()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using System;
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run(NativePool<int> pool)
+                {
+                    using NativeBuilder<int> builder =
+                        pool.CreateBuilder(preLease: 4);
+                    builder.Write(
+                        4,
+                        static writer =>
+                        {
+                            Span<int> values = writer.AsSpan();
+                            values[0] = 2;
+                            values[1] = 3;
+                            values[2] = 5;
+                            writer.Commit(3);
+                        });
+                    NativeTransfer<int> transfer = builder.Complete();
+                    transfer.Dispose();
+                }
+            }
+            """);
+
+        AssertNoNativeDiagnostics(diagnostics);
+    }
+
+    [Fact]
+    public async Task NamedScopedDirectWriterIsAccepted()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run(NativePool<int> pool)
+                {
+                    using NativeBuilder<int> builder =
+                        pool.CreateBuilder(preLease: 2);
+                    builder.Write(2, WriteValues);
+                    NativeTransfer<int> transfer = builder.Complete();
+                    transfer.Dispose();
+                }
+
+                private static void WriteValues(
+                    scoped NativeBuilderWriter<int> writer)
+                {
+                    writer.AsSpan().Fill(7);
+                    writer.Commit(writer.Length);
+                }
+            }
+            """);
+
+        AssertNoNativeDiagnostics(diagnostics);
+    }
+
+    [Fact]
+    public async Task BuilderWriteViewEscapeIsRejected()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using System;
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run(NativePool<int> pool)
+                {
+                    using NativeBuilder<int> builder = pool.CreateBuilder();
+                    builder.Write(
+                        2,
+                        static writer =>
+                        {
+                            Retain(writer.AsSpan());
+                            writer.Commit(2);
+                        });
+                    builder.Dispose();
+                }
+
+                private static void Retain(Span<int> values)
+                {
+                    _ = values.Length;
+                }
+            }
+            """);
+
+        Assert.Contains("NAM1041", NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task BuilderWriterAliasIsRejected()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run(NativePool<int> pool)
+                {
+                    using NativeBuilder<int> builder = pool.CreateBuilder();
+                    builder.Write(
+                        1,
+                        static writer =>
+                        {
+                            NativeBuilderWriter<int> alias = writer;
+                            alias.Commit(0);
+                        });
+                    builder.Dispose();
+                }
+            }
+            """);
+
+        Assert.Contains("NAM1042", NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task BuilderWriterHelperAuthorityIsRejected()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run(NativePool<int> pool)
+                {
+                    using NativeBuilder<int> builder = pool.CreateBuilder();
+                    builder.Write(
+                        1,
+                        static writer => Commit(writer));
+                    builder.Dispose();
+                }
+
+                private static void Commit(
+                    NativeBuilderWriter<int> writer) =>
+                    writer.Commit(0);
+            }
+            """);
+
+        Assert.Contains("NAM1042", NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task IndirectBuilderWriteCallbackIsRejected()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run(NativePool<int> pool)
+                {
+                    NativeBuilderWriteAction<int> action =
+                        static writer => writer.Commit(0);
+                    using NativeBuilder<int> builder = pool.CreateBuilder();
+                    builder.Write(0, action);
+                    NativeTransfer<int> transfer = builder.Complete();
+                    transfer.Dispose();
+                }
+            }
+            """);
+
+        Assert.Contains("NAM1042", NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
     public async Task LocalBuilderDisposalIsAccepted()
     {
         ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(

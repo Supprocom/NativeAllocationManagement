@@ -244,7 +244,12 @@ internal static class Program
         CancellationToken cancellationToken,
         params DiagnosticAnalyzer[] additionalAnalyzers)
     {
-        DiagnosticAnalyzer[] analyzers = [new NativeAllocationAnalyzer(), .. additionalAnalyzers];
+        DiagnosticAnalyzer[] analyzers =
+        [
+            new NativeAllocationAnalyzer(),
+            new NativeBuilderWriteAnalyzer(),
+            .. additionalAnalyzers
+        ];
         CompilationWithAnalyzers analyzed = compilation.WithAnalyzers(ImmutableArray.CreateRange(analyzers));
         return await analyzed.GetAnalyzerDiagnosticsAsync(cancellationToken);
     }
