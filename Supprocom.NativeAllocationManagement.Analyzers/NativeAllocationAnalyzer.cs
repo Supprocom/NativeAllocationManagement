@@ -1993,6 +1993,58 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             FlowSnapshot whenFalse = CaptureSnapshot();
 
             MergeSnapshots(whenTrue, whenFalse);
+            ApplyGuaranteedConditionalTransferCleanup(operation);
+        }
+
+        private void ApplyGuaranteedConditionalTransferCleanup(
+            IConditionalOperation operation)
+        {
+            if (operation.Syntax is not IfStatementSyntax statement
+                || statement.Else is not null)
+            {
+                return;
+            }
+
+            ExpressionStatementSyntax? cleanup = statement.Statement switch
+            {
+                ExpressionStatementSyntax expression => expression,
+                BlockSyntax
+                {
+                    Statements.Count: 1
+                } block => block.Statements[0] as ExpressionStatementSyntax,
+                _ => null
+            };
+            if (cleanup is null)
+            {
+                return;
+            }
+
+            SemanticModel model = _context.Compilation.GetSemanticModel(
+                cleanup.SyntaxTree);
+            if (model.GetOperation(
+                    cleanup.Expression,
+                    _context.CancellationToken)
+                is not IInvocationOperation
+                {
+                    TargetMethod.Name: "Dispose"
+                } invocation)
+            {
+                return;
+            }
+
+            TransferState? transfer = GetTransfer(
+                GetTransferInvocationInstance(invocation));
+            if (transfer is null
+                || !ConditionProvesNotNull(
+                    statement.Condition,
+                    transfer.Symbol))
+            {
+                return;
+            }
+
+            MarkTransferIdentity(
+                transfer.OwnershipIdentity,
+                TransferStatus.Disposed);
         }
 
         public override void VisitForEachLoop(IForEachLoopOperation operation)
@@ -2517,14 +2569,15 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 }
             }
             else if (_isStandaloneClosureAnalysis
-                && IsNativeBuilder(operation.Type)
+                && (IsNativeTransfer(operation.Type)
+                    || IsNativeBuilder(operation.Type))
                 && IsCapturedLocal(
                     operation.Local,
                     operation.Syntax)
-                && GetBuilder(operation) is TransferState builder)
+                && GetNativeOwnership(operation) is TransferState ownership)
             {
                 ReportTransferCopy(
-                    builder,
+                    ownership,
                     operation.Syntax,
                     "a closure");
             }
@@ -2560,6 +2613,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     || IsNativeBuilder(operand.Type))
                 && !IsNativeTransfer(operation.Type)
                 && !IsNativeBuilder(operation.Type)
+                && !IsNullComparisonConversion(operation)
                 && !(IsNativeBuilder(operand.Type)
                     && operation.IsImplicit
                     && IsDirectUsingResourceConversion(
@@ -2619,6 +2673,26 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             }
 
             base.VisitConversion(operation);
+        }
+
+        private static bool IsNullComparisonConversion(
+            IConversionOperation operation)
+        {
+            if (operation.Parent is not IBinaryOperation binary
+                || binary.OperatorMethod is not null
+                || binary.OperatorKind is not (
+                    BinaryOperatorKind.Equals
+                    or BinaryOperatorKind.NotEquals))
+            {
+                return false;
+            }
+
+            IOperation other = ReferenceEquals(binary.LeftOperand, operation)
+                ? binary.RightOperand
+                : binary.LeftOperand;
+            IOperation? unwrapped = Unwrap(other);
+            return unwrapped is not null
+                && IsNullValue(unwrapped);
         }
 
         private static bool IsDirectUsingResourceConversion(SyntaxNode syntax)
@@ -2728,10 +2802,37 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         private void ProcessTransferInvocation(
             IInvocationOperation operation)
         {
-            IOperation? instance = Unwrap(operation.Instance);
+            IOperation? instance = GetTransferInvocationInstance(operation);
             TransferState? transfer = GetTransfer(instance);
-            if (transfer is null
-                || !CheckTransferActive(
+            if (transfer is null)
+            {
+                return;
+            }
+
+            if (operation.TargetMethod.Name == "Dispose"
+                && IsConditionalTransferCleanup(operation, transfer))
+            {
+                if (_cfgMode)
+                {
+                    return;
+                }
+
+                if (transfer.Status == TransferStatus.Disposed)
+                {
+                    CheckTransferActive(
+                        transfer,
+                        operation.Syntax,
+                        operation.TargetMethod.Name);
+                    return;
+                }
+
+                MarkTransferIdentity(
+                    transfer.OwnershipIdentity,
+                    TransferStatus.Disposed);
+                return;
+            }
+
+            if (!CheckTransferActive(
                     transfer,
                     operation.Syntax,
                     operation.TargetMethod.Name))
@@ -2751,6 +2852,141 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     transfer.OwnershipIdentity,
                     TransferStatus.Disposed);
             }
+        }
+
+        private IOperation? GetTransferInvocationInstance(
+            IInvocationOperation operation)
+        {
+            IOperation? instance = Unwrap(operation.Instance);
+            if (instance is not IConditionalAccessInstanceOperation
+                && instance is not IFlowCaptureReferenceOperation)
+            {
+                return instance;
+            }
+
+            for (IOperation? current = operation.Parent;
+                current is not null;
+                current = current.Parent)
+            {
+                if (current is IConditionalAccessOperation conditional)
+                {
+                    return Unwrap(conditional.Operation);
+                }
+            }
+
+            ConditionalAccessExpressionSyntax? syntax = operation.Syntax
+                .AncestorsAndSelf()
+                .OfType<ConditionalAccessExpressionSyntax>()
+                .FirstOrDefault();
+            if (syntax is not null)
+            {
+                SemanticModel model = _context.Compilation.GetSemanticModel(
+                    syntax.SyntaxTree);
+                return Unwrap(model.GetOperation(
+                    syntax.Expression,
+                    _context.CancellationToken));
+            }
+
+            return instance;
+        }
+
+        private bool IsConditionalTransferCleanup(
+            IInvocationOperation operation,
+            TransferState transfer)
+        {
+            if (operation.TargetMethod.Name != "Dispose")
+            {
+                return false;
+            }
+
+            for (IOperation? current = operation.Parent;
+                current is not null;
+                current = current.Parent)
+            {
+                if (current is IConditionalAccessOperation conditional
+                    && SymbolEqualityComparer.Default.Equals(
+                        GetSymbol(Unwrap(conditional.Operation)),
+                        transfer.Symbol))
+                {
+                    return true;
+                }
+            }
+
+            ConditionalAccessExpressionSyntax? conditionalSyntax = operation.Syntax
+                .AncestorsAndSelf()
+                .OfType<ConditionalAccessExpressionSyntax>()
+                .FirstOrDefault();
+            if (conditionalSyntax is not null
+                && ExpressionReferencesSymbol(
+                    conditionalSyntax.Expression,
+                    transfer.Symbol))
+            {
+                return true;
+            }
+
+            return operation.Syntax.Ancestors()
+                .OfType<IfStatementSyntax>()
+                .Any(statement => statement.Statement.Span.Contains(
+                        operation.Syntax.Span)
+                    && ConditionProvesNotNull(
+                        statement.Condition,
+                        transfer.Symbol));
+        }
+
+        private bool ConditionProvesNotNull(
+            ExpressionSyntax condition,
+            ISymbol? transferSymbol)
+        {
+            if (transferSymbol is null)
+            {
+                return false;
+            }
+
+            if (condition is BinaryExpressionSyntax binary
+                && binary.IsKind(SyntaxKind.NotEqualsExpression))
+            {
+                return IsNullLiteral(binary.Left)
+                        && ExpressionReferencesSymbol(
+                            binary.Right,
+                            transferSymbol)
+                    || IsNullLiteral(binary.Right)
+                        && ExpressionReferencesSymbol(
+                            binary.Left,
+                            transferSymbol);
+            }
+
+            return condition is IsPatternExpressionSyntax
+            {
+                Expression: { } expression,
+                Pattern: UnaryPatternSyntax
+                {
+                    Pattern: ConstantPatternSyntax
+                    {
+                        Expression: LiteralExpressionSyntax literal
+                    }
+                } pattern
+            }
+                && pattern.IsKind(SyntaxKind.NotPattern)
+                && literal.IsKind(SyntaxKind.NullLiteralExpression)
+                && ExpressionReferencesSymbol(
+                    expression,
+                    transferSymbol);
+        }
+
+        private static bool IsNullLiteral(ExpressionSyntax expression) =>
+            expression.IsKind(SyntaxKind.NullLiteralExpression);
+
+        private bool ExpressionReferencesSymbol(
+            ExpressionSyntax expression,
+            ISymbol symbol)
+        {
+            SemanticModel model = _context.Compilation.GetSemanticModel(
+                expression.SyntaxTree);
+            return SymbolEqualityComparer.Default.Equals(
+                model.GetSymbolInfo(
+                    expression,
+                    _context.CancellationToken).Symbol,
+                symbol);
         }
 
         private void ProcessBuilderInvocation(
