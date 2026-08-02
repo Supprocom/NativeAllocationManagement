@@ -35,6 +35,14 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
             startContext.RegisterOperationBlockAction(blockContext =>
             {
+                if (!symbols.HasTrackedParameters(
+                        blockContext.OwningSymbol)
+                    && !blockContext.OperationBlocks.Any(
+                        symbols.ContainsNativeOwnership))
+                {
+                    return;
+                }
+
                 blockContext.CancellationToken.ThrowIfCancellationRequested();
                 MethodFlowAnalyzer analyzer = new(blockContext, symbols);
                 foreach (IOperation operationBlock in blockContext.OperationBlocks)
@@ -47,6 +55,12 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             startContext.RegisterOperationAction(operationContext =>
             {
                 if (operationContext.Operation is not IAnonymousFunctionOperation anonymous)
+                {
+                    return;
+                }
+
+                if (!symbols.HasTrackedParameters(anonymous.Symbol)
+                    && !symbols.ContainsNativeOwnership(anonymous.Body))
                 {
                     return;
                 }
@@ -124,6 +138,40 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             && Builder is not null
             && Workspace is not null
             && LeaseView is not null;
+
+        internal bool ContainsNativeOwnership(IOperation operation)
+        {
+            return operation.DescendantsAndSelf().Any(candidate =>
+                IsTrackedType(candidate.Type));
+        }
+
+        internal bool HasTrackedParameters(ISymbol? symbol)
+        {
+            return symbol is IMethodSymbol method
+                && method.Parameters.Any(parameter =>
+                    IsOwnerType(parameter.Type)
+                    || Is(parameter.Type, Transfer)
+                    || Is(parameter.Type, Builder)
+                    || Is(parameter.Type, Workspace));
+        }
+
+        private bool IsTrackedType(ITypeSymbol? type)
+        {
+            return IsOwnerType(type)
+                || Is(type, Pooled)
+                || Is(type, Local)
+                || Is(type, ArenaLease)
+                || Is(type, Transfer)
+                || Is(type, Builder)
+                || Is(type, Workspace);
+        }
+
+        private bool IsOwnerType(ITypeSymbol? type)
+        {
+            return Is(type, Pool)
+                || Is(type, Region)
+                || Is(type, Arena);
+        }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static bool Is(
@@ -256,10 +304,6 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             RegisterTransferParameters(method);
             RegisterBuilderParameters(method);
             RegisterWorkspaceParameters(method);
-            if (!ContainsNativeOwnership(operationBlock))
-            {
-                return;
-            }
 
             if (operationBlock is IMethodBodyOperation methodBody)
             {
@@ -322,16 +366,6 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 };
                 _owners.Add(parameter, owner);
             }
-        }
-
-        private bool ContainsNativeOwnership(IOperation operationBlock)
-        {
-            return operationBlock.DescendantsAndSelf()
-                .Any(operation => IsOwnerType(operation.Type)
-                    || IsHandleType(operation.Type)
-                    || IsNativeTransfer(operation.Type)
-                    || IsNativeBuilder(operation.Type)
-                    || IsNativeWorkspace(operation.Type));
         }
 
         private void RegisterWorkspaceParameters(
