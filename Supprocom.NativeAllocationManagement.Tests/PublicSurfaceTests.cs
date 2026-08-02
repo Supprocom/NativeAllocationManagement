@@ -67,9 +67,39 @@ public sealed class PublicSurfaceTests
             Assert.DoesNotContain(assembly.GetTypes(), type => type.Name == forbidden);
         }
 
-        ConstructorInfo poolConstructor = Assert.Single(typeof(NativePool<int>).GetConstructors());
-        Assert.Contains(poolConstructor.GetParameters(), parameter => parameter.Name == "returnMemoryOnDispose");
-        Assert.Contains(poolConstructor.GetParameters(), parameter => parameter.Name == "doNotLeaseOnDeclaration");
+        ConstructorInfo[] poolConstructors =
+            typeof(NativePool<int>).GetConstructors();
+        Assert.Equal(2, poolConstructors.Length);
+        ConstructorInfo? typedPoolConstructor =
+            typeof(NativePool<int>).GetConstructor(
+                [typeof(int), typeof(NativeMemoryReturn), typeof(bool)]);
+        Assert.NotNull(typedPoolConstructor);
+        Assert.Equal(
+            "preLease",
+            typedPoolConstructor.GetParameters()[0].Name);
+        ConstructorInfo? combinedPoolConstructor =
+            typeof(NativePool<int>).GetConstructor(
+                [
+                    typeof(int),
+                    typeof(nuint),
+                    typeof(NativeMemoryReturn),
+                    typeof(bool)
+                ]);
+        Assert.NotNull(combinedPoolConstructor);
+        ParameterInfo[] combinedParameters =
+            combinedPoolConstructor.GetParameters();
+        Assert.Equal("preLease", combinedParameters[0].Name);
+        Assert.Equal("preAllocateBytes", combinedParameters[1].Name);
+        Assert.Contains(
+            combinedParameters,
+            parameter => parameter.Name == "returnMemoryOnDispose");
+        Assert.Contains(
+            combinedParameters,
+            parameter => parameter.Name == "doNotLeaseOnDeclaration");
+        Assert.DoesNotContain(
+            poolConstructors.SelectMany(
+                constructor => constructor.GetParameters()),
+            parameter => parameter.Name == "initialCapacity");
         ConstructorInfo arenaConstructor = Assert.Single(typeof(NativeArena).GetConstructors());
         Assert.Contains(arenaConstructor.GetParameters(), parameter => parameter.Name == "returnMemoryOnDispose");
         Assert.Contains(arenaConstructor.GetParameters(), parameter => parameter.Name == "doNotLeaseOnDeclaration");

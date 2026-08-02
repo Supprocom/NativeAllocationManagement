@@ -57,7 +57,7 @@ between native allocations without a managed element array.
 ```csharp
 using Supprocom.NativeAllocationManagement;
 
-using NativePool<uint> pool = new(initialCapacity: 1_024);
+using NativePool<uint> pool = new(preLease: 1_024);
 using NativeBuilder<uint> builder = pool.CreateBuilder(
     initialCapacity: 64);
 Span<uint> batch = stackalloc uint[64];
@@ -133,7 +133,7 @@ using Supprocom.NativeAllocationManagement;
 
 Channel<NativeTransfer<uint>> uploads =
     Channel.CreateBounded<NativeTransfer<uint>>(1);
-using NativePool<uint> pool = new(initialCapacity: 1_024);
+using NativePool<uint> pool = new(preLease: 1_024);
 
 NativeTransfer<uint>? source = pool.RentTransferable(
     1_024,
@@ -214,8 +214,10 @@ allocation-free and requires an explicit `LeaseFromMemory()` before `Rent` or
 ```csharp
 using Supprocom.NativeAllocationManagement;
 
-using NativePool<int> pool = new(initialCapacity: 1024);
-using Pooled<int> values = pool.Rent(128);
+using NativePool<int> pool = new(preLease: 1024);
+using Pooled<int> values = pool.Rent(
+    128,
+    static writer => writer.Fill(default));
 
 values.Access(view =>
 {
@@ -225,6 +227,19 @@ values.Access(view =>
     }
 });
 ```
+
+`preLease` reserves storage in units of `T`. `preAllocateBytes` reserves an
+independent raw byte segment. The two reservations are additive and have different
+units.
+
+```csharp
+using NativePool<int> pool = new(
+    preLease: 1_024,
+    preAllocateBytes: 64 * 1_024);
+```
+
+The raw segment exposes only complete `T` elements to a lease. Any remaining bytes stay
+retained until trimming or owner cleanup.
 
 A source-visible synchronous helper can borrow a local pool by value. The analyzer proves
 that each pool reference has an approved, non-retaining use.

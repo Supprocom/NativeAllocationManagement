@@ -8,7 +8,7 @@ public sealed class NativeOwnerStatisticsTests
     public void PoolStatisticsTrackRequestedRetainedAndTrimmedStorage()
     {
         using NativePool<int> pool = new(
-            initialCapacity: 64,
+            preLease: 64,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
 
         NativeOwnerStatistics reserved = pool.GetStatistics();

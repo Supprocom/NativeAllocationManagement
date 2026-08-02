@@ -2543,7 +2543,8 @@ internal sealed class NativeOwnerKernel
     private readonly string _ownerKind;
     private readonly NativeMemoryReturn _returnMemoryOnDispose;
     private readonly int _storageElementSize;
-    private readonly nuint _initialReservation;
+    private readonly nuint _preLease;
+    private readonly nuint _preAllocateBytes;
     private readonly bool _containsReferences;
     private long _generation;
     private long _nextAllocationId;
@@ -2925,7 +2926,8 @@ internal sealed class NativeOwnerKernel
         string ownerKind,
         NativeMemoryReturn returnMemoryOnDispose,
         int storageElementSize,
-        nuint initialReservation,
+        nuint preLease,
+        nuint preAllocateBytes,
         bool containsReferences,
         bool doNotLeaseOnDeclaration)
     {
@@ -2933,7 +2935,8 @@ internal sealed class NativeOwnerKernel
         _ownerKind = ownerKind;
         _returnMemoryOnDispose = returnMemoryOnDispose;
         _storageElementSize = storageElementSize;
-        _initialReservation = initialReservation;
+        _preLease = preLease;
+        _preAllocateBytes = preAllocateBytes;
         _containsReferences = containsReferences;
         _lifecycle = doNotLeaseOnDeclaration ? NativeOwnerLifecycle.Unleased : NativeOwnerLifecycle.Active;
 
@@ -2957,14 +2960,15 @@ internal sealed class NativeOwnerKernel
     }
 
     internal static NativeOwnerKernel CreatePool(
-        int initialCapacity,
+        int preLease,
+        nuint preAllocateBytes,
         int storageElementSize,
         string ownerKind,
         NativeMemoryReturn returnMemoryOnDispose,
         bool containsReferences,
         bool doNotLeaseOnDeclaration)
     {
-        ArgumentOutOfRangeException.ThrowIfNegative(initialCapacity);
+        ArgumentOutOfRangeException.ThrowIfNegative(preLease);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(storageElementSize);
         NativeMemoryReturnValidation.Validate(returnMemoryOnDispose, nameof(returnMemoryOnDispose));
         return new NativeOwnerKernel(
@@ -2972,7 +2976,8 @@ internal sealed class NativeOwnerKernel
             ownerKind,
             returnMemoryOnDispose,
             storageElementSize,
-            (nuint)initialCapacity,
+            (nuint)preLease,
+            preAllocateBytes,
             containsReferences,
             doNotLeaseOnDeclaration);
     }
@@ -2990,9 +2995,10 @@ internal sealed class NativeOwnerKernel
             ownerKind,
             returnMemoryOnDispose,
             storageElementSize: 0,
-            preAllocateBytes,
-            containsReferences,
-            doNotLeaseOnDeclaration);
+            preLease: 0,
+            preAllocateBytes: preAllocateBytes,
+            containsReferences: containsReferences,
+            doNotLeaseOnDeclaration: doNotLeaseOnDeclaration);
     }
 
     internal static NativeOwnerKernel CreateArena(
@@ -3007,9 +3013,10 @@ internal sealed class NativeOwnerKernel
             ownerKind,
             returnMemoryOnDispose,
             storageElementSize: 0,
-            preAllocateBytes,
+            preLease: 0,
+            preAllocateBytes: preAllocateBytes,
             containsReferences: false,
-            doNotLeaseOnDeclaration);
+            doNotLeaseOnDeclaration: doNotLeaseOnDeclaration);
     }
 
     internal NativePoolLease RentInitialized<T>(
@@ -6132,22 +6139,50 @@ internal sealed class NativeOwnerKernel
 
     private void ReserveInitialStorageLocked(NativeGeneration generation, string operation, NativeOwnerLifecycle observedLifecycle)
     {
-        if (_kind == NativeOwnerKind.Pool && _initialReservation > 0)
+        if (_kind == NativeOwnerKind.Pool)
         {
-            int capacity = checked((int)_initialReservation);
-            generation.Slabs.EnsureCapacity(checked(generation.Slabs.Count + 1));
-            generation.AvailableSlabs.EnsureCapacity(checked(generation.AvailableSlabs.Count + 1));
-            generation.Owner.PrepareAddSegmentCapacity(1);
-            NativeSlab slab = AddPoolSlabLocked(generation, capacity, operation, observedLifecycle);
-            generation.AddSlabOrdered(slab);
-            generation.AddAvailableSlabOrdered(slab);
+            int reservationCount = (_preAllocateBytes == 0 ? 0 : 1)
+                + (_preLease == 0 ? 0 : 1);
+            if (reservationCount == 0)
+            {
+                return;
+            }
+
+            generation.Slabs.EnsureCapacity(
+                checked(generation.Slabs.Count + reservationCount));
+            generation.AvailableSlabs.EnsureCapacity(
+                checked(generation.AvailableSlabs.Count + reservationCount));
+            generation.Owner.PrepareAddSegmentCapacity(reservationCount);
+            if (_preAllocateBytes != 0)
+            {
+                NativeSlab rawSlab = AddPoolRawSlabLocked(
+                    generation,
+                    _preAllocateBytes,
+                    operation,
+                    observedLifecycle);
+                generation.AddSlabOrdered(rawSlab);
+                generation.AddAvailableSlabOrdered(rawSlab);
+            }
+
+            if (_preLease != 0)
+            {
+                int capacity = checked((int)_preLease);
+                NativeSlab typedSlab = AddPoolSlabLocked(
+                    generation,
+                    capacity,
+                    operation,
+                    observedLifecycle);
+                generation.AddSlabOrdered(typedSlab);
+                generation.AddAvailableSlabOrdered(typedSlab);
+            }
         }
-        else if (_kind is NativeOwnerKind.Region or NativeOwnerKind.Arena && _initialReservation > 0)
+        else if (_kind is NativeOwnerKind.Region or NativeOwnerKind.Arena
+            && _preAllocateBytes > 0)
         {
             generation.BumpSegments.EnsureCapacity(checked(generation.BumpSegments.Count + 1));
             generation.Owner.PrepareAddSegmentCapacity(1);
             NativeSegment segment = NativeSegment.Allocate(
-                _initialReservation,
+                _preAllocateBytes,
                 _ownerKind,
                 generation.Number,
                 operation,
@@ -6164,6 +6199,40 @@ internal sealed class NativeOwnerKernel
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(capacity);
         nuint byteLength = CalculateByteLength(capacity, _storageElementSize, operation);
+        return AddPoolSlabLocked(
+            generation,
+            capacity,
+            byteLength,
+            operation,
+            observedLifecycle);
+    }
+
+    private NativeSlab AddPoolRawSlabLocked(
+        NativeGeneration generation,
+        nuint byteLength,
+        string operation,
+        NativeOwnerLifecycle observedLifecycle)
+    {
+        ArgumentOutOfRangeException.ThrowIfZero(byteLength);
+        nuint usableElements = byteLength / (nuint)_storageElementSize;
+        int capacity = usableElements > int.MaxValue
+            ? int.MaxValue
+            : (int)usableElements;
+        return AddPoolSlabLocked(
+            generation,
+            capacity,
+            byteLength,
+            operation,
+            observedLifecycle);
+    }
+
+    private NativeSlab AddPoolSlabLocked(
+        NativeGeneration generation,
+        int capacity,
+        nuint byteLength,
+        string operation,
+        NativeOwnerLifecycle observedLifecycle)
+    {
         NativeSegment segment = NativeSegment.Allocate(
             byteLength,
             _ownerKind,

@@ -133,7 +133,7 @@ public sealed class RuntimeConcurrencyCoverageTests
         {
             for (int trimKind = 0; trimKind < 3; trimKind++)
             {
-                NativePool<int> pool = new(initialCapacity: 16, returnMemoryOnDispose: policy);
+                NativePool<int> pool = new(preLease: 16, returnMemoryOnDispose: policy);
                 ManualResetEventSlim entered = new();
                 ManualResetEventSlim release = new();
                 NativeMemoryTestHooks.SetOperationEntered(operation =>
@@ -353,7 +353,7 @@ public sealed class RuntimeConcurrencyCoverageTests
     {
         for (int iteration = 0; iteration < 32; iteration++)
         {
-            NativePool<int> pool = new(initialCapacity: 2);
+            NativePool<int> pool = new(preLease: 2);
             Pooled<int> stale = pool.Rent(1, static writer => writer.Fill(default!));
             using Barrier barrier = new(3);
             Exception? returnException = null;

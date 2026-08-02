@@ -27,7 +27,7 @@ from `NativeArena` when the output belongs to a heterogeneous arena lifecycle.
 ```csharp
 using Supprocom.NativeAllocationManagement;
 
-using NativePool<uint> pool = new(initialCapacity: 1_024);
+using NativePool<uint> pool = new(preLease: 1_024);
 using NativeBuilder<uint> builder = pool.CreateBuilder(
     initialCapacity: 64);
 Span<uint> batch = stackalloc uint[64];
@@ -112,7 +112,7 @@ using Supprocom.NativeAllocationManagement;
 
 Channel<NativeTransfer<uint>> channel =
     Channel.CreateBounded<NativeTransfer<uint>>(1);
-using NativePool<uint> pool = new(initialCapacity: 256);
+using NativePool<uint> pool = new(preLease: 256);
 
 NativeTransfer<uint>? source = pool.RentTransferable(
     256,
@@ -250,8 +250,10 @@ the owner in the normal C# order.
 ```csharp
 using Supprocom.NativeAllocationManagement;
 
-using NativePool<int> pool = new(initialCapacity: 1_024);
-using Pooled<int> values = pool.Rent(128);
+using NativePool<int> pool = new(preLease: 1_024);
+using Pooled<int> values = pool.Rent(
+    128,
+    static writer => writer.Fill(default));
 
 values.Access(view =>
 {
@@ -272,6 +274,18 @@ int total = values.Read(view =>
     return result;
 });
 ```
+
+`preLease` reserves storage in units of `T`. `preAllocateBytes` reserves one
+independent raw byte segment. These values are additive and do not use the same unit.
+
+```csharp
+using NativePool<int> pool = new(
+    preLease: 1_024,
+    preAllocateBytes: 64 * 1_024);
+```
+
+Only complete `T` values fit in the raw reservation. NAM retains any final partial
+element bytes until trimming or owner cleanup.
 
 `Access` and `Read` pass a scoped `NativeLeaseView<T>` only for the synchronous
 callback. Indexing, `Clear`, `Fill`, `CopyFrom`, and `CopyTo` use the same runtime
@@ -329,7 +343,7 @@ using Supprocom.NativeAllocationManagement;
 
 public sealed class Worker : IDisposable
 {
-    private readonly NativePool<int> _pool = new(initialCapacity: 1_024);
+    private readonly NativePool<int> _pool = new(preLease: 1_024);
 
     public void Process(int count)
     {
@@ -434,18 +448,20 @@ allocation or a predictable typed pool.
 
 Construction normally publishes an active generation. Passing
 `doNotLeaseOnDeclaration: true` makes construction allocation-free and publishes the
-`Unleased` lifecycle instead. The configured initial capacity remains private until
+`Unleased` lifecycle instead. The configured reservation remains private until
 `LeaseFromMemory()` succeeds.
 
 ```csharp
 using Supprocom.NativeAllocationManagement;
 
 using NativePool<byte> pool = new(
-    initialCapacity: 4_096,
+    preLease: 4_096,
     doNotLeaseOnDeclaration: true);
 
 pool.LeaseFromMemory();
-using Pooled<byte> buffer = pool.Rent(4_096);
+using Pooled<byte> buffer = pool.Rent(
+    4_096,
+    static writer => writer.Fill(default));
 buffer.Access(view => view.Fill(0x2A));
 ```
 
@@ -467,17 +483,21 @@ generation, and leaves the owner active.
 using Supprocom.NativeAllocationManagement;
 
 NativePool<int> pool = new(
-    initialCapacity: 256,
+    preLease: 256,
     returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
 
 try
 {
-    Pooled<int> first = pool.Rent(64);
+    Pooled<int> first = pool.Rent(
+        64,
+        static writer => writer.Fill(default));
     first.Access(view => view.Fill(1));
     first.Dispose();
 
     pool.ReleaseLeasesToNativeMemory();
-    Pooled<int> second = pool.Rent(64);
+    Pooled<int> second = pool.Rent(
+        64,
+        static writer => writer.Fill(default));
     second.Access(view => view.Fill(2));
     second.Dispose();
 
@@ -542,8 +562,10 @@ segment counts, cumulative trimming, and fresh upstream segment allocations.
 ```csharp
 using Supprocom.NativeAllocationManagement;
 
-using NativePool<int> pool = new(initialCapacity: 4_096);
-using Pooled<int> values = pool.Rent(1_024);
+using NativePool<int> pool = new(preLease: 4_096);
+using Pooled<int> values = pool.Rent(
+    1_024,
+    static writer => writer.Fill(default));
 
 NativeOwnerStatistics snapshot = pool.GetStatistics();
 Console.WriteLine(

@@ -56,7 +56,7 @@ public sealed class ConcurrencyTests
         NativeMemoryTestHooks.Reset();
 
         NativePool<int> pool = new(
-            initialCapacity: 1,
+            preLease: 1,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         ManualResetEventSlim entered = new();
         ManualResetEventSlim release = new();

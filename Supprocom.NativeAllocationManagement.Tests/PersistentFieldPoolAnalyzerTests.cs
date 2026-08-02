@@ -15,7 +15,7 @@ public sealed class PersistentFieldPoolAnalyzerTests
 
             public sealed class Worker : IDisposable
             {
-                private readonly NativePool<int> _pool = new(initialCapacity: 64);
+                private readonly NativePool<int> _pool = new(preLease: 64);
 
                 public int Run(int rounds, bool stop, bool fail)
                 {
@@ -92,7 +92,7 @@ public sealed class PersistentFieldPoolAnalyzerTests
 
             public sealed class Worker : IDisposable
             {
-                private readonly NativePool<int> _pool = new(initialCapacity: 16);
+                private readonly NativePool<int> _pool = new(preLease: 16);
 
                 public void Run(bool cleanup)
                 {
@@ -126,7 +126,7 @@ public sealed class PersistentFieldPoolAnalyzerTests
 
             public sealed class Worker : IDisposable
             {
-                private readonly NativePool<int> _pool = new(initialCapacity: 16);
+                private readonly NativePool<int> _pool = new(preLease: 16);
 
                 public void Run()
                 {
@@ -165,7 +165,7 @@ public sealed class PersistentFieldPoolAnalyzerTests
 
             public sealed class Worker : IDisposable
             {
-                private NativePool<int> _pool = new(initialCapacity: 16);
+                private NativePool<int> _pool = new(preLease: 16);
 
                 public void Run()
                 {

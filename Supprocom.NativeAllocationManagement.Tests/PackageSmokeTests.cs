@@ -145,7 +145,7 @@ public sealed class PackageSmokeTests
                     public static int Main()
                     {
                         bool valid = true;
-                        NativePool<string> pool = new(initialCapacity: 2);
+                        NativePool<string> pool = new(preLease: 2);
                         Pooled<string> first = pool.Rent(2, static writer => writer.Fill(default!));
                         first[0] = "first";
                         first[1] = "second";

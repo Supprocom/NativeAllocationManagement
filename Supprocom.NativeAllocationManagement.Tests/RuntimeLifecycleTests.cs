@@ -17,7 +17,7 @@ public sealed class RuntimeLifecycleTests
         empty.Dispose();
         lazy.Dispose();
 
-        NativePool<int> preallocated = new(initialCapacity: 8, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativePool<int> preallocated = new(preLease: 8, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         Pooled<int> lease = preallocated.Rent(3, static writer => writer.Fill(default!));
         Assert.Equal(3, lease.Length);
         Assert.Equal(8, lease.Capacity);
@@ -36,7 +36,7 @@ public sealed class RuntimeLifecycleTests
     {
         NativeMemoryTestHooks.Reset();
         NativePool<int> pool = new(
-            initialCapacity: 4,
+            preLease: 4,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
 
         Assert.Throws<InvalidOperationException>(
@@ -70,7 +70,7 @@ public sealed class RuntimeLifecycleTests
     public void SequentialWriterPublishesOnlyItsCompleteValueRange()
     {
         NativePool<int> pool = new(
-            initialCapacity: 6,
+            preLease: 6,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
 
         Pooled<int> lease = pool.Rent(
@@ -101,7 +101,7 @@ public sealed class RuntimeLifecycleTests
     public void SequentialWriterRejectsIncompleteAndExcessWrites()
     {
         NativePool<int> pool = new(
-            initialCapacity: 4,
+            preLease: 4,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
 
         Assert.Throws<InvalidOperationException>(
@@ -142,7 +142,7 @@ public sealed class RuntimeLifecycleTests
     public void SequentialWriterRejectsGapsAndRewritesInitializedRanges()
     {
         NativePool<int> pool = new(
-            initialCapacity: 4,
+            preLease: 4,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
 
         Assert.Throws<InvalidOperationException>(
@@ -181,7 +181,7 @@ public sealed class RuntimeLifecycleTests
     public void InitializedValueSpanSupportsCheckedBulkRewrite()
     {
         NativePool<int> pool = new(
-            initialCapacity: 5,
+            preLease: 5,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
 
         Pooled<int> lease = pool.Rent(
@@ -209,7 +209,7 @@ public sealed class RuntimeLifecycleTests
     public void InitializedValueSpanRejectsUnwrittenAndReferenceStorage()
     {
         NativePool<int> values = new(
-            initialCapacity: 2,
+            preLease: 2,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         Assert.Throws<InvalidOperationException>(
             () => values.Rent(
@@ -223,7 +223,7 @@ public sealed class RuntimeLifecycleTests
         values.Dispose();
 
         NativePool<object> references = new(
-            initialCapacity: 2,
+            preLease: 2,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         Assert.Throws<NotSupportedException>(
             () => references.Rent(
@@ -242,7 +242,7 @@ public sealed class RuntimeLifecycleTests
     public void FailedSequentialReferenceWriteRemovesEveryRoot()
     {
         NativePool<object> pool = new(
-            initialCapacity: 4,
+            preLease: 4,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         object first = new();
         object second = new();
@@ -269,7 +269,7 @@ public sealed class RuntimeLifecycleTests
     public void InitializerReadsAndReplacesOnlyItsInitializedPrefix()
     {
         NativePool<int> pool = new(
-            initialCapacity: 6,
+            preLease: 6,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
 
         Pooled<int> lease = pool.Rent(
@@ -303,7 +303,7 @@ public sealed class RuntimeLifecycleTests
     public void InitializerRejectsDirtyReadsAndUninitializedGaps()
     {
         NativePool<int> pool = new(
-            initialCapacity: 4,
+            preLease: 4,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         Pooled<int> dirty = pool.Rent(
             4,
@@ -355,7 +355,7 @@ public sealed class RuntimeLifecycleTests
     public void FailedReferenceReplacementRemovesAllInitializerRoots()
     {
         NativePool<object> pool = new(
-            initialCapacity: 4,
+            preLease: 4,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         object first = new();
         object replacement = new();
@@ -394,7 +394,7 @@ public sealed class RuntimeLifecycleTests
     public void FailedReferenceInitializationRemovesEveryPublishedRoot()
     {
         NativePool<object> pool = new(
-            initialCapacity: 4,
+            preLease: 4,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         object marker = new();
 
@@ -426,11 +426,11 @@ public sealed class RuntimeLifecycleTests
     {
         foreach (NativeMemoryReturn policy in Enum.GetValues<NativeMemoryReturn>())
         {
-            foreach (int initialCapacity in new[] { 0, 8 })
+            foreach (int preLease in new[] { 0, 8 })
             {
                 NativeMemoryTestHooks.Reset();
                 NativePool<int> pool = new(
-                    initialCapacity,
+                    preLease,
                     policy,
                     doNotLeaseOnDeclaration: true);
                 NativeMemoryTestMetrics before = NativeMemoryTestHooks.Snapshot();
@@ -452,8 +452,8 @@ public sealed class RuntimeLifecycleTests
 
                 pool.LeaseFromMemory();
                 Assert.Equal(NativeOwnerLifecycle.Active, pool.CurrentLifecycle);
-                Pooled<int> values = pool.Rent(initialCapacity == 0 ? 0 : 3, static writer => writer.Fill(default!));
-                Assert.Equal(initialCapacity == 0 ? 0 : initialCapacity, values.Capacity);
+                Pooled<int> values = pool.Rent(preLease == 0 ? 0 : 3, static writer => writer.Fill(default!));
+                Assert.Equal(preLease == 0 ? 0 : preLease, values.Capacity);
                 values.Dispose();
                 Assert.Throws<NativeAllocationStateException>(pool.LeaseFromMemory);
                 if (policy == NativeMemoryReturn.ToNativeMemory)
@@ -527,7 +527,7 @@ public sealed class RuntimeLifecycleTests
     public void DisposingUnleasedOwnersIsTerminalAndAllocationFree()
     {
         NativeMemoryTestHooks.Reset();
-        NativePool<int> pool = new(initialCapacity: 8, doNotLeaseOnDeclaration: true);
+        NativePool<int> pool = new(preLease: 8, doNotLeaseOnDeclaration: true);
         NativeRegion region = new(preAllocateBytes: 32, doNotLeaseOnDeclaration: true);
         NativeArena arena = new(preAllocateBytes: 64, doNotLeaseOnDeclaration: true);
         NativeMemoryTestMetrics before = NativeMemoryTestHooks.Snapshot();
@@ -549,7 +549,7 @@ public sealed class RuntimeLifecycleTests
     public void DelayedActivationFailuresRemainUnleasedAndRetryAtomically()
     {
         NativeMemoryTestHooks.Reset();
-        NativePool<int> pool = new(initialCapacity: 4, doNotLeaseOnDeclaration: true);
+        NativePool<int> pool = new(preLease: 4, doNotLeaseOnDeclaration: true);
         NativeMemoryTestHooks.FailNextAllocation();
         NativeAllocationFailedException poolFailure = Assert.Throws<NativeAllocationFailedException>(pool.LeaseFromMemory);
         Assert.Equal(NativeOwnerLifecycle.Unleased, poolFailure.CurrentLifecycle);
@@ -599,7 +599,7 @@ public sealed class RuntimeLifecycleTests
     [Fact]
     public void PoolGrowthAndSmallestSlabReuseWorkWithoutManagedBackingArrays()
     {
-        NativePool<int> pool = new(initialCapacity: 4);
+        NativePool<int> pool = new(preLease: 4);
         Pooled<int> first = pool.Rent(4, static writer => writer.Fill(default!));
         Pooled<int> second = pool.Rent(9, static writer => writer.Fill(default!));
         Assert.Equal(4, first.Capacity);
@@ -621,7 +621,7 @@ public sealed class RuntimeLifecycleTests
     [Fact]
     public void ReusedSlabsAreZeroedForShortAndLongLogicalRanges()
     {
-        NativePool<int> pool = new(initialCapacity: 8);
+        NativePool<int> pool = new(preLease: 8);
         Pooled<int> longLease = pool.Rent(8, static writer => writer.Fill(default!));
         longLease.Access(static span => span.Fill(99));
         longLease.Dispose();
@@ -652,7 +652,7 @@ public sealed class RuntimeLifecycleTests
     public void NativeMemoryReturnInvalidatesOldHandlesFreesImmediatelyAndAllowsNewGeneration()
     {
         NativeMemoryTestHooks.Reset();
-        NativePool<int> pool = new(initialCapacity: 4, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativePool<int> pool = new(preLease: 4, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         Pooled<int> oldLease = pool.Rent(1, static writer => writer.Fill(default!));
         oldLease[0] = 12;
 
@@ -707,7 +707,7 @@ public sealed class RuntimeLifecycleTests
     [Fact]
     public void ConcurrentReLeasePublishesExactlyOneGeneration()
     {
-        NativePool<int> pool = new(initialCapacity: 2);
+        NativePool<int> pool = new(preLease: 2);
         pool.ReturnMemoryToNativeMemory();
         int successes = 0;
         int stateFailures = 0;
@@ -792,7 +792,7 @@ public sealed class RuntimeLifecycleTests
         GC.WaitForPendingFinalizers();
         GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
         NativeMemoryTestHooks.Reset();
-        NativePool<long> pool = new(initialCapacity: 4);
+        NativePool<long> pool = new(preLease: 4);
         long detachedAfterReturn =
             DetachOldGenerationAndReleaseHandle(pool);
         pool.LeaseFromMemory();
@@ -947,7 +947,7 @@ public sealed class RuntimeLifecycleTests
     public void AllocationFailureLeavesEarlierPoolStateValid()
     {
         NativeMemoryTestHooks.Reset();
-        NativePool<int> pool = new(initialCapacity: 2);
+        NativePool<int> pool = new(preLease: 2);
         Pooled<int> existing = pool.Rent(2, static writer => writer.Fill(default!));
         NativeMemoryTestHooks.FailNextAllocation();
         NativeAllocationFailedException failure = Assert.Throws<NativeAllocationFailedException>(() => pool.Rent(100, static writer => writer.Fill(default!)));
@@ -962,7 +962,7 @@ public sealed class RuntimeLifecycleTests
     public void OwnerStatisticsExposeLiveRequestsRetainedSegmentsAndTerminalRelease()
     {
         NativeMemoryTestHooks.Reset();
-        using NativePool<int> pool = new(initialCapacity: 4, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(preLease: 4, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
 
         NativeOwnerStatistics initial = pool.GetStatistics();
         Assert.Equal(NativeOwnerLifecycle.Active, initial.Lifecycle);
@@ -991,7 +991,7 @@ public sealed class RuntimeLifecycleTests
     public void ReLeaseAllocationFailureDoesNotPublishAPartialGeneration()
     {
         NativeMemoryTestHooks.Reset();
-        NativePool<int> pool = new(initialCapacity: 2);
+        NativePool<int> pool = new(preLease: 2);
         pool.ReturnMemoryToNativeMemory();
         NativeMemoryTestHooks.FailNextAllocation();
 
@@ -1012,7 +1012,7 @@ public sealed class RuntimeLifecycleTests
         NativeMemoryTestHooks.Reset();
         NativeMemoryTestHooks.FailNextAllocation();
         NativeAllocationFailedException initial = Assert.Throws<NativeAllocationFailedException>(
-            () => new NativePool<int>(initialCapacity: 2));
+            () => new NativePool<int>(preLease: 2));
         Assert.Equal(NativeOwnerLifecycle.Active, initial.CurrentLifecycle);
 
         NativeMemoryTestHooks.FailNextAllocation();
@@ -1035,7 +1035,7 @@ public sealed class RuntimeLifecycleTests
         Assert.Equal(NativeOwnerLifecycle.Active, regionGrowth.CurrentLifecycle);
         region.Dispose();
 
-        NativePool<int> pool = new(initialCapacity: 2);
+        NativePool<int> pool = new(preLease: 2);
         NativeMemoryTestHooks.FailNextAllocation();
         NativeAllocationFailedException growth = Assert.Throws<NativeAllocationFailedException>(() => pool.Rent(4, static writer => writer.Fill(default!)));
         Assert.Equal(NativeOwnerLifecycle.Active, growth.CurrentLifecycle);
@@ -1054,7 +1054,7 @@ public sealed class RuntimeLifecycleTests
     {
         NativeMemoryTestHooks.Reset();
         NativePool<object> pool = new(
-            initialCapacity: 4,
+            preLease: 4,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         Pooled<object> lease = pool.Rent(
             4,
@@ -1091,11 +1091,11 @@ public sealed class RuntimeLifecycleTests
         NativeMemoryTestHooks.Reset();
         foreach (NativeMemoryReturn policy in Enum.GetValues<NativeMemoryReturn>())
         {
-            foreach (int initialCapacity in new[] { 0, 4 })
+            foreach (int reservationUnits in new[] { 0, 4 })
             {
                 NativeMemoryTestMetrics poolBefore = NativeMemoryTestHooks.Snapshot();
-                NativePool<int> pool = new(initialCapacity, policy);
-                Pooled<int> lease = pool.Rent(initialCapacity == 0 ? 1 : 3, static writer => writer.Fill(default!));
+                NativePool<int> pool = new(reservationUnits, policy);
+                Pooled<int> lease = pool.Rent(reservationUnits == 0 ? 1 : 3, static writer => writer.Fill(default!));
                 lease.Dispose();
                 pool.Dispose();
                 NativeMemoryTestMetrics poolAfter = NativeMemoryTestHooks.Snapshot();
@@ -1110,7 +1110,7 @@ public sealed class RuntimeLifecycleTests
                 }
 
                 NativeMemoryTestMetrics regionBefore = NativeMemoryTestHooks.Snapshot();
-                NativeRegion region = new((nuint)(initialCapacity * sizeof(long)), policy);
+                NativeRegion region = new((nuint)(reservationUnits * sizeof(long)), policy);
                 Local<long> local = region.Lease<long>(2, static writer => writer.Fill(default!));
                 local[0] = 8;
 
@@ -1224,7 +1224,7 @@ public sealed class RuntimeLifecycleTests
     public void DetachedNativeBytesRemainAccountedUntilFinalization()
     {
         NativeMemoryTestHooks.Reset();
-        NativePool<long> pool = new(initialCapacity: 4);
+        NativePool<long> pool = new(preLease: 4);
         Pooled<long> lease = pool.Rent(4, static writer => writer.Fill(default!));
         long allocatedBytes = NativeMemoryTestHooks.Snapshot().OutstandingNativeBytes;
         pool.ReturnMemoryToGarbageCollector();
@@ -1240,7 +1240,7 @@ public sealed class RuntimeLifecycleTests
 
     private static void DetachOneGeneration()
     {
-        NativePool<int> pool = new(initialCapacity: 4);
+        NativePool<int> pool = new(preLease: 4);
         Pooled<int> lease = pool.Rent(4, static writer => writer.Fill(default!));
         lease.Access(static span => span.Fill(1));
         pool.ReturnMemoryToGarbageCollector();

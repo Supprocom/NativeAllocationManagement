@@ -336,7 +336,7 @@ public sealed class ArenaLifecycleTests
     {
         NativeMemoryTestHooks.Reset();
         NativeMemoryTestMetrics before = NativeMemoryTestHooks.Snapshot();
-        NativePool<string> pool = new(initialCapacity: 4, doNotLeaseOnDeclaration: true);
+        NativePool<string> pool = new(preLease: 4, doNotLeaseOnDeclaration: true);
         NativeArena arena = new(preAllocateBytes: 64, doNotLeaseOnDeclaration: true);
         NativeRegion region = new(preAllocateBytes: 64, doNotLeaseOnDeclaration: true);
         NativeMemoryTestMetrics afterConstruction = NativeMemoryTestHooks.Snapshot();
@@ -571,7 +571,7 @@ public sealed class ArenaLifecycleTests
 
         foreach (Func<NativePool<int>, nuint> trim in poolTrims)
         {
-            NativePool<int> pool = new(initialCapacity: 8, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            NativePool<int> pool = new(preLease: 8, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
             nuint released = trim(pool);
             Assert.True(released >= (nuint)(8 * sizeof(int)));
             Pooled<int> lease = pool.Rent(1, static writer => writer.Fill(default!));

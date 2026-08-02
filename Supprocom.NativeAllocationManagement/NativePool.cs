@@ -39,17 +39,36 @@ public sealed class NativePool<T> : IDisposable
     public NativeOwnerStatistics GetStatistics() => _kernel.GetStatistics();
 
     /// <summary>Creates a typed pool, active immediately unless declaration leasing is disabled.</summary>
-    /// <param name="initialCapacity">Optional number of elements reserved immediately or on activation.</param>
+    /// <param name="preLease">Optional number of typed elements reserved immediately or on activation.</param>
     /// <param name="returnMemoryOnDispose">The physical cleanup policy used by <see cref="Dispose"/>.</param>
     /// <param name="doNotLeaseOnDeclaration">When true, defer the first generation until <see cref="LeaseFromMemory"/>.</param>
     public NativePool(
-        int initialCapacity = 0,
+        int preLease = 0,
+        NativeMemoryReturn returnMemoryOnDispose = NativeMemoryReturn.ToGarbageCollector,
+        bool doNotLeaseOnDeclaration = false)
+        : this(
+            preLease,
+            preAllocateBytes: 0,
+            returnMemoryOnDispose: returnMemoryOnDispose,
+            doNotLeaseOnDeclaration: doNotLeaseOnDeclaration)
+    {
+    }
+
+    /// <summary>Creates a typed pool with independent typed and raw byte reservations.</summary>
+    /// <param name="preLease">Number of typed elements reserved immediately or on activation.</param>
+    /// <param name="preAllocateBytes">Exact raw bytes reserved immediately or on activation.</param>
+    /// <param name="returnMemoryOnDispose">The physical cleanup policy used by <see cref="Dispose"/>.</param>
+    /// <param name="doNotLeaseOnDeclaration">When true, defer the first generation until <see cref="LeaseFromMemory"/>.</param>
+    public NativePool(
+        int preLease,
+        nuint preAllocateBytes,
         NativeMemoryReturn returnMemoryOnDispose = NativeMemoryReturn.ToGarbageCollector,
         bool doNotLeaseOnDeclaration = false)
     {
         NativeMemoryReturnValidation.Validate(returnMemoryOnDispose, nameof(returnMemoryOnDispose));
         _kernel = NativeOwnerKernel.CreatePool(
-            initialCapacity,
+            preLease,
+            preAllocateBytes,
             NativeTypeLayout.StorageSize<T>(),
             $"NativePool<{typeof(T).FullName ?? typeof(T).Name}>",
             returnMemoryOnDispose,

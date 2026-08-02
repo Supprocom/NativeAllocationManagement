@@ -13,7 +13,7 @@ public sealed class MechanismRegressionTests
         Assert.NotNull(typeof(NativeAllocation).GetProperty("ReferenceRoots", BindingFlags.Instance | BindingFlags.NonPublic));
 
         NativeMemoryTestHooks.Reset();
-        NativePool<string> pool = new(initialCapacity: 2, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativePool<string> pool = new(preLease: 2, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         try
         {
             Pooled<string> first = pool.Rent(2, static writer => writer.Fill(default!));
@@ -107,7 +107,7 @@ public sealed class MechanismRegressionTests
     public void SeveralScopedLeasesAreCompletedByOneRecycleAndTheRetainedSlabIsReused()
     {
         NativeMemoryTestHooks.Reset();
-        NativePool<int> pool = new(initialCapacity: 4, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativePool<int> pool = new(preLease: 4, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         try
         {
             Pooled<int> staleFirst = pool.LeaseScoped(4, static writer => writer.Fill(default!));
@@ -169,7 +169,7 @@ public sealed class MechanismRegressionTests
     public void RetiredSnapshotPreparationFailureLeavesTheActiveGenerationUntouched()
     {
         NativeMemoryTestHooks.Reset();
-        NativePool<int> pool = new(initialCapacity: 1, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativePool<int> pool = new(preLease: 1, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         try
         {
             Pooled<int> lease = pool.Rent(1, static writer => writer.Fill(default!));
@@ -308,7 +308,7 @@ public sealed class MechanismRegressionTests
     public void RolloverCommitBoundaryFailuresPreserveTheActiveGenerationAndNativeValues()
     {
         NativeMemoryTestHooks.Reset();
-        NativePool<string> pool = new(initialCapacity: 1, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativePool<string> pool = new(preLease: 1, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         try
         {
             Pooled<string> first = pool.Rent(1, static writer => writer.Fill(default!));
@@ -378,7 +378,7 @@ public sealed class MechanismRegressionTests
     public async Task TolerantLeaseReleaseDoesNotClearAReusedSlabUnderAnEnteredOperation()
     {
         NativeMemoryTestHooks.Reset();
-        NativePool<int> pool = new(initialCapacity: 1, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativePool<int> pool = new(preLease: 1, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         ManualResetEventSlim entered = new();
         ManualResetEventSlim allowCallback = new();
         NativeMemoryTestHooks.SetOperationEntered(operation =>
@@ -422,7 +422,7 @@ public sealed class MechanismRegressionTests
     public async Task TolerantMemoryReturnKeepsEnteredDataUntilTheOperationExits()
     {
         NativeMemoryTestHooks.Reset();
-        NativePool<int> pool = new(initialCapacity: 1, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativePool<int> pool = new(preLease: 1, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         ManualResetEventSlim entered = new();
         ManualResetEventSlim allowCallback = new();
         NativeMemoryTestHooks.SetOperationEntered(operation =>
@@ -467,7 +467,7 @@ public sealed class MechanismRegressionTests
     public async Task TolerantMemoryReturnDefersDetachedSegmentFreeUntilTheGenerationOwnerFinalizes()
     {
         NativeMemoryTestHooks.Reset();
-        NativePool<int> pool = new(initialCapacity: 1, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativePool<int> pool = new(preLease: 1, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         ManualResetEventSlim entered = new();
         ManualResetEventSlim allowCallback = new();
         NativeGenerationOwner? retainedOwner = null;
@@ -558,7 +558,7 @@ public sealed class MechanismRegressionTests
     public async Task RetiredPoolRejoinPreservesReversePhysicalTrimOrder()
     {
         NativeMemoryTestHooks.Reset();
-        NativePool<int> pool = new(initialCapacity: 1, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativePool<int> pool = new(preLease: 1, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         ManualResetEventSlim entered = new();
         ManualResetEventSlim allowCallback = new();
         NativeMemoryTestHooks.SetOperationEntered(operation =>
@@ -601,7 +601,7 @@ public sealed class MechanismRegressionTests
     {
         NativeMemoryTestHooks.Reset();
         Assert.Null(typeof(NativeOwnerKernel).Assembly.GetType("Supprocom.NativeAllocationManagement.NativeQuarantinedSegment"));
-        NativePool<int> pool = new(initialCapacity: 1, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativePool<int> pool = new(preLease: 1, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         ManualResetEventSlim entered = new();
         ManualResetEventSlim allowCallback = new();
         NativeMemoryTestHooks.SetOperationEntered(operation =>
@@ -706,7 +706,7 @@ public sealed class MechanismRegressionTests
     public async Task RetiredDrainTransferFailureQuarantinesTheTransferredSegment()
     {
         NativeMemoryTestHooks.Reset();
-        NativePool<int> pool = new(initialCapacity: 1, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativePool<int> pool = new(preLease: 1, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         ManualResetEventSlim entered = new();
         ManualResetEventSlim allowCallback = new();
         NativeMemoryTestHooks.SetOperationEntered(operation =>
@@ -1074,7 +1074,7 @@ public sealed class MechanismRegressionTests
     [Fact]
     public void TrimUsesLifecycleNoOpsExactPhysicalUnitsAndAllocationOrder()
     {
-        NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory, initialCapacity: 4);
+        NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory, preLease: 4);
         Pooled<int> initial = pool.Rent(4, static writer => writer.Fill(default!));
         Pooled<int> growth = pool.Rent(8, static writer => writer.Fill(default!));
         growth.Dispose();
@@ -1085,7 +1085,7 @@ public sealed class MechanismRegressionTests
         Assert.Equal((nuint)(4 * sizeof(int)), secondRelease);
         pool.Dispose();
 
-        NativePool<string> referencePool = new(initialCapacity: 2, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativePool<string> referencePool = new(preLease: 2, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         Pooled<string> referenceLease = referencePool.Rent(2, static writer => writer.Fill(default!));
         referenceLease[0] = "root";
         referenceLease.Dispose();
