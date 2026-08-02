@@ -781,19 +781,18 @@ internal static class ConcurrentArenaBenchmark
 
     private abstract class MapWorkload : IDisposable
     {
+        private readonly PersistentMapWorkers _workers;
+
         protected MapWorkload(ConcurrentArenaBenchmarkOptions options)
         {
             Options = options;
-            ParallelOptions = new ParallelOptions
-            {
-                MaxDegreeOfParallelism = options.WorkerCount
-            };
+            _workers = new PersistentMapWorkers(
+                options.WorkerCount,
+                options.MapCount);
             Checksums = new long[options.MapCount];
         }
 
         protected ConcurrentArenaBenchmarkOptions Options { get; }
-
-        protected ParallelOptions ParallelOptions { get; }
 
         protected long[] Checksums { get; }
 
@@ -838,20 +837,10 @@ internal static class ConcurrentArenaBenchmark
 
         protected void ForEachMap(Action<int, int> action)
         {
-            Parallel.For(
-                0,
-                Options.WorkerCount,
-                ParallelOptions,
-                workerIndex =>
-                {
-                    for (int mapIndex = workerIndex;
-                        mapIndex < Options.MapCount;
-                        mapIndex += Options.WorkerCount)
-                    {
-                        action(workerIndex, mapIndex);
-                    }
-                });
+            _workers.Run(action);
         }
+
+        protected void DisposeWorkers() => _workers.Dispose();
 
         protected abstract void Initialize();
 
@@ -947,6 +936,7 @@ internal static class ConcurrentArenaBenchmark
 
         public override void Dispose()
         {
+            DisposeWorkers();
             foreach (ManagedMapSlot slot in _producers)
             {
                 slot.Return(_banks);
@@ -1091,6 +1081,7 @@ internal static class ConcurrentArenaBenchmark
 
         public override void Dispose()
         {
+            DisposeWorkers();
             DisposeSlots();
             _pool.Dispose();
         }
@@ -1130,6 +1121,7 @@ internal static class ConcurrentArenaBenchmark
 
         public override void Dispose()
         {
+            DisposeWorkers();
             DisposeSlots();
             _arena.Dispose();
         }
@@ -1180,6 +1172,7 @@ internal static class ConcurrentArenaBenchmark
 
         public override void Dispose()
         {
+            DisposeWorkers();
             DisposeSlots();
             foreach (NativeArena arena in _arenas)
             {
