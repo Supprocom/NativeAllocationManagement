@@ -556,6 +556,214 @@ public sealed class NativeTransferAnalyzerTests
     }
 
     [Fact]
+    public async Task GenericReceiverDoesNotGainOwnershipAfterSubstitution()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run(NativeTransfer<int>? source)
+                {
+                    Drop(NativeTransfer<int>.Move(ref source));
+                }
+
+                private static void Drop<T>(T value)
+                {
+                }
+            }
+            """);
+
+        Assert.Contains(
+            "NAM1025",
+            AnalyzerContractTests.NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task TaskAggregateDoesNotGainTransferOwnership()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using System.Threading.Tasks;
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run(NativeTransfer<int>? source)
+                {
+                    _ = Task.FromResult(
+                        NativeTransfer<int>.Move(ref source));
+                }
+            }
+            """);
+
+        Assert.Contains(
+            "NAM1025",
+            AnalyzerContractTests.NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task UnboundedChannelDoesNotGainTransferOwnership()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using System.Threading.Channels;
+            using System.Threading.Tasks;
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static async Task Run(NativeTransfer<int>? source)
+                {
+                    Channel<NativeTransfer<int>> channel =
+                        Channel.CreateUnbounded<NativeTransfer<int>>();
+                    await channel.Writer.WriteAsync(
+                        NativeTransfer<int>.Move(ref source));
+                }
+            }
+            """);
+
+        Assert.Contains(
+            "NAM1025",
+            AnalyzerContractTests.NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task UnprovenChannelParameterDoesNotGainTransferOwnership()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using System.Threading.Channels;
+            using System.Threading.Tasks;
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static async Task Run(
+                    Channel<NativeTransfer<int>> channel,
+                    NativeTransfer<int>? source)
+                {
+                    await channel.Writer.WriteAsync(
+                        NativeTransfer<int>.Move(ref source));
+                }
+            }
+            """);
+
+        Assert.Contains(
+            "NAM1025",
+            AnalyzerContractTests.NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task TryWriteDoesNotConsumeTransferOwnership()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using System.Threading.Channels;
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run(NativeTransfer<int>? source)
+                {
+                    Channel<NativeTransfer<int>> channel =
+                        Channel.CreateBounded<NativeTransfer<int>>(1);
+                    _ = channel.Writer.TryWrite(
+                        NativeTransfer<int>.Move(ref source));
+                }
+            }
+            """);
+
+        Assert.Contains(
+            "NAM1025",
+            AnalyzerContractTests.NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task ReassignedChannelDoesNotKeepBoundedProvenance()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using System.Threading.Channels;
+            using System.Threading.Tasks;
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static async Task Run(NativeTransfer<int>? source)
+                {
+                    Channel<NativeTransfer<int>> channel =
+                        Channel.CreateBounded<NativeTransfer<int>>(1);
+                    channel = Channel.CreateUnbounded<NativeTransfer<int>>();
+                    await channel.Writer.WriteAsync(
+                        NativeTransfer<int>.Move(ref source));
+                }
+            }
+            """);
+
+        Assert.Contains(
+            "NAM1025",
+            AnalyzerContractTests.NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task ProvenBoundedChannelReceivesTransferOwnership()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using System.Threading.Channels;
+            using System.Threading.Tasks;
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static async Task Run(NativeTransfer<int>? source)
+                {
+                    Channel<NativeTransfer<int>> channel =
+                        Channel.CreateBounded<NativeTransfer<int>>(1);
+                    await channel.Writer.WriteAsync(
+                        NativeTransfer<int>.Move(ref source));
+                    NativeTransfer<int> received =
+                        await channel.Reader.ReadAsync();
+                    received.Dispose();
+                }
+            }
+            """);
+
+        Assert.True(
+            AnalyzerContractTests.NativeDiagnostics(diagnostics).Length == 0,
+            string.Join(Environment.NewLine, diagnostics));
+    }
+
+    [Fact]
+    public async Task GenericExactTransferDeclarationReceivesOwnership()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run(NativeTransfer<int>? source)
+                {
+                    Consume(NativeTransfer<int>.Move(ref source));
+                }
+
+                private static void Consume<T>(NativeTransfer<T> transfer)
+                    where T : unmanaged
+                {
+                    transfer.Dispose();
+                }
+            }
+            """);
+
+        Assert.True(
+            AnalyzerContractTests.NativeDiagnostics(diagnostics).Length == 0,
+            string.Join(Environment.NewLine, diagnostics));
+    }
+
+    [Fact]
     public async Task DirectMoveToDroppingReceiverIsRejected()
     {
         ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(

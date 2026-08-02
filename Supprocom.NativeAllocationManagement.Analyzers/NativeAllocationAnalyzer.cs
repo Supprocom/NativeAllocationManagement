@@ -181,6 +181,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         private readonly Dictionary<ISymbol, OwnerState> _owners = new(SymbolEqualityComparer.Default);
         private readonly Dictionary<ISymbol, HandleState> _handles = new(SymbolEqualityComparer.Default);
         private readonly Dictionary<ISymbol, TransferState> _transfers = new(SymbolEqualityComparer.Default);
+        private readonly Dictionary<ISymbol, bool> _boundedTransferChannelProvenance =
+            new(SymbolEqualityComparer.Default);
         private readonly Dictionary<string, LifecycleEffect> _lifecycleSummaries = new(StringComparer.Ordinal);
         private readonly HashSet<string> _lifecycleSummaryVisiting = new(StringComparer.Ordinal);
         private readonly Dictionary<string, bool> _nonRetainingOwnerParameters =
@@ -205,6 +207,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         private int _finallyDepth;
         private bool _cfgMode;
         private bool _suppressDiagnostics;
+        private IOperation? _analysisRootOperation;
         private SyntaxTree? _analysisRootTree;
         private TextSpan _analysisRootSpan;
         private bool _hasAnalysisRoot;
@@ -229,6 +232,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         internal void AnalyzeOperationBlock(IOperation operationBlock)
         {
             _context.CancellationToken.ThrowIfCancellationRequested();
+            _analysisRootOperation = operationBlock;
             _analysisRootTree = operationBlock.Syntax.SyntaxTree;
             _analysisRootSpan = operationBlock.Syntax.Span;
             _hasAnalysisRoot = true;
@@ -2913,7 +2917,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 IArgumentOperation
                 {
                     Parameter: { RefKind: RefKind.None } parameter
-                } => IsNativeTransfer(parameter.Type),
+                } argument => HasExactTransferParameterDeclaration(parameter)
+                    || IsProvenBoundedChannelHandoff(argument),
                 IReturnOperation
                 {
                     ReturnedValue: { } returnedValue
@@ -2922,6 +2927,164 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 _ => false
             };
             return safeOperationDestination || IsDirectTypedReturnSyntax(move);
+        }
+
+        private bool HasExactTransferParameterDeclaration(
+            IParameterSymbol parameter)
+        {
+            if (parameter.RefKind != RefKind.None
+                || !IsNativeTransfer(parameter.Type)
+                || parameter.ContainingSymbol is not IMethodSymbol method)
+            {
+                return false;
+            }
+
+            IMethodSymbol declaration = method.OriginalDefinition;
+            return parameter.Ordinal >= 0
+                && parameter.Ordinal < declaration.Parameters.Length
+                && IsNativeTransfer(
+                    declaration.Parameters[parameter.Ordinal].Type);
+        }
+
+        private bool IsProvenBoundedChannelHandoff(
+            IArgumentOperation argument)
+        {
+            if (argument.Parameter is not
+                {
+                    Ordinal: 0,
+                    RefKind: RefKind.None
+                }
+                || argument.Parent is not IInvocationOperation write
+                || write.TargetMethod.Name != "WriteAsync"
+                || write.TargetMethod.ContainingType.OriginalDefinition.ToDisplayString()
+                    != "System.Threading.Channels.ChannelWriter<T>"
+                || Unwrap(write.Instance) is not IPropertyReferenceOperation
+                {
+                    Property.Name: "Writer",
+                    Instance: { } channel
+                })
+            {
+                return false;
+            }
+
+            IOperation? source = Unwrap(channel);
+            return source switch
+            {
+                ILocalReferenceOperation local =>
+                    IsProvenBoundedChannelLocal(local.Local),
+                IInvocationOperation factory =>
+                    IsBoundedTransferChannelFactory(factory),
+                _ => false
+            };
+        }
+
+        private bool IsProvenBoundedChannelLocal(ILocalSymbol local)
+        {
+            if (_boundedTransferChannelProvenance.TryGetValue(
+                local,
+                out bool proven))
+            {
+                return proven;
+            }
+
+            if (!IsTransferChannel(local.Type)
+                || !_hasAnalysisRoot
+                || _analysisRootOperation is null
+                || local.DeclaringSyntaxReferences.Length != 1
+                || local.DeclaringSyntaxReferences[0].GetSyntax(
+                    _context.CancellationToken) is not VariableDeclaratorSyntax
+                    {
+                        Initializer.Value: { } initializer
+                    } declaration
+                || !ReferenceEquals(
+                    declaration.SyntaxTree,
+                    _analysisRootTree)
+                || !_analysisRootSpan.Contains(declaration.Span))
+            {
+                _boundedTransferChannelProvenance[local] = false;
+                return false;
+            }
+
+            SemanticModel model = _context.Compilation.GetSemanticModel(
+                declaration.SyntaxTree);
+            proven = model.GetOperation(
+                    initializer,
+                    _context.CancellationToken) is IInvocationOperation factory
+                && IsBoundedTransferChannelFactory(factory)
+                && !HasWritableReference(local);
+            _boundedTransferChannelProvenance[local] = proven;
+            return proven;
+        }
+
+        private bool HasWritableReference(ILocalSymbol local)
+        {
+            return _analysisRootOperation!.DescendantsAndSelf()
+                .OfType<ILocalReferenceOperation>()
+                .Where(reference => SymbolEqualityComparer.Default.Equals(
+                    reference.Local,
+                    local))
+                .Any(IsWritableReference);
+        }
+
+        private static bool IsWritableReference(
+            ILocalReferenceOperation reference)
+        {
+            IOperation current = reference;
+            while (current.Parent is IConversionOperation conversion
+                    && conversion.Operand == current
+                || current.Parent is IParenthesizedOperation parenthesized
+                    && parenthesized.Operand == current)
+            {
+                current = current.Parent;
+            }
+
+            if (current.Parent is ISimpleAssignmentOperation assignment
+                    && assignment.Target == current
+                || current.Parent is ICompoundAssignmentOperation compound
+                    && compound.Target == current
+                || current.Parent is ICoalesceAssignmentOperation coalesce
+                    && coalesce.Target == current
+                || current.Parent is IIncrementOrDecrementOperation increment
+                    && increment.Target == current
+                || current.Parent is IArgumentOperation argument
+                    && argument.Parameter?.RefKind is RefKind.Ref or RefKind.Out)
+            {
+                return true;
+            }
+
+            IOperation? ancestor = current.Parent;
+            while (ancestor is not null
+                && ancestor is not IDeconstructionAssignmentOperation)
+            {
+                ancestor = ancestor.Parent;
+            }
+
+            IDeconstructionAssignmentOperation? deconstruction =
+                ancestor as IDeconstructionAssignmentOperation;
+            return deconstruction?.Target.DescendantsAndSelf()
+                    .Any(operation => ReferenceEquals(operation, reference)) == true
+                || reference.Syntax.AncestorsAndSelf()
+                    .Any(syntax => syntax is RefExpressionSyntax);
+        }
+
+        private bool IsBoundedTransferChannelFactory(
+            IInvocationOperation factory)
+        {
+            return factory.TargetMethod.Name == "CreateBounded"
+                && factory.TargetMethod.ContainingType.ToDisplayString()
+                    == "System.Threading.Channels.Channel"
+                && IsTransferChannel(factory.Type);
+        }
+
+        private bool IsTransferChannel(ITypeSymbol? type)
+        {
+            return type is INamedTypeSymbol
+            {
+                TypeArguments.Length: 1
+            } channel
+                && channel.OriginalDefinition.ToDisplayString()
+                    == "System.Threading.Channels.Channel<T>"
+                && IsNativeTransfer(channel.TypeArguments[0]);
         }
 
         private bool IsDirectTypedReturnSyntax(IInvocationOperation move)

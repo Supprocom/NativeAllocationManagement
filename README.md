@@ -114,8 +114,13 @@ views, unfinished lifetimes, and direct acquisition into storage. These rules ar
 An ordinary `NativeTransfer<T>` parameter receives ownership. The receiver must dispose
 or move that ownership on every method exit. Pass only a move expression to the receiver.
 The move destination must have the exact `NativeTransfer<T>` type. This rule permits a
-typed field, a bounded typed channel, or a direct typed return. It rejects `object`,
-`dynamic`, tuple, array, and other aggregate storage.
+typed field, a proven bounded typed channel, or a direct typed return. It rejects `object`,
+`dynamic`, generic `T`, tasks, tuples, arrays, and other aggregate storage.
+
+The analyzer accepts `WriteAsync` from a direct `Channel.CreateBounded` result. It also
+accepts an unreassigned local that was initialized by `Channel.CreateBounded`. An unbounded
+channel or reassigned channel cannot receive transfer ownership. `TryWrite` is rejected
+because a failed call keeps ownership with its caller.
 
 Application `in`, `ref`, and `out NativeTransfer<T>` parameters are invalid. Borrow only
 inside an `Access` or `Read` callback. Keep `ref` for `NativeTransfer<T>.Move(ref source)`.

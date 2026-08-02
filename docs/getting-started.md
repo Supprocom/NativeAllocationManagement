@@ -106,8 +106,15 @@ rejects transfer parameters with `in`, `ref`, or `out`.
 An ordinary `NativeTransfer<T>` parameter is an owned receiver. Each receiver path must
 dispose the transfer or move it to the next owner. Call the receiver with
 `NativeTransfer<T>.Move(ref source)`. The immediate destination must have the exact
-`NativeTransfer<T>` type. A typed field, bounded typed channel, or direct typed return can
-receive ownership. An `object`, `dynamic`, tuple, array, or other aggregate cannot.
+`NativeTransfer<T>` type. A typed field, proven bounded typed channel, or direct typed
+return can receive ownership. An `object`, `dynamic`, generic `T`, task, tuple, array, or
+other aggregate cannot.
+
+Use `WriteAsync` on a direct `Channel.CreateBounded` result or an unreassigned local from
+that factory. The analyzer rejects `CreateUnbounded` and any channel local that is
+reassigned. This proof keeps the generic `ChannelWriter<T>` parameter from becoming broad
+ownership authority. Do not move directly into `TryWrite`. A failed call keeps ownership
+with its caller.
 
 Do not use application `in`, `ref`, or `out NativeTransfer<T>` parameters. Borrow only
 inside an `Access` or `Read` callback. Use `ref` only in the package move operation.
