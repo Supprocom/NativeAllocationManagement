@@ -1,3 +1,5 @@
+using System.Reflection;
+using System.Reflection.Emit;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Supprocom.NativeAllocationManagement;
@@ -52,6 +54,30 @@ public sealed class NativeBuilderTests
             new uint[] { 2, 3, 5, 7, 11, 13 },
             transfer.Read(static view => view.AsSpan().ToArray()));
         transfer.Dispose();
+    }
+
+    [Fact]
+    public void GeometricGrowthCreatesNoManagedIntermediateArray()
+    {
+        Type? resolvedKernelType =
+            typeof(NativePool<int>).Assembly.GetType(
+                "Supprocom.NativeAllocationManagement.NativeOwnerKernel");
+        Assert.NotNull(resolvedKernelType);
+        Type kernelType = resolvedKernelType;
+        MethodInfo growBuilder = Assert.Single(
+            kernelType.GetMethods(
+                BindingFlags.Instance | BindingFlags.NonPublic),
+            static method =>
+                method.Name == "GrowBuilder"
+                && method.IsGenericMethodDefinition);
+
+        OpCode[] instructions = ReadOpCodes(growBuilder).ToArray();
+
+        Assert.NotEmpty(instructions);
+        Assert.DoesNotContain(
+            instructions,
+            static instruction =>
+                instruction.Value == OpCodes.Newarr.Value);
     }
 
     [Fact]
@@ -480,6 +506,57 @@ public sealed class NativeBuilderTests
         builder.Append([1, 2, 3, 4]);
         return new WeakReference(builder);
     }
+
+    private static IEnumerable<OpCode> ReadOpCodes(MethodInfo method)
+    {
+        MethodBody? body = method.GetMethodBody();
+        Assert.NotNull(body);
+        byte[]? methodCode = body.GetILAsByteArray();
+        Assert.NotNull(methodCode);
+        byte[] code = methodCode;
+        Dictionary<short, OpCode> opCodes = typeof(OpCodes)
+            .GetFields(BindingFlags.Public | BindingFlags.Static)
+            .Where(static field => field.FieldType == typeof(OpCode))
+            .Select(static field => (OpCode)field.GetValue(null)!)
+            .ToDictionary(static opCode => opCode.Value);
+
+        for (int offset = 0; offset < code.Length;)
+        {
+            short value = code[offset++] == 0xfe
+                ? unchecked((short)(0xfe00 | code[offset++]))
+                : code[offset - 1];
+            OpCode opCode = opCodes[value];
+            yield return opCode;
+            offset += GetOperandSize(opCode, code, offset);
+        }
+    }
+
+    private static int GetOperandSize(
+        OpCode opCode,
+        byte[] code,
+        int operandOffset) => opCode.OperandType switch
+        {
+            OperandType.InlineNone => 0,
+            OperandType.ShortInlineBrTarget
+                or OperandType.ShortInlineI
+                or OperandType.ShortInlineVar => 1,
+            OperandType.InlineVar => 2,
+            OperandType.InlineBrTarget
+                or OperandType.InlineField
+                or OperandType.InlineI
+                or OperandType.InlineMethod
+                or OperandType.InlineSig
+                or OperandType.InlineString
+                or OperandType.InlineTok
+                or OperandType.InlineType
+                or OperandType.ShortInlineR => 4,
+            OperandType.InlineI8
+                or OperandType.InlineR => 8,
+            OperandType.InlineSwitch => checked(
+                4 + (4 * BitConverter.ToInt32(code, operandOffset))),
+            _ => throw new InvalidOperationException(
+                $"Unsupported IL operand type {opCode.OperandType}.")
+        };
 
     private sealed unsafe class AlignedTestBuffer : SafeBuffer
     {
