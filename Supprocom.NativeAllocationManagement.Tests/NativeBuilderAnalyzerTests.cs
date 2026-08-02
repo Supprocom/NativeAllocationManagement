@@ -277,7 +277,13 @@ public sealed class NativeBuilderAnalyzerTests
                             }));
                     builder.Write(
                         1,
-                        Factory());
+                        Factory(
+                            static writer =>
+                            {
+                                Retain(writer.AsSpan());
+                                writer.Commit(0);
+                            }));
+                    builder.Write(1, Create());
                     builder.Write(
                         1,
                         first
@@ -293,12 +299,12 @@ public sealed class NativeBuilderAnalyzerTests
                 private static NativeBuilderWriteAction<int> Identity(
                     NativeBuilderWriteAction<int> action) => action;
 
-                private static NativeBuilderWriteAction<int> Factory() =>
-                    static writer =>
-                    {
-                        Retain(writer.AsSpan());
-                        writer.Commit(0);
-                    };
+                private static NativeBuilderWriteAction<int> Factory(
+                    NativeBuilderWriteAction<int> action) =>
+                    static writer => writer.Commit(0);
+
+                private static NativeBuilderWriteAction<int> Create() =>
+                    static writer => writer.Commit(0);
 
                 private static void Retain(Span<int> values)
                 {
@@ -310,7 +316,7 @@ public sealed class NativeBuilderAnalyzerTests
             diagnostic.Id == "NAM1042"
             && diagnostic.GetMessage().Contains(
                 "an indirect callback",
-                StringComparison.Ordinal)) >= 3);
+                StringComparison.Ordinal)) >= 4);
         Assert.True(diagnostics.Count(diagnostic =>
             diagnostic.Id == "NAM1042"
             && diagnostic.GetMessage().Contains(
@@ -517,7 +523,10 @@ public sealed class NativeBuilderAnalyzerTests
                             (scoped ref NativeBuilderBorrow<int> borrow) =>
                                 escaped = borrow));
                     builder.Borrow(
-                        Factory());
+                        Factory(
+                            (scoped ref NativeBuilderBorrow<int> borrow) =>
+                                Forward(ref borrow)));
+                    builder.Borrow(Create());
                     builder.Borrow(
                         first
                             ? new NativeBuilderBorrowAction<int>(Direct)
@@ -528,9 +537,14 @@ public sealed class NativeBuilderAnalyzerTests
                 private static NativeBuilderBorrowAction<int> Identity(
                     NativeBuilderBorrowAction<int> action) => action;
 
-                private static NativeBuilderBorrowAction<int> Factory() =>
+                private static NativeBuilderBorrowAction<int> Factory(
+                    NativeBuilderBorrowAction<int> action) =>
                     static (scoped ref NativeBuilderBorrow<int> borrow) =>
-                        Forward(ref borrow);
+                        borrow.Append(0);
+
+                private static NativeBuilderBorrowAction<int> Create() =>
+                    static (scoped ref NativeBuilderBorrow<int> borrow) =>
+                        borrow.Append(0);
 
                 private static void Direct(
                     scoped ref NativeBuilderBorrow<int> borrow) =>
@@ -547,7 +561,7 @@ public sealed class NativeBuilderAnalyzerTests
                 diagnostic.Id == "NAM1044"
                 && diagnostic.GetMessage().Contains(
                     "an indirect callback",
-                    StringComparison.Ordinal)) >= 3,
+                    StringComparison.Ordinal)) >= 4,
             string.Join(
                 Environment.NewLine,
                 diagnostics.Select(diagnostic =>

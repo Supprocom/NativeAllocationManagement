@@ -86,7 +86,8 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
         SyntaxNodeAnalysisContext context,
         Symbols symbols)
     {
-        if (context.SemanticModel.GetOperation(
+        if (!HasPotentialBuilderInvocationAncestor(context.Node)
+            || context.SemanticModel.GetOperation(
             context.Node,
             context.CancellationToken)
             is not IAnonymousFunctionOperation anonymous
@@ -123,6 +124,23 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
             symbols,
             context.ReportDiagnostic,
             expressionReturn: false);
+    }
+
+    private static bool HasPotentialBuilderInvocationAncestor(
+        SyntaxNode node)
+    {
+        for (SyntaxNode? ancestor = node.Parent;
+            ancestor is not null;
+            ancestor = ancestor.Parent)
+        {
+            if (ancestor is InvocationExpressionSyntax invocation
+                && IsPotentialBuilderInvocation(invocation))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static void AnalyzeDeclaredMethod(
