@@ -251,6 +251,77 @@ public sealed class NativeBuilderAnalyzerTests
     }
 
     [Fact]
+    public async Task WrappedWriteCallbacksFailClosedAndAnalyzeBodies()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using System;
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run(
+                    NativePool<int> pool,
+                    bool first)
+                {
+                    NativeBuilderWriteAction<int> indirect =
+                        static writer => writer.Commit(0);
+                    using NativeBuilder<int> builder = pool.CreateBuilder();
+                    builder.Write(
+                        1,
+                        Identity(
+                            static writer =>
+                            {
+                                NativeBuilderWriter<int> alias = writer;
+                                alias.Commit(0);
+                            }));
+                    builder.Write(
+                        1,
+                        Factory());
+                    builder.Write(
+                        1,
+                        first
+                            ? static writer =>
+                            {
+                                NativeBuilderWriter<int> alias = writer;
+                                alias.Commit(0);
+                            }
+                            : indirect);
+                    builder.Dispose();
+                }
+
+                private static NativeBuilderWriteAction<int> Identity(
+                    NativeBuilderWriteAction<int> action) => action;
+
+                private static NativeBuilderWriteAction<int> Factory() =>
+                    static writer =>
+                    {
+                        Retain(writer.AsSpan());
+                        writer.Commit(0);
+                    };
+
+                private static void Retain(Span<int> values)
+                {
+                }
+            }
+            """);
+
+        Assert.True(diagnostics.Count(diagnostic =>
+            diagnostic.Id == "NAM1042"
+            && diagnostic.GetMessage().Contains(
+                "an indirect callback",
+                StringComparison.Ordinal)) >= 3);
+        Assert.True(diagnostics.Count(diagnostic =>
+            diagnostic.Id == "NAM1042"
+            && diagnostic.GetMessage().Contains(
+                "an alias or helper",
+                StringComparison.Ordinal)) >= 2);
+        Assert.Contains(
+            diagnostics,
+            diagnostic => diagnostic.Id == "NAM1041");
+    }
+
+    [Fact]
     public async Task IndirectBorrowWriteCallbackIsRejected()
     {
         ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
@@ -421,6 +492,113 @@ public sealed class NativeBuilderAnalyzerTests
             """);
 
         Assert.Contains("NAM1044", NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task WrappedBorrowCallbacksFailClosedAndAnalyzeBodies()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run(
+                    NativePool<int> pool,
+                    bool first)
+                {
+                    NativeBuilderBorrow<int> escaped = default;
+                    NativeBuilderBorrowAction<int> indirect =
+                        static (scoped ref NativeBuilderBorrow<int> borrow) =>
+                            borrow.Append(0);
+                    using NativeBuilder<int> builder = pool.CreateBuilder();
+                    builder.Borrow(
+                        Identity(
+                            (scoped ref NativeBuilderBorrow<int> borrow) =>
+                                escaped = borrow));
+                    builder.Borrow(
+                        Factory());
+                    builder.Borrow(
+                        first
+                            ? new NativeBuilderBorrowAction<int>(Direct)
+                            : indirect);
+                    builder.Dispose();
+                }
+
+                private static NativeBuilderBorrowAction<int> Identity(
+                    NativeBuilderBorrowAction<int> action) => action;
+
+                private static NativeBuilderBorrowAction<int> Factory() =>
+                    static (scoped ref NativeBuilderBorrow<int> borrow) =>
+                        Forward(ref borrow);
+
+                private static void Direct(
+                    scoped ref NativeBuilderBorrow<int> borrow) =>
+                    Forward(ref borrow);
+
+                private static void Forward(
+                    ref NativeBuilderBorrow<int> borrow) =>
+                    borrow.Append(0);
+            }
+            """);
+
+        Assert.True(
+            diagnostics.Count(diagnostic =>
+                diagnostic.Id == "NAM1044"
+                && diagnostic.GetMessage().Contains(
+                    "an indirect callback",
+                    StringComparison.Ordinal)) >= 3,
+            string.Join(
+                Environment.NewLine,
+                diagnostics.Select(diagnostic =>
+                    $"{diagnostic.Id}: {diagnostic.GetMessage()}")));
+        Assert.True(diagnostics.Count(diagnostic =>
+            diagnostic.Id == "NAM1043") >= 1);
+        Assert.Contains(
+            diagnostics,
+            diagnostic => diagnostic.Id == "NAM1044"
+                && diagnostic.GetMessage().Contains(
+                    "an alias or unscoped helper",
+                    StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task DirectDelegateConstructionKeepsExactAuthority()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run(NativePool<int> pool)
+                {
+                    using NativeBuilder<int> builder = pool.CreateBuilder();
+                    builder.Write(
+                        1,
+                        new NativeBuilderWriteAction<int>(
+                            static writer =>
+                            {
+                                writer.AsSpan()[0] = 7;
+                                writer.Commit(1);
+                            }));
+                    builder.Borrow(
+                        new NativeBuilderBorrowAction<int>(
+                            static (
+                                scoped ref NativeBuilderBorrow<int> borrow) =>
+                                borrow.Append(8)));
+                    NativeTransfer<int> transfer = builder.Complete();
+                    transfer.Dispose();
+                }
+            }
+            """);
+
+        Assert.DoesNotContain(
+            diagnostics,
+            diagnostic => diagnostic.Id is "NAM1041"
+                or "NAM1042"
+                or "NAM1043"
+                or "NAM1044");
     }
 
     [Fact]

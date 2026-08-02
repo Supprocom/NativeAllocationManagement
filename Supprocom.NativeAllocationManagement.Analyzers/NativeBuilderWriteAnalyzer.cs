@@ -86,16 +86,10 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
         SyntaxNodeAnalysisContext context,
         Symbols symbols)
     {
-        InvocationExpressionSyntax? invocation = context.Node
-            .Ancestors()
-            .OfType<InvocationExpressionSyntax>()
-            .FirstOrDefault();
-        if (invocation is null
-            || !IsPotentialBuilderInvocation(invocation)
-            || context.SemanticModel.GetOperation(
-                context.Node,
-                context.CancellationToken)
-                is not IAnonymousFunctionOperation anonymous
+        if (context.SemanticModel.GetOperation(
+            context.Node,
+            context.CancellationToken)
+            is not IAnonymousFunctionOperation anonymous
             || anonymous.Symbol.Parameters.Length != 1)
         {
             return;
@@ -233,7 +227,7 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
 
         if (symbols.IsBuilderWrite(invocation.TargetMethod))
         {
-            ValidateCallbackArgument(
+            AnalyzeCallbackArgument(
                 context.ReportDiagnostic,
                 invocation,
                 symbols.IsWriteAction,
@@ -246,7 +240,7 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
 
         if (symbols.IsBuilderBorrow(invocation.TargetMethod))
         {
-            ValidateCallbackArgument(
+            AnalyzeCallbackArgument(
                 context.ReportDiagnostic,
                 invocation,
                 symbols.IsBorrowAction,
@@ -294,7 +288,7 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
         }
     }
 
-    private static void ValidateCallbackArgument(
+    private static void AnalyzeCallbackArgument(
         Action<Diagnostic> report,
         IInvocationOperation invocation,
         Func<ITypeSymbol?, bool> isAction,
@@ -306,20 +300,22 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
         IArgumentOperation? callback = invocation.Arguments
             .FirstOrDefault(argument =>
                 isAction(argument.Parameter?.Type));
-        if (callback is null
-            || IsDirectCallback(
-                callback.Value,
-                isAuthority,
-                refKind))
+        if (callback is null)
         {
             return;
         }
 
-        report(Diagnostic.Create(
-            descriptor,
-            callback.Syntax.GetLocation(),
-            name,
-            "an indirect callback"));
+        if (!IsDirectCallback(
+            callback.Value,
+            isAuthority,
+            refKind))
+        {
+            report(Diagnostic.Create(
+                descriptor,
+                callback.Syntax.GetLocation(),
+                name,
+                "an indirect callback"));
+        }
     }
 
     private static bool IsDirectCallback(
@@ -327,11 +323,8 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
         Func<ITypeSymbol?, bool> isAuthority,
         RefKind refKind)
     {
-        IAnonymousFunctionOperation? anonymous = value
-            .DescendantsAndSelf()
-            .OfType<IAnonymousFunctionOperation>()
-            .FirstOrDefault();
-        if (anonymous is not null)
+        IOperation callback = UnwrapCallbackValue(value);
+        if (callback is IAnonymousFunctionOperation anonymous)
         {
             return anonymous.Symbol.Parameters.Length == 1
                 && anonymous.Symbol.Parameters[0].RefKind == refKind
@@ -339,11 +332,7 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
                     anonymous.Symbol.Parameters[0].Type);
         }
 
-        IMethodReferenceOperation? reference = value
-            .DescendantsAndSelf()
-            .OfType<IMethodReferenceOperation>()
-            .FirstOrDefault();
-        if (reference is null)
+        if (callback is not IMethodReferenceOperation reference)
         {
             return false;
         }
@@ -358,6 +347,31 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
             && isAuthority(
                 declaration.Parameters[0].Type)
             && declaration.DeclaringSyntaxReferences.Length == 1;
+    }
+
+    private static IOperation UnwrapCallbackValue(IOperation value)
+    {
+        IOperation current = value;
+        while (true)
+        {
+            switch (current)
+            {
+                case IParenthesizedOperation parenthesized:
+                    current = parenthesized.Operand;
+                    continue;
+                case IConversionOperation conversion
+                    when conversion.OperatorMethod is null
+                    && (conversion.Conversion.IsIdentity
+                        || conversion.Conversion.IsReference):
+                    current = conversion.Operand;
+                    continue;
+                case IDelegateCreationOperation creation:
+                    current = creation.Target;
+                    continue;
+                default:
+                    return current;
+            }
+        }
     }
 
     private static void ReportInvalidBorrowParameters(
