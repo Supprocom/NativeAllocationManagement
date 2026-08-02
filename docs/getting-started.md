@@ -178,6 +178,46 @@ the callback exits.
 arena storage. A transfer can use external storage that the arena accepted through
 `ReserveExternalMemory`.
 
+The same arena accepts concurrent `ScratchTransferable<T>` calls. The arena reserves a
+disjoint range before each initializer runs. The callback writes directly into its range
+without holding the arena lock. Failure returns only that range.
+
+```csharp
+using NativeArena arena = new(
+    preAllocateBytes: 24u * 25_600u * sizeof(float));
+
+Parallel.For(0, 24, index =>
+{
+    NativeTransfer<float>? map = arena.ScratchTransferable<float>(
+        25_600,
+        writer => writer.Fill(index));
+    try
+    {
+        ProcessMap(NativeTransfer<float>.Move(ref map));
+    }
+    finally
+    {
+        map?.Dispose();
+    }
+});
+
+static void ProcessMap(NativeTransfer<float> map)
+{
+    try
+    {
+        float first = map.Read(static view => view[0]);
+        Console.WriteLine(first);
+    }
+    finally
+    {
+        map.Dispose();
+    }
+}
+```
+
+Each `ProcessMap` call owns its transfer. It must dispose or move that ownership on every
+exit. No worker-local arena wrapper, queue, or semaphore is necessary.
+
 `NAM1021` rejects ownership copies. `NAM1022` rejects inactive use and double disposal.
 `NAM1023` rejects invalid moves.
 

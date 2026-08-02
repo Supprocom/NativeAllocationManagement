@@ -1006,6 +1006,90 @@ public sealed class NativeTransferAnalyzerTests
     }
 
     [Fact]
+    public async Task ParallelCallbacksCanPublishConcurrentArenaTransfers()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using System;
+            using System.Threading.Tasks;
+            using Supprocom.NativeAllocationManagement;
+
+            public sealed class Owner : IDisposable
+            {
+                private NativeTransfer<float>? _transfer;
+
+                public Owner(NativeTransfer<float>? transfer)
+                {
+                    _transfer = NativeTransfer<float>.Move(ref transfer);
+                }
+
+                public void Dispose()
+                {
+                    _transfer?.Dispose();
+                }
+            }
+
+            public static class Sample
+            {
+                public static void Run(
+                    NativeArena arena,
+                    Owner?[] owners)
+                {
+                    Parallel.For(0, owners.Length, index =>
+                    {
+                        NativeTransfer<float>? transfer =
+                            arena.ScratchTransferable<float>(
+                                25_600,
+                                writer => writer.Fill(index));
+                        try
+                        {
+                            owners[index] = new Owner(
+                                NativeTransfer<float>.Move(ref transfer));
+                        }
+                        finally
+                        {
+                            transfer?.Dispose();
+                        }
+                    });
+                }
+            }
+            """);
+
+        Assert.True(
+            AnalyzerContractTests.NativeDiagnostics(diagnostics).Length == 0,
+            string.Join(Environment.NewLine, diagnostics));
+    }
+
+    [Fact]
+    public async Task ParallelArenaCallbackStillRequiresTransferCleanup()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using System.Threading.Tasks;
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run(NativeArena arena)
+                {
+                    Parallel.For(0, 1, _ =>
+                    {
+                        NativeTransfer<float> transfer =
+                            arena.ScratchTransferable<float>(
+                                4,
+                                static writer => writer.Fill(1));
+                        _ = transfer.Length;
+                    });
+                }
+            }
+            """);
+
+        Assert.Contains(
+            "NAM1025",
+            AnalyzerContractTests.NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
     public async Task NamedHelperCanMoveAndConditionallyCleanTransferOwnership()
     {
         ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(

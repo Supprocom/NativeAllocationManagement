@@ -143,7 +143,8 @@ internal readonly struct NativeBumpInitialization
         nuint originalCursor,
         bool cursorCaptured,
         bool scoped,
-        bool startedScope)
+        bool startedScope,
+        bool concurrentReservation = false)
     {
         Allocation = allocation;
         CreatedSegment = createdSegment;
@@ -151,6 +152,7 @@ internal readonly struct NativeBumpInitialization
         CursorCaptured = cursorCaptured;
         Scoped = scoped;
         StartedScope = startedScope;
+        ConcurrentReservation = concurrentReservation;
     }
 
     internal NativeGeneration Generation =>
@@ -173,6 +175,8 @@ internal readonly struct NativeBumpInitialization
     internal bool Scoped { get; }
 
     internal bool StartedScope { get; }
+
+    internal bool ConcurrentReservation { get; }
 }
 
 internal readonly struct NativeBuilderInitialization
@@ -1285,8 +1289,18 @@ internal sealed class NativeReferenceRootTable
     }
 }
 
+internal readonly record struct NativeBumpFreeRange(
+    nuint Offset,
+    nuint Length)
+{
+    internal nuint End => checked(Offset + Length);
+}
+
 internal sealed class NativeBumpSegment
 {
+    private readonly List<NativeBumpFreeRange> _concurrentFreeRanges = [];
+    private int _concurrentReservations;
+
     internal NativeBumpSegment(NativeSegment segment, long allocationOrdinal)
     {
         Segment = segment;
@@ -1315,6 +1329,242 @@ internal sealed class NativeBumpSegment
     internal nuint PendingScopeRangeEnd { get; set; }
 
     internal bool IsCompletelyIdle => LowCursor == 0 && HighCursor == Segment.ByteLength;
+
+    internal int ConcurrentReservationCount => _concurrentReservations;
+
+    internal bool TryReserveConcurrentRange(
+        nuint byteLength,
+        nuint alignment,
+        out nuint offset)
+    {
+        offset = 0;
+        int bestIndex = -1;
+        nuint bestOffset = 0;
+        nuint bestWaste = nuint.MaxValue;
+        for (int index = 0;
+            index < _concurrentFreeRanges.Count;
+            index++)
+        {
+            NativeBumpFreeRange range =
+                _concurrentFreeRanges[index];
+            nuint candidate = AlignUpRange(
+                range.Offset,
+                alignment);
+            if (candidate > range.End
+                || byteLength > range.End - candidate)
+            {
+                continue;
+            }
+
+            nuint waste = checked(
+                range.Length - byteLength);
+            if (waste >= bestWaste)
+            {
+                continue;
+            }
+
+            bestIndex = index;
+            bestOffset = candidate;
+            bestWaste = waste;
+        }
+
+        if (bestIndex < 0)
+        {
+            return false;
+        }
+
+        _concurrentFreeRanges.EnsureCapacity(
+            checked(_concurrentFreeRanges.Count + 1));
+        int reservationCount = checked(
+            _concurrentReservations + 1);
+        NativeBumpFreeRange selected =
+            _concurrentFreeRanges[bestIndex];
+        nuint selectedEnd = selected.End;
+        nuint allocationEnd = checked(
+            bestOffset + byteLength);
+        nuint leftLength = bestOffset - selected.Offset;
+        nuint rightLength = selectedEnd - allocationEnd;
+        if (leftLength != 0 && rightLength != 0)
+        {
+            _concurrentFreeRanges[bestIndex] = new(
+                selected.Offset,
+                leftLength);
+            _concurrentFreeRanges.Insert(
+                bestIndex + 1,
+                new NativeBumpFreeRange(
+                    allocationEnd,
+                    rightLength));
+        }
+        else if (leftLength != 0)
+        {
+            _concurrentFreeRanges[bestIndex] = new(
+                selected.Offset,
+                leftLength);
+        }
+        else if (rightLength != 0)
+        {
+            _concurrentFreeRanges[bestIndex] = new(
+                allocationEnd,
+                rightLength);
+        }
+        else
+        {
+            _concurrentFreeRanges.RemoveAt(bestIndex);
+        }
+
+        _concurrentReservations = reservationCount;
+        offset = bestOffset;
+        return true;
+    }
+
+    internal void ReserveConcurrentTail(
+        nuint originalCursor,
+        nuint offset,
+        nuint byteLength)
+    {
+        if (checked(offset + byteLength) != LowCursor
+            || offset < originalCursor)
+        {
+            throw new InvalidOperationException(
+                "The concurrent arena tail reservation is inconsistent.");
+        }
+
+        _concurrentFreeRanges.EnsureCapacity(
+            checked(_concurrentFreeRanges.Count + 1));
+        int reservationCount = checked(
+            _concurrentReservations + 1);
+        if (offset > originalCursor)
+        {
+            InsertConcurrentFreeRange(
+                originalCursor,
+                offset - originalCursor);
+        }
+
+        _concurrentReservations = reservationCount;
+    }
+
+    internal void PrepareConcurrentRangeReturn()
+    {
+        _concurrentFreeRanges.EnsureCapacity(
+            checked(_concurrentFreeRanges.Count + 1));
+    }
+
+    internal void ReleaseConcurrentRange(
+        nuint offset,
+        nuint byteLength)
+    {
+        if (_concurrentReservations <= 0)
+        {
+            throw new InvalidOperationException(
+                "The concurrent arena range was already returned.");
+        }
+
+        PrepareConcurrentRangeReturn();
+        ValidateConcurrentFreeRange(offset, byteLength);
+        int reservationCount = checked(
+            _concurrentReservations - 1);
+        InsertConcurrentFreeRange(offset, byteLength);
+        _concurrentReservations = reservationCount;
+        CompactConcurrentTail();
+    }
+
+    internal void ResetConcurrentRanges()
+    {
+        _concurrentFreeRanges.Clear();
+        _concurrentReservations = 0;
+    }
+
+    private void ValidateConcurrentFreeRange(
+        nuint offset,
+        nuint byteLength)
+    {
+        nuint end = checked(offset + byteLength);
+        if (end > Segment.ByteLength)
+        {
+            throw new InvalidOperationException(
+                "The concurrent arena range is outside its segment.");
+        }
+
+        foreach (NativeBumpFreeRange range in
+            _concurrentFreeRanges)
+        {
+            if (end > range.Offset && offset < range.End)
+            {
+                throw new InvalidOperationException(
+                    "The concurrent arena range overlaps returned storage.");
+            }
+        }
+    }
+
+    private void InsertConcurrentFreeRange(
+        nuint offset,
+        nuint byteLength)
+    {
+        if (byteLength == 0)
+        {
+            return;
+        }
+
+        nuint end = checked(offset + byteLength);
+        int index = 0;
+        while (index < _concurrentFreeRanges.Count
+            && _concurrentFreeRanges[index].Offset < offset)
+        {
+            index++;
+        }
+
+        if (index > 0
+            && _concurrentFreeRanges[index - 1].End == offset)
+        {
+            NativeBumpFreeRange previous =
+                _concurrentFreeRanges[index - 1];
+            offset = previous.Offset;
+            byteLength = checked(previous.Length + byteLength);
+            end = checked(offset + byteLength);
+            _concurrentFreeRanges.RemoveAt(index - 1);
+            index--;
+        }
+
+        if (index < _concurrentFreeRanges.Count
+            && _concurrentFreeRanges[index].Offset == end)
+        {
+            NativeBumpFreeRange next =
+                _concurrentFreeRanges[index];
+            byteLength = checked(byteLength + next.Length);
+            _concurrentFreeRanges.RemoveAt(index);
+        }
+
+        _concurrentFreeRanges.Insert(
+            index,
+            new NativeBumpFreeRange(offset, byteLength));
+    }
+
+    private void CompactConcurrentTail()
+    {
+        while (_concurrentFreeRanges.Count != 0)
+        {
+            int index = _concurrentFreeRanges.Count - 1;
+            NativeBumpFreeRange range =
+                _concurrentFreeRanges[index];
+            if (range.End != LowCursor)
+            {
+                return;
+            }
+
+            LowCursor = range.Offset;
+            _concurrentFreeRanges.RemoveAt(index);
+        }
+    }
+
+    private static nuint AlignUpRange(
+        nuint value,
+        nuint alignment)
+    {
+        nuint remainder = value % alignment;
+        return remainder == 0
+            ? value
+            : checked(value + alignment - remainder);
+    }
 
     internal void BeginPendingScopeRange(long scopeEpoch, nuint start, nuint end)
     {
@@ -1409,6 +1659,8 @@ internal sealed class NativeAllocation
 
     internal bool IsScoped { get; private set; }
 
+    internal bool RecyclesBumpRange { get; private set; }
+
     internal long ScopeEpoch => Volatile.Read(ref _scopeEpoch);
 
     internal void SetScopeEpochForTest(long value) =>
@@ -1461,11 +1713,23 @@ internal sealed class NativeAllocation
         StorageBytes = storageBytes;
         ReferenceRoots = referenceRoots;
         IsScoped = scoped;
+        RecyclesBumpRange = false;
         Volatile.Write(ref _scopeEpoch, scopeEpoch);
         Lifecycle = NativeAllocationLifecycle.Active;
         NativeOperationAdmission.Reset(ref _operationAdmission);
         InitializedLength = 0;
         Volatile.Write(ref _id, id);
+    }
+
+    internal void EnableBumpRangeRecycling()
+    {
+        if (BumpSegment is null && StorageBytes != 0)
+        {
+            throw new InvalidOperationException(
+                "A recyclable bump allocation requires one native segment.");
+        }
+
+        RecyclesBumpRange = StorageBytes != 0;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -1839,6 +2103,8 @@ internal sealed class NativeGeneration
     internal int LeaseReturnsInProgress { get; set; }
 
     internal int InitializationsInProgress { get; set; }
+
+    internal int ConcurrentBumpInitializationsInProgress { get; set; }
 
     internal long RetiredNativeBytes { get; set; }
 
@@ -2452,6 +2718,29 @@ internal sealed class NativeOwnerKernel
         lock (_gate)
         {
             return _current?.ReferenceRoots.Count ?? 0;
+        }
+    }
+
+    internal int CurrentConcurrentReservationCountForTest()
+    {
+        lock (_gate)
+        {
+            NativeGeneration? generation = _current;
+            if (generation is null)
+            {
+                return 0;
+            }
+
+            int count = 0;
+            foreach (NativeBumpSegment segment in
+                generation.BumpSegments)
+            {
+                count = checked(
+                    count
+                    + segment.ConcurrentReservationCount);
+            }
+
+            return count;
         }
     }
 
@@ -3156,13 +3445,50 @@ internal sealed class NativeOwnerKernel
         bool containsReferences,
         NativeLeaseInitializer<T> initializer)
     {
+        return LeaseBumpInitializedCore(
+            length,
+            elementSize,
+            alignment,
+            scoped,
+            containsReferences,
+            initializer,
+            concurrentReservation: false);
+    }
+
+    internal NativeRegionAllocation LeaseConcurrentBumpInitialized<T>(
+        int length,
+        int elementSize,
+        nuint alignment,
+        NativeLeaseInitializer<T> initializer)
+        where T : unmanaged
+    {
+        return LeaseBumpInitializedCore(
+            length,
+            elementSize,
+            alignment,
+            scoped: false,
+            containsReferences: false,
+            initializer,
+            concurrentReservation: true);
+    }
+
+    private NativeRegionAllocation LeaseBumpInitializedCore<T>(
+        int length,
+        int elementSize,
+        nuint alignment,
+        bool scoped,
+        bool containsReferences,
+        NativeLeaseInitializer<T> initializer,
+        bool concurrentReservation)
+    {
         ArgumentNullException.ThrowIfNull(initializer);
         NativeBumpInitialization reservation = BeginBumpInitialization(
             length,
             elementSize,
             alignment,
             scoped,
-            containsReferences);
+            containsReferences,
+            concurrentReservation: concurrentReservation);
         int initializedLength = 0;
         try
         {
@@ -3857,7 +4183,8 @@ internal sealed class NativeOwnerKernel
         nuint alignment,
         bool scoped,
         bool containsReferences,
-        bool allowExistingInitialization = false)
+        bool allowExistingInitialization = false,
+        bool concurrentReservation = false)
     {
         ValidateBumpInitializationArguments(
             length,
@@ -3873,7 +4200,8 @@ internal sealed class NativeOwnerKernel
                 scoped,
                 containsReferences,
                 allowExistingInitialization,
-                byteLength);
+                byteLength,
+                concurrentReservation);
         }
 
         lock (_gate)
@@ -3884,7 +4212,8 @@ internal sealed class NativeOwnerKernel
                 scoped,
                 containsReferences,
                 allowExistingInitialization,
-                byteLength);
+                byteLength,
+                concurrentReservation);
         }
     }
 
@@ -3904,7 +4233,8 @@ internal sealed class NativeOwnerKernel
         bool scoped,
         bool containsReferences,
         bool allowExistingInitialization,
-        nuint byteLength)
+        nuint byteLength,
+        bool concurrentReservation = false)
     {
         NativeGeneration generation = EnsureActiveLocked(
             scoped ? "LeaseScoped" : "Lease");
@@ -3913,8 +4243,32 @@ internal sealed class NativeOwnerKernel
             throw CreateStateException("Lease", "This owner does not expose heterogeneous allocations.", 0);
         }
 
+        if (concurrentReservation
+            && (_kind != NativeOwnerKind.Arena
+                || scoped
+                || containsReferences))
+        {
+            throw CreateStateException(
+                "ScratchTransferable",
+                "Concurrent reservations require unmanaged ordinary arena storage.",
+                0);
+        }
+
+        if (concurrentReservation
+            && generation.InitializationsInProgress
+                != generation.ConcurrentBumpInitializationsInProgress)
+        {
+            throw CreateInUseException(
+                "ScratchTransferable",
+                generation.Number,
+                0,
+                generation.ActiveOperations,
+                "A different native lease initializer is already active.");
+        }
+
         if (generation.InitializationsInProgress != 0
-            && !allowExistingInitialization)
+            && !allowExistingInitialization
+            && !concurrentReservation)
         {
             throw CreateInUseException(
                 scoped ? "LeaseScoped" : "Lease",
@@ -3930,6 +4284,7 @@ internal sealed class NativeOwnerKernel
         NativeBumpSegment? createdSegment = null;
         nuint originalCursor = 0;
         bool cursorCaptured = false;
+        bool concurrentRangeRegistered = false;
         nuint offset = 0;
         try
         {
@@ -3962,7 +4317,22 @@ internal sealed class NativeOwnerKernel
 
             if (byteLength > 0)
             {
-                bumpSegment = FindBumpSpaceLocked(generation, byteLength, alignment, scoped);
+                if (concurrentReservation)
+                {
+                    bumpSegment = FindConcurrentBumpRangeLocked(
+                        generation,
+                        byteLength,
+                        alignment,
+                        out offset);
+                    concurrentRangeRegistered =
+                        bumpSegment is not null;
+                }
+
+                bumpSegment ??= FindBumpSpaceLocked(
+                    generation,
+                    byteLength,
+                    alignment,
+                    scoped);
                 if (bumpSegment is null)
                 {
                     nuint segmentBytes = ChooseBumpSegmentBytes(
@@ -4000,10 +4370,24 @@ internal sealed class NativeOwnerKernel
                 }
                 else
                 {
-                    originalCursor = bumpSegment.LowCursor;
-                    cursorCaptured = true;
-                    offset = AlignUp(bumpSegment.LowCursor, alignment);
-                    bumpSegment.LowCursor = checked(offset + byteLength);
+                    if (!concurrentRangeRegistered)
+                    {
+                        originalCursor = bumpSegment.LowCursor;
+                        cursorCaptured = true;
+                        offset = AlignUp(
+                            bumpSegment.LowCursor,
+                            alignment);
+                        bumpSegment.LowCursor = checked(
+                            offset + byteLength);
+                        if (concurrentReservation)
+                        {
+                            bumpSegment.ReserveConcurrentTail(
+                                originalCursor,
+                                offset,
+                                byteLength);
+                            concurrentRangeRegistered = true;
+                        }
+                    }
                 }
             }
 
@@ -4025,6 +4409,10 @@ internal sealed class NativeOwnerKernel
                 preserveScopedRegistration:
                     reuseRegisteredScopedRecord);
             allocation.Lifecycle = NativeAllocationLifecycle.Initializing;
+            if (concurrentReservation)
+            {
+                allocation.EnableBumpRangeRecycling();
+            }
             if (!reuseRegisteredScopedRecord)
             {
                 generation.Allocations.Add(
@@ -4038,7 +4426,19 @@ internal sealed class NativeOwnerKernel
                     checked(generation.ScopedRecordCount + 1);
             }
 
-            generation.InitializationsInProgress++;
+            int initializationCount = checked(
+                generation.InitializationsInProgress + 1);
+            int concurrentInitializationCount =
+                generation.ConcurrentBumpInitializationsInProgress;
+            if (concurrentReservation)
+            {
+                concurrentInitializationCount = checked(
+                    concurrentInitializationCount + 1);
+            }
+
+            generation.InitializationsInProgress = initializationCount;
+            generation.ConcurrentBumpInitializationsInProgress =
+                concurrentInitializationCount;
 
             return new NativeBumpInitialization(
                 allocation,
@@ -4046,10 +4446,19 @@ internal sealed class NativeOwnerKernel
                 originalCursor,
                 cursorCaptured,
                 scoped,
-                startedScope);
+                startedScope,
+                concurrentReservation);
         }
         catch
         {
+            if (concurrentRangeRegistered
+                && bumpSegment is not null)
+            {
+                bumpSegment.ReleaseConcurrentRange(
+                    offset,
+                    byteLength);
+            }
+
             if (createdSegment is not null)
             {
                 generation.BumpSegments.Remove(createdSegment);
@@ -4057,7 +4466,9 @@ internal sealed class NativeOwnerKernel
                 createdSegment.Segment.FreeNow();
                 ResetBumpTraversal(generation);
             }
-            else if (bumpSegment is not null && cursorCaptured)
+            else if (bumpSegment is not null
+                && cursorCaptured
+                && !concurrentRangeRegistered)
             {
                 if (scoped)
                 {
@@ -4342,6 +4753,10 @@ internal sealed class NativeOwnerKernel
         }
 
         generation.InitializationsInProgress--;
+        if (reservation.ConcurrentReservation)
+        {
+            generation.ConcurrentBumpInitializationsInProgress--;
+        }
     }
 
     internal void AbortBumpInitializationGroup(
@@ -4442,6 +4857,14 @@ internal sealed class NativeOwnerKernel
                 return;
             }
 
+            if (reservation.ConcurrentReservation
+                && reservation.BumpSegment is not null)
+            {
+                reservation.BumpSegment.ReleaseConcurrentRange(
+                    allocation.OffsetBytes,
+                    allocation.StorageBytes);
+            }
+
             allocation.ClearInitializedReferences();
             allocation.Lifecycle = NativeAllocationLifecycle.Returned;
             allocation.InitializedLength = 0;
@@ -4455,31 +4878,38 @@ internal sealed class NativeOwnerKernel
                 generation.ReusableAllocations.Add(allocation);
             }
 
-            if (reservation.CreatedSegment is not null)
+            if (!reservation.ConcurrentReservation)
             {
-                generation.BumpSegments.Remove(
-                    reservation.CreatedSegment);
-                generation.Owner.RemoveSegment(
-                    reservation.CreatedSegment.Segment);
-                reservation.CreatedSegment.Segment.FreeNow();
-                ResetBumpTraversal(generation);
-            }
-            else if (reservation.BumpSegment is not null
-                && reservation.CursorCaptured)
-            {
-                if (reservation.Scoped)
+                if (reservation.CreatedSegment is not null)
                 {
-                    reservation.BumpSegment.HighCursor =
-                        reservation.OriginalCursor;
+                    generation.BumpSegments.Remove(
+                        reservation.CreatedSegment);
+                    generation.Owner.RemoveSegment(
+                        reservation.CreatedSegment.Segment);
+                    reservation.CreatedSegment.Segment.FreeNow();
+                    ResetBumpTraversal(generation);
                 }
-                else
+                else if (reservation.BumpSegment is not null
+                    && reservation.CursorCaptured)
                 {
-                    reservation.BumpSegment.LowCursor =
-                        reservation.OriginalCursor;
+                    if (reservation.Scoped)
+                    {
+                        reservation.BumpSegment.HighCursor =
+                            reservation.OriginalCursor;
+                    }
+                    else
+                    {
+                        reservation.BumpSegment.LowCursor =
+                            reservation.OriginalCursor;
+                    }
                 }
             }
 
             generation.InitializationsInProgress--;
+            if (reservation.ConcurrentReservation)
+            {
+                generation.ConcurrentBumpInitializationsInProgress--;
+            }
             if (reservation.StartedScope
                 && generation.ScopedRecordCount == 0)
             {
@@ -5102,6 +5532,12 @@ internal sealed class NativeOwnerKernel
                 generation.AvailableSlabs.EnsureCapacity(checked(generation.AvailableSlabs.Count + 1));
             }
 
+            if (allocation.RecyclesBumpRange
+                && allocation.BumpSegment is not null)
+            {
+                allocation.BumpSegment.PrepareConcurrentRangeReturn();
+            }
+
             allocation.ReferenceRoots?.ReserveForClear(ClearSlotCount(allocation));
             int activeOperations =
                 allocation.CloseOperationAdmission();
@@ -5131,6 +5567,14 @@ internal sealed class NativeOwnerKernel
                 if (allocation.Slab is not null && allocation.Length > 0)
                 {
                     generation.AddAvailableSlabOrdered(allocation.Slab);
+                }
+
+                else if (allocation.RecyclesBumpRange
+                    && allocation.BumpSegment is not null)
+                {
+                    allocation.BumpSegment.ReleaseConcurrentRange(
+                        allocation.OffsetBytes,
+                        allocation.StorageBytes);
                 }
 
                 allocation.Lifecycle = NativeAllocationLifecycle.Returned;
@@ -5789,6 +6233,35 @@ internal sealed class NativeOwnerKernel
         return null;
     }
 
+    private static NativeBumpSegment? FindConcurrentBumpRangeLocked(
+        NativeGeneration generation,
+        nuint byteLength,
+        nuint alignment,
+        out nuint offset)
+    {
+        offset = 0;
+        for (int index = 0;
+            index < generation.BumpSegments.Count;
+            index++)
+        {
+            NativeMemoryTestHooks.RecordBumpTraversalVisit();
+            NativeBumpSegment segment =
+                generation.BumpSegments[index];
+            if (!segment.TryReserveConcurrentRange(
+                byteLength,
+                alignment,
+                out offset))
+            {
+                continue;
+            }
+
+            generation.OrdinaryBumpTraversalIndex = index;
+            return segment;
+        }
+
+        return null;
+    }
+
     private static void AppendBumpSegmentLocked(NativeGeneration generation, NativeBumpSegment segment)
     {
         int previousCount = generation.BumpSegments.Count;
@@ -6076,6 +6549,7 @@ internal sealed class NativeOwnerKernel
                         {
                             bump.LowCursor = 0;
                             bump.HighCursor = bump.Segment.ByteLength;
+                            bump.ResetConcurrentRanges();
                             TransferSegmentLocked(current, next, bump.Segment);
                             current.BumpSegments.Remove(bump);
                             next.AddBumpOrdered(bump);
@@ -6198,6 +6672,7 @@ internal sealed class NativeOwnerKernel
                 failedBoundary = "bump transfer";
                 bump.LowCursor = 0;
                 bump.HighCursor = bump.Segment.ByteLength;
+                bump.ResetConcurrentRanges();
                 TransferSegmentLocked(generation, current!, bump.Segment);
                 generation.BumpSegments.Remove(bump);
                 current!.AddBumpOrdered(bump);

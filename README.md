@@ -180,6 +180,12 @@ owner disposal until that callback exits.
 `NativeArena.ScratchTransferable<T>` gives the same ownership model to heterogeneous
 arena storage. It also works with storage supplied through `ReserveExternalMemory`.
 
+Calls to `ScratchTransferable<T>` can run concurrently on one preallocated arena. Each
+initializer receives a disjoint range and runs outside the arena lock. A failed
+initializer returns only its reservation. Published transfers keep independent storage
+until disposal. This pattern removes application-managed arena sharding, queues, and
+semaphores.
+
 The bundled analyzer rejects copied ownership, inactive use, double moves, escaping
 views, unfinished lifetimes, and direct acquisition into storage. These rules are
 `NAM1021` through `NAM1027`.

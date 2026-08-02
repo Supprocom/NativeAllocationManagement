@@ -15,6 +15,9 @@ public sealed class NativeArena : IDisposable
 
     internal int CurrentReferenceRootCountForTest => _kernel.CurrentReferenceRootCountForTest();
 
+    internal int CurrentConcurrentReservationCountForTest =>
+        _kernel.CurrentConcurrentReservationCountForTest();
+
     internal int QuarantinedSegmentCountForTest => _kernel.QuarantinedSegmentCountForTest();
 
     internal int QuarantinedGenerationCountForTest => _kernel.QuarantinedGenerationCountForTest();
@@ -68,18 +71,16 @@ public sealed class NativeArena : IDisposable
         return new ArenaLease<T>(_kernel, allocation);
     }
 
-    /// <summary>Rents an initialized unmanaged range for destructive ownership transfer.</summary>
+    /// <summary>Concurrently reserves and initializes an unmanaged arena range for destructive ownership transfer.</summary>
     public NativeTransfer<T> ScratchTransferable<T>(
         int length,
         NativeLeaseInitializer<T> initializer)
         where T : unmanaged
     {
-        NativeRegionAllocation allocation = _kernel.LeaseBumpInitialized(
+        NativeRegionAllocation allocation = _kernel.LeaseConcurrentBumpInitialized(
             length,
             NativeTypeLayout.StorageSize<T>(),
             NativeTypeLayout.Alignment<T>(),
-            scoped: false,
-            containsReferences: false,
             initializer);
         return NativeTransfer<T>.Create(
             _kernel,
