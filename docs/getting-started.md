@@ -12,9 +12,91 @@ normal package reference and keep its analyzer asset enabled.
 
 ```xml
 <ItemGroup>
-  <PackageReference Include="Supprocom.NativeAllocationManagement" Version="0.1.1" />
+  <PackageReference Include="Supprocom.NativeAllocationManagement" Version="0.1.2" />
 </ItemGroup>
 ```
+
+## Build a growable native sequence
+
+`NativeBuilder<T>` owns one unpublished unmanaged sequence. The builder supports one
+writer and remains in one method-local variable.
+
+Create the builder from `NativePool<T>` when output has one known element type. Create it
+from `NativeArena` when the output belongs to a heterogeneous arena lifecycle.
+
+```csharp
+using Supprocom.NativeAllocationManagement;
+
+using NativePool<uint> pool = new(initialCapacity: 1_024);
+using NativeBuilder<uint> builder = pool.CreateBuilder(
+    initialCapacity: 64);
+Span<uint> batch = stackalloc uint[64];
+
+for (int offset = 0; offset < 4_096; offset += batch.Length)
+{
+    for (int index = 0; index < batch.Length; index++)
+    {
+        batch[index] = checked((uint)(offset + index));
+    }
+
+    builder.Append(batch);
+}
+
+NativeTransfer<uint> output = builder.Complete();
+try
+{
+    output.Access(static view => Upload(view.AsSpan()));
+}
+finally
+{
+    output.Dispose();
+}
+```
+
+`Append(T)` writes one value directly. `Append(ReadOnlySpan<T>)` copies one batch directly
+into the unused native range.
+
+Growth reserves a geometric native allocation. It copies only the initialized native
+prefix and returns the prior pool slab for reuse.
+
+An arena cannot reclaim an earlier bump range during growth. The arena lifecycle reclaims
+that range with its containing segment.
+
+`Complete` changes the current allocation from unpublished initialization to active
+transfer ownership. It does not copy elements into another final buffer.
+
+The published transfer has the exact initialized `Length`. Its `Capacity` can remain
+larger because geometric growth retains the current allocation.
+
+Completion invalidates all builder operations. The automatic disposal from a `using`
+declaration is a valid no-op after completion.
+
+Cancellation before or after an append aborts the complete unpublished builder. An
+allocation failure uses the same cleanup path.
+
+Explicit disposal is idempotent. The session returns its current allocation and exits its
+generation protection only once.
+
+A live builder blocks owner disposal under both return policies. This rule prevents an
+owner transition from invalidating unpublished initialization.
+
+An abandoned active builder has an emergency finalizer. The finalizer returns storage but
+does not provide prompt reuse.
+
+The analyzer requires direct `CreateBuilder` initialization into one local. It rejects
+fields, properties, parameters, returns, arguments, aggregates, conversions, and closures.
+
+`NAM1028` rejects ownership copies. `NAM1029` rejects use after completion or disposal.
+`NAM1030` rejects double completion.
+
+`NAM1031` requires completion or disposal on each exit. `NAM1032` requires direct local
+acquisition, and `NAM1033` rejects builder parameters.
+
+`NAM1034` requires `Complete` to publish directly to an exact `NativeTransfer<T>`
+destination. Existing typed return, owned receiver, field, and bounded-channel rules apply.
+
+Do not use the builder as cross-method ownership. Complete it and move or store the
+resulting transfer instead.
 
 ## Transfer ownership across threads
 

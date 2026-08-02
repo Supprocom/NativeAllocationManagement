@@ -1710,7 +1710,7 @@ public sealed class VoxelSharedContractTests
     }
 
     [Fact]
-    public void ReleaseDocumentsDescribeTransferableOwnership()
+    public void ReleaseDocumentsDescribeBuilderAndTransferableOwnership()
     {
         string root = FindRepositoryRoot();
         string readme = File.ReadAllText(
@@ -1718,11 +1718,11 @@ public sealed class VoxelSharedContractTests
         string guide = File.ReadAllText(
             Path.Combine(root, "docs", "getting-started.md"));
         Assert.Contains(
-            "Version=\"0.1.1\"",
+            "Version=\"0.1.2\"",
             readme,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Version=\"0.1.1\"",
+            "Version=\"0.1.2\"",
             guide,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -1745,10 +1745,34 @@ public sealed class VoxelSharedContractTests
             "Do not use application `in`, `ref`, or `out NativeTransfer<T>` parameters.",
             guide,
             StringComparison.Ordinal);
+        Assert.Contains(
+            "NativeBuilder<uint> builder = pool.CreateBuilder(",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "`NAM1028` through `NAM1034`",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "--native-builder --samples 10",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "NativeBuilder<uint> builder = pool.CreateBuilder(",
+            guide,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "`NAM1028` rejects ownership copies.",
+            guide,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "`NAM1034` requires `Complete`",
+            guide,
+            StringComparison.Ordinal);
     }
 
     [Fact]
-    public void PackageMetadataUsesTransferablePatchVersion()
+    public void PackageMetadataUsesBuilderPatchVersion()
     {
         string root = FindRepositoryRoot();
         string project = File.ReadAllText(
@@ -1758,7 +1782,11 @@ public sealed class VoxelSharedContractTests
                 "Supprocom.NativeAllocationManagement.csproj"));
 
         Assert.Contains(
-            "<Version>0.1.1</Version>",
+            "<Version>0.1.2</Version>",
+            project,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "growable native builders",
             project,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -1766,7 +1794,7 @@ public sealed class VoxelSharedContractTests
             project,
             StringComparison.Ordinal);
         Assert.Contains(
-            "destructive move ownership",
+            "native-builder",
             project,
             StringComparison.Ordinal);
     }

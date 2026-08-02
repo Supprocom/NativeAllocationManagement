@@ -35,16 +35,89 @@ method, commands, and current evidence.
 
 [voxel-guide]: https://github.com/Supprocom/NativeAllocationManagement/blob/main/.Demos/01-VoxelChunkPipeline/README.md
 
-Install the package with a normal package reference. Version `0.1.1` adds
-transferable native leases for cross-thread pipelines.
+Install the package with a normal package reference. Version `0.1.2` adds a growable
+native builder that publishes one transferable lease.
 
 ```xml
-<PackageReference Include="Supprocom.NativeAllocationManagement" Version="0.1.1" />
+<PackageReference Include="Supprocom.NativeAllocationManagement" Version="0.1.2" />
 ```
 
 The package contains the runtime assembly, the ownership analyzer, and its
 `buildTransitive` analyzer-presence check. Keep analyzer assets enabled in consuming
 projects.
+
+## Build growable native output
+
+`NativeBuilder<T>` builds one unmanaged sequence directly in native storage. Create it
+from a typed pool or a heterogeneous arena.
+
+Append one value or one `ReadOnlySpan<T>`. Geometric growth copies the initialized prefix
+between native allocations without a managed element array.
+
+```csharp
+using Supprocom.NativeAllocationManagement;
+
+using NativePool<uint> pool = new(initialCapacity: 1_024);
+using NativeBuilder<uint> builder = pool.CreateBuilder(
+    initialCapacity: 64);
+Span<uint> batch = stackalloc uint[64];
+
+for (int offset = 0; offset < 4_096; offset += batch.Length)
+{
+    for (int index = 0; index < batch.Length; index++)
+    {
+        batch[index] = checked((uint)(offset + index));
+    }
+
+    builder.Append(batch);
+}
+
+NativeTransfer<uint> output = builder.Complete();
+try
+{
+    uint last = output.Read(static view => view[^1]);
+    Console.WriteLine(last);
+}
+finally
+{
+    output.Dispose();
+}
+```
+
+`Complete` publishes the current allocation without a final element copy. The transfer
+view has the exact initialized length, while its retained capacity can be larger.
+
+Completion invalidates the builder. A later append, count read, capacity read, or second
+completion fails closed.
+
+Cancellation or an append failure aborts the unpublished builder. Disposal returns its
+current storage, and repeated disposal does not return storage twice.
+
+Owner disposal rejects a live builder under both memory-return policies. Complete or
+dispose the builder before owner disposal.
+
+An abandoned active builder has an emergency finalizer. This fallback prevents permanent
+retention, but deterministic disposal remains the normal cleanup method.
+
+Keep a builder in one local variable. Do not pass it, return it, store it, copy it, or
+capture it.
+
+Publish a `NativeTransfer<T>` when ownership must enter a field, return value, receiver,
+or proven bounded channel. Diagnostics `NAM1028` through `NAM1034` enforce these rules.
+
+An arena builder can use storage supplied through `ReserveExternalMemory`. Growth beyond
+that mapped range follows the arena's normal segment policy.
+
+The included builder benchmark compares the same batch generator in both paths. The
+managed path uses `List<uint>` growth and `ToArray`.
+
+The native path uses pool-backed builder growth and zero-copy completion. The harness
+records paired confidence, allocations, external peak working set, throughput, and exact
+output parity.
+
+```powershell
+dotnet run --project Supprocom.NativeAllocationManagement.Performance -c Release -- --native-builder --samples 10 --output native-builder.json
+```
 
 ## Transferable cross-thread leases
 
