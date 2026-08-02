@@ -105,7 +105,9 @@ rejects transfer parameters with `in`, `ref`, or `out`.
 
 An ordinary `NativeTransfer<T>` parameter is an owned receiver. Each receiver path must
 dispose the transfer or move it to the next owner. Call the receiver with
-`NativeTransfer<T>.Move(ref source)`. An `object` parameter cannot receive ownership.
+`NativeTransfer<T>.Move(ref source)`. The immediate destination must have the exact
+`NativeTransfer<T>` type. A typed field, bounded typed channel, or direct typed return can
+receive ownership. An `object`, `dynamic`, tuple, array, or other aggregate cannot.
 
 Do not use application `in`, `ref`, or `out NativeTransfer<T>` parameters. Borrow only
 inside an `Access` or `Read` callback. Use `ref` only in the package move operation.

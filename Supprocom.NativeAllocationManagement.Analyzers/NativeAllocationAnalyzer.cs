@@ -2617,6 +2617,15 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             Target target = FindTarget(operation);
             if (target.Symbol is not null)
             {
+                if (!IsNativeTransfer(GetSymbolType(target.Symbol)))
+                {
+                    Report(
+                        NativeAllocationDiagnosticDescriptors.TransferLifetime,
+                        operation.Syntax,
+                        "the moved destination");
+                    return;
+                }
+
                 RegisterTransferDestination(
                     target,
                     operation.Syntax,
@@ -2878,25 +2887,86 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             IInvocationOperation move)
         {
             IOperation current = move;
-            while (current.Parent is IConversionOperation conversion
-                && conversion.Operand == current)
+            while (true)
             {
-                current = conversion;
+                if (current.Parent is IConversionOperation conversion
+                    && conversion.Operand == current
+                    && IsNativeTransfer(conversion.Type))
+                {
+                    current = conversion;
+                    continue;
+                }
+
+                if (current.Parent is IParenthesizedOperation parenthesized
+                    && parenthesized.Operand == current
+                    && IsNativeTransfer(parenthesized.Type))
+                {
+                    current = parenthesized;
+                    continue;
+                }
+
+                break;
             }
 
-            bool safeParent = current.Parent switch
+            bool safeOperationDestination = current.Parent switch
             {
                 IArgumentOperation
                 {
                     Parameter: { RefKind: RefKind.None } parameter
                 } => IsNativeTransfer(parameter.Type),
-                IReturnOperation => true,
+                IReturnOperation
+                {
+                    ReturnedValue: { } returnedValue
+                } when returnedValue == current => IsNativeTransfer(
+                    GetEffectiveReturnType(move.Syntax)),
                 _ => false
             };
-            return safeParent
-                || move.Syntax.Ancestors()
-                    .Any(ancestor => ancestor is ReturnStatementSyntax
-                        or ArrowExpressionClauseSyntax);
+            return safeOperationDestination || IsDirectTypedReturnSyntax(move);
+        }
+
+        private bool IsDirectTypedReturnSyntax(IInvocationOperation move)
+        {
+            ExpressionSyntax directExpression = (ExpressionSyntax)move.Syntax;
+            while (directExpression.Parent is ParenthesizedExpressionSyntax parenthesized
+                && parenthesized.Expression == directExpression)
+            {
+                directExpression = parenthesized;
+            }
+
+            ExpressionSyntax? returnedExpression = directExpression.Parent switch
+            {
+                ReturnStatementSyntax statement => statement.Expression,
+                ArrowExpressionClauseSyntax arrow => arrow.Expression,
+                _ => null
+            };
+            return returnedExpression is not null
+                && UnwrapParenthesizedExpression(returnedExpression) == move.Syntax
+                && IsNativeTransfer(GetEffectiveReturnType(move.Syntax));
+        }
+
+        private static ExpressionSyntax UnwrapParenthesizedExpression(
+            ExpressionSyntax expression)
+        {
+            while (expression is ParenthesizedExpressionSyntax parenthesized)
+            {
+                expression = parenthesized.Expression;
+            }
+
+            return expression;
+        }
+
+        private ITypeSymbol? GetEffectiveReturnType(SyntaxNode syntax)
+        {
+            SemanticModel model = _context.Compilation.GetSemanticModel(
+                syntax.SyntaxTree);
+            return model.GetEnclosingSymbol(
+                syntax.SpanStart,
+                _context.CancellationToken) switch
+            {
+                IMethodSymbol method => method.ReturnType,
+                IPropertySymbol property => property.Type,
+                _ => null
+            };
         }
 
         private bool IsTransferMoveInvocation(IOperation operation) =>

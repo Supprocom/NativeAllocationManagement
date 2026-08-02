@@ -399,6 +399,163 @@ public sealed class NativeTransferAnalyzerTests
     }
 
     [Fact]
+    public async Task ExpressionBodiedMoveReturnTransfersOwnership()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static NativeTransfer<int> Forward(
+                    NativeTransfer<int>? source) =>
+                    NativeTransfer<int>.Move(ref source);
+            }
+            """);
+
+        Assert.True(
+            AnalyzerContractTests.NativeDiagnostics(diagnostics).Length == 0,
+            string.Join(Environment.NewLine, diagnostics));
+    }
+
+    [Theory]
+    [InlineData("Field")]
+    [InlineData("Property")]
+    public async Task MoveToUntypedStorageIsRejected(string destination)
+    {
+        string member = destination == "Field"
+            ? "public object? Value;"
+            : "public object? Value { get; set; }";
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
+            $$"""
+            using Supprocom.NativeAllocationManagement;
+
+            public sealed class Holder
+            {
+                {{member}}
+            }
+
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    using NativePool<int> pool = new();
+                    NativeTransfer<int>? source = pool.RentTransferable(
+                        1,
+                        static writer => writer.Fill(1));
+                    Holder holder = new();
+                    holder.Value = NativeTransfer<int>.Move(ref source);
+                }
+            }
+            """);
+
+        Assert.Contains(
+            "NAM1025",
+            AnalyzerContractTests.NativeDiagnostics(diagnostics));
+    }
+
+    [Theory]
+    [InlineData("object")]
+    [InlineData("dynamic")]
+    public async Task MoveToUntypedReturnIsRejected(string returnType)
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
+            $$"""
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static {{returnType}} Create(NativePool<int> pool)
+                {
+                    NativeTransfer<int>? source = pool.RentTransferable(
+                        1,
+                        static writer => writer.Fill(1));
+                    return NativeTransfer<int>.Move(ref source);
+                }
+            }
+            """);
+
+        Assert.Contains(
+            "NAM1025",
+            AnalyzerContractTests.NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task MoveInsideTupleReturnIsRejected()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static (NativeTransfer<int> Transfer, int Count) Create(
+                    NativePool<int> pool)
+                {
+                    NativeTransfer<int>? source = pool.RentTransferable(
+                        1,
+                        static writer => writer.Fill(1));
+                    return (NativeTransfer<int>.Move(ref source), 1);
+                }
+            }
+            """);
+
+        Assert.Contains(
+            "NAM1025",
+            AnalyzerContractTests.NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task MoveInsideAggregateReturnIsRejected()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static object[] Create(NativePool<int> pool)
+                {
+                    NativeTransfer<int>? source = pool.RentTransferable(
+                        1,
+                        static writer => writer.Fill(1));
+                    return new object[]
+                    {
+                        NativeTransfer<int>.Move(ref source)
+                    };
+                }
+            }
+            """);
+
+        Assert.Contains(
+            "NAM1025",
+            AnalyzerContractTests.NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task ExpressionBodiedObjectReceiverIsRejected()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run(NativeTransfer<int>? source) =>
+                    Drop(NativeTransfer<int>.Move(ref source));
+
+                private static void Drop(object value)
+                {
+                }
+            }
+            """);
+
+        Assert.Contains(
+            "NAM1025",
+            AnalyzerContractTests.NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
     public async Task DirectMoveToDroppingReceiverIsRejected()
     {
         ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
