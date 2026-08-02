@@ -121,6 +121,122 @@ public sealed class PackageSmokeTests
     }
 
     [Fact]
+    public async Task PackageBuilderRunsAndBundledAnalyzerRejectsDoubleCompletion()
+    {
+        PackageEvidence package = await GetPackageAsync();
+        WriteEvidence(package);
+        string consumerRoot = CreateConsumerRoot();
+        try
+        {
+            WriteConsumerProject(
+                consumerRoot,
+                package,
+                excludeAnalyzer: false,
+                suppressDiagnostics: false,
+                executable: true);
+            string program = Path.Combine(
+                consumerRoot,
+                "Program.cs");
+            File.WriteAllText(
+                program,
+                """
+                using Supprocom.NativeAllocationManagement;
+
+                public static class Consumer
+                {
+                    public static int Main()
+                    {
+                        using NativePool<uint> pool = new(preLease: 4);
+                        using NativeBuilder<uint> builder =
+                            pool.CreateBuilder(preLease: 2);
+                        builder.Append(11);
+                        builder.Append(22);
+                        builder.Append(33);
+                        builder.Append(44);
+                        NativeTransfer<uint> transfer = builder.Complete();
+                        try
+                        {
+                            return transfer.Read(static values =>
+                                values.Length == 4
+                                    && values[0] == 11
+                                    && values[1] == 22
+                                    && values[2] == 33
+                                    && values[3] == 44
+                                        ? 0
+                                        : 7);
+                        }
+                        finally
+                        {
+                            transfer.Dispose();
+                        }
+                    }
+                }
+                """);
+
+            string project = Path.Combine(
+                consumerRoot,
+                "Consumer.csproj");
+            CommandResult restore = await RunDotnetAsync(
+                $"restore \"{project}\" --nologo --force --no-cache --packages \"{Path.Combine(consumerRoot, ".packages")}\" --source \"{package.SourceDirectory}\"",
+                consumerRoot);
+            Assert.True(restore.ExitCode == 0, restore.Output);
+
+            CommandResult validBuild = await RunDotnetAsync(
+                $"build \"{project}\" --no-restore --nologo",
+                consumerRoot);
+            Assert.True(validBuild.ExitCode == 0, validBuild.Output);
+
+            CommandResult run = await RunDotnetAsync(
+                $"run \"{project}\" --no-build --no-restore --nologo",
+                consumerRoot);
+            Assert.True(run.ExitCode == 0, run.Output);
+
+            File.WriteAllText(
+                program,
+                """
+                using Supprocom.NativeAllocationManagement;
+
+                public static class Consumer
+                {
+                    public static int Main()
+                    {
+                        using NativePool<uint> pool = new(preLease: 4);
+                        using NativeBuilder<uint> builder =
+                            pool.CreateBuilder(preLease: 2);
+                        builder.Append(11);
+                        NativeTransfer<uint> first = builder.Complete();
+                        try
+                        {
+                            NativeTransfer<uint> second = builder.Complete();
+                            second.Dispose();
+                            return 0;
+                        }
+                        finally
+                        {
+                            first.Dispose();
+                        }
+                    }
+                }
+                """);
+
+            CommandResult invalidBuild = await RunDotnetAsync(
+                $"build \"{project}\" --no-restore --nologo -t:Rebuild",
+                consumerRoot);
+            Assert.True(
+                invalidBuild.ExitCode != 0,
+                invalidBuild.Output);
+            Assert.Contains(
+                "error NAM1030",
+                invalidBuild.Output,
+                StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            DeleteConsumerRoot(consumerRoot);
+        }
+    }
+
+    [Fact]
     public async Task PackageReferenceStorageUsesNativeSlotsForReferencesAcrossReuse()
     {
         PackageEvidence package = await GetPackageAsync();
