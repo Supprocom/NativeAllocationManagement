@@ -6,7 +6,7 @@ namespace Supprocom.NativeAllocationManagement;
 /// <typeparam name="T">The element type in the range.</typeparam>
 public ref struct NativeSequentialLeaseWriter<T>
 {
-    private readonly NativeAllocation _allocation;
+    private readonly NativeAllocation? _allocation;
     private readonly Span<T> _directValues;
     private readonly ref int _initializedLength;
     private readonly int _start;
@@ -14,7 +14,7 @@ public ref struct NativeSequentialLeaseWriter<T>
     private bool _completed;
 
     internal NativeSequentialLeaseWriter(
-        NativeAllocation allocation,
+        NativeAllocation? allocation,
         Span<T> directValues,
         ref int initializedLength,
         int start,
@@ -49,7 +49,7 @@ public ref struct NativeSequentialLeaseWriter<T>
         int source = _start + index;
         return !RuntimeHelpers.IsReferenceOrContainsReferences<T>()
             ? _directValues[source]
-            : _allocation.GetValue<T>(source);
+            : GetValue(source);
     }
 
     /// <summary>Writes the next element.</summary>
@@ -169,11 +169,27 @@ public ref struct NativeSequentialLeaseWriter<T>
 
         if (destination < _initializedLength)
         {
-            _allocation.SetValue(destination, value);
+            SetValue(destination, value);
             return;
         }
 
-        _allocation.SetInitialValue(destination, value);
+        SetInitialValue(destination, value);
         _initializedLength = destination + 1;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private T GetValue(int index) =>
+        _allocation!.GetValue<T>(index);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void SetInitialValue(int index, T value)
+    {
+        _allocation!.SetInitialValue(index, value);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void SetValue(int index, T value)
+    {
+        _allocation!.SetValue(index, value);
     }
 }

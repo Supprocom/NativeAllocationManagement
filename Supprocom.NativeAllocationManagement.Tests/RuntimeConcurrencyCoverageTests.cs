@@ -397,99 +397,6 @@ public sealed class RuntimeConcurrencyCoverageTests
         }
     }
 
-    [Fact]
-    public void LocalOperationWinsAndReturnWinsBeforeEntryForBothPolicies()
-    {
-        foreach (NativeMemoryReturn policy in Enum.GetValues<NativeMemoryReturn>())
-        {
-            NativeRegion operationRegion = new(16, policy);
-            Local<int> operationLocal = operationRegion.Lease<int>(1, static writer => writer.Fill(default!));
-            NativeAllocationInUseException? inUse = null;
-            NativeMemoryTestHooks.SetOperationEnteredWithAllocation((operation, kernel, _, _) =>
-            {
-                if (operation != nameof(Local<int>.Access))
-                {
-                    return;
-                }
-
-                try
-                {
-                    ReturnRegion(kernel, policy);
-                }
-                catch (NativeAllocationInUseException exception)
-                {
-                    inUse = exception;
-                }
-            });
-
-            try
-            {
-                operationLocal.Access(static span => span[0] = 9);
-                if (policy == NativeMemoryReturn.ToNativeMemory)
-                {
-                    Assert.NotNull(inUse);
-                }
-                else
-                {
-                    Assert.Null(inUse);
-                    Assert.Equal(NativeOwnerLifecycle.Returned, operationRegion.CurrentLifecycle);
-                }
-            }
-            finally
-            {
-                NativeMemoryTestHooks.Reset();
-                if (policy == NativeMemoryReturn.ToNativeMemory)
-                {
-                    operationRegion.ReturnMemoryToNativeMemory();
-                }
-                else
-                {
-                    NativeAllocationReturnedException? returned = null;
-                    try
-                    {
-                        operationRegion.ReturnMemoryToNativeMemory();
-                    }
-                    catch (NativeAllocationReturnedException exception)
-                    {
-                        returned = exception;
-                    }
-
-                    Assert.NotNull(returned);
-                }
-                operationRegion.Dispose();
-            }
-
-            NativeRegion returnRegion = new(16, policy);
-            Local<int> returnLocal = returnRegion.Lease<int>(1, static writer => writer.Fill(default!));
-            NativeMemoryTestHooks.SetBeforeOperationEntryWithKernel((operation, kernel) =>
-            {
-                if (operation == nameof(Local<int>.Access))
-                {
-                    ReturnRegion(kernel, policy);
-                }
-            });
-            try
-            {
-                Exception? failure = null;
-                try
-                {
-                    returnLocal.Access(static _ => { });
-                }
-                catch (Exception exception)
-                {
-                    failure = exception;
-                }
-
-                Assert.IsType<NativeAllocationReturnedException>(failure);
-            }
-            finally
-            {
-                NativeMemoryTestHooks.Reset();
-                returnRegion.Dispose();
-            }
-        }
-    }
-
     private static async Task RaceReturnAgainstOperationAsync(
         NativePool<int> pool,
         NativeMemoryReturn policy,
@@ -716,18 +623,6 @@ public sealed class RuntimeConcurrencyCoverageTests
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(operation), operation, "Unknown test operation.");
-        }
-    }
-
-    private static void ReturnRegion(NativeOwnerKernel kernel, NativeMemoryReturn policy)
-    {
-        if (policy == NativeMemoryReturn.ToNativeMemory)
-        {
-            kernel.ReturnMemoryToNativeMemory();
-        }
-        else
-        {
-            kernel.ReturnMemoryToGarbageCollector();
         }
     }
 

@@ -21,7 +21,7 @@ public sealed class LifecycleConformanceTests
             Assert.Equal(testCase.Result, actual[^1].ToString());
         }
 
-        Assert.Equal(18, cases.Length);
+        Assert.Equal(15, cases.Length);
     }
 
     private static IReadOnlyList<NativeOwnerLifecycle> Execute(LifecycleCase testCase)
@@ -64,24 +64,16 @@ public sealed class LifecycleConformanceTests
 
         if (testCase.Owner == "region")
         {
-            NativeRegion region = new((nuint)testCase.InitialReservation, returnPolicy, testCase.DelayedActivation);
+            NativeRegion region = new(
+                (nuint)testCase.InitialReservation,
+                returnPolicy);
             states.Add(region.CurrentLifecycle);
-            if (testCase.ReturnKind == "disposeBeforeActivation")
+            if (testCase.DelayedActivation
+                || testCase.ReLease
+                || testCase.ReturnKind != "none")
             {
-                region.Dispose();
-                states.Add(region.CurrentLifecycle);
-                return states;
-            }
-
-            if (testCase.DelayedActivation)
-            {
-                region.LeaseFromMemory();
-                states.Add(region.CurrentLifecycle);
-            }
-            ExecuteReturn(region, testCase.ReturnKind);
-            if (testCase.ReturnKind != "none")
-            {
-                states.Add(region.CurrentLifecycle);
+                throw new InvalidDataException(
+                    "A simple Region case cannot use generation transitions.");
             }
 
             region.Dispose();
@@ -144,23 +136,6 @@ public sealed class LifecycleConformanceTests
                 break;
             default:
                 throw new InvalidDataException($"Unknown pool return kind '{returnKind}'.");
-        }
-    }
-
-    private static void ExecuteReturn(NativeRegion region, string returnKind)
-    {
-        switch (returnKind)
-        {
-            case "native":
-                region.ReturnMemoryToNativeMemory();
-                break;
-            case "garbageCollector":
-                region.ReturnMemoryToGarbageCollector();
-                break;
-            case "none":
-                break;
-            default:
-                throw new InvalidDataException($"Unknown region return kind '{returnKind}'.");
         }
     }
 

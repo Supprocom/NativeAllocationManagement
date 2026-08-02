@@ -6,8 +6,9 @@ namespace Supprocom.NativeAllocationManagement;
 /// <typeparam name="T">The element type in the new lease.</typeparam>
 public readonly ref struct NativeLeaseWriter<T>
 {
-    private readonly NativeAllocation _allocation;
+    private readonly NativeAllocation? _allocation;
     private readonly Span<T> _directValues;
+    private readonly int _length;
     private readonly ref int _initializedLength;
 
     internal NativeLeaseWriter(
@@ -19,10 +20,24 @@ public readonly ref struct NativeLeaseWriter<T>
         _directValues = !RuntimeHelpers.IsReferenceOrContainsReferences<T>()
             ? allocation.AsSpan<T>()
             : default;
+        _length = allocation.Length;
+    }
+
+    internal unsafe NativeLeaseWriter(
+        IntPtr pointer,
+        int length,
+        ref int initializedLength)
+    {
+        _allocation = null;
+        _initializedLength = ref initializedLength;
+        _directValues = !RuntimeHelpers.IsReferenceOrContainsReferences<T>()
+            ? new Span<T>((void*)pointer, length)
+            : default;
+        _length = length;
     }
 
     /// <summary>Gets the number of elements that the initializer must write.</summary>
-    public int Length => _allocation.Length;
+    public int Length => _length;
 
     /// <summary>Gets the number of elements that do not have a value.</summary>
     public int Remaining => Length - _initializedLength;
@@ -60,7 +75,7 @@ public readonly ref struct NativeLeaseWriter<T>
         }
         else
         {
-            _allocation.SetInitialValue(index, value);
+            SetInitialValue(index, value);
         }
 
         _initializedLength = index + 1;
@@ -79,7 +94,7 @@ public readonly ref struct NativeLeaseWriter<T>
 
         return !RuntimeHelpers.IsReferenceOrContainsReferences<T>()
             ? _directValues[index]
-            : _allocation.GetValue<T>(index);
+            : GetValue(index);
     }
 
     /// <summary>Starts one sequential writer for a contiguous lease range.</summary>
@@ -170,7 +185,7 @@ public readonly ref struct NativeLeaseWriter<T>
             }
             else
             {
-                _allocation.SetInitialValue(index, value);
+                SetInitialValue(index, value);
             }
 
             _initializedLength = index + 1;
@@ -183,7 +198,7 @@ public readonly ref struct NativeLeaseWriter<T>
         }
         else
         {
-            _allocation.SetValue(index, value);
+            SetValue(index, value);
         }
     }
 
@@ -221,13 +236,13 @@ public readonly ref struct NativeLeaseWriter<T>
             int destinationIndex = start + index;
             if (destinationIndex < initializedLength)
             {
-                _allocation.SetValue(
+                SetValue(
                     destinationIndex,
                     source[index]);
                 continue;
             }
 
-            _allocation.SetInitialValue(
+            SetInitialValue(
                 destinationIndex,
                 source[index]);
             _initializedLength = destinationIndex + 1;
@@ -255,7 +270,7 @@ public readonly ref struct NativeLeaseWriter<T>
 
         for (int index = 0; index < source.Length; index++)
         {
-            _allocation.SetInitialValue(
+            SetInitialValue(
                 start + index,
                 source[index]);
             _initializedLength = start + index + 1;
@@ -276,7 +291,7 @@ public readonly ref struct NativeLeaseWriter<T>
 
         for (int index = start; index < Length; index++)
         {
-            _allocation.SetInitialValue(index, value);
+            SetInitialValue(index, value);
             _initializedLength = index + 1;
         }
     }
@@ -315,12 +330,28 @@ public readonly ref struct NativeLeaseWriter<T>
         {
             if (index < initializedLength)
             {
-                _allocation.SetValue(index, value);
+                SetValue(index, value);
                 continue;
             }
 
-            _allocation.SetInitialValue(index, value);
+            SetInitialValue(index, value);
             _initializedLength = index + 1;
         }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private T GetValue(int index) =>
+        _allocation!.GetValue<T>(index);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void SetInitialValue(int index, T value)
+    {
+        _allocation!.SetInitialValue(index, value);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void SetValue(int index, T value)
+    {
+        _allocation!.SetValue(index, value);
     }
 }
