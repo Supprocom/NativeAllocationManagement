@@ -62,6 +62,7 @@ public sealed class NativeBuilderWriteRegressionTests
             zeroFreshSegments: true,
             cleanup: true,
             productionShape: true,
+            binaryIdentity: true,
             meanSpeedup: 1.19,
             aggregateSpeedup: 1.20,
             confidenceLower95: 1.10));
@@ -72,8 +73,20 @@ public sealed class NativeBuilderWriteRegressionTests
             zeroFreshSegments: true,
             cleanup: true,
             productionShape: true,
+            binaryIdentity: true,
             meanSpeedup: 1.20,
             aggregateSpeedup: 1.20,
             confidenceLower95: 1.01));
+        Assert.False(NativeBuilderWriteRegression.EvaluateGate(
+            exactParity: true,
+            balancedOrder: true,
+            runtimeConfiguration: true,
+            zeroFreshSegments: true,
+            cleanup: true,
+            productionShape: true,
+            binaryIdentity: false,
+            meanSpeedup: 2.00,
+            aggregateSpeedup: 2.00,
+            confidenceLower95: 1.50));
     }
 }

@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -109,6 +110,14 @@ internal static class NativeBuilderWriteRegression
         }
 
         totalClock.Stop();
+        NativeBuilderWriteBinaryIdentity runtimeIdentity =
+            CreateBinaryIdentity(typeof(NativeBuilder<>).Assembly);
+        NativeBuilderWriteBinaryIdentity benchmarkIdentity =
+            CreateBinaryIdentity(
+                typeof(NativeBuilderWriteRegression).Assembly);
+        bool binaryIdentity = runtimeIdentity.SourceCommit
+                == benchmarkIdentity.SourceCommit
+            && runtimeIdentity.SourceCommit.Length == 40;
         double[] speedups = pairs
             .Select(static pair => pair.AppendToWriteSpeedup)
             .ToArray();
@@ -157,10 +166,14 @@ internal static class NativeBuilderWriteRegression
             zeroFreshSegments,
             cleanup,
             productionShape,
+            binaryIdentity,
             mean,
             aggregate,
             lower);
         return new NativeBuilderWriteReport(
+            runtimeIdentity.SourceCommit,
+            runtimeIdentity,
+            benchmarkIdentity,
             options,
             pairs,
             pairs.Average(static pair =>
@@ -188,6 +201,7 @@ internal static class NativeBuilderWriteRegression
             zeroFreshSegments,
             cleanup,
             productionShape,
+            binaryIdentity,
             gatePassed,
             totalClock.Elapsed.TotalMilliseconds,
             DateTimeOffset.UtcNow);
@@ -300,6 +314,7 @@ internal static class NativeBuilderWriteRegression
         bool zeroFreshSegments,
         bool cleanup,
         bool productionShape,
+        bool binaryIdentity,
         double meanSpeedup,
         double aggregateSpeedup,
         double confidenceLower95) =>
@@ -309,6 +324,7 @@ internal static class NativeBuilderWriteRegression
         && zeroFreshSegments
         && cleanup
         && productionShape
+        && binaryIdentity
         && meanSpeedup >= RequiredSpeedup
         && aggregateSpeedup >= RequiredSpeedup
         && confidenceLower95 > 1d;
@@ -606,6 +622,27 @@ internal static class NativeBuilderWriteRegression
         };
         options.Converters.Add(new JsonStringEnumConverter());
         return options;
+    }
+
+    private static NativeBuilderWriteBinaryIdentity CreateBinaryIdentity(
+        Assembly assembly)
+    {
+        string path = assembly.Location;
+        string informationalVersion = assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+            ?.InformationalVersion
+            ?? string.Empty;
+        int separator = informationalVersion.LastIndexOf('+');
+        string sourceCommit = separator >= 0
+            ? informationalVersion[(separator + 1)..]
+            : string.Empty;
+        using FileStream stream = File.OpenRead(path);
+        using SHA256 hash = SHA256.Create();
+        return new NativeBuilderWriteBinaryIdentity(
+            assembly.GetName().Name ?? string.Empty,
+            informationalVersion,
+            sourceCommit,
+            Convert.ToHexString(hash.ComputeHash(stream)));
     }
 
     private sealed class BuilderWriteExecution : IDisposable
@@ -916,7 +953,16 @@ internal sealed record NativeBuilderWritePairEvidence(
     NativeBuilderWriteWorkerEvidence BoundedWrite,
     double AppendToWriteSpeedup);
 
+internal sealed record NativeBuilderWriteBinaryIdentity(
+    string AssemblyName,
+    string InformationalVersion,
+    string SourceCommit,
+    string Sha256);
+
 internal sealed record NativeBuilderWriteReport(
+    string SourceCommit,
+    NativeBuilderWriteBinaryIdentity RuntimeBinary,
+    NativeBuilderWriteBinaryIdentity BenchmarkBinary,
     NativeBuilderWriteOptions Options,
     IReadOnlyList<NativeBuilderWritePairEvidence> Pairs,
     double RepeatedAppendMeanMilliseconds,
@@ -936,6 +982,7 @@ internal sealed record NativeBuilderWriteReport(
     bool ZeroFreshSegmentsPassed,
     bool CleanupPassed,
     bool ProductionShapePassed,
+    bool BinaryIdentityPassed,
     bool GatePassed,
     double TotalElapsedMilliseconds,
     DateTimeOffset CompletedAtUtc);
