@@ -15,7 +15,7 @@ public sealed class PersistentFieldPoolAnalyzerTests
 
             public sealed class Worker : IDisposable
             {
-                private readonly NativePool<int> _pool = new(preAllocateElements: 64);
+                private readonly NativePool<int> _pool = new(initialCapacity: 64);
 
                 public int Run(int rounds, bool stop, bool fail)
                 {
@@ -76,6 +76,7 @@ public sealed class PersistentFieldPoolAnalyzerTests
             }
             """);
 
+        AssertNoCompilerErrors(diagnostics);
         Assert.True(
             AnalyzerContractTests.NativeDiagnostics(diagnostics).Length == 0,
             string.Join(Environment.NewLine, diagnostics));
@@ -91,7 +92,7 @@ public sealed class PersistentFieldPoolAnalyzerTests
 
             public sealed class Worker : IDisposable
             {
-                private readonly NativePool<int> _pool = new(preAllocateElements: 16);
+                private readonly NativePool<int> _pool = new(initialCapacity: 16);
 
                 public void Run(bool cleanup)
                 {
@@ -111,6 +112,7 @@ public sealed class PersistentFieldPoolAnalyzerTests
             }
             """);
 
+        AssertNoCompilerErrors(diagnostics);
         Assert.Contains("NAM1003", AnalyzerContractTests.NativeDiagnostics(diagnostics));
     }
 
@@ -124,7 +126,7 @@ public sealed class PersistentFieldPoolAnalyzerTests
 
             public sealed class Worker : IDisposable
             {
-                private readonly NativePool<int> _pool = new(preAllocateElements: 16);
+                private readonly NativePool<int> _pool = new(initialCapacity: 16);
 
                 public void Run()
                 {
@@ -147,6 +149,7 @@ public sealed class PersistentFieldPoolAnalyzerTests
             }
             """);
 
+        AssertNoCompilerErrors(diagnostics);
         string[] ids = AnalyzerContractTests.NativeDiagnostics(diagnostics);
         Assert.Contains("NAM1007", ids);
         Assert.Contains("NAM1009", ids);
@@ -162,7 +165,7 @@ public sealed class PersistentFieldPoolAnalyzerTests
 
             public sealed class Worker : IDisposable
             {
-                private NativePool<int> _pool = new(preAllocateElements: 16);
+                private NativePool<int> _pool = new(initialCapacity: 16);
 
                 public void Run()
                 {
@@ -178,6 +181,7 @@ public sealed class PersistentFieldPoolAnalyzerTests
             }
             """);
 
+        AssertNoCompilerErrors(diagnostics);
         Assert.Contains("NAM1009", AnalyzerContractTests.NativeDiagnostics(diagnostics));
     }
 
@@ -239,5 +243,20 @@ public sealed class PersistentFieldPoolAnalyzerTests
         string[] ids = AnalyzerContractTests.NativeDiagnostics(diagnostics);
         Assert.Contains("NAM1013", ids);
         Assert.Contains("NAM1011", ids);
+    }
+
+    private static void AssertNoCompilerErrors(
+        ImmutableArray<Diagnostic> diagnostics)
+    {
+        Diagnostic[] compilerErrors = diagnostics
+            .Where(diagnostic =>
+                diagnostic.Severity == DiagnosticSeverity.Error
+                && diagnostic.Id.StartsWith(
+                    "CS",
+                    StringComparison.Ordinal))
+            .ToArray();
+        Assert.True(
+            compilerErrors.Length == 0,
+            string.Join(Environment.NewLine, compilerErrors));
     }
 }
