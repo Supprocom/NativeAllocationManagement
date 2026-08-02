@@ -77,6 +77,10 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 Namespace + "Local`1");
             ArenaLease = compilation.GetTypeByMetadataName(
                 Namespace + "ArenaLease`1");
+            Transfer = compilation.GetTypeByMetadataName(
+                Namespace + "NativeTransfer`1");
+            LeaseView = compilation.GetTypeByMetadataName(
+                Namespace + "NativeLeaseView`1");
         }
 
         internal INamedTypeSymbol? Pool { get; }
@@ -91,13 +95,19 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
         internal INamedTypeSymbol? ArenaLease { get; }
 
+        internal INamedTypeSymbol? Transfer { get; }
+
+        internal INamedTypeSymbol? LeaseView { get; }
+
         internal bool IsAvailable =>
             Pool is not null
             && Region is not null
             && Arena is not null
             && Pooled is not null
             && Local is not null
-            && ArenaLease is not null;
+            && ArenaLease is not null
+            && Transfer is not null
+            && LeaseView is not null;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static bool Is(
@@ -164,6 +174,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         private readonly NativeSymbols _symbols;
         private readonly Dictionary<ISymbol, OwnerState> _owners = new(SymbolEqualityComparer.Default);
         private readonly Dictionary<ISymbol, HandleState> _handles = new(SymbolEqualityComparer.Default);
+        private readonly Dictionary<ISymbol, TransferState> _transfers = new(SymbolEqualityComparer.Default);
         private readonly Dictionary<string, LifecycleEffect> _lifecycleSummaries = new(StringComparer.Ordinal);
         private readonly HashSet<string> _lifecycleSummaryVisiting = new(StringComparer.Ordinal);
         private readonly Dictionary<string, bool> _nonRetainingOwnerParameters =
@@ -179,6 +190,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         private readonly HashSet<string> _reported = new(StringComparer.Ordinal);
         private readonly HashSet<ISymbol> _reportedScopedCompletions = new(SymbolEqualityComparer.Default);
         private readonly HashSet<ISymbol> _reportedRegionParameters = new(SymbolEqualityComparer.Default);
+        private readonly HashSet<IInvocationOperation> _preprocessedTransferInvocations = [];
         private readonly Dictionary<ControlFlowRegion, List<FinallyAnalysisCacheEntry>>
             _finallyAnalysisCache = new();
         private int _closureDepth;
@@ -216,6 +228,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             _isStandaloneClosureAnalysis = operationBlock.Parent is IAnonymousFunctionOperation;
             ReportRegionParameters();
             RegisterOwnerParameters();
+            RegisterTransferParameters();
             if (!ContainsNativeOwnership(operationBlock))
             {
                 return;
@@ -286,7 +299,37 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         {
             return operationBlock.DescendantsAndSelf()
                 .Any(operation => IsOwnerType(operation.Type)
-                    || IsHandleType(operation.Type));
+                    || IsHandleType(operation.Type)
+                    || IsNativeTransfer(operation.Type));
+        }
+
+        private void RegisterTransferParameters()
+        {
+            if (_context.OwningSymbol is not IMethodSymbol method)
+            {
+                return;
+            }
+
+            foreach (IParameterSymbol parameter in method.Parameters
+                .Where(parameter => IsNativeTransfer(parameter.Type)))
+            {
+                if (_transfers.ContainsKey(parameter))
+                {
+                    continue;
+                }
+
+                SyntaxNode syntax = parameter.DeclaringSyntaxReferences
+                    .FirstOrDefault()
+                    ?.GetSyntax(_context.CancellationToken)
+                    ?? method.DeclaringSyntaxReferences
+                        .First()
+                        .GetSyntax(_context.CancellationToken);
+                _transfers.Add(
+                    parameter,
+                    TransferState.CreateExternal(
+                        parameter,
+                        syntax));
+            }
         }
 
         private void ReportRegionParameters()
@@ -320,6 +363,21 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             foreach (FlowSnapshot exit in exits)
             {
                 _context.CancellationToken.ThrowIfCancellationRequested();
+                foreach (TransferState transfer in exit.Transfers.Values)
+                {
+                    if (!transfer.MustEnd
+                        || transfer.IsUsing
+                        || transfer.Status is TransferStatus.Moved or TransferStatus.Disposed or TransferStatus.Unowned)
+                    {
+                        continue;
+                    }
+
+                    Report(
+                        NativeAllocationDiagnosticDescriptors.TransferLifetime,
+                        transfer.Syntax,
+                        transfer.DisplayName);
+                }
+
                 foreach (HandleState handle in exit.Handles.Values)
                 {
                     if (handle.Returned && !handle.Ambiguous && handle.GenerationRelation != GenerationRelationKind.Unknown
@@ -469,7 +527,9 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
                 foreach (ILocalSymbol local in region.Locals)
                 {
-                    if (IsOwnerType(local.Type) || IsHandleType(local.Type))
+                    if (IsOwnerType(local.Type)
+                        || IsHandleType(local.Type)
+                        || IsNativeTransfer(local.Type))
                     {
                         _localLifetimeRegions[local] = region;
                     }
@@ -574,6 +634,22 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 }
             }
 
+            foreach (TransferState transfer in result.Transfers.Values
+                .Where(transfer => transfer.Symbol is not null && exitingSymbols.Contains(transfer.Symbol))
+                .ToArray())
+            {
+                if (transfer.MustEnd
+                    && !transfer.IsUsing
+                    && transfer.Status is TransferStatus.Active or TransferStatus.Ambiguous
+                    && emitDiagnostics)
+                {
+                    Report(
+                        NativeAllocationDiagnosticDescriptors.TransferLifetime,
+                        transfer.Syntax,
+                        transfer.DisplayName);
+                }
+            }
+
             foreach (ISymbol symbol in exitingSymbols)
             {
                 if (enteringFinally
@@ -587,6 +663,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
                 result.Handles.Remove(symbol);
                 result.Owners.Remove(symbol);
+                result.Transfers.Remove(symbol);
             }
 
             return result;
@@ -1147,6 +1224,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             return new FlowSnapshot(
                 new Dictionary<ISymbol, OwnerState>(SymbolEqualityComparer.Default),
                 new Dictionary<ISymbol, HandleState>(SymbolEqualityComparer.Default),
+                new Dictionary<ISymbol, TransferState>(SymbolEqualityComparer.Default),
                 [],
                 []);
         }
@@ -1172,13 +1250,19 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 handles.Add(pair.Key, pair.Value.Clone(owner));
             }
 
+            Dictionary<ISymbol, TransferState> transfers = new(SymbolEqualityComparer.Default);
+            foreach (KeyValuePair<ISymbol, TransferState> pair in _transfers)
+            {
+                transfers.Add(pair.Key, pair.Value.Clone());
+            }
+
             HashSet<OwnerState> borrowed = [];
             foreach (OwnerState owner in _borrowedOwners)
             {
                 borrowed.Add(ownerCopies.TryGetValue(owner, out OwnerState? copy) ? copy : owner.Clone());
             }
 
-            return new FlowSnapshot(owners, handles, [.. _regions], borrowed);
+            return new FlowSnapshot(owners, handles, transfers, [.. _regions], borrowed);
         }
 
         private void RestoreSnapshot(FlowSnapshot snapshot)
@@ -1194,6 +1278,12 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             foreach (KeyValuePair<ISymbol, HandleState> pair in copy.Handles)
             {
                 _handles.Add(pair.Key, pair.Value);
+            }
+
+            _transfers.Clear();
+            foreach (KeyValuePair<ISymbol, TransferState> pair in copy.Transfers)
+            {
+                _transfers.Add(pair.Key, pair.Value);
             }
 
             _regions.Clear();
@@ -1217,6 +1307,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 return new FlowSnapshot(
                     new Dictionary<ISymbol, OwnerState>(SymbolEqualityComparer.Default),
                     new Dictionary<ISymbol, HandleState>(SymbolEqualityComparer.Default),
+                    new Dictionary<ISymbol, TransferState>(SymbolEqualityComparer.Default),
                     [],
                     []);
             }
@@ -1372,6 +1463,40 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 handles.Add(symbol, mergedHandle);
             }
 
+            Dictionary<ISymbol, TransferState> transfers = new(SymbolEqualityComparer.Default);
+            HashSet<ISymbol> transferSymbols = new(SymbolEqualityComparer.Default);
+            foreach (FlowSnapshot path in paths)
+            {
+                transferSymbols.UnionWith(path.Transfers.Keys);
+            }
+
+            foreach (ISymbol symbol in transferSymbols)
+            {
+                TransferState? first = paths
+                    .Select(path => path.Transfers.TryGetValue(symbol, out TransferState? transfer) ? transfer : null)
+                    .FirstOrDefault(transfer => transfer is not null);
+                if (first is null)
+                {
+                    continue;
+                }
+
+                TransferState merged = first.Clone();
+                TransferState[] present = paths
+                    .Select(path => path.Transfers.TryGetValue(symbol, out TransferState? transfer) ? transfer : null)
+                    .Where(transfer => transfer is not null)
+                    .Cast<TransferState>()
+                    .ToArray();
+                if (present.Length != paths.Length
+                    || present.Any(transfer => transfer.Status != first.Status)
+                    || present.Any(transfer => transfer.OwnershipIdentity != first.OwnershipIdentity))
+                {
+                    merged.Status = TransferStatus.Ambiguous;
+                }
+
+                merged.MustEnd = present.Any(transfer => transfer.MustEnd);
+                transfers.Add(symbol, merged);
+            }
+
             List<RegionScope> regions = [];
             foreach (FlowSnapshot path in paths)
             {
@@ -1396,7 +1521,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 }
             }
 
-            return new FlowSnapshot(owners, handles, regions, borrowed);
+            return new FlowSnapshot(owners, handles, transfers, regions, borrowed);
         }
 
         private static FlowSnapshot CloneSnapshot(FlowSnapshot snapshot)
@@ -1419,13 +1544,19 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 handles.Add(pair.Key, pair.Value.Clone(owner));
             }
 
+            Dictionary<ISymbol, TransferState> transfers = new(SymbolEqualityComparer.Default);
+            foreach (KeyValuePair<ISymbol, TransferState> pair in snapshot.Transfers)
+            {
+                transfers.Add(pair.Key, pair.Value.Clone());
+            }
+
             HashSet<OwnerState> borrowed = [];
             foreach (OwnerState owner in snapshot.BorrowedOwners)
             {
                 borrowed.Add(ownerCopies.TryGetValue(owner, out OwnerState? copy) ? copy : owner.Clone());
             }
 
-            return new FlowSnapshot(owners, handles, [.. snapshot.Regions], borrowed);
+            return new FlowSnapshot(owners, handles, transfers, [.. snapshot.Regions], borrowed);
         }
 
         private static GenerationRelationKind MergeOwnerGenerationRelation(
@@ -1521,7 +1652,9 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
         private static bool SnapshotEquivalent(FlowSnapshot left, FlowSnapshot right)
         {
-            if (left.Owners.Count != right.Owners.Count || left.Handles.Count != right.Handles.Count)
+            if (left.Owners.Count != right.Owners.Count
+                || left.Handles.Count != right.Handles.Count
+                || left.Transfers.Count != right.Transfers.Count)
             {
                 return false;
             }
@@ -1551,6 +1684,18 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     || pair.Value.Ambiguous != other.Ambiguous
                     || pair.Value.Generation != other.Generation
                     || pair.Value.GenerationRelation != other.GenerationRelation)
+                {
+                    return false;
+                }
+            }
+
+            foreach (KeyValuePair<ISymbol, TransferState> pair in left.Transfers)
+            {
+                if (!right.Transfers.TryGetValue(pair.Key, out TransferState? other)
+                    || pair.Value.Status != other.Status
+                    || pair.Value.OwnershipIdentity != other.OwnershipIdentity
+                    || pair.Value.MustEnd != other.MustEnd
+                    || pair.Value.IsUsing != other.IsUsing)
                 {
                     return false;
                 }
@@ -1598,6 +1743,21 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         public override void VisitInvocation(IInvocationOperation operation)
         {
             _context.CancellationToken.ThrowIfCancellationRequested();
+            bool transferWasPreprocessed = _preprocessedTransferInvocations.Remove(operation);
+            if (!transferWasPreprocessed && IsTransferMoveInvocation(operation))
+            {
+                ProcessTransferMove(operation);
+            }
+            else if (!transferWasPreprocessed && IsTransferFactoryInvocation(operation))
+            {
+                RegisterTransferFactory(operation);
+            }
+            else if (!transferWasPreprocessed
+                && IsNativeTransfer(operation.TargetMethod.ContainingType))
+            {
+                ProcessTransferInvocation(operation);
+            }
+
             if (operation.IsImplicit)
             {
                 base.VisitInvocation(operation);
@@ -1805,6 +1965,15 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
         public override void VisitPropertyReference(IPropertyReferenceOperation operation)
         {
+            if (IsNativeTransfer(operation.Instance?.Type)
+                && GetTransfer(Unwrap(operation.Instance)) is TransferState transfer)
+            {
+                CheckTransferActive(
+                    transfer,
+                    operation.Syntax,
+                    operation.Property.Name);
+            }
+
             HandleState? handle = GetHandle(Unwrap(operation.Instance));
             if (handle is not null)
             {
@@ -1828,6 +1997,13 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         public override void VisitSimpleAssignment(ISimpleAssignmentOperation operation)
         {
             IOperation? value = Unwrap(operation.Value);
+            if (IsNativeTransfer(operation.Target.Type))
+            {
+                ProcessTransferAssignment(
+                    GetTarget(operation.Target),
+                    value);
+            }
+
             if (value is not null && value is not IObjectCreationOperation && !IsHandleCreatingInvocation(value))
             {
                 Target target = GetTarget(operation.Target);
@@ -1849,6 +2025,13 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         public override void VisitVariableDeclarator(IVariableDeclaratorOperation operation)
         {
             IOperation? value = Unwrap(operation.Initializer?.Value);
+            if (IsNativeTransfer(operation.Symbol.Type))
+            {
+                ProcessTransferAssignment(
+                    new Target(operation.Symbol, operation.Syntax),
+                    value);
+            }
+
             if (value is not null && value is not IObjectCreationOperation && !IsHandleCreatingInvocation(value))
             {
                 Target target = new(operation.Symbol, operation.Syntax);
@@ -1870,6 +2053,27 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         public override void VisitArgument(IArgumentOperation operation)
         {
             IOperation? value = Unwrap(operation.Value);
+            if (value is not null && IsNativeTransfer(value.Type))
+            {
+                if (operation.Parent is not IInvocationOperation transferCall
+                    || !IsTransferMoveInvocation(transferCall)
+                    || operation.Parameter?.RefKind != RefKind.Ref)
+                {
+                    if (!IsTransferMoveInvocation(value)
+                        && !IsTransferFactoryInvocation(value)
+                        && GetTransfer(value) is TransferState transfer)
+                    {
+                        string destination = operation.Parent is IInvocationOperation invocation
+                            ? invocation.TargetMethod.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)
+                            : "the call argument";
+                        ReportTransferCopy(
+                            transfer,
+                            operation.Syntax,
+                            destination);
+                    }
+                }
+            }
+
             if (value is not null && value is not IObjectCreationOperation)
             {
                 if (operation.Parent is IInvocationOperation composite
@@ -1899,7 +2103,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 else if (IsOwnerType(value.Type) && GetOwner(value) is OwnerState owner)
                 {
                     if (operation.Parent is IInvocationOperation invocation
-                        && (GetLifecycleEffect(invocation.TargetMethod, operation.Parameter)
+                        && (IsTransferFactoryInvocation(invocation)
+                            || GetLifecycleEffect(invocation.TargetMethod, operation.Parameter)
                                 is not LifecycleEffect.None
                             || IsNonRetainingOwnerParameter(
                                 invocation.TargetMethod,
@@ -1923,6 +2128,25 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         public override void VisitReturn(IReturnOperation operation)
         {
             IOperation? value = Unwrap(operation.ReturnedValue);
+            if (value is IInvocationOperation transferInvocation
+                && IsTransferMoveInvocation(transferInvocation))
+            {
+                ProcessTransferMove(transferInvocation);
+                _preprocessedTransferInvocations.Add(transferInvocation);
+            }
+
+            if (value is not null
+                && IsNativeTransfer(value.Type)
+                && !IsTransferMoveInvocation(value)
+                && !IsTransferFactoryInvocation(value)
+                && GetTransfer(value) is TransferState transfer)
+            {
+                ReportTransferCopy(
+                    transfer,
+                    operation.Syntax,
+                    "the return value");
+            }
+
             if (value is not null && value is not IObjectCreationOperation)
             {
                 if (IsHandleType(value.Type) && GetHandle(value) is HandleState handle)
@@ -1993,6 +2217,15 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         {
             if (_closureDepth > 0)
             {
+                if (_transfers.TryGetValue(operation.Local, out TransferState? transfer)
+                    && IsCapturedLocal(operation.Local, operation.Syntax))
+                {
+                    ReportTransferCopy(
+                        transfer,
+                        operation.Syntax,
+                        "a closure");
+                }
+
                 if (_handles.TryGetValue(operation.Local, out HandleState? handle) && !handle.Returned)
                 {
                     RecordGenerationLiveness(
@@ -2021,9 +2254,41 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             base.VisitLocalReference(operation);
         }
 
+        private bool IsCapturedLocal(
+            ILocalSymbol local,
+            SyntaxNode referenceSyntax)
+        {
+            AnonymousFunctionExpressionSyntax? containingCallback = referenceSyntax
+                .Ancestors()
+                .OfType<AnonymousFunctionExpressionSyntax>()
+                .FirstOrDefault();
+            if (containingCallback is null)
+            {
+                return false;
+            }
+
+            SyntaxNode? declaration = local.DeclaringSyntaxReferences
+                .FirstOrDefault()
+                ?.GetSyntax(_context.CancellationToken);
+            return declaration is null
+                || !containingCallback.Span.Contains(declaration.SpanStart);
+        }
+
         public override void VisitConversion(IConversionOperation operation)
         {
             IOperation? operand = Unwrap(operation.Operand);
+            if (operand is not null
+                && IsNativeTransfer(operand.Type)
+                && !IsNativeTransfer(operation.Type)
+                && GetTransfer(operand) is TransferState transfer)
+            {
+                ReportTransferCopy(
+                    transfer,
+                    operation.Syntax,
+                    operation.Type?.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)
+                        ?? "a converted value");
+            }
+
             if (operand is not null
                 && IsOwnerType(operand.Type)
                 && operation.IsImplicit
@@ -2078,7 +2343,15 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         {
             foreach (IOperation element in operation.Elements)
             {
-                if (IsHandleType(element.Type) && GetHandle(Unwrap(element)) is HandleState handle)
+                if (IsNativeTransfer(element.Type)
+                    && GetTransfer(Unwrap(element)) is TransferState transfer)
+                {
+                    ReportTransferCopy(
+                        transfer,
+                        operation.Syntax,
+                        "a tuple");
+                }
+                else if (IsHandleType(element.Type) && GetHandle(Unwrap(element)) is HandleState handle)
                 {
                     ReportHandleTransfer(
                         handle,
@@ -2097,7 +2370,15 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         {
             foreach (IOperation element in operation.ElementValues)
             {
-                if (IsHandleType(element.Type) && GetHandle(Unwrap(element)) is HandleState handle)
+                if (IsNativeTransfer(element.Type)
+                    && GetTransfer(Unwrap(element)) is TransferState transfer)
+                {
+                    ReportTransferCopy(
+                        transfer,
+                        operation.Syntax,
+                        "an array");
+                }
+                else if (IsHandleType(element.Type) && GetHandle(Unwrap(element)) is HandleState handle)
                 {
                     ReportHandleTransfer(
                         handle,
@@ -2127,6 +2408,585 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             }
 
             base.VisitDeconstructionAssignment(operation);
+        }
+
+        private void ProcessTransferInvocation(
+            IInvocationOperation operation)
+        {
+            IOperation? instance = Unwrap(operation.Instance);
+            TransferState? transfer = GetTransfer(instance);
+            if (transfer is null
+                || !CheckTransferActive(
+                    transfer,
+                    operation.Syntax,
+                    operation.TargetMethod.Name))
+            {
+                return;
+            }
+
+            if (operation.TargetMethod.Name is "Access" or "Read")
+            {
+                ReportTransferViewEscapes(operation);
+                return;
+            }
+
+            if (operation.TargetMethod.Name == "Dispose")
+            {
+                MarkTransferIdentity(
+                    transfer.OwnershipIdentity,
+                    TransferStatus.Disposed);
+            }
+        }
+
+        private void ProcessTransferMove(
+            IInvocationOperation operation)
+        {
+            IArgumentOperation? sourceArgument = operation.Arguments
+                .FirstOrDefault(argument => argument.Parameter?.RefKind == RefKind.Ref);
+            IOperation? sourceOperation = Unwrap(sourceArgument?.Value);
+            TransferState? source = GetTransfer(sourceOperation);
+            if (source is null)
+            {
+                Report(
+                    NativeAllocationDiagnosticDescriptors.InvalidTransferMove,
+                    operation.Syntax,
+                    sourceOperation?.Syntax.ToString() ?? "the source",
+                    "unknown");
+                return;
+            }
+
+            if (source.IsUsing)
+            {
+                Report(
+                    NativeAllocationDiagnosticDescriptors.InvalidTransferMove,
+                    operation.Syntax,
+                    source.DisplayName,
+                    "bound to automatic disposal");
+                return;
+            }
+
+            if (source.Status != TransferStatus.Active)
+            {
+                Report(
+                    NativeAllocationDiagnosticDescriptors.InvalidTransferMove,
+                    operation.Syntax,
+                    source.DisplayName,
+                    DescribeTransferStatus(source.Status));
+                return;
+            }
+
+            MarkTransferIdentity(
+                source.OwnershipIdentity,
+                TransferStatus.Moved);
+            Target target = FindTarget(operation);
+            if (target.Symbol is not null)
+            {
+                RegisterTransferDestination(
+                    target,
+                    operation.Syntax,
+                    mustEnd: target.Symbol is ILocalSymbol,
+                    isUsing: IsUsingSyntax(operation.Syntax, target.Symbol));
+                return;
+            }
+
+            if (!IsSafeTransferEscape(operation))
+            {
+                Report(
+                    NativeAllocationDiagnosticDescriptors.TransferLifetime,
+                    operation.Syntax,
+                    "the moved destination");
+            }
+        }
+
+        private void RegisterTransferFactory(
+            IInvocationOperation operation)
+        {
+            Target target = FindTarget(operation);
+            if (target.Symbol is not ILocalSymbol)
+            {
+                Report(
+                    NativeAllocationDiagnosticDescriptors.TransferAcquisitionEscape,
+                    operation.Syntax,
+                    operation.TargetMethod.Name);
+                return;
+            }
+
+            RegisterTransferDestination(
+                target,
+                operation.Syntax,
+                mustEnd: true,
+                isUsing: IsUsingSyntax(operation.Syntax, target.Symbol));
+        }
+
+        private void ProcessTransferAssignment(
+            Target target,
+            IOperation? value)
+        {
+            if (target.Symbol is null)
+            {
+                if (value is not null
+                    && IsNativeTransfer(value.Type)
+                    && !IsTransferMoveInvocation(value)
+                    && !IsTransferFactoryInvocation(value)
+                    && GetTransfer(value) is TransferState discarded)
+                {
+                    ReportTransferCopy(
+                        discarded,
+                        target.Syntax,
+                        "a discarded value");
+                }
+
+                return;
+            }
+
+            if (value is null || IsNullValue(value))
+            {
+                ReportActiveTransferOverwrite(target);
+                _transfers[target.Symbol] = TransferState.Create(
+                    target.Symbol,
+                    target.Syntax,
+                    TransferStatus.Unowned,
+                    mustEnd: false,
+                    isUsing: false);
+                return;
+            }
+
+            if (IsTransferMoveInvocation(value)
+                || IsTransferFactoryInvocation(value))
+            {
+                return;
+            }
+
+            if (IsNativeTransfer(value.Type)
+                && GetTransfer(value) is TransferState source)
+            {
+                if (SymbolEqualityComparer.Default.Equals(
+                    source.Symbol,
+                    target.Symbol))
+                {
+                    return;
+                }
+
+                ReportActiveTransferOverwrite(target);
+                if (CheckTransferActive(
+                    source,
+                    target.Syntax,
+                    "copy"))
+                {
+                    Report(
+                        NativeAllocationDiagnosticDescriptors.TransferAlias,
+                        target.Syntax,
+                        source.DisplayName,
+                        target.Symbol.Name);
+                }
+
+                _transfers[target.Symbol] = source.CloneFor(
+                    target.Symbol,
+                    mustEnd: target.Symbol is ILocalSymbol,
+                    isUsing: IsUsingSyntax(target.Syntax, target.Symbol),
+                    target.Syntax);
+                return;
+            }
+
+            if (IsNativeTransfer(GetSymbolType(target.Symbol)))
+            {
+                RegisterTransferDestination(
+                    target,
+                    value.Syntax,
+                    mustEnd: target.Symbol is ILocalSymbol,
+                    isUsing: IsUsingSyntax(target.Syntax, target.Symbol));
+            }
+        }
+
+        private void RegisterTransferDestination(
+            Target target,
+            SyntaxNode origin,
+            bool mustEnd,
+            bool isUsing)
+        {
+            if (target.Symbol is null)
+            {
+                return;
+            }
+
+            ReportActiveTransferOverwrite(target);
+            _transfers[target.Symbol] = TransferState.Create(
+                target.Symbol,
+                origin,
+                TransferStatus.Active,
+                mustEnd,
+                isUsing);
+        }
+
+        private void ReportActiveTransferOverwrite(Target target)
+        {
+            if (target.Symbol is null
+                || !_transfers.TryGetValue(
+                    target.Symbol,
+                    out TransferState? previous)
+                || previous.Status != TransferStatus.Active)
+            {
+                return;
+            }
+
+            Report(
+                NativeAllocationDiagnosticDescriptors.TransferLifetime,
+                target.Syntax,
+                previous.DisplayName);
+        }
+
+        private TransferState? GetTransfer(IOperation? operation)
+        {
+            if (operation is null || !IsNativeTransfer(operation.Type))
+            {
+                return null;
+            }
+
+            ISymbol? symbol = GetSymbol(operation);
+            if (symbol is null)
+            {
+                return null;
+            }
+
+            if (_transfers.TryGetValue(
+                symbol,
+                out TransferState? existing))
+            {
+                return existing;
+            }
+
+            TransferState external = TransferState.CreateExternal(
+                symbol,
+                operation.Syntax);
+            _transfers.Add(symbol, external);
+            return external;
+        }
+
+        private bool CheckTransferActive(
+            TransferState transfer,
+            SyntaxNode syntax,
+            string operation)
+        {
+            if (transfer.Status == TransferStatus.Active)
+            {
+                return true;
+            }
+
+            Report(
+                NativeAllocationDiagnosticDescriptors.InactiveTransferUse,
+                syntax,
+                transfer.DisplayName,
+                operation,
+                DescribeTransferStatus(transfer.Status));
+            return false;
+        }
+
+        private void ReportTransferCopy(
+            TransferState transfer,
+            SyntaxNode syntax,
+            string destination)
+        {
+            if (!CheckTransferActive(
+                transfer,
+                syntax,
+                "copy"))
+            {
+                return;
+            }
+
+            Report(
+                NativeAllocationDiagnosticDescriptors.TransferAlias,
+                syntax,
+                transfer.DisplayName,
+                destination);
+        }
+
+        private void MarkTransferIdentity(
+            string ownershipIdentity,
+            TransferStatus status)
+        {
+            foreach (TransferState transfer in _transfers.Values)
+            {
+                if (transfer.OwnershipIdentity == ownershipIdentity)
+                {
+                    transfer.Status = status;
+                }
+            }
+        }
+
+        private static string DescribeTransferStatus(
+            TransferStatus status) =>
+            status switch
+            {
+                TransferStatus.Unowned => "absent",
+                TransferStatus.Moved => "moved",
+                TransferStatus.Disposed => "disposed",
+                TransferStatus.Ambiguous => "not proven active",
+                _ => "active"
+            };
+
+        private static bool IsNullValue(IOperation operation) =>
+            operation.ConstantValue.HasValue
+            && operation.ConstantValue.Value is null;
+
+        private static bool IsSafeTransferEscape(
+            IInvocationOperation move)
+        {
+            IOperation current = move;
+            while (current.Parent is IConversionOperation conversion
+                && conversion.Operand == current)
+            {
+                current = conversion;
+            }
+
+            return current.Parent is IArgumentOperation
+                or IReturnOperation
+                || move.Syntax.Ancestors()
+                    .Any(ancestor => ancestor is ReturnStatementSyntax
+                        or ArrowExpressionClauseSyntax
+                        or ArgumentSyntax);
+        }
+
+        private bool IsTransferMoveInvocation(IOperation operation) =>
+            operation is IInvocationOperation invocation
+            && invocation.TargetMethod.Name == "Move"
+            && IsNativeTransfer(invocation.TargetMethod.ContainingType)
+            && IsNativeTransfer(invocation.Type);
+
+        private bool IsTransferFactoryInvocation(IOperation operation) =>
+            operation is IInvocationOperation invocation
+            && IsNativeTransfer(invocation.Type)
+            && (invocation.TargetMethod.Name == "RentTransferable"
+                    && invocation.TargetMethod.ContainingType.ToDisplayString()
+                        == "Supprocom.NativeAllocationManagement.NativeTransferPoolExtensions"
+                || invocation.TargetMethod.Name == "ScratchTransferable"
+                    && IsNativeArena(invocation.TargetMethod.ContainingType));
+
+        private void ReportTransferViewEscapes(
+            IInvocationOperation operation)
+        {
+            SemanticModel model = _context.Compilation.GetSemanticModel(
+                operation.Syntax.SyntaxTree);
+            foreach (IArgumentOperation argument in operation.Arguments)
+            {
+                AnonymousFunctionExpressionSyntax[] callbackSyntaxes = argument.Value.Syntax
+                    .DescendantNodesAndSelf()
+                    .OfType<AnonymousFunctionExpressionSyntax>()
+                    .ToArray();
+                if (callbackSyntaxes.Length != 0)
+                {
+                    ReportTransferViewSyntaxEscapes(callbackSyntaxes[0]);
+                }
+
+                foreach (AnonymousFunctionExpressionSyntax callbackSyntax in callbackSyntaxes)
+                {
+                    if (model.GetOperation(
+                        callbackSyntax,
+                        _context.CancellationToken) is not IAnonymousFunctionOperation callback)
+                    {
+                        continue;
+                    }
+
+                    IParameterSymbol[] viewParameters = callback.Symbol.Parameters
+                        .Where(parameter => IsNativeLeaseView(parameter.Type))
+                        .ToArray();
+                    if (viewParameters.Length == 0)
+                    {
+                        continue;
+                    }
+
+                    TransferViewEscapeWalker walker = new(
+                        this,
+                        viewParameters);
+                    walker.Visit(callback.Body);
+                }
+            }
+        }
+
+        private void ReportTransferViewSyntaxEscapes(
+            AnonymousFunctionExpressionSyntax callback)
+        {
+            string[] parameterNames = callback switch
+            {
+                SimpleLambdaExpressionSyntax simple =>
+                    [simple.Parameter.Identifier.ValueText],
+                ParenthesizedLambdaExpressionSyntax parenthesized =>
+                    parenthesized.ParameterList.Parameters
+                        .Select(parameter => parameter.Identifier.ValueText)
+                        .ToArray(),
+                AnonymousMethodExpressionSyntax anonymous =>
+                    anonymous.ParameterList?.Parameters
+                        .Select(parameter => parameter.Identifier.ValueText)
+                        .ToArray()
+                    ?? [],
+                _ => []
+            };
+            if (parameterNames.Length == 0)
+            {
+                return;
+            }
+
+            foreach (AnonymousFunctionExpressionSyntax nested in callback
+                .DescendantNodes()
+                .OfType<AnonymousFunctionExpressionSyntax>())
+            {
+                IdentifierNameSyntax? captured = nested
+                    .DescendantNodes()
+                    .OfType<IdentifierNameSyntax>()
+                    .FirstOrDefault(identifier => parameterNames.Contains(
+                        identifier.Identifier.ValueText,
+                        StringComparer.Ordinal));
+                if (captured is null)
+                {
+                    continue;
+                }
+
+                Report(
+                    NativeAllocationDiagnosticDescriptors.TransferViewEscape,
+                    nested,
+                    captured.Identifier.ValueText,
+                    "a nested callback");
+            }
+        }
+
+        private bool IsViewDerived(
+            IOperation? operation,
+            IReadOnlyCollection<IParameterSymbol> viewParameters)
+        {
+            if (operation is null
+                || !IsViewLikeType(operation.Type))
+            {
+                return false;
+            }
+
+            return operation.DescendantsAndSelf()
+                .OfType<IParameterReferenceOperation>()
+                .Any(reference => viewParameters.Any(parameter =>
+                    SymbolEqualityComparer.Default.Equals(
+                        parameter,
+                        reference.Parameter)));
+        }
+
+        private bool IsViewLikeType(ITypeSymbol? type)
+        {
+            if (IsNativeLeaseView(type))
+            {
+                return true;
+            }
+
+            if (type is not INamedTypeSymbol named)
+            {
+                return type?.TypeKind == TypeKind.Pointer;
+            }
+
+            string metadataName = named.OriginalDefinition.ToDisplayString();
+            return metadataName is "System.Span<T>"
+                or "System.ReadOnlySpan<T>";
+        }
+
+        private sealed class TransferViewEscapeWalker : OperationWalker
+        {
+            private readonly MethodFlowAnalyzer _analyzer;
+            private readonly IParameterSymbol[] _viewParameters;
+
+            internal TransferViewEscapeWalker(
+                MethodFlowAnalyzer analyzer,
+                IParameterSymbol[] viewParameters)
+            {
+                _analyzer = analyzer;
+                _viewParameters = viewParameters;
+            }
+
+            public override void VisitReturn(IReturnOperation operation)
+            {
+                if (_analyzer.IsViewDerived(
+                    operation.ReturnedValue,
+                    _viewParameters))
+                {
+                    _analyzer.Report(
+                        NativeAllocationDiagnosticDescriptors.TransferViewEscape,
+                        operation.Syntax,
+                        ViewName(operation.ReturnedValue),
+                        "the callback return");
+                }
+
+                base.VisitReturn(operation);
+            }
+
+            public override void VisitSimpleAssignment(
+                ISimpleAssignmentOperation operation)
+            {
+                if (_analyzer.IsViewDerived(
+                    operation.Value,
+                    _viewParameters)
+                    && operation.Target is IFieldReferenceOperation
+                        or IPropertyReferenceOperation
+                        or IArrayElementReferenceOperation)
+                {
+                    _analyzer.Report(
+                        NativeAllocationDiagnosticDescriptors.TransferViewEscape,
+                        operation.Syntax,
+                        ViewName(operation.Value),
+                        "a nonlocal assignment");
+                }
+
+                base.VisitSimpleAssignment(operation);
+            }
+
+            public override void VisitArgument(IArgumentOperation operation)
+            {
+                if (_analyzer.IsViewDerived(
+                    operation.Value,
+                    _viewParameters)
+                    && operation.Parameter?.ScopedKind == ScopedKind.None)
+                {
+                    string destination = operation.Parent is IInvocationOperation invocation
+                        ? invocation.TargetMethod.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)
+                        : "an unscoped call";
+                    _analyzer.Report(
+                        NativeAllocationDiagnosticDescriptors.TransferViewEscape,
+                        operation.Syntax,
+                        ViewName(operation.Value),
+                        destination);
+                }
+
+                base.VisitArgument(operation);
+            }
+
+            public override void VisitAnonymousFunction(
+                IAnonymousFunctionOperation operation)
+            {
+                IParameterReferenceOperation? captured = operation.Body
+                    .DescendantsAndSelf()
+                    .OfType<IParameterReferenceOperation>()
+                    .FirstOrDefault(reference => _viewParameters.Any(parameter =>
+                        SymbolEqualityComparer.Default.Equals(
+                            parameter,
+                            reference.Parameter)));
+                if (captured is not null)
+                {
+                    _analyzer.Report(
+                        NativeAllocationDiagnosticDescriptors.TransferViewEscape,
+                        operation.Syntax,
+                        captured.Parameter.Name,
+                        "a nested callback");
+                    return;
+                }
+
+                base.VisitAnonymousFunction(operation);
+            }
+
+            private string ViewName(IOperation? operation)
+            {
+                IParameterReferenceOperation? reference = operation?
+                    .DescendantsAndSelf()
+                    .OfType<IParameterReferenceOperation>()
+                    .FirstOrDefault(item => _viewParameters.Any(parameter =>
+                        SymbolEqualityComparer.Default.Equals(
+                            parameter,
+                            item.Parameter)));
+                return reference?.Parameter.Name ?? "view";
+            }
         }
 
         private void RegisterOwner(IObjectCreationOperation operation)
@@ -3966,6 +4826,18 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             };
         }
 
+        private static ITypeSymbol? GetSymbolType(ISymbol symbol)
+        {
+            return symbol switch
+            {
+                ILocalSymbol local => local.Type,
+                IFieldSymbol field => field.Type,
+                IParameterSymbol parameter => parameter.Type,
+                IPropertySymbol property => property.Type,
+                _ => null
+            };
+        }
+
         private bool IsOwnerType(ITypeSymbol? type)
         {
             return IsNativePool(type) || IsNativeRegion(type) || IsNativeArena(type);
@@ -3974,6 +4846,16 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         private bool IsHandleType(ITypeSymbol? type)
         {
             return IsNativePooled(type) || IsNativeLocal(type) || IsNativeArenaLease(type);
+        }
+
+        private bool IsNativeTransfer(ITypeSymbol? type)
+        {
+            return NativeSymbols.Is(type, _symbols.Transfer);
+        }
+
+        private bool IsNativeLeaseView(ITypeSymbol? type)
+        {
+            return NativeSymbols.Is(type, _symbols.LeaseView);
         }
 
         private bool IsNativePool(ITypeSymbol? type)
@@ -4334,22 +5216,119 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             }
         }
 
+        private enum TransferStatus
+        {
+            Unowned,
+            Active,
+            Moved,
+            Disposed,
+            Ambiguous
+        }
+
+        private sealed class TransferState
+        {
+            private TransferState(
+                ISymbol symbol,
+                string ownershipIdentity,
+                TransferStatus status,
+                bool mustEnd,
+                bool isUsing,
+                SyntaxNode syntax)
+            {
+                Symbol = symbol;
+                OwnershipIdentity = ownershipIdentity;
+                Status = status;
+                MustEnd = mustEnd;
+                IsUsing = isUsing;
+                Syntax = syntax;
+            }
+
+            internal ISymbol Symbol { get; }
+            internal string OwnershipIdentity { get; }
+            internal TransferStatus Status { get; set; }
+            internal bool MustEnd { get; set; }
+            internal bool IsUsing { get; }
+            internal SyntaxNode Syntax { get; }
+            internal string DisplayName => Symbol.Name;
+
+            internal static TransferState CreateExternal(
+                ISymbol symbol,
+                SyntaxNode syntax) =>
+                new(
+                    symbol,
+                    CreateSymbolIdentity(symbol),
+                    TransferStatus.Active,
+                    mustEnd: false,
+                    isUsing: false,
+                    syntax);
+
+            internal static TransferState Create(
+                ISymbol symbol,
+                SyntaxNode origin,
+                TransferStatus status,
+                bool mustEnd,
+                bool isUsing) =>
+                new(
+                    symbol,
+                    CreateSyntaxIdentity(origin),
+                    status,
+                    mustEnd,
+                    isUsing,
+                    origin);
+
+            internal TransferState Clone() =>
+                new(
+                    Symbol,
+                    OwnershipIdentity,
+                    Status,
+                    MustEnd,
+                    IsUsing,
+                    Syntax);
+
+            internal TransferState CloneFor(
+                ISymbol symbol,
+                bool mustEnd,
+                bool isUsing,
+                SyntaxNode syntax) =>
+                new(
+                    symbol,
+                    OwnershipIdentity,
+                    Status,
+                    mustEnd,
+                    isUsing,
+                    syntax);
+
+            private static string CreateSyntaxIdentity(SyntaxNode syntax) =>
+                $"{syntax.SyntaxTree.FilePath}:{syntax.SpanStart}:{syntax.RawKind}";
+
+            private static string CreateSymbolIdentity(ISymbol symbol)
+            {
+                Location? source = symbol.Locations.FirstOrDefault(location => location.IsInSource);
+                return source is null
+                    ? "external:" + symbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)
+                    : $"{source.SourceTree?.FilePath}:{source.SourceSpan.Start}:{symbol.Name}";
+            }
+        }
+
         private sealed class FlowSnapshot
         {
             internal FlowSnapshot(
                 Dictionary<ISymbol, OwnerState> owners,
                 Dictionary<ISymbol, HandleState> handles,
+                Dictionary<ISymbol, TransferState> transfers,
                 List<RegionScope> regions,
                 HashSet<OwnerState> borrowedOwners)
             {
                 Owners = owners;
                 Handles = handles;
+                Transfers = transfers;
                 Regions = regions;
                 BorrowedOwners = borrowedOwners;
             }
 
             internal Dictionary<ISymbol, OwnerState> Owners { get; }
             internal Dictionary<ISymbol, HandleState> Handles { get; }
+            internal Dictionary<ISymbol, TransferState> Transfers { get; }
             internal List<RegionScope> Regions { get; }
             internal HashSet<OwnerState> BorrowedOwners { get; }
         }
