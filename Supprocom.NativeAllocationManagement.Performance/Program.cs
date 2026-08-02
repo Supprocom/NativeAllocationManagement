@@ -42,6 +42,13 @@ internal static class Program
         }
 
         if (args.Length != 0
+            && args[0] is "--native-builder-write"
+                or "--native-builder-write-worker")
+        {
+            return await NativeBuilderWriteRegression.RunCommandAsync(args);
+        }
+
+        if (args.Length != 0
             && args[0] is "--concurrent-arena" or "--concurrent-arena-worker")
         {
             return await ConcurrentArenaBenchmark.RunCommandAsync(args);

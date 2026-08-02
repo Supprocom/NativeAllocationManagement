@@ -40,18 +40,9 @@ using Supprocom.NativeAllocationManagement;
 
 using NativePool<uint> pool = new(preLease: 1_024);
 using NativeBuilder<uint> builder = pool.CreateBuilder(
-    preLease: 64);
-Span<uint> batch = stackalloc uint[64];
+    preLease: 4_096);
 
-for (int offset = 0; offset < 4_096; offset += batch.Length)
-{
-    for (int index = 0; index < batch.Length; index++)
-    {
-        batch[index] = checked((uint)(offset + index));
-    }
-
-    builder.Append(batch);
-}
+builder.Borrow(EmitPackedWords);
 
 NativeTransfer<uint> output = builder.Complete();
 try
@@ -62,6 +53,30 @@ finally
 {
     output.Dispose();
 }
+
+static void EmitPackedWords(
+    scoped ref NativeBuilderBorrow<uint> borrow) =>
+    EmitPackedWordsNested(ref borrow);
+
+static void EmitPackedWordsNested(
+    scoped ref NativeBuilderBorrow<uint> borrow)
+{
+    borrow.Write(
+        maximumAdditionalCount: 4_096,
+        static writer => WriteWords(ref writer));
+}
+
+static void WriteWords(
+    scoped ref NativeBuilderWriter<uint> writer)
+{
+    Span<uint> values = writer.AsSpan();
+    for (int index = 0; index < values.Length; index++)
+    {
+        values[index] = checked((uint)index);
+    }
+
+    writer.Commit(values.Length);
+}
 ```
 
 `preLease` reserves builder capacity in units of `T`. Use the owner
@@ -69,6 +84,21 @@ finally
 
 `Append(T)` writes one value directly. `Append(ReadOnlySpan<T>)` copies one batch directly
 into the unused native range.
+
+`Write` reserves its maximum range with one capacity check. Its callback writes directly
+into that native range and commits the initialized prefix.
+
+The callback must call `Commit` exactly once. A missing, repeated, negative, or oversized
+commit aborts the complete active builder.
+
+`Borrow` gives one exclusive callback a temporary builder view. Pass that view to nested
+helpers only through `scoped ref NativeBuilderBorrow<T>` parameters.
+
+The borrow supports `Append` and `Write`. It cannot complete, dispose, move, store, return,
+box, or capture the builder owner.
+
+The owner rejects all operations while its borrow is active. The runtime also rejects a
+stale borrow after callback completion.
 
 Growth reserves a geometric native allocation. It copies only the initialized native
 prefix and returns the prior pool slab for reuse.
@@ -109,6 +139,12 @@ acquisition, and `NAM1033` rejects builder parameters.
 `NAM1034` requires `Complete` to publish directly to an exact `NativeTransfer<T>`
 destination. Existing typed return, owned receiver, field, and bounded-channel rules apply.
 
+`NAM1041` rejects direct-write view escape. `NAM1042` permits writer forwarding only through
+a source-visible `scoped ref NativeBuilderWriter<T>` parameter.
+
+`NAM1043` rejects borrow escape. `NAM1044` permits borrow forwarding only through a
+source-visible `scoped ref NativeBuilderBorrow<T>` parameter.
+
 A field destination requires an `IDisposable` containing type. Its verified `Dispose`
 method must release that exact field. A property cannot receive builder completion.
 
@@ -125,6 +161,23 @@ Run the Release benchmark with this command:
 
 ```powershell
 dotnet run --project Supprocom.NativeAllocationManagement.Performance -c Release -- --native-builder --samples 10 --prelease 1024 --output native-builder.json
+```
+
+The focused direct-write regression uses 24 independent builders. It compares millions of
+two-word `Append` calls with one nested-helper `Write` call per builder.
+
+```powershell
+$env:DOTNET_TieredCompilation='0'
+$env:DOTNET_TieredPGO='0'
+dotnet run `
+    --project Supprocom.NativeAllocationManagement.Performance `
+    -c Release `
+    -- `
+    --native-builder-write `
+    --samples 6 `
+    --records-per-builder 100000 `
+    --enforce `
+    --output native-builder-write.json
 ```
 
 ## Transfer ownership across threads
