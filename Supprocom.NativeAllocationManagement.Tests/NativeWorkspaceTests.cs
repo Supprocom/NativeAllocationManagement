@@ -219,6 +219,62 @@ public sealed class NativeWorkspaceTests
     }
 
     [Fact]
+    public void WorkspacePublicationFailureRollsBackOwnership()
+    {
+        NativeMemoryTestHooks.Reset();
+        NativePool<int> pool = new(
+            preLease: 8,
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        try
+        {
+            NativeMemoryTestHooks.FailAtManagedPublicationBoundary(1);
+
+            InvalidOperationException exception = Assert.Throws<
+                InvalidOperationException>(
+                () => pool.CreateWorkspace(4));
+
+            Assert.Contains(
+                "NativePool.CreateWorkspace",
+                exception.Message);
+            Assert.Equal(
+                0,
+                pool.CurrentAllocationRecordCountForTest);
+            Assert.Equal(
+                0,
+                pool.CurrentInitializationCountForTest);
+            Assert.Equal(
+                0,
+                pool.CurrentGenerationActiveOperationsForTest);
+
+            Exception? disposalFailure = Record.Exception(
+                pool.Dispose);
+            Assert.Null(disposalFailure);
+            Assert.Equal(
+                NativeOwnerLifecycle.Disposed,
+                pool.CurrentLifecycle);
+            Assert.Equal(
+                0,
+                NativeMemoryTestHooks.Snapshot()
+                    .OutstandingNativeBytes);
+        }
+        finally
+        {
+            try
+            {
+                if (pool.CurrentLifecycle
+                    != NativeOwnerLifecycle.Disposed)
+                {
+                    pool.Dispose();
+                }
+            }
+            finally
+            {
+                NativeMemoryTestHooks.Reset();
+            }
+        }
+    }
+
+    [Fact]
     public void RuntimeStateRejectsCrossThreadOperations()
     {
         using NativePool<int> pool = new(

@@ -12,6 +12,12 @@ public sealed class NativePool<T> : IDisposable
 
     internal int CurrentAllocationRecordCountForTest => _kernel.CurrentAllocationRecordCountForTest();
 
+    internal int CurrentInitializationCountForTest =>
+        _kernel.CurrentInitializationCountForTest();
+
+    internal int CurrentGenerationActiveOperationsForTest =>
+        _kernel.CurrentGenerationActiveOperationsForTest();
+
     internal int CurrentReferenceRootCountForTest => _kernel.CurrentReferenceRootCountForTest();
 
     internal int QuarantinedSegmentCountForTest => _kernel.QuarantinedSegmentCountForTest();

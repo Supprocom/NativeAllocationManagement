@@ -453,6 +453,126 @@ public sealed class NativeBuilderTests
         }
     }
 
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public void PoolBuilderPublicationFailureRollsBackOwnership(
+        int boundary)
+    {
+        NativeMemoryTestHooks.Reset();
+        NativePool<int> pool = new(
+            preLease: 8,
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        try
+        {
+            NativeMemoryTestHooks.FailAtManagedPublicationBoundary(
+                boundary);
+
+            InvalidOperationException exception = Assert.Throws<
+                InvalidOperationException>(
+                () => pool.CreateBuilder(preLease: 4));
+
+            Assert.Contains(
+                "NativePool.CreateBuilder",
+                exception.Message);
+            Assert.Equal(
+                0,
+                pool.CurrentAllocationRecordCountForTest);
+            Assert.Equal(
+                0,
+                pool.CurrentInitializationCountForTest);
+            Assert.Equal(
+                0,
+                pool.CurrentGenerationActiveOperationsForTest);
+
+            Exception? disposalFailure = Record.Exception(
+                pool.Dispose);
+            Assert.Null(disposalFailure);
+            Assert.Equal(
+                NativeOwnerLifecycle.Disposed,
+                pool.CurrentLifecycle);
+            Assert.Equal(
+                0,
+                NativeMemoryTestHooks.Snapshot()
+                    .OutstandingNativeBytes);
+        }
+        finally
+        {
+            try
+            {
+                if (pool.CurrentLifecycle
+                    != NativeOwnerLifecycle.Disposed)
+                {
+                    pool.Dispose();
+                }
+            }
+            finally
+            {
+                NativeMemoryTestHooks.Reset();
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public void ArenaBuilderPublicationFailureRollsBackOwnership(
+        int boundary)
+    {
+        NativeMemoryTestHooks.Reset();
+        NativeArena arena = new(
+            preAllocateBytes: 256,
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        try
+        {
+            NativeMemoryTestHooks.FailAtManagedPublicationBoundary(
+                boundary);
+
+            InvalidOperationException exception = Assert.Throws<
+                InvalidOperationException>(
+                () => arena.CreateBuilder<int>(preLease: 4));
+
+            Assert.Contains(
+                "NativeArena.CreateBuilder",
+                exception.Message);
+            Assert.Equal(
+                0,
+                arena.CurrentAllocationRecordCountForTest);
+            Assert.Equal(
+                0,
+                arena.CurrentInitializationCountForTest);
+            Assert.Equal(
+                0,
+                arena.CurrentGenerationActiveOperationsForTest);
+
+            Exception? disposalFailure = Record.Exception(
+                arena.Dispose);
+            Assert.Null(disposalFailure);
+            Assert.Equal(
+                NativeOwnerLifecycle.Disposed,
+                arena.CurrentLifecycle);
+            Assert.Equal(
+                0,
+                NativeMemoryTestHooks.Snapshot()
+                    .OutstandingNativeBytes);
+        }
+        finally
+        {
+            try
+            {
+                if (arena.CurrentLifecycle
+                    != NativeOwnerLifecycle.Disposed)
+                {
+                    arena.Dispose();
+                }
+            }
+            finally
+            {
+                NativeMemoryTestHooks.Reset();
+            }
+        }
+    }
+
     [Fact]
     public void ReturnedBuilderSlabIsReusedWithoutFreshGrowth()
     {

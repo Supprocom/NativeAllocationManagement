@@ -13,6 +13,12 @@ public sealed class NativeArena : IDisposable
 
     internal int CurrentAllocationRecordCountForTest => _kernel.CurrentAllocationRecordCountForTest();
 
+    internal int CurrentInitializationCountForTest =>
+        _kernel.CurrentInitializationCountForTest();
+
+    internal int CurrentGenerationActiveOperationsForTest =>
+        _kernel.CurrentGenerationActiveOperationsForTest();
+
     internal int CurrentReferenceRootCountForTest => _kernel.CurrentReferenceRootCountForTest();
 
     internal int CurrentConcurrentReservationCountForTest =>

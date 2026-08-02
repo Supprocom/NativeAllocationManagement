@@ -14,11 +14,12 @@ public static class NativeBuilderOwnerExtensions
         ArgumentNullException.ThrowIfNull(pool);
         ArgumentOutOfRangeException.ThrowIfNegative(
             preLease);
-        return new NativeBuilder<T>(
-            new NativeBuilderSession<T>(
-                pool.KernelForTransfer,
-                pool.KernelForTransfer.BeginPoolBuilder(
-                    preLease)));
+        NativeBuilderSession<T> session = new(
+            pool.KernelForTransfer);
+        session.BeginPool(preLease);
+        return PublishBuilder(
+            session,
+            "NativePool.CreateBuilder");
     }
 
     /// <summary>Creates one single-writer builder from a heterogeneous arena.</summary>
@@ -32,11 +33,43 @@ public static class NativeBuilderOwnerExtensions
         ArgumentNullException.ThrowIfNull(arena);
         ArgumentOutOfRangeException.ThrowIfNegative(
             preLease);
-        return new NativeBuilder<T>(
-            new NativeBuilderSession<T>(
-                arena.KernelForInitialization,
-                arena.KernelForInitialization.BeginArenaBuilder<T>(
-                    preLease)));
+        NativeBuilderSession<T> session = new(
+            arena.KernelForInitialization);
+        session.BeginArena(preLease);
+        return PublishBuilder(
+            session,
+            "NativeArena.CreateBuilder");
+    }
+
+    private static NativeBuilder<T> PublishBuilder<T>(
+        NativeBuilderSession<T> session,
+        string operation)
+        where T : unmanaged
+    {
+        try
+        {
+            NativeMemoryTestHooks.CheckManagedPublicationBoundary(
+                operation,
+                ordinal: 2,
+                "NativeBuilder");
+            return new NativeBuilder<T>(session);
+        }
+        catch (Exception failure)
+        {
+            try
+            {
+                session.Abort();
+            }
+            catch (Exception cleanupFailure)
+            {
+                throw new AggregateException(
+                    "Native builder creation failed and cleanup also failed.",
+                    failure,
+                    cleanupFailure);
+            }
+
+            throw;
+        }
     }
 }
 
@@ -404,6 +437,7 @@ public sealed class NativeBuilder<T> : IDisposable
 internal sealed class NativeBuilderSession<T>
     where T : unmanaged
 {
+    private const int Uninitialized = -1;
     private const int Active = 0;
     private const int Completing = 1;
     private const int Completed = 2;
@@ -411,19 +445,26 @@ internal sealed class NativeBuilderSession<T>
     private const int Released = 4;
 
     private readonly NativeOwnerKernel _kernel;
-    private readonly NativeGeneration _generation;
+    private NativeGeneration? _generation;
     private NativeBuilderInitialization _initialization;
-    private int _state;
+    private int _state = Uninitialized;
     private int _generationExited;
 
     internal NativeBuilderSession(
-        NativeOwnerKernel kernel,
-        NativeBuilderInitialization initialization)
+        NativeOwnerKernel kernel)
     {
         _kernel = kernel;
-        _initialization = initialization;
-        _generation = initialization.Generation;
     }
+
+    internal void BeginPool(int preLease) =>
+        Attach(
+            _kernel.BeginPoolBuilder(preLease),
+            "NativePool.CreateBuilder");
+
+    internal void BeginArena(int preLease) =>
+        Attach(
+            _kernel.BeginArenaBuilder<T>(preLease),
+            "NativeArena.CreateBuilder");
 
     internal int Capacity =>
         _initialization.Allocation.Capacity;
@@ -573,13 +614,53 @@ internal sealed class NativeBuilderSession<T>
         }
     }
 
+    private void Attach(
+        NativeBuilderInitialization initialization,
+        string operation)
+    {
+        try
+        {
+            NativeMemoryTestHooks.CheckManagedPublicationBoundary(
+                operation,
+                ordinal: 1,
+                "NativeBuilderSession ownership");
+            _initialization = initialization;
+            _generation = initialization.Generation;
+            Volatile.Write(ref _state, Active);
+        }
+        catch (Exception failure)
+        {
+            try
+            {
+                _kernel.AbortUnpublishedBuilderInitialization(
+                    initialization);
+            }
+            catch (Exception cleanupFailure)
+            {
+                throw new AggregateException(
+                    "Native builder session publication failed and cleanup also failed.",
+                    failure,
+                    cleanupFailure);
+            }
+            finally
+            {
+                Volatile.Write(ref _state, Released);
+            }
+
+            throw;
+        }
+    }
+
     private void ExitGenerationOnce()
     {
+        NativeGeneration generation = _generation
+            ?? throw new InvalidOperationException(
+                "The native builder session has no generation ownership.");
         if (Interlocked.Exchange(
             ref _generationExited,
             1) == 0)
         {
-            _kernel.ExitBuilderGeneration(_generation);
+            _kernel.ExitBuilderGeneration(generation);
         }
     }
 }

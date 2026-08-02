@@ -387,6 +387,7 @@ internal static class NativeMemoryTestHooks
     private static int _postCommitBoundary;
     private static int _forcedRetiredSnapshotPreparation;
     private static int _forcedQuarantineReservation;
+    private static int _forcedManagedPublicationBoundary;
     private static Action<string>? _operationEntered;
     private static Action<string>? _beforeOperationEntry;
     private static Action<string, NativeOwnerKernel>? _beforeOperationEntryWithKernel;
@@ -413,6 +414,7 @@ internal static class NativeMemoryTestHooks
         Interlocked.Exchange(ref _postCommitBoundary, 0);
         Interlocked.Exchange(ref _forcedRetiredSnapshotPreparation, 0);
         Interlocked.Exchange(ref _forcedQuarantineReservation, 0);
+        Interlocked.Exchange(ref _forcedManagedPublicationBoundary, 0);
         Volatile.Write(ref _operationEntered, null);
         Volatile.Write(ref _beforeOperationEntry, null);
         Volatile.Write(ref _beforeOperationEntryWithKernel, null);
@@ -484,6 +486,35 @@ internal static class NativeMemoryTestHooks
 
     internal static bool ConsumeQuarantineReservationFailure() =>
         ConsumeCounter(ref _forcedQuarantineReservation);
+
+    internal static void FailAtManagedPublicationBoundary(
+        int boundary)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(boundary);
+        Volatile.Write(
+            ref _forcedManagedPublicationBoundary,
+            boundary);
+    }
+
+    internal static void CheckManagedPublicationBoundary(
+        string operation,
+        int ordinal,
+        string publication)
+    {
+        int configured = Volatile.Read(
+            ref _forcedManagedPublicationBoundary);
+        if (configured != ordinal
+            || Interlocked.CompareExchange(
+                ref _forcedManagedPublicationBoundary,
+                0,
+                configured) != configured)
+        {
+            return;
+        }
+
+        throw new InvalidOperationException(
+            $"Injected managed publication failure during {operation} before {publication}.");
+    }
 
     private static bool ConsumeCounter(ref int counter)
     {
@@ -3027,6 +3058,22 @@ internal sealed class NativeOwnerKernel
         }
     }
 
+    internal int CurrentInitializationCountForTest()
+    {
+        lock (_gate)
+        {
+            return _current?.InitializationsInProgress ?? 0;
+        }
+    }
+
+    internal int CurrentGenerationActiveOperationsForTest()
+    {
+        lock (_gate)
+        {
+            return _current?.ActiveOperations ?? 0;
+        }
+    }
+
     internal int CurrentReferenceRootCountForTest()
     {
         lock (_gate)
@@ -3587,6 +3634,19 @@ internal sealed class NativeOwnerKernel
             AbortPoolInitialization(
                 initialization.Generation,
                 initialization.Allocation);
+        }
+    }
+
+    internal void AbortUnpublishedBuilderInitialization(
+        NativeBuilderInitialization initialization)
+    {
+        try
+        {
+            AbortBuilderInitialization(initialization);
+        }
+        finally
+        {
+            ExitBuilderGeneration(initialization.Generation);
         }
     }
 

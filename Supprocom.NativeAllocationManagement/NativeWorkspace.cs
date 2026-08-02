@@ -14,12 +14,9 @@ public static class NativeWorkspacePoolExtensions
         ArgumentNullException.ThrowIfNull(pool);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(capacity);
         NativeOwnerKernel kernel = pool.KernelForTransfer;
-        NativeBuilderInitialization initialization =
-            kernel.BeginPoolBuilder(capacity);
-        return new NativeWorkspace<T>(
-            new NativeWorkspaceState<T>(
-                kernel,
-                initialization));
+        NativeWorkspaceState<T> state = new(kernel);
+        state.Begin(capacity);
+        return new NativeWorkspace<T>(state);
     }
 }
 
@@ -100,29 +97,64 @@ public readonly ref struct NativeWorkspace<T>
 internal sealed class NativeWorkspaceState<T>
     where T : unmanaged
 {
+    private const int Uninitialized = -1;
     private const int Active = 0;
     private const int Released = 1;
 
     private readonly NativeOwnerKernel _kernel;
-    private readonly NativeGeneration _generation;
-    private readonly NativeBuilderInitialization _initialization;
-    private readonly int _capacity;
+    private NativeGeneration? _generation;
+    private NativeBuilderInitialization _initialization;
+    private int _capacity;
     private readonly int _ownerThreadId;
-    private int _state;
+    private int _state = Uninitialized;
     private int _length;
     private int _published;
 
     internal NativeWorkspaceState(
-        NativeOwnerKernel kernel,
-        NativeBuilderInitialization initialization)
+        NativeOwnerKernel kernel)
     {
         _kernel = kernel;
-        _generation = initialization.Generation;
-        _initialization = initialization;
-        _capacity = initialization.Allocation.Capacity;
         _ownerThreadId = Environment.CurrentManagedThreadId;
-        initialization.Allocation.SetBuilderLength(0);
-        initialization.Allocation.InitializedLength = 0;
+    }
+
+    internal void Begin(int capacity)
+    {
+        NativeBuilderInitialization initialization =
+            _kernel.BeginPoolBuilder(capacity);
+        try
+        {
+            NativeMemoryTestHooks.CheckManagedPublicationBoundary(
+                "NativePool.CreateWorkspace",
+                ordinal: 1,
+                "NativeWorkspaceState ownership");
+            initialization.Allocation.SetBuilderLength(0);
+            initialization.Allocation.InitializedLength = 0;
+            _generation = initialization.Generation;
+            _initialization = initialization;
+            _capacity = initialization.Allocation.Capacity;
+            Volatile.Write(ref _state, Active);
+        }
+        catch (Exception failure)
+        {
+            try
+            {
+                _kernel.AbortUnpublishedBuilderInitialization(
+                    initialization);
+            }
+            catch (Exception cleanupFailure)
+            {
+                throw new AggregateException(
+                    "Native workspace publication failed and cleanup also failed.",
+                    failure,
+                    cleanupFailure);
+            }
+            finally
+            {
+                Volatile.Write(ref _state, Released);
+            }
+
+            throw;
+        }
     }
 
     internal int GetCapacity()
@@ -265,7 +297,10 @@ internal sealed class NativeWorkspaceState<T>
         }
         finally
         {
-            _kernel.ExitBuilderGeneration(_generation);
+            NativeGeneration generation = _generation
+                ?? throw new InvalidOperationException(
+                    "The native workspace has no generation ownership.");
+            _kernel.ExitBuilderGeneration(generation);
         }
     }
 
