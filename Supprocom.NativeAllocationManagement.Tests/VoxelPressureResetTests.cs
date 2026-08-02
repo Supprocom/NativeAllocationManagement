@@ -8,21 +8,21 @@ namespace Supprocom.NativeAllocationManagement.Tests;
 
 public sealed class VoxelPressureResetTests
 {
-    [Fact]
+    [VoxelDemonstrationFact]
     public void SafeSessionResetsBeforeTheFirstMeasuredRequest()
     {
         using SafeSession session = new();
         VerifyResetSequence(session);
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void NativeSessionResetsBeforeTheFirstMeasuredRequest()
     {
         using NativeSession session = new();
         VerifyResetSequence(session);
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void WorkerLocalSessionsPreserveResetStateAndAllocationPlans()
     {
         using WorkerLocalPressureSession safe = new(
@@ -38,7 +38,7 @@ public sealed class VoxelPressureResetTests
         VerifyResetSequence(native);
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void SafeDiagnosticRecordsWorkerAndPhaseState()
     {
         using WorkerLocalPressureSession session = new(
@@ -51,7 +51,7 @@ public sealed class VoxelPressureResetTests
             expectAllocatorState: false);
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void NativeDiagnosticRecordsWorkerAndAllocatorState()
     {
         using WorkerLocalPressureSession session = new(

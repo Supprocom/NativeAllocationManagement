@@ -8,7 +8,7 @@ namespace Supprocom.NativeAllocationManagement.Tests;
 
 public sealed class VoxelSharedContractTests
 {
-    [Fact]
+    [VoxelDemonstrationFact]
     public void PressureProfilesUseFourWarmupsAndFreshContainers()
     {
         string root = FindRepositoryRoot();
@@ -60,7 +60,7 @@ public sealed class VoxelSharedContractTests
             StringComparison.Ordinal);
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void AllAlgorithmAndProtocolTypesComeFromOneSharedAssembly()
     {
         Type[] contractTypes =
@@ -166,7 +166,7 @@ public sealed class VoxelSharedContractTests
             type => type.Name == "NativeFaceOutput");
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void BothImplementationProjectsReferenceTheSharedContractWithoutDuplicateDtos()
     {
         string root = FindRepositoryRoot();
@@ -194,7 +194,7 @@ public sealed class VoxelSharedContractTests
         }
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void CompilationGateUsesConsumerBinariesAndBlocksBeforePressureExecution()
     {
         string root = FindRepositoryRoot();
@@ -642,7 +642,7 @@ public sealed class VoxelSharedContractTests
             StringComparison.Ordinal);
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void CompilationGateUsesSixMeasuredPairsAndUnchangedLimits()
     {
         Assert.Equal(
@@ -687,7 +687,7 @@ public sealed class VoxelSharedContractTests
             StringComparison.Ordinal);
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void CompilationGateMeasuredOrderIsBalanced()
     {
         PressureCompilationConfiguration configuration =
@@ -740,7 +740,7 @@ public sealed class VoxelSharedContractTests
                 CompilationGatePolicy.DefaultMeasuredPairCount));
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void CompilationGateRequiresDisabledEqualChildSettings()
     {
         PressureCompilationConfiguration disabled =
@@ -814,7 +814,7 @@ public sealed class VoxelSharedContractTests
                 CompilationGatePolicy.DefaultMeasuredPairCount));
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void CompilationWarmupFailureBlocksTheCompleteGate()
     {
         PressureCompilationConfiguration configuration =
@@ -886,7 +886,7 @@ public sealed class VoxelSharedContractTests
                 wallGatePassed: true));
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void CompilationWarmupPolicyRejectsMalformedPairsAndResults()
     {
         PressureCompilationConfiguration configuration =
@@ -945,7 +945,7 @@ public sealed class VoxelSharedContractTests
                 CompilationGatePolicy.DefaultWarmupPairCount));
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void IncorrectSafeOutputNeverBecomesDecisiveNamResult()
     {
         PressureOutcomeDecision decision = PressureOutcomePolicy.Evaluate(
@@ -964,7 +964,7 @@ public sealed class VoxelSharedContractTests
         Assert.False(decision.DeadlineGatePassed);
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void SafeResourceFailureCanRemainDecisiveNamResult()
     {
         PressureOutcomeDecision decision = PressureOutcomePolicy.Evaluate(
@@ -982,7 +982,7 @@ public sealed class VoxelSharedContractTests
         Assert.True(decision.DeadlineGatePassed);
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void DeadlineAppliesToEachPressureSample()
     {
         PressureImplementationObservation completed =
@@ -1014,7 +1014,7 @@ public sealed class VoxelSharedContractTests
                 observations));
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void PressureSampleOrderRequiresAnEvenSplit()
     {
         PressurePairedObservation safeFirst =
@@ -1053,7 +1053,7 @@ public sealed class VoxelSharedContractTests
                 ]));
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void ProfileOrdinalDoesNotChangeImplementationOrder()
     {
         bool[] firstProfileOrder = CreateProfileOrder(
@@ -1067,7 +1067,7 @@ public sealed class VoxelSharedContractTests
             firstProfileOrder);
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void StressConfidenceRequiresSixPairsAndPositiveLowerBound()
     {
         Assert.True(
@@ -1087,7 +1087,7 @@ public sealed class VoxelSharedContractTests
                 1.20));
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void ProfileOrderPolicyAcceptsOnlyCanonicalSubsets()
     {
         int[] canonical = [50, 100, 200, 500, 1000, 10000];
@@ -1106,7 +1106,7 @@ public sealed class VoxelSharedContractTests
                 canonical));
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void PreparationMetadataUsesEqualFixedCountsAndOrdinalEleven()
     {
         PressureImplementationObservation[] attempts =
@@ -1142,7 +1142,7 @@ public sealed class VoxelSharedContractTests
         Assert.True(roundTrip.NamTimedRequestStarted);
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void CompilationPolicyRequiresEqualDisabledTiering()
     {
         PressureRuntimeSnapshot disabled =
@@ -1205,7 +1205,7 @@ public sealed class VoxelSharedContractTests
             roundTrip.CompilationConfiguration.TieredPgo);
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void EnforcedProfileFailureStopsProfileContinuation()
     {
         PressurePairedStatistics failed = default;
@@ -1228,7 +1228,7 @@ public sealed class VoxelSharedContractTests
                 failed));
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void GateFailurePathReturnsBeforeVerificationOrAnotherProfile()
     {
         string root = FindRepositoryRoot();
@@ -1266,7 +1266,7 @@ public sealed class VoxelSharedContractTests
         Assert.True(verification > terminalReturn);
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public async Task AtomicCheckpointReplacementKeepsOnlyTheLatestDocument()
     {
         string directory = CreateTestArtifactDirectory();
@@ -1299,7 +1299,7 @@ public sealed class VoxelSharedContractTests
         }
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void PreparationCheckpointKeepsAllAttemptsAndLiveWorkerState()
     {
         double[] elapsed = [10, 9, 10, 9, 10, 9];
@@ -1388,7 +1388,7 @@ public sealed class VoxelSharedContractTests
         Assert.True(active.IsAlive);
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public async Task CompletedPairCheckpointSurvivesSimulatedTermination()
     {
         string directory = CreateTestArtifactDirectory();
@@ -1466,7 +1466,7 @@ public sealed class VoxelSharedContractTests
         }
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public async Task FinalReportAtomicallyReplacesTheCheckpoint()
     {
         string directory = CreateTestArtifactDirectory();
@@ -1583,7 +1583,7 @@ public sealed class VoxelSharedContractTests
         }
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void WrapperTimeoutValidationRejectsUnsafeBounds()
     {
         string root = FindRepositoryRoot();
@@ -1656,7 +1656,7 @@ public sealed class VoxelSharedContractTests
             .ToArray();
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void CompletedOutputMismatchBlocksAResourceFailureResult()
     {
         PressureOutcomeDecision decision = PressureOutcomePolicy.Evaluate(
@@ -1680,7 +1680,7 @@ public sealed class VoxelSharedContractTests
         Assert.False(decision.CorrectnessGatePassed);
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void ReleaseDocumentsUseTheDesignatedContactAndAbsoluteGuideLink()
     {
         string root = FindRepositoryRoot();
@@ -1709,7 +1709,7 @@ public sealed class VoxelSharedContractTests
             StringComparison.Ordinal);
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void ReleaseDocumentsDescribeBuilderAndTransferableOwnership()
     {
         string root = FindRepositoryRoot();
@@ -1771,7 +1771,7 @@ public sealed class VoxelSharedContractTests
             StringComparison.Ordinal);
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void PackageMetadataUsesBuilderPatchVersion()
     {
         string root = FindRepositoryRoot();
@@ -1799,7 +1799,7 @@ public sealed class VoxelSharedContractTests
             StringComparison.Ordinal);
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void VerificationReportStoresSelectedProfileAndActualWarmupSeparately()
     {
         const long capBytes = 268_435_456;
@@ -1879,7 +1879,7 @@ public sealed class VoxelSharedContractTests
         Assert.Equal("commit", identity.InformationalCommit);
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void PressureQualificationIsInformationalAndDoesNotBlockTheGate()
     {
         PressureMatrixSummary summary = new(
@@ -1901,7 +1901,7 @@ public sealed class VoxelSharedContractTests
         Assert.True(summary.GatePassed);
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void MeasuredProfilesDoNotCreatePerChunkEvidence()
     {
         string root = FindRepositoryRoot();
@@ -1989,7 +1989,7 @@ public sealed class VoxelSharedContractTests
                 nameof(PressureProfileResult.ExecutionMode)));
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void BothImplementationsSelectRuntimeCapacityWithinSharedBounds()
     {
         string root = FindRepositoryRoot();
@@ -2127,7 +2127,7 @@ public sealed class VoxelSharedContractTests
             StringComparison.Ordinal);
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void CanonicalInputIncludesTheRegistryOrderAndCompleteCellHashes()
     {
         VoxelMath.ValidateCanonicalInputFixture();
@@ -2150,7 +2150,7 @@ public sealed class VoxelSharedContractTests
         Assert.NotEqual(contract.ByteHash, VoxelMath.ComputeCanonicalInput(options with { Seed = options.Seed + 1 }).ByteHash);
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void CorrectnessInputCanCarryEveryPreMutationCellAndItsCanonicalHash()
     {
         VoxelWorkloadOptions options = VoxelWorkloadOptions.Default with
@@ -2174,7 +2174,7 @@ public sealed class VoxelSharedContractTests
         Assert.Equal(options.ChunkCount * options.Iterations - 1, cells[^1].ChunkId);
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void ObservedInputUsesEveryMeasuredChunkAndStrongOutputHashCoversAllStreams()
     {
         VoxelWorkloadOptions options = VoxelWorkloadOptions.Default with
@@ -2217,7 +2217,7 @@ public sealed class VoxelSharedContractTests
         Assert.True(observed.Observed);
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void StrongOutputHashIncludesEveryMaterializedElementAndByte()
     {
         OutputFixture fixture = VoxelMath.ExpectedIndependentFixture;
@@ -2245,7 +2245,7 @@ public sealed class VoxelSharedContractTests
         Assert.NotEqual(original, changed);
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void HandAuthoredOutputFixtureIsCompleteAndCoversBothStreams()
     {
         OutputFixture fixture = VoxelMath.ExpectedIndependentFixture;
@@ -2263,7 +2263,7 @@ public sealed class VoxelSharedContractTests
         Assert.Contains(fixture.TransparentSlices, slice => slice.StageMask != 0 && slice.BlockId > 255);
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void GpuStageInlineArraysHaveExactRecordSizes()
     {
         Assert.Equal(160, Unsafe.SizeOf<GpuStage160>());
@@ -2273,7 +2273,7 @@ public sealed class VoxelSharedContractTests
         Assert.Equal(224, Unsafe.SizeOf<GpuStage224>());
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void MappedGpuBufferSupportsSafeStreamAccess()
     {
         byte[] expected = new byte[4096];
@@ -2297,7 +2297,7 @@ public sealed class VoxelSharedContractTests
             buffer.ByteLength);
     }
 
-    [Theory]
+    [VoxelDemonstrationTheory]
     [InlineData(256, 160)]
     [InlineData(261, 168)]
     [InlineData(257, 176)]
@@ -2561,7 +2561,7 @@ public sealed class VoxelSharedContractTests
         Assert.True(failed);
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void AliasedScatterPackingRejectsARecordThatExceedsOutputRanges()
     {
         FaceRecord[] records =
@@ -2584,7 +2584,7 @@ public sealed class VoxelSharedContractTests
                 []));
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void PressureCapacityCoversThePredeclaredCanonicalChunkRange()
     {
         VoxelCell[] cells = new VoxelCell[VoxelMath.CellsPerChunk];
@@ -2635,7 +2635,7 @@ public sealed class VoxelSharedContractTests
         AssertCanonicalResidentCapacities(shapes);
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void CanonicalPressureChunkMaterializesEveryVoxelEngineSectionKind()
     {
         VoxelCell[] cells = new VoxelCell[VoxelMath.CellsPerChunk];
@@ -2661,7 +2661,7 @@ public sealed class VoxelSharedContractTests
         Assert.True(shape.SectionStateWordCount > 0);
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void TransparentMasksUseTheSectionRepresentationCoordinateOrder()
     {
         const int x = 1;
@@ -2706,7 +2706,7 @@ public sealed class VoxelSharedContractTests
         Assert.Equal(1, fromCells.Count(static value => value != 0));
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void TransparentMaskSlotsFollowStableMaterialOrder()
     {
         (int Index, ushort Id)[] transparentTypes =
@@ -2746,7 +2746,7 @@ public sealed class VoxelSharedContractTests
         Assert.Equal(2, masks.Count(static value => value != 0));
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void SeparateAndFusedSectionBuildersProduceIdenticalData()
     {
         VoxelCell[] cells = new VoxelCell[VoxelMath.CellsPerChunk];
@@ -2818,7 +2818,7 @@ public sealed class VoxelSharedContractTests
                                     & (1UL << index)) != 0)));
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void SectionBuilderCoversEveryVisibleCellAndMaskBit()
     {
         const int seed = 17;
@@ -2926,7 +2926,7 @@ public sealed class VoxelSharedContractTests
             PressureWorkContract.HashTransparentMasks(chunkId, masks));
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void CanonicalPressureStreamContainsDistinctChunkAndSectionClasses()
     {
         VoxelCell[] cells = new VoxelCell[VoxelMath.CellsPerChunk];
@@ -2957,7 +2957,7 @@ public sealed class VoxelSharedContractTests
             shapes.Select(static shape => shape.UploadBytes).Distinct().Count());
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void PressureCorpusRepeatsOneHeterogeneousCycle()
     {
         int cycleLength =
@@ -2994,7 +2994,7 @@ public sealed class VoxelSharedContractTests
         }
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void CanonicalPressureProfilesAddCompleteEqualCycles()
     {
         const long capBytes = 268_435_456;
@@ -3056,7 +3056,7 @@ public sealed class VoxelSharedContractTests
         }
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void SectionPrerenderEvidenceCoversEveryTypedValueAndRetainedMutation()
     {
         const int seed = 17;
@@ -3149,7 +3149,7 @@ public sealed class VoxelSharedContractTests
                 changedStates));
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void SeparateSectionRangesMatchTheCanonicalContiguousLayout()
     {
         const int seed = 17;
@@ -3447,7 +3447,7 @@ public sealed class VoxelSharedContractTests
                 + 4_096));
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void SustainedDiagnosticContractSerializesFromTheSharedAssembly()
     {
         PressureWorkerDiagnostic worker = new(
@@ -3564,7 +3564,7 @@ public sealed class VoxelSharedContractTests
             diagnostics.GetType().Assembly);
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void HostStabilityRequiresThreeValidTailSamples()
     {
         PressureHostProcessorSample[] baseline =
@@ -3622,7 +3622,7 @@ public sealed class VoxelSharedContractTests
                 5));
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void SustainedDiagnosticUsesTheFixedTracePlan()
     {
         string root = FindRepositoryRoot();
@@ -3682,7 +3682,7 @@ public sealed class VoxelSharedContractTests
             StringComparison.Ordinal);
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void DockerChildrenUseTheHarnessLifetimeJob()
     {
         string root = FindRepositoryRoot();
