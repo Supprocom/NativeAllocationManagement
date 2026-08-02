@@ -135,6 +135,17 @@ internal readonly record struct NativeRegionAllocation(
         AllocationState.GenerationState;
 }
 
+internal readonly record struct NativeArenaAllocation(
+    NativeGeneration GenerationState,
+    IntPtr Pointer,
+    nuint OriginalCursor,
+    int Length)
+{
+    internal long Generation => GenerationState.Number;
+
+    internal int Capacity => Length;
+}
+
 internal readonly struct NativeBumpInitialization
 {
     internal NativeBumpInitialization(
@@ -1319,6 +1330,8 @@ internal sealed class NativeBumpSegment
 
     internal long ReclaimedScopeEpoch { get; set; }
 
+    internal bool IsArenaFastSegment { get; set; }
+
     internal nuint ReclaimedRangeStart { get; set; }
 
     internal nuint ReclaimedRangeEnd { get; set; }
@@ -2151,6 +2164,12 @@ internal sealed class NativeGeneration
 
     internal int ConcurrentBumpInitializationsInProgress { get; set; }
 
+    internal long FastArenaRequestedBytes { get; set; }
+
+    internal int ArenaInitializationsInProgress;
+
+    internal List<NativeAllocation>? ArenaCompositeAllocations { get; set; }
+
     internal long RetiredNativeBytes { get; set; }
 
     internal long ScopeEpoch
@@ -2246,6 +2265,35 @@ internal sealed class NativeGeneration
     }
 }
 
+internal ref struct NativeArenaLocalOperationToken
+{
+    private NativeOwnerKernel? _kernel;
+    private readonly NativeGeneration _generation;
+
+    internal NativeArenaLocalOperationToken(
+        NativeOwnerKernel kernel,
+        NativeGeneration generation)
+    {
+        _kernel = kernel;
+        _generation = generation;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public void Dispose()
+    {
+        NativeOwnerKernel? kernel = _kernel;
+        if (kernel is null)
+        {
+            return;
+        }
+
+        _kernel = null;
+        kernel.ExitArenaFastLocalOperation(
+            _generation,
+            "ArenaLease");
+    }
+}
+
 internal ref struct NativeOperationToken
 {
     private NativeOwnerKernel? _kernel;
@@ -2290,6 +2338,104 @@ internal ref struct NativeOperationToken
             _allocation,
             _allocationEntered,
             _operation);
+        GC.KeepAlive(_generationOwner);
+    }
+}
+
+internal ref struct NativeArenaOperationToken
+{
+    private NativeOperationToken _legacy;
+    private NativeOwnerKernel? _kernel;
+    private readonly NativeGeneration? _generationState;
+    private readonly NativeGenerationOwner? _generationOwner;
+    private readonly IntPtr _pointer;
+    private readonly int _length;
+    private readonly bool _localOperation;
+    private readonly string? _operation;
+
+    internal NativeArenaOperationToken(
+        NativeOperationToken legacy)
+    {
+        _legacy = legacy;
+        _kernel = null;
+        _generationState = null;
+        _generationOwner = null;
+        _pointer = IntPtr.Zero;
+        _length = 0;
+        _localOperation = false;
+        _operation = null;
+    }
+
+    internal NativeArenaOperationToken(
+        NativeOwnerKernel kernel,
+        NativeGeneration generation,
+        IntPtr pointer,
+        int length,
+        bool localOperation,
+        string operation)
+    {
+        _legacy = default;
+        _kernel = kernel;
+        _generationState = generation;
+        _generationOwner = generation.Owner;
+        _pointer = pointer;
+        _length = length;
+        _localOperation = localOperation;
+        _operation = operation;
+    }
+
+    internal NativeLeaseView<T> GetView<T>() =>
+        _generationState is null
+            ? _legacy.GetView<T>()
+            : new NativeLeaseView<T>(
+                _pointer,
+                _length);
+
+    internal T GetValue<T>(int index) =>
+        _generationState is null
+            ? _legacy.GetValue<T>(index)
+            : GetView<T>()[index];
+
+    internal void SetValue<T>(int index, T value)
+    {
+        if (_generationState is null)
+        {
+            _legacy.SetValue(index, value);
+            return;
+        }
+
+        GetView<T>()[index] = value;
+    }
+
+    public void Dispose()
+    {
+        NativeGeneration? generation = _generationState;
+        if (generation is null)
+        {
+            _legacy.Dispose();
+            return;
+        }
+
+        NativeOwnerKernel? kernel = _kernel;
+        if (kernel is null)
+        {
+            return;
+        }
+
+        _kernel = null;
+        if (_localOperation)
+        {
+            kernel.ExitArenaFastLocalOperation(
+                generation,
+                _operation!);
+        }
+        else
+        {
+            kernel.ExitArenaFastOperation(
+                generation,
+                _operation!);
+        }
+
         GC.KeepAlive(_generationOwner);
     }
 }
@@ -2556,6 +2702,18 @@ internal sealed class NativeOwnerKernel
     private long _trimmedBytes;
     private long _trimCallCount;
     private long _freshSegmentAllocationCount;
+    private long _arenaFastSlowPathCount;
+    private readonly int _arenaFastThreadId;
+    private NativeGeneration? _arenaFastGeneration;
+    private NativeBumpSegment? _arenaFastSegment;
+    private nuint _arenaFastCursor;
+    private NativeBumpSegment? _arenaFastRollbackPreviousSegment;
+    private NativeBumpSegment? _arenaFastRollbackCreatedSegment;
+    private nuint _arenaFastRollbackPreviousCursor;
+    private int _arenaFastInitializerActive;
+    private int _arenaFastBoundaryClosing;
+    private int _arenaFastOperationDepth;
+    private NativeGeneration? _arenaFastHazardGeneration;
 
     internal NativeOwnerLifecycle Lifecycle
     {
@@ -2602,6 +2760,10 @@ internal sealed class NativeOwnerKernel
                     : checked((long)allocation.StorageBytes);
                 requestedBytes = checked(requestedBytes + allocationBytes);
             }
+
+            requestedBytes = checked(
+                requestedBytes
+                + current.FastArenaRequestedBytes);
 
             long retainedBytes = 0;
             foreach (NativeSlab slab in current.Slabs)
@@ -2753,6 +2915,14 @@ internal sealed class NativeOwnerKernel
                 {
                     count++;
                 }
+            }
+
+            if (_kind == NativeOwnerKind.Arena)
+            {
+                count = checked(
+                    count
+                    + (current.ArenaCompositeAllocations?.Count
+                        ?? 0));
             }
 
             return count;
@@ -2938,6 +3108,10 @@ internal sealed class NativeOwnerKernel
         _preLease = preLease;
         _preAllocateBytes = preAllocateBytes;
         _containsReferences = containsReferences;
+        _arenaFastThreadId =
+            kind == NativeOwnerKind.Arena
+                ? Environment.CurrentManagedThreadId
+                : 0;
         _lifecycle = doNotLeaseOnDeclaration ? NativeOwnerLifecycle.Unleased : NativeOwnerLifecycle.Active;
 
         if (doNotLeaseOnDeclaration)
@@ -3018,6 +3192,61 @@ internal sealed class NativeOwnerKernel
             containsReferences: false,
             doNotLeaseOnDeclaration: doNotLeaseOnDeclaration);
     }
+
+    internal long ArenaFastSlowPathCountForTest()
+    {
+        lock (_gate)
+        {
+            return _arenaFastSlowPathCount;
+        }
+    }
+
+    internal bool IsArenaFastThread =>
+        _kind == NativeOwnerKind.Arena
+        && Environment.CurrentManagedThreadId
+            == _arenaFastThreadId;
+
+    internal bool CanUseArenaFastLocalOperation =>
+        IsArenaFastThread
+        && !NativeMemoryTestHooks.OperationHooksEnabled;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void BeginArenaFastBoundary()
+    {
+        if (_kind == NativeOwnerKind.Arena)
+        {
+            Volatile.Write(
+                ref _arenaFastBoundaryClosing,
+                1);
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void EndArenaFastBoundary()
+    {
+        if (_kind == NativeOwnerKind.Arena)
+        {
+            Volatile.Write(
+                ref _arenaFastBoundaryClosing,
+                0);
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private bool HasArenaFastInitializer() =>
+        _kind == NativeOwnerKind.Arena
+        && Volatile.Read(
+            ref _arenaFastInitializerActive)
+            != 0;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private bool HasArenaFastHazard(
+        NativeGeneration generation) =>
+        _kind == NativeOwnerKind.Arena
+        && ReferenceEquals(
+            Volatile.Read(
+                ref _arenaFastHazardGeneration),
+            generation);
 
     internal NativePoolLease RentInitialized<T>(
         int length,
@@ -3506,6 +3735,455 @@ internal sealed class NativeOwnerKernel
             initializer,
             concurrentReservation: false);
     }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal NativeArenaAllocation LeaseArenaBumpInitialized<T>(
+        int length,
+        int elementSize,
+        nuint alignment,
+        NativeLeaseInitializer<T> initializer)
+    {
+        ArgumentNullException.ThrowIfNull(initializer);
+        ArgumentOutOfRangeException.ThrowIfNegative(length);
+        nuint byteLength = CalculateArenaByteLength(
+            length,
+            elementSize);
+        NativeGeneration generation = BeginArenaBumpReservation();
+        NativeArenaAllocation allocation =
+            ReserveArenaBumpRangeSafe(
+                generation,
+                length,
+                byteLength,
+                alignment);
+        InitializeArenaBumpRange(
+            generation,
+            allocation,
+            length,
+            byteLength,
+            initializer);
+        return allocation;
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private void InitializeArenaBumpRange<T>(
+        NativeGeneration generation,
+        NativeArenaAllocation allocation,
+        int length,
+        nuint byteLength,
+        NativeLeaseInitializer<T> initializer)
+    {
+        int initializedLength = 0;
+        try
+        {
+            NativeLeaseWriter<T> writer = new(
+                allocation.Pointer,
+                length,
+                ref initializedLength);
+            initializer(writer);
+            if (initializedLength != length)
+            {
+                throw new InvalidOperationException(
+                    "The native lease initializer did not write all logical elements.");
+            }
+
+            generation.FastArenaRequestedBytes =
+                checked(
+                    generation.FastArenaRequestedBytes
+                    + checked((long)byteLength));
+        }
+        catch
+        {
+            RollBackArenaBumpReservation(
+                generation,
+                allocation);
+            throw;
+        }
+        finally
+        {
+            FinishArenaBumpInitialization();
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private NativeArenaAllocation ReserveArenaBumpRangeSafe(
+        NativeGeneration generation,
+        int length,
+        nuint byteLength,
+        nuint alignment)
+    {
+        try
+        {
+            return ReserveArenaBumpRange(
+                generation,
+                length,
+                byteLength,
+                alignment);
+        }
+        catch
+        {
+            FinishArenaBumpInitialization();
+            throw;
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private NativeGeneration BeginArenaBumpReservation()
+    {
+        if (Volatile.Read(
+                ref _arenaFastInitializerActive)
+            != 0)
+        {
+            ThrowArenaFastInitializerInUse();
+        }
+
+        Volatile.Write(
+            ref _arenaFastInitializerActive,
+            1);
+        NativeGeneration? generation = _arenaFastGeneration;
+        if (Volatile.Read(
+                ref _arenaFastBoundaryClosing)
+                != 0
+            || generation is null)
+        {
+            generation = EnterArenaInitializationSlowSafe();
+        }
+        else if (!ReferenceEquals(
+                Volatile.Read(ref _current),
+                generation)
+            || _lifecycle != NativeOwnerLifecycle.Active)
+        {
+            generation = EnterArenaInitializationSlowSafe();
+        }
+        else if (Volatile.Read(
+                ref generation.ArenaInitializationsInProgress)
+            != 0)
+        {
+            generation = EnterArenaInitializationSlowSafe();
+        }
+
+        return generation;
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private NativeGeneration EnterArenaInitializationSlowSafe()
+    {
+        try
+        {
+            return EnterArenaInitializationSlow();
+        }
+        catch
+        {
+            FinishArenaBumpInitialization();
+            throw;
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private NativeGeneration EnterArenaInitializationSlow()
+    {
+        lock (_gate)
+        {
+            _arenaFastSlowPathCount = checked(
+                _arenaFastSlowPathCount + 1);
+            NativeGeneration generation = EnsureActiveLocked(
+                "Scratch");
+            if (_kind != NativeOwnerKind.Arena)
+            {
+                throw CreateStateException(
+                    "Scratch",
+                    "This owner does not have an Arena scratch lane.",
+                    0);
+            }
+
+            if (Volatile.Read(
+                    ref _arenaFastBoundaryClosing)
+                != 0)
+            {
+                throw CreateInUseException(
+                    "Scratch",
+                    generation.Number,
+                    0,
+                    generation.ActiveOperations,
+                    "The Arena is in a lane-boundary transition.");
+            }
+
+            if (!ReferenceEquals(
+                    _arenaFastGeneration,
+                    generation))
+            {
+                _arenaFastGeneration = generation;
+                _arenaFastSegment = null;
+                _arenaFastCursor = 0;
+            }
+
+            if (generation.InitializationsInProgress != 0)
+            {
+                throw CreateInUseException(
+                    "Scratch",
+                    generation.Number,
+                    0,
+                    generation.ActiveOperations,
+                    "A different native lease initializer is already active.");
+            }
+
+            return generation;
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private NativeArenaAllocation ReserveArenaBumpRange(
+        NativeGeneration generation,
+        int length,
+        nuint byteLength,
+        nuint alignment)
+    {
+        if (byteLength == 0)
+        {
+            return new NativeArenaAllocation(
+                generation,
+                IntPtr.Zero,
+                _arenaFastCursor,
+                length);
+        }
+
+        NativeBumpSegment? previousSegment =
+            _arenaFastSegment;
+        nuint previousCursor = _arenaFastCursor;
+        NativeBumpSegment? createdSegment = null;
+        NativeBumpSegment? segment = previousSegment;
+        nuint aligned = segment is null
+            ? 0
+            : AlignArenaBumpCursor(
+                _arenaFastCursor,
+                alignment);
+        if (segment is null
+            || aligned > segment.HighCursor
+            || byteLength
+                > segment.HighCursor - aligned)
+        {
+            segment = GrowArenaBumpLane(
+                generation,
+                byteLength,
+                alignment,
+                out createdSegment);
+            aligned = AlignArenaBumpCursor(
+                _arenaFastCursor,
+                alignment);
+        }
+
+        nuint originalCursor = _arenaFastCursor;
+        nuint end = checked(aligned + byteLength);
+        _arenaFastCursor = end;
+        segment.LowCursor = end;
+        if (createdSegment is not null)
+        {
+            _arenaFastRollbackPreviousSegment = previousSegment;
+            _arenaFastRollbackCreatedSegment = createdSegment;
+            _arenaFastRollbackPreviousCursor = previousCursor;
+        }
+
+        return new NativeArenaAllocation(
+            generation,
+            AddPointer(segment.Segment.Pointer, aligned),
+            originalCursor,
+            length);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private NativeBumpSegment GrowArenaBumpLane(
+        NativeGeneration generation,
+        nuint byteLength,
+        nuint alignment,
+        out NativeBumpSegment? createdSegment)
+    {
+        lock (_gate)
+        {
+            _arenaFastSlowPathCount = checked(
+                _arenaFastSlowPathCount + 1);
+            if (!ReferenceEquals(generation, _current)
+                || _lifecycle != NativeOwnerLifecycle.Active)
+            {
+                throw CreateStateException(
+                    "Scratch",
+                    "The Arena changed before its scratch range grew.",
+                    0);
+            }
+
+            nuint requiredBytes =
+                RequiredFreshBumpBytes(
+                    byteLength,
+                    alignment);
+            foreach (NativeBumpSegment candidate in
+                generation.BumpSegments)
+            {
+                if (candidate.IsArenaFastSegment
+                    || candidate.ConcurrentReservationCount != 0
+                    || candidate.HighCursor
+                        < candidate.LowCursor)
+                {
+                    continue;
+                }
+
+                nuint candidateCursor =
+                    AlignArenaBumpCursor(
+                        candidate.LowCursor,
+                        alignment);
+                if (candidateCursor > candidate.HighCursor
+                    || byteLength
+                        > candidate.HighCursor - candidateCursor)
+                {
+                    continue;
+                }
+
+                candidate.IsArenaFastSegment = true;
+                _arenaFastSegment = candidate;
+                _arenaFastCursor = candidate.LowCursor;
+                createdSegment = null;
+                return candidate;
+            }
+
+            nuint segmentBytes = ChooseBumpSegmentBytes(
+                generation,
+                requiredBytes);
+            generation.BumpSegments.EnsureCapacity(
+                checked(generation.BumpSegments.Count + 1));
+            generation.Owner.PrepareAddSegmentCapacity(1);
+            NativeSegment segment = NativeSegment.Allocate(
+                segmentBytes,
+                _ownerKind,
+                generation.Number,
+                "arena lane growth",
+                _lifecycle,
+                zeroed: false);
+            NativeBumpSegment bump = new(
+                segment,
+                NextSegmentOrdinalLocked())
+            {
+                IsArenaFastSegment = true
+            };
+            try
+            {
+                AppendBumpSegmentLocked(generation, bump);
+                generation.Owner.AddSegment(segment);
+                _freshSegmentAllocationCount++;
+                _arenaFastSegment = bump;
+                _arenaFastCursor = 0;
+                createdSegment = bump;
+                return bump;
+            }
+            catch
+            {
+                generation.BumpSegments.Remove(bump);
+                generation.Owner.RemoveSegment(segment);
+                segment.FreeNow();
+                ResetBumpTraversal(generation);
+                throw;
+            }
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void RollBackArenaBumpReservation(
+        NativeGeneration generation,
+        NativeArenaAllocation allocation)
+    {
+        if (allocation.Pointer == IntPtr.Zero)
+        {
+            return;
+        }
+
+        if (_arenaFastRollbackCreatedSegment is null)
+        {
+            _arenaFastCursor = allocation.OriginalCursor;
+            _arenaFastSegment!.LowCursor =
+                allocation.OriginalCursor;
+            return;
+        }
+
+        lock (_gate)
+        {
+            NativeBumpSegment created =
+                _arenaFastRollbackCreatedSegment;
+            generation.BumpSegments.Remove(created);
+            generation.Owner.RemoveSegment(
+                created.Segment);
+            created.IsArenaFastSegment = false;
+            created.Segment.FreeNow();
+            _arenaFastSegment = _arenaFastRollbackPreviousSegment;
+            _arenaFastCursor = _arenaFastRollbackPreviousCursor;
+            ResetBumpTraversal(generation);
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void FinishArenaBumpInitialization()
+    {
+        if (_arenaFastRollbackCreatedSegment is not null)
+        {
+            _arenaFastRollbackPreviousSegment = null;
+            _arenaFastRollbackCreatedSegment = null;
+            _arenaFastRollbackPreviousCursor = 0;
+        }
+
+        Volatile.Write(
+            ref _arenaFastInitializerActive,
+            0);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static nuint CalculateArenaByteLength(
+        int length,
+        int elementSize)
+    {
+        uint unsignedLength = (uint)length;
+        uint unsignedElementSize = (uint)elementSize;
+        if (IntPtr.Size == 4)
+        {
+            ulong byteLength =
+                (ulong)unsignedLength * unsignedElementSize;
+            if (byteLength > uint.MaxValue)
+            {
+                ThrowArenaByteLengthOverflow();
+            }
+        }
+
+        return (nuint)unsignedLength * unsignedElementSize;
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void ThrowArenaByteLengthOverflow() =>
+        throw new OverflowException(
+            "The arena allocation byte count overflows native addressable storage.");
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static nuint AlignArenaBumpCursor(
+        nuint value,
+        nuint alignment)
+    {
+        nuint mask = alignment - 1;
+        return checked(value + mask) & ~mask;
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private void ThrowArenaFastInitializerInUse()
+    {
+        lock (_gate)
+        {
+            NativeGeneration generation =
+                EnsureActiveLocked("Scratch");
+            throw CreateInUseException(
+                "Scratch",
+                generation.Number,
+                0,
+                generation.ActiveOperations,
+                "An Arena scratch initializer is already active on this lane.");
+        }
+    }
+
+    private static unsafe IntPtr AddPointer(
+        IntPtr pointer,
+        nuint offset) =>
+        (IntPtr)((byte*)pointer + checked((nint)offset));
 
     internal NativeRegionAllocation LeaseConcurrentBumpInitialized<T>(
         int length,
@@ -4134,6 +4812,9 @@ internal sealed class NativeOwnerKernel
                 checked(
                     generation.InitializationsInProgress
                     + 1);
+            Volatile.Write(
+                ref generation.ArenaInitializationsInProgress,
+                generation.InitializationsInProgress);
             _nextAllocationId = lastAllocationId;
             return true;
         }
@@ -4293,6 +4974,21 @@ internal sealed class NativeOwnerKernel
         if (_kind is not (NativeOwnerKind.Region or NativeOwnerKind.Arena))
         {
             throw CreateStateException("Lease", "This owner does not expose heterogeneous allocations.", 0);
+        }
+
+        if (_kind == NativeOwnerKind.Arena
+            && HasArenaFastInitializer())
+        {
+            throw CreateInUseException(
+                concurrentReservation
+                    ? "ScratchTransferable"
+                    : scoped
+                        ? "LeaseScoped"
+                        : "Lease",
+                generation.Number,
+                0,
+                generation.ActiveOperations,
+                "An Arena scratch initializer is already active on the owner lane.");
         }
 
         if (concurrentReservation
@@ -4491,6 +5187,9 @@ internal sealed class NativeOwnerKernel
             generation.InitializationsInProgress = initializationCount;
             generation.ConcurrentBumpInitializationsInProgress =
                 concurrentInitializationCount;
+            Volatile.Write(
+                ref generation.ArenaInitializationsInProgress,
+                generation.InitializationsInProgress);
 
             return new NativeBumpInitialization(
                 allocation,
@@ -4741,6 +5440,9 @@ internal sealed class NativeOwnerKernel
         }
 
         generation.InitializationsInProgress--;
+        Volatile.Write(
+            ref generation.ArenaInitializationsInProgress,
+            generation.InitializationsInProgress);
     }
 
     private static void ValidateInitializedLength(
@@ -4809,6 +5511,10 @@ internal sealed class NativeOwnerKernel
         {
             generation.ConcurrentBumpInitializationsInProgress--;
         }
+
+        Volatile.Write(
+            ref generation.ArenaInitializationsInProgress,
+            generation.InitializationsInProgress);
     }
 
     internal void AbortBumpInitializationGroup(
@@ -4893,6 +5599,9 @@ internal sealed class NativeOwnerKernel
             }
 
             generation.InitializationsInProgress--;
+            Volatile.Write(
+                ref generation.ArenaInitializationsInProgress,
+                generation.InitializationsInProgress);
         }
     }
 
@@ -4962,6 +5671,9 @@ internal sealed class NativeOwnerKernel
             {
                 generation.ConcurrentBumpInitializationsInProgress--;
             }
+            Volatile.Write(
+                ref generation.ArenaInitializationsInProgress,
+                generation.InitializationsInProgress);
             if (reservation.StartedScope
                 && generation.ScopedRecordCount == 0)
             {
@@ -5010,6 +5722,448 @@ internal sealed class NativeOwnerKernel
             allocationId,
             operation,
             notifyHooks: true);
+
+    internal NativeHandleMetadata ValidateArenaFastHandle(
+        NativeArenaAllocation allocation,
+        string operation)
+    {
+        NativeArenaOperationToken token =
+            EnterArenaFastOperationCore(
+                allocation,
+                operation,
+                notifyHooks: false);
+        try
+        {
+            return new NativeHandleMetadata(
+                allocation.Length,
+                allocation.Capacity);
+        }
+        finally
+        {
+            token.Dispose();
+        }
+    }
+
+    internal NativeArenaOperationToken EnterArenaFastOperation(
+        NativeArenaAllocation allocation,
+        string operation) =>
+        EnterArenaFastOperationCore(
+            allocation,
+            operation,
+            notifyHooks: true);
+
+    private NativeArenaOperationToken EnterArenaFastOperationCore(
+        NativeArenaAllocation allocation,
+        string operation,
+        bool notifyHooks)
+    {
+        if (notifyHooks)
+        {
+            NativeMemoryTestHooks.NotifyBeforeOperationEntry(
+                operation,
+                this);
+        }
+
+        NativeGeneration generation =
+            allocation.GenerationState;
+        NativeArenaOperationToken token;
+        if (IsArenaFastThread
+            && TryEnterArenaFastLocalOperation(
+                allocation,
+                operation,
+                out token))
+        {
+            goto Entered;
+        }
+
+        if (IsArenaFastHandleActive(allocation)
+            && generation.TryEnterOperation())
+        {
+            if (IsArenaFastHandleActive(allocation))
+            {
+                token = new NativeArenaOperationToken(
+                    this,
+                    generation,
+                    allocation.Pointer,
+                    allocation.Length,
+                    localOperation: false,
+                    operation);
+                goto Entered;
+            }
+
+            ExitGenerationOperation(generation);
+        }
+
+        token = EnterArenaFastOperationSlow(
+            allocation,
+            operation);
+
+    Entered:
+        if (!notifyHooks)
+        {
+            return token;
+        }
+
+        try
+        {
+            NativeMemoryTestHooks.NotifyOperationEntered(
+                operation,
+                this,
+                generation.Owner,
+                allocation.Generation,
+                allocationId: 0);
+        }
+        catch
+        {
+            token.Dispose();
+            throw;
+        }
+
+        return token;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal NativeArenaLocalOperationToken
+        EnterArenaFastLocalOperation(
+            NativeGeneration generation,
+            string operation)
+    {
+        if (!TryEnterArenaFastLocalState(generation))
+        {
+            ThrowArenaFastLocalOperation(
+                generation,
+                operation);
+        }
+
+        return new NativeArenaLocalOperationToken(
+            this,
+            generation);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private bool TryEnterArenaFastLocalOperation(
+        NativeArenaAllocation allocation,
+        string operation,
+        out NativeArenaOperationToken token)
+    {
+        NativeGeneration generation =
+            allocation.GenerationState;
+        if (!TryEnterArenaFastLocalState(generation))
+        {
+            token = default;
+            return false;
+        }
+
+        token = new NativeArenaOperationToken(
+            this,
+            generation,
+            allocation.Pointer,
+            allocation.Length,
+            localOperation: true,
+            operation);
+        return true;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private bool TryEnterArenaFastLocalState(
+        NativeGeneration generation)
+    {
+        int depth = _arenaFastOperationDepth;
+        if (depth != 0)
+        {
+            if (!ReferenceEquals(
+                    _arenaFastHazardGeneration,
+                    generation)
+                || !IsArenaFastHandleActive(generation))
+            {
+                return false;
+            }
+
+            _arenaFastOperationDepth = checked(depth + 1);
+            return true;
+        }
+
+        Volatile.Write(
+            ref _arenaFastHazardGeneration,
+            generation);
+        if (Volatile.Read(
+                ref _arenaFastBoundaryClosing)
+                != 0
+            || !IsArenaFastHandleActive(generation))
+        {
+            Volatile.Write(
+                ref _arenaFastHazardGeneration,
+                null);
+            return false;
+        }
+
+        _arenaFastOperationDepth = 1;
+        return true;
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private void ThrowArenaFastLocalOperation(
+        NativeGeneration allocationGeneration,
+        string operation)
+    {
+        lock (_gate)
+        {
+            NativeGeneration generation = EnsureActiveLocked(
+                operation,
+                allocationGeneration.Number,
+                allocationId: 0);
+            if (!ReferenceEquals(
+                    generation,
+                    allocationGeneration)
+                || !IsArenaFastHandleActive(
+                    allocationGeneration))
+            {
+                throw CreateReturnedException(
+                    operation,
+                    allocationGeneration.Number,
+                    _generation,
+                    allocationId: 0,
+                    "The Arena scratch range belongs to an inactive generation.");
+            }
+
+            throw CreateInUseException(
+                operation,
+                allocationGeneration.Number,
+                allocationId: 0,
+                generation.ActiveOperations,
+                "The Arena lane is in a lifecycle transition.");
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private NativeArenaOperationToken EnterArenaFastOperationSlow(
+        NativeArenaAllocation allocation,
+        string operation)
+    {
+        lock (_gate)
+        {
+            NativeGeneration generation = EnsureActiveLocked(
+                operation,
+                allocation.Generation,
+                allocationId: 0);
+            if (!ReferenceEquals(
+                    generation,
+                    allocation.GenerationState)
+                || !IsArenaFastHandleActive(allocation))
+            {
+                throw CreateReturnedException(
+                    operation,
+                    allocation.Generation,
+                    _generation,
+                    allocationId: 0,
+                    "The Arena scratch range belongs to an inactive generation.");
+            }
+
+            if (!generation.TryEnterOperation())
+            {
+                throw CreateInUseException(
+                    operation,
+                    allocation.Generation,
+                    allocationId: 0,
+                    generation.ActiveOperations,
+                    "The Arena generation does not accept a new operation.");
+            }
+
+            return new NativeArenaOperationToken(
+                this,
+                generation,
+                allocation.Pointer,
+                allocation.Length,
+                localOperation: false,
+                operation);
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private bool IsArenaFastHandleActive(
+        NativeArenaAllocation allocation) =>
+        IsArenaFastHandleActive(allocation.GenerationState);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private bool IsArenaFastHandleActive(
+        NativeGeneration generation) =>
+        ReferenceEquals(
+            Volatile.Read(ref _current),
+            generation)
+        && _lifecycle == NativeOwnerLifecycle.Active;
+
+    internal NativeAllocation MaterializeArenaAllocation(
+        NativeArenaAllocation allocation,
+        nuint storageBytes,
+        string operation)
+    {
+        lock (_gate)
+        {
+            NativeGeneration generation = EnsureActiveLocked(
+                operation,
+                allocation.Generation,
+                allocationId: 0);
+            if (!ReferenceEquals(
+                    generation,
+                    allocation.GenerationState)
+                || !IsArenaFastHandleActive(allocation))
+            {
+                throw CreateReturnedException(
+                    operation,
+                    allocation.Generation,
+                    _generation,
+                    allocationId: 0,
+                    "The Arena scratch range belongs to an inactive generation.");
+            }
+
+            List<NativeAllocation>? materialized =
+                generation.ArenaCompositeAllocations;
+            if (materialized is not null)
+            {
+                foreach (NativeAllocation candidate in
+                    materialized)
+                {
+                    if (candidate.Length
+                            == allocation.Length
+                        && candidate.StorageBytes
+                            == storageBytes
+                        && GetAllocationPointer(candidate)
+                            == allocation.Pointer)
+                    {
+                        return candidate;
+                    }
+                }
+            }
+
+            NativeBumpSegment? bumpSegment = null;
+            nuint offsetBytes = 0;
+            if (storageBytes != 0)
+            {
+                (bumpSegment, offsetBytes) =
+                    FindArenaBumpRangeLocked(
+                        generation,
+                        allocation.Pointer,
+                        storageBytes,
+                        operation);
+            }
+
+            long allocationId = NextAllocationIdLocked();
+            NativeAllocation created = new(
+                generation,
+                allocationId,
+                slab: null,
+                bumpSegment,
+                offsetBytes,
+                allocation.Length,
+                allocation.Capacity,
+                storageBytes,
+                referenceRoots: null,
+                scoped: false,
+                generation.ScopeEpoch)
+            {
+                Lifecycle = NativeAllocationLifecycle.Active
+            };
+            materialized ??= [];
+            materialized.Add(created);
+            generation.ArenaCompositeAllocations =
+                materialized;
+            return created;
+        }
+    }
+
+    private static IntPtr GetAllocationPointer(
+        NativeAllocation allocation)
+    {
+        NativeSegment? segment = allocation.Segment;
+        return segment is null
+            ? IntPtr.Zero
+            : AddPointer(
+                segment.Pointer,
+                allocation.OffsetBytes);
+    }
+
+    private static (
+        NativeBumpSegment Segment,
+        nuint OffsetBytes) FindArenaBumpRangeLocked(
+            NativeGeneration generation,
+            IntPtr pointer,
+            nuint storageBytes,
+            string operation)
+    {
+        nuint address = (nuint)pointer;
+        foreach (NativeBumpSegment candidate in
+            generation.BumpSegments)
+        {
+            nuint start = (nuint)candidate.Segment.Pointer;
+            if (address < start)
+            {
+                continue;
+            }
+
+            nuint offset = address - start;
+            if (offset <= candidate.Segment.ByteLength
+                && storageBytes
+                    <= candidate.Segment.ByteLength - offset)
+            {
+                return (candidate, offset);
+            }
+        }
+
+        throw new NativeAllocationStateException(
+            "The Arena scratch range does not belong to an active segment.",
+            "NativeArena",
+            generation.Number,
+            generation.Number,
+            operation,
+            generation.ActiveOperations,
+            allocationId: 0,
+            NativeOwnerLifecycle.Active);
+    }
+
+    internal void ExitArenaFastOperation(
+        NativeGeneration generation,
+        string operation)
+    {
+        _ = operation;
+        ExitGenerationOperation(generation);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void ExitArenaFastLocalOperation(
+        NativeGeneration generation,
+        string operation)
+    {
+        _ = operation;
+        int depth = _arenaFastOperationDepth;
+        if (depth <= 0)
+        {
+            throw new InvalidOperationException(
+                "The Arena lane operation count is already zero.");
+        }
+
+        depth--;
+        _arenaFastOperationDepth = depth;
+        if (depth != 0)
+        {
+            return;
+        }
+
+        Volatile.Write(
+            ref _arenaFastHazardGeneration,
+            null);
+        if (!generation.MemoryDetached
+            && ReferenceEquals(
+                Volatile.Read(ref _current),
+                generation))
+        {
+            return;
+        }
+
+        lock (_gate)
+        {
+            FinishOperationExitLocked(generation);
+        }
+    }
 
     internal void TransferLeaseAuthority<TState>(
         NativeGeneration expectedGeneration,
@@ -5523,7 +6677,8 @@ internal sealed class NativeOwnerKernel
     {
         if (generation.MemoryDetached)
         {
-            if (generation.ActiveOperations == 0)
+            if (generation.ActiveOperations == 0
+                && !HasArenaFastHazard(generation))
             {
                 DrainDetachedGenerationLocked(generation);
             }
@@ -5533,6 +6688,7 @@ internal sealed class NativeOwnerKernel
 
         if (generation != _current
             && generation.ActiveOperations == 0
+            && !HasArenaFastHazard(generation)
             && _retiredGenerations.Contains(generation))
         {
             DrainRetiredGenerationLocked(generation);
@@ -5696,6 +6852,7 @@ internal sealed class NativeOwnerKernel
 
             _current = candidate;
             _lifecycle = NativeOwnerLifecycle.Active;
+            EndArenaFastBoundary();
         }
     }
 
@@ -5849,6 +7006,7 @@ internal sealed class NativeOwnerKernel
             finally
             {
                 generation.OpenOperationAdmission();
+                EndArenaFastBoundary();
             }
         }
     }
@@ -5911,6 +7069,7 @@ internal sealed class NativeOwnerKernel
             finally
             {
                 generation.OpenOperationAdmission();
+                EndArenaFastBoundary();
             }
         }
     }
@@ -5941,6 +7100,7 @@ internal sealed class NativeOwnerKernel
             finally
             {
                 generation.OpenOperationAdmission();
+                EndArenaFastBoundary();
             }
         }
     }
@@ -5977,6 +7137,7 @@ internal sealed class NativeOwnerKernel
             finally
             {
                 generation.OpenOperationAdmission();
+                EndArenaFastBoundary();
             }
         }
     }
@@ -6022,6 +7183,7 @@ internal sealed class NativeOwnerKernel
             finally
             {
                 generation.OpenOperationAdmission();
+                EndArenaFastBoundary();
             }
         }
     }
@@ -6041,6 +7203,7 @@ internal sealed class NativeOwnerKernel
             }
 
             NativeGeneration? admissionGeneration = _current;
+            BeginArenaFastBoundary();
             admissionGeneration?.CloseOperationAdmission();
             try
             {
@@ -6130,6 +7293,7 @@ internal sealed class NativeOwnerKernel
                     && _lifecycle == NativeOwnerLifecycle.Active)
                 {
                     admissionGeneration.OpenOperationAdmission();
+                    EndArenaFastBoundary();
                 }
 
                 throw;
@@ -6326,6 +7490,11 @@ internal sealed class NativeOwnerKernel
             {
                 NativeMemoryTestHooks.RecordBumpTraversalVisit();
                 NativeBumpSegment segment = generation.BumpSegments[index];
+                if (segment.IsArenaFastSegment)
+                {
+                    continue;
+                }
+
                 nuint candidate = AlignUp(segment.LowCursor, alignment);
                 if (candidate <= segment.HighCursor && byteLength <= segment.HighCursor - candidate)
                 {
@@ -6361,6 +7530,11 @@ internal sealed class NativeOwnerKernel
             NativeMemoryTestHooks.RecordBumpTraversalVisit();
             NativeBumpSegment segment =
                 generation.BumpSegments[index];
+            if (segment.IsArenaFastSegment)
+            {
+                continue;
+            }
+
             if (!segment.TryReserveConcurrentRange(
                 byteLength,
                 alignment,
@@ -6456,6 +7630,7 @@ internal sealed class NativeOwnerKernel
 
             bool tolerant = policy == NativeMemoryReturn.ToGarbageCollector;
             NativeGeneration generation = _current!;
+            BeginArenaFastBoundary();
             generation.CloseOperationAdmission();
             bool completed = false;
             try
@@ -6477,8 +7652,13 @@ internal sealed class NativeOwnerKernel
                     retiredSlabs,
                     retiredBumps,
                     operation,
-                    reserveQuarantineSlot: tolerant && generation.ActiveOperations != 0);
-                if (tolerant && generation.ActiveOperations != 0)
+                    reserveQuarantineSlot:
+                        tolerant
+                        && (generation.ActiveOperations != 0
+                            || HasArenaFastHazard(generation)));
+                if (tolerant
+                    && (generation.ActiveOperations != 0
+                        || HasArenaFastHazard(generation)))
                 {
                     _retiredGenerations.EnsureCapacity(checked(_retiredGenerations.Count + 1));
                 }
@@ -6505,7 +7685,8 @@ internal sealed class NativeOwnerKernel
                 }
 
                 bool deferAllCleanup =
-                    generation.ActiveOperations != 0;
+                    generation.ActiveOperations != 0
+                    || HasArenaFastHazard(generation);
                 PreflightCommitBoundaries(
                     operation,
                     deferAllCleanup
@@ -6537,6 +7718,7 @@ internal sealed class NativeOwnerKernel
                     && _lifecycle == NativeOwnerLifecycle.Active)
                 {
                     generation.OpenOperationAdmission();
+                    EndArenaFastBoundary();
                 }
             }
         }
@@ -6553,6 +7735,7 @@ internal sealed class NativeOwnerKernel
             }
 
             NativeGeneration current = EnsureActiveLocked(operation);
+            BeginArenaFastBoundary();
             current.CloseOperationAdmission();
             bool completed = false;
             try
@@ -6561,15 +7744,19 @@ internal sealed class NativeOwnerKernel
                     policy == NativeMemoryReturn.ToGarbageCollector;
                 if (current.LeaseReturnsInProgress != 0
                     || current.InitializationsInProgress != 0
+                    || HasArenaFastInitializer()
                     || (!tolerant
-                        && current.ActiveOperations != 0))
+                        && (current.ActiveOperations != 0
+                            || HasArenaFastHazard(current))))
                 {
                     throw CreateInUseException(operation, current.Number, 0, current.ActiveOperations, "No lease generation was invalidated or reset.");
                 }
 
                 EnsureNoInjectedClearFailureLocked(operation);
                 bool retainAllSegments =
-                    tolerant && current.ActiveOperations != 0;
+                    tolerant
+                    && (current.ActiveOperations != 0
+                        || HasArenaFastHazard(current));
                 long nextGenerationNumber = checked(current.Number + 1);
                 NativeSlab[] slabs = SnapshotRetiredSlabsLocked(current, operation);
                 NativeBumpSegment[] bumps = SnapshotRetiredBumpsLocked(current, operation);
@@ -6663,6 +7850,7 @@ internal sealed class NativeOwnerKernel
                         {
                             bump.LowCursor = 0;
                             bump.HighCursor = bump.Segment.ByteLength;
+                            bump.IsArenaFastSegment = false;
                             bump.ResetConcurrentRanges();
                             TransferSegmentLocked(current, next, bump.Segment);
                             current.BumpSegments.Remove(bump);
@@ -6686,7 +7874,8 @@ internal sealed class NativeOwnerKernel
                         }
 
                         _retiredGenerations.Add(current);
-                        if (current.ActiveOperations == 0)
+                        if (current.ActiveOperations == 0
+                            && !HasArenaFastHazard(current))
                         {
                             DrainRetiredGenerationLocked(current);
                         }
@@ -6696,6 +7885,7 @@ internal sealed class NativeOwnerKernel
                         current.Owner.ReleaseToNative();
                     }
 
+                    EndArenaFastBoundary();
                     completed = true;
                 }
                 catch
@@ -6715,6 +7905,7 @@ internal sealed class NativeOwnerKernel
                     && _lifecycle == NativeOwnerLifecycle.Active)
                 {
                     current.OpenOperationAdmission();
+                    EndArenaFastBoundary();
                 }
             }
         }
@@ -6786,6 +7977,7 @@ internal sealed class NativeOwnerKernel
                 failedBoundary = "bump transfer";
                 bump.LowCursor = 0;
                 bump.HighCursor = bump.Segment.ByteLength;
+                bump.IsArenaFastSegment = false;
                 bump.ResetConcurrentRanges();
                 TransferSegmentLocked(generation, current!, bump.Segment);
                 generation.BumpSegments.Remove(bump);
@@ -7015,12 +8207,15 @@ internal sealed class NativeOwnerKernel
         return true;
     }
 
-    private static bool TryCloseForMaintenanceLocked(
+    private bool TryCloseForMaintenanceLocked(
         NativeGeneration generation)
     {
+        BeginArenaFastBoundary();
         int activeOperations =
             generation.CloseOperationAdmission();
         if (activeOperations == 0
+            && !HasArenaFastInitializer()
+            && !HasArenaFastHazard(generation)
             && generation.LeaseReturnsInProgress == 0
             && generation.InitializationsInProgress == 0)
         {
@@ -7028,6 +8223,7 @@ internal sealed class NativeOwnerKernel
         }
 
         generation.OpenOperationAdmission();
+        EndArenaFastBoundary();
         return false;
     }
 
@@ -7585,6 +8781,16 @@ internal sealed class NativeOwnerKernel
                 break;
             }
 
+            if (ReferenceEquals(
+                    segment,
+                    _arenaFastSegment))
+            {
+                _arenaFastSegment = null;
+                _arenaFastCursor = 0;
+            }
+
+            segment.IsArenaFastSegment = false;
+
             generation.BumpSegments.RemoveAt(index);
             generation.Owner.RemoveSegment(segment.Segment);
             segment.Segment.FreeNow();
@@ -7852,6 +9058,48 @@ internal sealed class NativeOwnerKernel
                 ref leaseReturnsInProgress,
                 ref busyGenerationCount,
                 ref firstBusyGeneration);
+        }
+
+        NativeGeneration? arenaHazard = Volatile.Read(
+            ref _arenaFastHazardGeneration);
+        bool activeArenaHazard = arenaHazard is
+            { MemoryDetached: false };
+        NativeGeneration? arenaInitializer =
+            HasArenaFastInitializer()
+                ? _arenaFastGeneration ?? _current
+                : null;
+        bool activeArenaInitializer = arenaInitializer is
+            { MemoryDetached: false };
+        if (activeArenaHazard)
+        {
+            activeOperations = checked(
+                activeOperations + 1);
+        }
+
+        if (activeArenaInitializer)
+        {
+            leaseReturnsInProgress = checked(
+                leaseReturnsInProgress + 1);
+        }
+
+        NativeGeneration? fastBusyGeneration =
+            arenaHazard ?? arenaInitializer;
+        if ((activeArenaHazard
+                || activeArenaInitializer)
+            && fastBusyGeneration is not null
+            && fastBusyGeneration.ActiveOperations == 0
+            && fastBusyGeneration.LeaseReturnsInProgress == 0
+            && fastBusyGeneration.InitializationsInProgress == 0)
+        {
+            busyGenerationCount = checked(
+                busyGenerationCount + 1);
+            if (firstBusyGeneration == 0
+                || fastBusyGeneration.Number
+                    < firstBusyGeneration)
+            {
+                firstBusyGeneration =
+                    fastBusyGeneration.Number;
+            }
         }
 
         return new OwnerWideActivity(
