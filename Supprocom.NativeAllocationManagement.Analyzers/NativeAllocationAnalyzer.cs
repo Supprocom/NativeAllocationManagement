@@ -4059,21 +4059,86 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 break;
             }
 
-            bool safeOperationDestination = current.Parent switch
-            {
-                IArgumentOperation
+            IArgumentOperation? destinationArgument =
+                GetDirectMoveDestinationArgument(move, current);
+            bool safeOperationDestination = destinationArgument is
                 {
                     Parameter: { RefKind: RefKind.None } parameter
-                } argument => HasExactTransferParameterDeclaration(parameter)
-                    || IsProvenBoundedChannelHandoff(argument),
-                IReturnOperation
+                }
+                && (HasExactTransferParameterDeclaration(parameter)
+                    || IsProvenBoundedChannelHandoff(destinationArgument));
+            if (!safeOperationDestination
+                && current.Parent is IReturnOperation
                 {
                     ReturnedValue: { } returnedValue
-                } when returnedValue == current => IsNativeTransfer(
-                    GetEffectiveReturnType(move.Syntax)),
-                _ => false
-            };
+                }
+                && returnedValue == current)
+            {
+                safeOperationDestination = IsNativeTransfer(
+                    GetEffectiveReturnType(move.Syntax));
+            }
+
             return safeOperationDestination || IsDirectTypedReturnSyntax(move);
+        }
+
+        private IArgumentOperation? GetDirectMoveDestinationArgument(
+            IInvocationOperation move,
+            IOperation current)
+        {
+            if (current.Parent is IArgumentOperation directArgument
+                && IsDirectMoveArgumentValue(directArgument.Value, move))
+            {
+                return directArgument;
+            }
+
+            ArgumentSyntax? argumentSyntax = move.Syntax
+                .Ancestors()
+                .OfType<ArgumentSyntax>()
+                .FirstOrDefault();
+            if (argumentSyntax is null)
+            {
+                return null;
+            }
+
+            SemanticModel model = _context.Compilation.GetSemanticModel(
+                argumentSyntax.SyntaxTree);
+            return model.GetOperation(
+                    argumentSyntax,
+                    _context.CancellationToken)
+                is IArgumentOperation sourceArgument
+                && IsDirectMoveArgumentValue(sourceArgument.Value, move)
+                    ? sourceArgument
+                    : null;
+        }
+
+        private bool IsDirectMoveArgumentValue(
+            IOperation value,
+            IInvocationOperation move)
+        {
+            IOperation current = value;
+            while (true)
+            {
+                if (current is IConversionOperation conversion
+                    && IsNativeTransfer(conversion.Type))
+                {
+                    current = conversion.Operand;
+                    continue;
+                }
+
+                if (current is IParenthesizedOperation parenthesized
+                    && IsNativeTransfer(parenthesized.Type))
+                {
+                    current = parenthesized.Operand;
+                    continue;
+                }
+
+                break;
+            }
+
+            return current is IInvocationOperation candidate
+                && IsTransferMoveInvocation(candidate)
+                && candidate.Syntax.SyntaxTree == move.Syntax.SyntaxTree
+                && candidate.Syntax.Span == move.Syntax.Span;
         }
 
         private bool HasExactTransferParameterDeclaration(

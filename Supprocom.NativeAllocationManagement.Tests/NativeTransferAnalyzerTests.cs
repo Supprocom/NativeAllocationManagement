@@ -435,6 +435,173 @@ public sealed class NativeTransferAnalyzerTests
     }
 
     [Fact]
+    public async Task ConstructorMoveAuthorityIgnoresComputedSiblingArguments()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using System;
+            using Supprocom.NativeAllocationManagement;
+
+            public sealed class Result : IDisposable
+            {
+                private NativeTransfer<int>? _first;
+                private NativeTransfer<int>? _second;
+
+                public Result(
+                    int before,
+                    NativeTransfer<int>? first,
+                    int between,
+                    NativeTransfer<int>? second,
+                    int after)
+                {
+                    try
+                    {
+                        _first = NativeTransfer<int>.Move(ref first);
+                        _second = NativeTransfer<int>.Move(ref second);
+                    }
+                    finally
+                    {
+                        first?.Dispose();
+                        second?.Dispose();
+                    }
+                }
+
+                public void Dispose()
+                {
+                    _first?.Dispose();
+                    _second?.Dispose();
+                }
+            }
+
+            public static class Sample
+            {
+                public static Result ComputedBefore(
+                    NativeTransfer<int>? first,
+                    NativeTransfer<int>? second,
+                    bool enabled,
+                    int left,
+                    int right)
+                {
+                    try
+                    {
+                        Result result = new(
+                            enabled ? left + right : left - right,
+                            NativeTransfer<int>.Move(ref first),
+                            2,
+                            NativeTransfer<int>.Move(ref second),
+                            3);
+                        return result;
+                    }
+                    finally
+                    {
+                        first?.Dispose();
+                        second?.Dispose();
+                    }
+                }
+
+                public static Result ComputedBetween(
+                    NativeTransfer<int>? first,
+                    NativeTransfer<int>? second,
+                    bool outer,
+                    bool inner,
+                    int left,
+                    int right)
+                {
+                    try
+                    {
+                        Result result = new(
+                            1,
+                            NativeTransfer<int>.Move(ref first),
+                            outer
+                                ? inner ? left + right : left * right
+                                : left - right,
+                            NativeTransfer<int>.Move(ref second),
+                            3);
+                        return result;
+                    }
+                    finally
+                    {
+                        first?.Dispose();
+                        second?.Dispose();
+                    }
+                }
+
+                public static Result ComputedAfter(
+                    NativeTransfer<int>? first,
+                    NativeTransfer<int>? second,
+                    bool enabled,
+                    int left,
+                    int right)
+                {
+                    try
+                    {
+                        Result result = new(
+                            1,
+                            NativeTransfer<int>.Move(ref first),
+                            2,
+                            NativeTransfer<int>.Move(ref second),
+                            enabled ? left + right : left * right);
+                        return result;
+                    }
+                    finally
+                    {
+                        first?.Dispose();
+                        second?.Dispose();
+                    }
+                }
+            }
+            """);
+
+        Assert.True(
+            AnalyzerContractTests.NativeDiagnostics(diagnostics).Length == 0,
+            string.Join(Environment.NewLine, diagnostics));
+    }
+
+    [Fact]
+    public async Task ComputedSiblingArgumentsDoNotHideDroppedConstructorOwnership()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public sealed class DroppingResult
+            {
+                public DroppingResult(
+                    NativeTransfer<int>? transfer,
+                    int count)
+                {
+                }
+            }
+
+            public static class Sample
+            {
+                public static DroppingResult Create(
+                    NativeTransfer<int>? source,
+                    bool enabled,
+                    int left,
+                    int right)
+                {
+                    try
+                    {
+                        DroppingResult result = new(
+                            NativeTransfer<int>.Move(ref source),
+                            enabled ? left + right : left * right);
+                        return result;
+                    }
+                    finally
+                    {
+                        source?.Dispose();
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains(
+            "NAM1025",
+            AnalyzerContractTests.NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
     public async Task ExpressionBodiedMoveReturnTransfersOwnership()
     {
         ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
