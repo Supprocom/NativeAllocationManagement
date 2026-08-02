@@ -72,19 +72,29 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
                     nodeContext,
                     symbols),
                 SyntaxKind.InvocationExpression);
-            startContext.RegisterOperationAction(
-                operationContext => AnalyzeAnonymousFunction(
-                    operationContext,
+            startContext.RegisterSyntaxNodeAction(
+                nodeContext => AnalyzeAnonymousFunction(
+                    nodeContext,
                     symbols),
-                OperationKind.AnonymousFunction);
+                SyntaxKind.SimpleLambdaExpression,
+                SyntaxKind.ParenthesizedLambdaExpression,
+                SyntaxKind.AnonymousMethodExpression);
         });
     }
 
     private static void AnalyzeAnonymousFunction(
-        OperationAnalysisContext context,
+        SyntaxNodeAnalysisContext context,
         Symbols symbols)
     {
-        if (context.Operation
+        InvocationExpressionSyntax? invocation = context.Node
+            .Ancestors()
+            .OfType<InvocationExpressionSyntax>()
+            .FirstOrDefault();
+        if (invocation is null
+            || !IsPotentialBuilderInvocation(invocation)
+            || context.SemanticModel.GetOperation(
+                context.Node,
+                context.CancellationToken)
                 is not IAnonymousFunctionOperation anonymous
             || anonymous.Symbol.Parameters.Length != 1)
         {
