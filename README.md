@@ -108,6 +108,10 @@ capture it.
 Publish a `NativeTransfer<T>` when ownership must enter a field, return value, receiver,
 or proven bounded channel. Diagnostics `NAM1028` through `NAM1034` enforce these rules.
 
+A builder completion can enter a field only when its containing type implements
+`IDisposable`. The analyzer must also verify that `Dispose` releases that exact field.
+A property is not ownership authority.
+
 An arena builder can use storage supplied through `ReserveExternalMemory`. Growth beyond
 that mapped range follows the arena's normal segment policy.
 

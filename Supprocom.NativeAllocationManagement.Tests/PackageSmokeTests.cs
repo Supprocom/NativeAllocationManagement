@@ -196,6 +196,19 @@ public sealed class PackageSmokeTests
                 """
                 using Supprocom.NativeAllocationManagement;
 
+                public sealed class Holder
+                {
+                    private NativeTransfer<uint>? _transfer;
+
+                    public void Build(NativePool<uint> pool)
+                    {
+                        using NativeBuilder<uint> builder =
+                            pool.CreateBuilder(preLease: 2);
+                        builder.Append(7);
+                        _transfer = builder.Complete();
+                    }
+                }
+
                 public static class Consumer
                 {
                     public static int Main()
@@ -227,6 +240,10 @@ public sealed class PackageSmokeTests
                 invalidBuild.Output);
             Assert.Contains(
                 "error NAM1030",
+                invalidBuild.Output,
+                StringComparison.OrdinalIgnoreCase);
+            Assert.Contains(
+                "error NAM1034",
                 invalidBuild.Output,
                 StringComparison.OrdinalIgnoreCase);
         }

@@ -3476,10 +3476,21 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             IInvocationOperation completion)
         {
             Target target = FindTarget(completion);
-            if (target.Symbol is not null)
+            if (target.Symbol is ILocalSymbol)
             {
                 return IsNativeTransfer(
                     GetSymbolType(target.Symbol));
+            }
+
+            if (target.Symbol is IFieldSymbol field)
+            {
+                return IsNativeTransfer(field.Type)
+                    && HasFieldDisposalPath(field);
+            }
+
+            if (target.Symbol is not null)
+            {
+                return false;
             }
 
             return IsSafeTransferEscape(completion);
@@ -5460,7 +5471,19 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                             .Where(branch => branch.Source is not null
                                 && outStates.ContainsKey(branch.Source)
                                 && FieldSuccessors(graph, branch.Source!, method, knownBoolean).Contains(block))
-                            .Select(branch => ApplyFieldFinalizers(graph, branch.Source!, block, outStates[branch.Source!], field, visiting, method, knownBoolean))
+                            .Select(branch => ApplyFieldFinalizers(
+                                graph,
+                                branch.Source!,
+                                block,
+                                outStates[branch.Source!]
+                                    || BranchProvesFieldNull(
+                                        branch.Source!,
+                                        block,
+                                        field),
+                                field,
+                                visiting,
+                                method,
+                                knownBoolean))
                             .ToArray();
                         if (predecessors.Length == 0)
                         {
@@ -5574,6 +5597,32 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 : successors.Where(successor => ReferenceEquals(successor, chosen));
         }
 
+        private bool BranchProvesFieldNull(
+            BasicBlock source,
+            BasicBlock destination,
+            IFieldSymbol field)
+        {
+            if (source.BranchValue is not IIsNullOperation isNull
+                || !SymbolEqualityComparer.Default.Equals(
+                    GetSemanticSymbol(isNull.Operand),
+                    field))
+            {
+                return false;
+            }
+
+            BasicBlock? nullDestination = source.ConditionKind switch
+            {
+                ControlFlowConditionKind.WhenTrue =>
+                    source.ConditionalSuccessor?.Destination,
+                ControlFlowConditionKind.WhenFalse =>
+                    source.FallThroughSuccessor?.Destination,
+                _ => null
+            };
+            return ReferenceEquals(
+                nullDestination,
+                destination);
+        }
+
         private static bool IsKnownBooleanBranch(BasicBlock block, IParameterSymbol parameter)
         {
             if (IsParameterReference(block.BranchValue, parameter))
@@ -5624,7 +5673,11 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                             && members.Contains(branch.Source)
                             && outgoing.ContainsKey(branch.Source)
                             && FieldSuccessors(graph, branch.Source!, method, knownBoolean).Contains(block))
-                        .Select(branch => outgoing[branch.Source!])
+                        .Select(branch => outgoing[branch.Source!]
+                            || BranchProvesFieldNull(
+                                branch.Source!,
+                                block,
+                                field))
                         .DefaultIfEmpty(false)
                         .All(value => value);
                 bool changed = !incoming.TryGetValue(block, out bool previousIncoming) || previousIncoming != state;
@@ -5654,8 +5707,14 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             HashSet<ISymbol> visiting)
         {
             IOperation? receiver = Unwrap(invocation.Instance);
-            if (receiver is IFieldReferenceOperation fieldReference
-                && SymbolEqualityComparer.Default.Equals(fieldReference.Field, field)
+            if ((receiver is IFieldReferenceOperation fieldReference
+                    && SymbolEqualityComparer.Default.Equals(
+                        fieldReference.Field,
+                        field)
+                || receiver is IFlowCaptureReferenceOperation
+                    && SymbolEqualityComparer.Default.Equals(
+                        GetSemanticSymbol(receiver),
+                        field))
                 && ToLifecycleEffect(invocation.TargetMethod.Name) is not LifecycleEffect.None)
             {
                 return true;

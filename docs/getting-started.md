@@ -98,6 +98,9 @@ acquisition, and `NAM1033` rejects builder parameters.
 `NAM1034` requires `Complete` to publish directly to an exact `NativeTransfer<T>`
 destination. Existing typed return, owned receiver, field, and bounded-channel rules apply.
 
+A field destination requires an `IDisposable` containing type. Its verified `Dispose`
+method must release that exact field. A property cannot receive builder completion.
+
 Do not use the builder as cross-method ownership. Complete it and move or store the
 resulting transfer instead.
 

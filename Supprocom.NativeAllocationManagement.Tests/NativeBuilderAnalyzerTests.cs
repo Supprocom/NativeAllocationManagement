@@ -106,6 +106,32 @@ public sealed class NativeBuilderAnalyzerTests
     {
         ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
             """
+            using System;
+            using Supprocom.NativeAllocationManagement;
+
+            public sealed class Sample : IDisposable
+            {
+                private NativeTransfer<int>? _transfer;
+
+                public void Build(NativePool<int> pool)
+                {
+                    using NativeBuilder<int> builder = pool.CreateBuilder();
+                    builder.Append(31);
+                    _transfer = builder.Complete();
+                }
+
+                public void Dispose() => _transfer?.Dispose();
+            }
+            """);
+
+        AssertNoNativeDiagnostics(diagnostics);
+    }
+
+    [Fact]
+    public async Task CompletionFieldRequiresDeterministicDisposalPath()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
             using Supprocom.NativeAllocationManagement;
 
             public sealed class Sample
@@ -121,7 +147,63 @@ public sealed class NativeBuilderAnalyzerTests
             }
             """);
 
-        AssertNoNativeDiagnostics(diagnostics);
+        Assert.Contains("NAM1034", NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task CompletionPropertyIsNotOwnershipAuthority()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public sealed class Sample
+            {
+                private NativeTransfer<int>? Transfer { get; set; }
+
+                public void Build(NativePool<int> pool)
+                {
+                    using NativeBuilder<int> builder = pool.CreateBuilder();
+                    builder.Append(31);
+                    Transfer = builder.Complete();
+                }
+            }
+            """);
+
+        Assert.Contains("NAM1034", NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task ConditionalFieldCleanupDoesNotProvideAuthority()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using System;
+            using Supprocom.NativeAllocationManagement;
+
+            public sealed class Sample : IDisposable
+            {
+                private readonly bool _cleanup;
+                private NativeTransfer<int>? _transfer;
+
+                public void Build(NativePool<int> pool)
+                {
+                    using NativeBuilder<int> builder = pool.CreateBuilder();
+                    builder.Append(31);
+                    _transfer = builder.Complete();
+                }
+
+                public void Dispose()
+                {
+                    if (_cleanup)
+                    {
+                        _transfer?.Dispose();
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("NAM1034", NativeDiagnostics(diagnostics));
     }
 
     [Fact]
