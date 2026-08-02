@@ -96,6 +96,50 @@ public sealed class NativeBuilderAnalyzerTests
     }
 
     [Fact]
+    public async Task ExclusiveBorrowAndNestedScopedHelpersAreAccepted()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run(NativePool<uint> pool)
+                {
+                    using NativeBuilder<uint> builder =
+                        pool.CreateBuilder(preLease: 4);
+                    builder.Borrow(Emit);
+                    NativeTransfer<uint> transfer = builder.Complete();
+                    transfer.Dispose();
+                }
+
+                private static void Emit(
+                    scoped ref NativeBuilderBorrow<uint> borrow) =>
+                    EmitNested(ref borrow);
+
+                private static void EmitNested(
+                    scoped ref NativeBuilderBorrow<uint> borrow)
+                {
+                    borrow.Write(4, WriteWords);
+                }
+
+                private static void WriteWords(
+                    scoped NativeBuilderWriter<uint> writer) =>
+                    WriteWordsNested(ref writer);
+
+                private static void WriteWordsNested(
+                    scoped ref NativeBuilderWriter<uint> writer)
+                {
+                    writer.AsSpan().Fill(7);
+                    writer.Commit(writer.Length);
+                }
+            }
+            """);
+
+        AssertNoNativeDiagnostics(diagnostics);
+    }
+
+    [Fact]
     public async Task BuilderWriteViewEscapeIsRejected()
     {
         ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
@@ -204,6 +248,154 @@ public sealed class NativeBuilderAnalyzerTests
             """);
 
         Assert.Contains("NAM1042", NativeDiagnostics(diagnostics));
+    }
+
+    [Theory]
+    [InlineData("NativeBuilderBorrow<int> borrow")]
+    [InlineData("in NativeBuilderBorrow<int> borrow")]
+    [InlineData("ref NativeBuilderBorrow<int> borrow")]
+    [InlineData("out NativeBuilderBorrow<int> borrow")]
+    public async Task NonScopedRefBorrowParametersAreRejected(
+        string parameter)
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            $$"""
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Invalid({{parameter}})
+                {
+                    {{(parameter.StartsWith("out", StringComparison.Ordinal) ? "borrow = default;" : "_ = borrow.Count;")}}
+                }
+            }
+            """);
+
+        Assert.Contains("NAM1044", NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task BorrowStorageAndUseAfterCallbackAreRejected()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run(NativePool<int> pool)
+                {
+                    using NativeBuilder<int> builder = pool.CreateBuilder();
+                    NativeBuilderBorrow<int> escaped = default;
+                    builder.Borrow(
+                        (scoped ref NativeBuilderBorrow<int> borrow) =>
+                            escaped = borrow);
+                    escaped.Append(1);
+                    builder.Dispose();
+                }
+            }
+            """);
+
+        string[] ids = NativeDiagnostics(diagnostics);
+        Assert.Contains("NAM1043", ids);
+        Assert.Contains("NAM1044", ids);
+    }
+
+    [Fact]
+    public async Task BorrowReturnIsRejected()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static NativeBuilderBorrow<int> Return(
+                    scoped ref NativeBuilderBorrow<int> borrow) =>
+                    borrow;
+            }
+            """);
+
+        Assert.Contains("NAM1043", NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task BorrowCaptureIsRejected()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using System;
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run(NativePool<int> pool)
+                {
+                    using NativeBuilder<int> builder = pool.CreateBuilder();
+                    builder.Borrow(
+                        (scoped ref NativeBuilderBorrow<int> borrow) =>
+                        {
+                            Action capture = () => _ = borrow.Count;
+                            capture();
+                        });
+                    builder.Dispose();
+                }
+            }
+            """);
+
+        Assert.Contains("NAM1043", NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task OwnerUseAndNestedBorrowAreRejected()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run(NativePool<int> pool)
+                {
+                    using NativeBuilder<int> builder = pool.CreateBuilder();
+                    builder.Borrow(
+                        (scoped ref NativeBuilderBorrow<int> borrow) =>
+                        {
+                            builder.Append(1);
+                            builder.Borrow(
+                                static (scoped ref NativeBuilderBorrow<int> nested) =>
+                                    nested.Append(2));
+                        });
+                    builder.Dispose();
+                }
+            }
+            """);
+
+        Assert.Contains("NAM1044", NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task IndirectBorrowCallbackIsRejected()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run(NativePool<int> pool)
+                {
+                    NativeBuilderBorrowAction<int> action =
+                        static (scoped ref NativeBuilderBorrow<int> borrow) =>
+                            borrow.Append(1);
+                    using NativeBuilder<int> builder = pool.CreateBuilder();
+                    builder.Borrow(action);
+                    builder.Dispose();
+                }
+            }
+            """);
+
+        Assert.Contains("NAM1044", NativeDiagnostics(diagnostics));
     }
 
     [Fact]
