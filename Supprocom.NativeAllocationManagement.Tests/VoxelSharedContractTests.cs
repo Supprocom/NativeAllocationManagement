@@ -1736,7 +1736,7 @@ public sealed class VoxelSharedContractTests
             guide,
             StringComparison.Ordinal);
         Assert.Contains(
-            "preLease: 64",
+            "preLease: 4_096",
             guide,
             StringComparison.Ordinal);
         Assert.Contains(
