@@ -1835,6 +1835,31 @@ internal sealed class NativeAllocation
         }
     }
 
+    internal Span<T> AsCapacitySpan<T>()
+    {
+        if (NativeTypeLayout.ContainsReferences<T>())
+        {
+            throw new NotSupportedException(
+                "A direct capacity span requires value storage without managed references.");
+        }
+
+        if (Capacity == 0)
+        {
+            return Span<T>.Empty;
+        }
+
+        NativeSegment segment = Segment
+            ?? throw new InvalidOperationException(
+                "The allocation has no native segment.");
+        unsafe
+        {
+            ref T first = ref Unsafe.AsRef<T>(
+                (void*)((byte*)segment.Pointer
+                    + checked((nint)OffsetBytes)));
+            return MemoryMarshal.CreateSpan(ref first, Capacity);
+        }
+    }
+
     internal void SetValue<T>(int index, T value)
     {
         if (ReferenceRoots is not null)
