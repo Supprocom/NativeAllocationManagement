@@ -355,6 +355,79 @@ public sealed class NativeBuilderTests
     }
 
     [Fact]
+    public async Task ConcurrentCompletionAndDisposalReturnStorageOnce()
+    {
+        using NativePool<int> pool = new(
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+
+        for (int attempt = 0; attempt < 64; attempt++)
+        {
+            NativeBuilder<int> builder =
+                pool.CreateBuilder(preLease: 4);
+            builder.Append([47, 53, 59, 61]);
+            using ManualResetEventSlim start = new(false);
+            NativeTransfer<int>? transfer = null;
+            Exception? completionFailure = null;
+            Exception? disposalFailure = null;
+
+            Task completion = Task.Run(
+                () =>
+                {
+                    start.Wait();
+                    try
+                    {
+                        transfer = builder.Complete();
+                    }
+                    catch (Exception failure)
+                    {
+                        completionFailure = failure;
+                    }
+                });
+            Task disposal = Task.Run(
+                () =>
+                {
+                    start.Wait();
+                    try
+                    {
+                        builder.Dispose();
+                    }
+                    catch (Exception failure)
+                    {
+                        disposalFailure = failure;
+                    }
+                });
+
+            start.Set();
+            await Task.WhenAll(completion, disposal);
+
+            if (transfer is not null)
+            {
+                Assert.Null(completionFailure);
+                Assert.True(
+                    disposalFailure is null
+                    or InvalidOperationException);
+                Assert.Equal(
+                    new[] { 47, 53, 59, 61 },
+                    transfer.Read(
+                        static view => view.AsSpan().ToArray()));
+                transfer.Dispose();
+                Assert.Throws<ObjectDisposedException>(
+                    transfer.Dispose);
+            }
+            else
+            {
+                Assert.Null(disposalFailure);
+                Assert.True(
+                    completionFailure is InvalidOperationException
+                    or ObjectDisposedException);
+            }
+
+            builder.Dispose();
+            Assert.Equal(0, pool.CurrentAllocationRecordCountForTest);
+        }
+    }
+
+    [Fact]
     public void ReturnedBuilderSlabIsReusedWithoutFreshGrowth()
     {
         NativeMemoryTestHooks.Reset();
