@@ -128,6 +128,11 @@ internal static class NativeAllocationDiagnosticDescriptors
         "Transfer acquisition requires a local source",
         "'{0}' must initialize a local NativeTransfer<T>. Move that local before storage, return, or channel transfer.");
 
+    internal static readonly DiagnosticDescriptor UnsupportedTransferParameter = Create(
+        "NAM1027",
+        "Transfer parameter must own its value",
+        "Native transfer parameter '{0}' uses '{1}'. Use a by-value owner, and borrow only through Access or Read callback views.");
+
     internal static readonly DiagnosticDescriptor AnalyzerMissing = Create(
         "NAM9001",
         "Bundled analyzer is required",
@@ -158,6 +163,7 @@ internal static class NativeAllocationDiagnosticDescriptors
         TransferViewEscape,
         TransferLifetime,
         TransferAcquisitionEscape,
+        UnsupportedTransferParameter,
         AnalyzerMissing);
 
     private static DiagnosticDescriptor Create(

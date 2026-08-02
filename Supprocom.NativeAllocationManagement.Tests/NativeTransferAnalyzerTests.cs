@@ -548,6 +548,156 @@ public sealed class NativeTransferAnalyzerTests
     }
 
     [Fact]
+    public async Task DirectMoveToInReceiverIsRejected()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    using NativePool<int> pool = new();
+                    NativeTransfer<int>? source = pool.RentTransferable(
+                        1,
+                        static writer => writer.Fill(1));
+                    Drop(NativeTransfer<int>.Move(ref source));
+                }
+
+                private static void Drop(
+                    in NativeTransfer<int> transfer)
+                {
+                }
+            }
+            """);
+
+        string[] ids = AnalyzerContractTests.NativeDiagnostics(diagnostics);
+        Assert.Contains("NAM1027", ids);
+        Assert.Contains("NAM1025", ids);
+    }
+
+    [Fact]
+    public async Task InTransferParameterIsRejectedBeforeDisposal()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void DisposeBorrow(
+                    in NativeTransfer<int> transfer)
+                {
+                    transfer.Dispose();
+                }
+            }
+            """);
+
+        Assert.Contains(
+            "NAM1027",
+            AnalyzerContractTests.NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task RefTransferParameterIsRejectedBeforeMove()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void MoveBorrow(
+                    ref NativeTransfer<int>? transfer)
+                {
+                    _ = NativeTransfer<int>.Move(ref transfer);
+                }
+            }
+            """);
+
+        Assert.Contains(
+            "NAM1027",
+            AnalyzerContractTests.NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task RefTransferParameterIsRejectedBeforeDisposal()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void DisposeBorrow(
+                    ref NativeTransfer<int> transfer)
+                {
+                    transfer.Dispose();
+                }
+            }
+            """);
+
+        Assert.Contains(
+            "NAM1027",
+            AnalyzerContractTests.NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task OutTransferParameterIsRejected()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Create(
+                    out NativeTransfer<int>? transfer)
+                {
+                    transfer = null;
+                }
+            }
+            """);
+
+        Assert.Contains(
+            "NAM1027",
+            AnalyzerContractTests.NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task AccessCallbackIsTheBorrowBoundary()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    using NativePool<int> pool = new();
+                    NativeTransfer<int> transfer = pool.RentTransferable(
+                        1,
+                        static writer => writer.Fill(7));
+                    transfer.Access(
+                        static view =>
+                        {
+                            view[0] = 11;
+                            _ = view[0];
+                        });
+                    _ = transfer.Read(static view => view[0]);
+                    transfer.Dispose();
+                }
+            }
+            """);
+
+        Assert.True(
+            AnalyzerContractTests.NativeDiagnostics(diagnostics).Length == 0,
+            string.Join(Environment.NewLine, diagnostics));
+    }
+
+    [Fact]
     public async Task DisposalInFinallyInsideThreadCallbackIsAccepted()
     {
         ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(

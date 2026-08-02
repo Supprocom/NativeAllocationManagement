@@ -100,11 +100,15 @@ arena storage. A transfer can use external storage that the arena accepted throu
 `NAM1023` rejects invalid moves.
 
 `NAM1024` prevents a callback view from escaping. `NAM1025` requires disposal or a move
-on each exit. `NAM1026` requires direct acquisition into a local source.
+on each exit. `NAM1026` requires direct acquisition into a local source. `NAM1027`
+rejects transfer parameters with `in`, `ref`, or `out`.
 
 An ordinary `NativeTransfer<T>` parameter is an owned receiver. Each receiver path must
 dispose the transfer or move it to the next owner. Call the receiver with
 `NativeTransfer<T>.Move(ref source)`. An `object` parameter cannot receive ownership.
+
+Do not use application `in`, `ref`, or `out NativeTransfer<T>` parameters. Borrow only
+inside an `Access` or `Read` callback. Use `ref` only in the package move operation.
 
 ## Typed pool leases
 

@@ -331,9 +331,24 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     ?? method.DeclaringSyntaxReferences
                         .First()
                         .GetSyntax(_context.CancellationToken);
+                if (parameter.RefKind != RefKind.None)
+                {
+                    Report(
+                        NativeAllocationDiagnosticDescriptors.UnsupportedTransferParameter,
+                        syntax,
+                        parameter.Name,
+                        ParameterModifier(parameter.RefKind));
+                    _transfers.Add(
+                        parameter,
+                        TransferState.CreateExternal(
+                            parameter,
+                            syntax));
+                    continue;
+                }
+
                 _transfers.Add(
                     parameter,
-                    TransferState.CreateParameter(
+                    TransferState.CreateOwnedParameter(
                         parameter,
                         syntax));
             }
@@ -2843,6 +2858,15 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             operation.ConstantValue.HasValue
             && operation.ConstantValue.Value is null;
 
+        private static string ParameterModifier(RefKind refKind) =>
+            refKind switch
+            {
+                RefKind.In => "in",
+                RefKind.Ref => "ref",
+                RefKind.Out => "out",
+                _ => refKind.ToString()
+            };
+
         private bool IsSafeTransferEscape(
             IInvocationOperation move)
         {
@@ -2855,8 +2879,10 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
             bool safeParent = current.Parent switch
             {
-                IArgumentOperation argument =>
-                    IsNativeTransfer(argument.Parameter?.Type),
+                IArgumentOperation
+                {
+                    Parameter: { RefKind: RefKind.None } parameter
+                } => IsNativeTransfer(parameter.Type),
                 IReturnOperation => true,
                 _ => false
             };
@@ -5381,16 +5407,14 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     isUsing: false,
                     syntax);
 
-            internal static TransferState CreateParameter(
+            internal static TransferState CreateOwnedParameter(
                 IParameterSymbol symbol,
                 SyntaxNode syntax) =>
                 new(
                     symbol,
                     CreateSymbolIdentity(symbol),
-                    symbol.RefKind == RefKind.Out
-                        ? TransferStatus.Unowned
-                        : TransferStatus.Active,
-                    mustEnd: symbol.RefKind == RefKind.None,
+                    TransferStatus.Active,
+                    mustEnd: true,
                     isUsing: false,
                     syntax);
 

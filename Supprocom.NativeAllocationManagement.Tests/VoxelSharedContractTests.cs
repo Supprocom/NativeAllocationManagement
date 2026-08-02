@@ -1734,8 +1734,16 @@ public sealed class VoxelSharedContractTests
             guide,
             StringComparison.Ordinal);
         Assert.Contains(
-            "`NAM1021` through `NAM1026`",
+            "`NAM1021` through `NAM1027`",
             readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Application `in`, `ref`, and `out NativeTransfer<T>` parameters are invalid.",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Do not use application `in`, `ref`, or `out NativeTransfer<T>` parameters.",
+            guide,
             StringComparison.Ordinal);
     }
 

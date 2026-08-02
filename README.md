@@ -109,11 +109,14 @@ arena storage. It also works with storage supplied through `ReserveExternalMemor
 
 The bundled analyzer rejects copied ownership, inactive use, double moves, escaping
 views, unfinished lifetimes, and direct acquisition into storage. These rules are
-`NAM1021` through `NAM1026`.
+`NAM1021` through `NAM1027`.
 
 An ordinary `NativeTransfer<T>` parameter receives ownership. The receiver must dispose
 or move that ownership on every method exit. Pass only a move expression to the receiver.
 An untyped parameter cannot receive transfer ownership.
+
+Application `in`, `ref`, and `out NativeTransfer<T>` parameters are invalid. Borrow only
+inside an `Access` or `Read` callback. Keep `ref` for `NativeTransfer<T>.Move(ref source)`.
 
 ## Typed pools
 
