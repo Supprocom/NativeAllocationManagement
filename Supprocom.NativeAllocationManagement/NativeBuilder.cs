@@ -158,6 +158,58 @@ public sealed class NativeBuilder<T> : IDisposable
         }
     }
 
+    /// <summary>Writes one bounded native range and publishes its committed prefix.</summary>
+    /// <param name="maximumAdditionalCount">The maximum number of elements for this write.</param>
+    /// <param name="action">The callback that writes and commits the initialized prefix.</param>
+    /// <param name="cancellationToken">The token that can cancel the complete builder.</param>
+    public void Write(
+        int maximumAdditionalCount,
+        NativeBuilderWriteAction<T> action,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(
+            maximumAdditionalCount);
+        ArgumentNullException.ThrowIfNull(action);
+        EnterOperation(nameof(Write));
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            int required = checked(
+                _count + maximumAdditionalCount);
+            Span<T> values = _session.PrepareWrite(
+                _count,
+                required,
+                maximumAdditionalCount);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            int committedCount = -1;
+            action(new NativeBuilderWriter<T>(
+                values,
+                ref committedCount));
+            cancellationToken.ThrowIfCancellationRequested();
+            if (committedCount < 0)
+            {
+                throw new InvalidOperationException(
+                    "The bounded builder write did not commit an initialized prefix.");
+            }
+
+            _session.CommitWrite(
+                _count,
+                committedCount);
+            _count = checked(_count + committedCount);
+        }
+        catch (Exception failure)
+        {
+            FailOperation(failure);
+            throw;
+        }
+        finally
+        {
+            ExitOperation();
+            GC.KeepAlive(this);
+        }
+    }
+
     /// <summary>Publishes one exact logical range and invalidates this builder.</summary>
     public NativeTransfer<T> Complete(
         CancellationToken cancellationToken = default)
@@ -502,6 +554,27 @@ internal sealed class NativeBuilderSession<T>
             _initialization.Allocation.AsSpan<T>()
                 .Slice(start, source.Length));
         _initialization.Allocation.InitializedLength = required;
+    }
+
+    internal Span<T> PrepareWrite(
+        int start,
+        int required,
+        int maximumAdditionalCount)
+    {
+        EnsureCapacity(required, start);
+        Validate(nameof(NativeBuilder<T>.Write));
+        return _initialization.Allocation
+            .AsSpan<T>()
+            .Slice(start, maximumAdditionalCount);
+    }
+
+    internal void CommitWrite(
+        int start,
+        int committedCount)
+    {
+        Validate(nameof(NativeBuilder<T>.Write));
+        _initialization.Allocation.InitializedLength =
+            checked(start + committedCount);
     }
 
     internal NativeTransfer<T> Complete(int length)

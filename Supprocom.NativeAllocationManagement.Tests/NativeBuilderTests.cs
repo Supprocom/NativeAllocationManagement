@@ -57,6 +57,227 @@ public sealed class NativeBuilderTests
     }
 
     [Fact]
+    public void BoundedWriteCommitsZeroElements()
+    {
+        using NativePool<int> pool = new(
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeBuilder<int> builder =
+            pool.CreateBuilder(preLease: 4);
+
+        builder.Write(
+            0,
+            static writer => writer.Commit(0));
+        NativeTransfer<int> transfer = builder.Complete();
+
+        Assert.Equal(0, transfer.Length);
+        transfer.Dispose();
+        Assert.Equal(0, pool.CurrentAllocationRecordCountForTest);
+    }
+
+    [Fact]
+    public void BoundedWritePublishesOnlyTheCommittedPrefix()
+    {
+        using NativePool<int> pool = new(
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeBuilder<int> builder =
+            pool.CreateBuilder(preLease: 2);
+
+        builder.Append(2);
+        builder.Write(
+            6,
+            static writer =>
+            {
+                Span<int> values = writer.AsSpan();
+                values[0] = 3;
+                values[1] = 5;
+                values[2] = 7;
+                values[3] = 11;
+                writer.Commit(3);
+            });
+        builder.Append(13);
+        NativeTransfer<int> transfer = builder.Complete();
+
+        Assert.Equal(5, transfer.Length);
+        Assert.Equal(
+            new[] { 2, 3, 5, 7, 13 },
+            transfer.Read(
+                static view => view.AsSpan().ToArray()));
+        transfer.Dispose();
+    }
+
+    [Fact]
+    public void BoundedWriteGrowsOnceAndCommitsTheFullRange()
+    {
+        using NativePool<int> pool = new(
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeBuilder<int> builder =
+            pool.CreateBuilder(preLease: 1);
+
+        builder.Write(
+            8,
+            static writer =>
+            {
+                Span<int> values = writer.AsSpan();
+                for (int index = 0; index < values.Length; index++)
+                {
+                    values[index] = index * 2;
+                }
+
+                writer.Commit(values.Length);
+            });
+        NativeTransfer<int> transfer = builder.Complete();
+
+        Assert.Equal(
+            new[] { 0, 2, 4, 6, 8, 10, 12, 14 },
+            transfer.Read(
+                static view => view.AsSpan().ToArray()));
+        transfer.Dispose();
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(3)]
+    public void InvalidCommitCountAbortsTheCompleteBuilder(
+        int committedCount)
+    {
+        using NativePool<int> pool = new(
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeBuilder<int> builder =
+            pool.CreateBuilder(preLease: 2);
+
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => builder.Write(
+                2,
+                writer => writer.Commit(committedCount)));
+
+        Assert.Equal(0, pool.CurrentAllocationRecordCountForTest);
+        Assert.Throws<ObjectDisposedException>(
+            () => builder.Append(1));
+        builder.Dispose();
+    }
+
+    [Fact]
+    public void MissingCommitAbortsTheCompleteBuilder()
+    {
+        using NativePool<int> pool = new(
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeBuilder<int> builder =
+            pool.CreateBuilder(preLease: 2);
+
+        Assert.Throws<InvalidOperationException>(
+            () => builder.Write(
+                2,
+                static writer => writer.AsSpan().Fill(17)));
+
+        Assert.Equal(0, pool.CurrentAllocationRecordCountForTest);
+        Assert.Throws<ObjectDisposedException>(
+            () => builder.Complete());
+        builder.Dispose();
+    }
+
+    [Fact]
+    public void DoubleCommitAbortsTheCompleteBuilder()
+    {
+        using NativePool<int> pool = new(
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeBuilder<int> builder =
+            pool.CreateBuilder(preLease: 2);
+
+        Assert.Throws<InvalidOperationException>(
+            () => builder.Write(
+                2,
+                static writer =>
+                {
+                    writer.AsSpan()[0] = 19;
+                    writer.Commit(1);
+                    writer.Commit(1);
+                }));
+
+        Assert.Equal(0, pool.CurrentAllocationRecordCountForTest);
+        builder.Dispose();
+    }
+
+    [Fact]
+    public void CallbackFailureAbortsTheCompleteBuilder()
+    {
+        using NativePool<int> pool = new(
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeBuilder<int> builder =
+            pool.CreateBuilder(preLease: 2);
+
+        Assert.Throws<FormatException>(
+            () => builder.Write(
+                2,
+                static writer =>
+                {
+                    writer.AsSpan()[0] = 23;
+                    throw new FormatException("Expected test failure.");
+                }));
+
+        Assert.Equal(0, pool.CurrentAllocationRecordCountForTest);
+        builder.Dispose();
+    }
+
+    [Fact]
+    public void CallbackCancellationAbortsTheCompleteBuilder()
+    {
+        using NativePool<int> pool = new(
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeBuilder<int> builder =
+            pool.CreateBuilder(preLease: 2);
+        using CancellationTokenSource cancellation = new();
+
+        Assert.Throws<OperationCanceledException>(
+            () => builder.Write(
+                2,
+                writer =>
+                {
+                    writer.AsSpan()[0] = 29;
+                    writer.Commit(1);
+                    cancellation.Cancel();
+                },
+                cancellation.Token));
+
+        Assert.Equal(0, pool.CurrentAllocationRecordCountForTest);
+        builder.Dispose();
+    }
+
+    [Fact]
+    public void BoundedWriteGrowthFailureReturnsStorageExactlyOnce()
+    {
+        NativeMemoryTestHooks.Reset();
+        try
+        {
+            using NativePool<int> pool = new(
+                returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            NativeBuilder<int> builder =
+                pool.CreateBuilder(preLease: 1);
+            NativeMemoryTestHooks.FailNextAllocation();
+
+            Assert.Throws<NativeAllocationFailedException>(
+                () => builder.Write(
+                    4,
+                    static writer =>
+                    {
+                        writer.AsSpan().Fill(31);
+                        writer.Commit(writer.Length);
+                    }));
+
+            builder.Dispose();
+            builder.Dispose();
+            Assert.Equal(0, pool.CurrentAllocationRecordCountForTest);
+            Assert.Equal(0, pool.CurrentInitializationCountForTest);
+            Assert.Equal(
+                0,
+                pool.CurrentGenerationActiveOperationsForTest);
+        }
+        finally
+        {
+            NativeMemoryTestHooks.Reset();
+        }
+    }
+
+    [Fact]
     public void GeometricGrowthCreatesNoManagedIntermediateArray()
     {
         Type? resolvedKernelType =
