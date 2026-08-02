@@ -1710,6 +1710,36 @@ public sealed class VoxelSharedContractTests
     }
 
     [Fact]
+    public void ReleaseDocumentsDescribeTransferableOwnership()
+    {
+        string root = FindRepositoryRoot();
+        string readme = File.ReadAllText(
+            Path.Combine(root, "README.md"));
+        string guide = File.ReadAllText(
+            Path.Combine(root, "docs", "getting-started.md"));
+        Assert.Contains(
+            "Version=\"0.1.1\"",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Version=\"0.1.1\"",
+            guide,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "NativeTransfer<uint>.Move(ref source)",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "NativeTransfer<uint>.Move(ref source)",
+            guide,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "`NAM1021` through `NAM1026`",
+            readme,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void VerificationReportStoresSelectedProfileAndActualWarmupSeparately()
     {
         const long capBytes = 268_435_456;

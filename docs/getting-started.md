@@ -12,9 +12,95 @@ normal package reference and keep its analyzer asset enabled.
 
 ```xml
 <ItemGroup>
-  <PackageReference Include="Supprocom.NativeAllocationManagement" Version="0.1.0" />
+  <PackageReference Include="Supprocom.NativeAllocationManagement" Version="0.1.1" />
 </ItemGroup>
 ```
+
+## Transfer ownership across threads
+
+`NativeTransfer<T>` stores one initialized unmanaged lease on the managed heap. The
+object can cross a thread boundary without exposing an unbounded pointer.
+
+Acquire the lease into a local variable. Then move that local into its next ownership
+location.
+
+```csharp
+using System.Threading.Channels;
+using Supprocom.NativeAllocationManagement;
+
+Channel<NativeTransfer<uint>> channel =
+    Channel.CreateBounded<NativeTransfer<uint>>(1);
+using NativePool<uint> pool = new(initialCapacity: 256);
+
+NativeTransfer<uint>? source = pool.RentTransferable(
+    256,
+    static writer =>
+    {
+        for (int index = 0; index < writer.Length; index++)
+        {
+            writer.Write(checked((uint)(index * 3)));
+        }
+    });
+
+await channel.Writer.WriteAsync(
+    NativeTransfer<uint>.Move(ref source));
+
+NativeTransfer<uint> receiver = await channel.Reader.ReadAsync();
+try
+{
+    uint sum = receiver.Read(
+        static view =>
+        {
+            uint total = 0;
+            foreach (uint value in view.AsSpan())
+            {
+                total = unchecked(total + value);
+            }
+
+            return total;
+        });
+
+    Console.WriteLine(sum);
+}
+finally
+{
+    receiver.Dispose();
+}
+```
+
+The initializer must write all logical elements in order. NAM returns the unpublished
+storage if initialization fails or remains incomplete.
+
+`Move(ref source)` sets the source variable to `null` before it publishes the
+destination. Old aliases fail at runtime even when analyzer diagnostics are disabled.
+
+Only one concurrent move can publish a destination. A move that finds an active
+callback consumes the source and returns its storage after that callback exits.
+
+Run cancellation checks before the move when possible. After the move, the destination
+owns cleanup and must be disposed if the next operation rejects it.
+
+If no code retains the rejected destination, its finalizer returns the lease later.
+Finalization prevents a permanent leak, but it does not give prompt reuse.
+
+An exception from `Access` or `Read` releases the operation token. The destination stays
+active and still requires disposal.
+
+An owner can dispose while a live transfer is idle. This action invalidates the
+transfer, and the receiver must still dispose its transfer object.
+
+An entered receiver callback blocks strict owner disposal. Retry owner disposal after
+the callback exits.
+
+`NativeArena.ScratchTransferable<T>` supports the same move contract for heterogeneous
+arena storage. A transfer can use external storage that the arena accepted through
+`ReserveExternalMemory`.
+
+`NAM1021` rejects ownership copies. `NAM1022` rejects inactive use and double disposal.
+`NAM1023` rejects invalid moves.
+
+`NAM1024` prevents a callback view from escaping. `NAM1025` requires disposal or a move
+on each exit. `NAM1026` requires direct acquisition into a local source.
 
 ## Typed pool leases
 

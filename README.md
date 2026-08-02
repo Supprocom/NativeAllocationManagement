@@ -35,16 +35,81 @@ method, commands, and current evidence.
 
 [voxel-guide]: https://github.com/Supprocom/NativeAllocationManagement/blob/main/.Demos/01-VoxelChunkPipeline/README.md
 
-Install the package with a normal package reference. Version `0.1.0` is the
-first public release.
+Install the package with a normal package reference. Version `0.1.1` adds
+transferable native leases for cross-thread pipelines.
 
 ```xml
-<PackageReference Include="Supprocom.NativeAllocationManagement" Version="0.1.0" />
+<PackageReference Include="Supprocom.NativeAllocationManagement" Version="0.1.1" />
 ```
 
 The package contains the runtime assembly, the ownership analyzer, and its
 `buildTransitive` analyzer-presence check. Keep analyzer assets enabled in consuming
 projects.
+
+## Transferable cross-thread leases
+
+`NativeTransfer<T>` is a heap-storable lease for unmanaged values. A pool initializes
+the complete range before it publishes the lease.
+
+`Move(ref source)` transfers ownership and sets `source` to `null`. Store only the
+returned destination in an object field or a bounded channel.
+
+```csharp
+using System.Threading.Channels;
+using Supprocom.NativeAllocationManagement;
+
+Channel<NativeTransfer<uint>> uploads =
+    Channel.CreateBounded<NativeTransfer<uint>>(1);
+using NativePool<uint> pool = new(initialCapacity: 1_024);
+
+NativeTransfer<uint>? source = pool.RentTransferable(
+    1_024,
+    static writer =>
+    {
+        for (int index = 0; index < writer.Length; index++)
+        {
+            writer.Write(checked((uint)(index + 1)));
+        }
+    });
+
+await uploads.Writer.WriteAsync(
+    NativeTransfer<uint>.Move(ref source));
+
+NativeTransfer<uint> received = await uploads.Reader.ReadAsync();
+try
+{
+    received.Access(static view => Consume(view.AsSpan()));
+}
+finally
+{
+    received.Dispose();
+}
+```
+
+The receiver can use the lease on a different thread. `Access` and `Read` expose the
+same bounded `NativeLeaseView<T>` as other NAM handles.
+
+The source and all old aliases are invalid after a successful move. A second move,
+source reuse, access after disposal, and double disposal fail closed.
+
+Wait for channel capacity and process cancellation before the move when possible. The
+destination owns cleanup after the move, including when later channel work fails.
+
+A callback exception releases its operation token and leaves the destination active.
+Dispose that destination in the normal cleanup path.
+
+An abandoned destination has a finalizer that returns its lease. This finalizer is a
+safety fallback and is not a deterministic cleanup method.
+
+Owner disposal invalidates an idle live transfer. An active receiver callback blocks
+owner disposal until that callback exits.
+
+`NativeArena.ScratchTransferable<T>` gives the same ownership model to heterogeneous
+arena storage. It also works with storage supplied through `ReserveExternalMemory`.
+
+The bundled analyzer rejects copied ownership, inactive use, double moves, escaping
+views, unfinished lifetimes, and direct acquisition into storage. These rules are
+`NAM1021` through `NAM1026`.
 
 ## Typed pools
 
