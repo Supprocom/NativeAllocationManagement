@@ -4691,7 +4691,10 @@ internal sealed class NativeOwnerKernel
         }
     }
 
-    internal void ReturnLease(long generationNumber, long allocationId)
+    internal void ReturnLease(
+        long generationNumber,
+        long allocationId,
+        string operation = "Pooled.Dispose")
     {
         lock (_gate)
         {
@@ -4740,7 +4743,7 @@ internal sealed class NativeOwnerKernel
             {
                 allocation.OpenOperationAdmission();
                 throw CreateInUseException(
-                    "Pooled.Dispose",
+                    operation,
                     generation.Number,
                     allocationId,
                     activeOperations,
@@ -4754,7 +4757,7 @@ internal sealed class NativeOwnerKernel
                 if (allocation.ReferenceRoots is not null)
                 {
                     EnsureNoInjectedClearFailureLocked(
-                        "Pooled.Dispose",
+                        operation,
                         afterStateChange: true);
                     ClearReferenceStorage(allocation);
                 }

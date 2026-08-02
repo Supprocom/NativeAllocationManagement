@@ -6,6 +6,8 @@ public sealed class NativePool<T> : IDisposable
 {
     private readonly NativeOwnerKernel _kernel;
 
+    internal NativeOwnerKernel KernelForTransfer => _kernel;
+
     internal NativeOwnerLifecycle CurrentLifecycle => _kernel.Lifecycle;
 
     internal int CurrentAllocationRecordCountForTest => _kernel.CurrentAllocationRecordCountForTest();
