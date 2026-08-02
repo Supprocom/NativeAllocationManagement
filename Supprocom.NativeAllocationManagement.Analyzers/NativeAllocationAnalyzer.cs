@@ -85,6 +85,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 Namespace + "ArenaLease`1");
             Transfer = runtimeAssembly.GetTypeByMetadataName(
                 Namespace + "NativeTransfer`1");
+            Builder = runtimeAssembly.GetTypeByMetadataName(
+                Namespace + "NativeBuilder`1");
             LeaseView = runtimeAssembly.GetTypeByMetadataName(
                 Namespace + "NativeLeaseView`1");
         }
@@ -103,6 +105,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
         internal INamedTypeSymbol? Transfer { get; }
 
+        internal INamedTypeSymbol? Builder { get; }
+
         internal INamedTypeSymbol? LeaseView { get; }
 
         internal bool IsAvailable =>
@@ -113,6 +117,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             && Local is not null
             && ArenaLease is not null
             && Transfer is not null
+            && Builder is not null
             && LeaseView is not null;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -244,6 +249,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             ReportRegionParameters(method);
             RegisterOwnerParameters(method);
             RegisterTransferParameters(method);
+            RegisterBuilderParameters(method);
             if (!ContainsNativeOwnership(operationBlock))
             {
                 return;
@@ -316,7 +322,42 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             return operationBlock.DescendantsAndSelf()
                 .Any(operation => IsOwnerType(operation.Type)
                     || IsHandleType(operation.Type)
-                    || IsNativeTransfer(operation.Type));
+                    || IsNativeTransfer(operation.Type)
+                    || IsNativeBuilder(operation.Type));
+        }
+
+        private void RegisterBuilderParameters(
+            IMethodSymbol? method)
+        {
+            if (method is null)
+            {
+                return;
+            }
+
+            foreach (IParameterSymbol parameter in method.Parameters
+                .Where(parameter => IsNativeBuilder(parameter.Type)))
+            {
+                if (_transfers.ContainsKey(parameter))
+                {
+                    continue;
+                }
+
+                SyntaxNode syntax = parameter.DeclaringSyntaxReferences
+                    .FirstOrDefault()
+                    ?.GetSyntax(_context.CancellationToken)
+                    ?? method.DeclaringSyntaxReferences
+                        .First()
+                        .GetSyntax(_context.CancellationToken);
+                Report(
+                    NativeAllocationDiagnosticDescriptors.UnsupportedBuilderParameter,
+                    syntax,
+                    parameter.Name);
+                _transfers.Add(
+                    parameter,
+                    TransferState.CreateExternalBuilder(
+                        parameter,
+                        syntax));
+            }
         }
 
         private void RegisterTransferParameters(
@@ -405,10 +446,9 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                         continue;
                     }
 
-                    Report(
-                        NativeAllocationDiagnosticDescriptors.TransferLifetime,
-                        transfer.Syntax,
-                        transfer.DisplayName);
+                    ReportOwnershipLifetime(
+                        transfer,
+                        transfer.Syntax);
                 }
 
                 foreach (HandleState handle in exit.Handles.Values)
@@ -577,7 +617,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 {
                     if (IsOwnerType(local.Type)
                         || IsHandleType(local.Type)
-                        || IsNativeTransfer(local.Type))
+                        || IsNativeTransfer(local.Type)
+                        || IsNativeBuilder(local.Type))
                     {
                         _localLifetimeRegions[local] = region;
                     }
@@ -691,10 +732,9 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     && transfer.Status is TransferStatus.Active or TransferStatus.Ambiguous
                     && emitDiagnostics)
                 {
-                    Report(
-                        NativeAllocationDiagnosticDescriptors.TransferLifetime,
-                        transfer.Syntax,
-                        transfer.DisplayName);
+                    ReportOwnershipLifetime(
+                        transfer,
+                        transfer.Syntax);
                 }
             }
 
@@ -795,6 +835,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 IsOwnerType(candidate.Type)
                 || IsHandleType(candidate.Type)
                 || IsNativeTransfer(candidate.Type)
+                || IsNativeBuilder(candidate.Type)
                 || candidate is IAwaitOperation
                 || candidate is IReturnOperation
                 || candidate is IThrowOperation);
@@ -1574,6 +1615,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     .Cast<TransferState>()
                     .ToArray();
                 if (present.Length != paths.Length
+                    || present.Any(transfer => transfer.Kind != first.Kind)
                     || present.Any(transfer => transfer.Status != first.Status)
                     || present.Any(transfer => transfer.OwnershipIdentity != first.OwnershipIdentity))
                 {
@@ -1779,6 +1821,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             foreach (KeyValuePair<ISymbol, TransferState> pair in left.Transfers)
             {
                 if (!right.Transfers.TryGetValue(pair.Key, out TransferState? other)
+                    || pair.Value.Kind != other.Kind
                     || pair.Value.Status != other.Status
                     || pair.Value.OwnershipIdentity != other.OwnershipIdentity
                     || pair.Value.MustEnd != other.MustEnd
@@ -1843,6 +1886,16 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 && IsNativeTransfer(operation.TargetMethod.ContainingType))
             {
                 ProcessTransferInvocation(operation);
+            }
+
+            if (IsBuilderFactoryInvocation(operation))
+            {
+                RegisterBuilderFactory(operation);
+            }
+            else if (IsNativeBuilder(
+                operation.TargetMethod.ContainingType))
+            {
+                ProcessBuilderInvocation(operation);
             }
 
             if (operation.IsImplicit)
@@ -2071,10 +2124,9 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     && !transfer.IsUsing
                     && transfer.Status is TransferStatus.Active or TransferStatus.Ambiguous)
                 {
-                    Report(
-                        NativeAllocationDiagnosticDescriptors.TransferLifetime,
-                        transfer.Syntax,
-                        transfer.DisplayName);
+                    ReportOwnershipLifetime(
+                        transfer,
+                        transfer.Syntax);
                 }
 
                 result.Transfers.Remove(pair.Key);
@@ -2114,6 +2166,15 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     operation.Property.Name);
             }
 
+            if (IsNativeBuilder(operation.Instance?.Type)
+                && GetBuilder(Unwrap(operation.Instance)) is TransferState builder)
+            {
+                CheckBuilderActive(
+                    builder,
+                    operation.Syntax,
+                    operation.Property.Name);
+            }
+
             HandleState? handle = GetHandle(Unwrap(operation.Instance));
             if (handle is not null)
             {
@@ -2144,6 +2205,13 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     value);
             }
 
+            if (IsNativeBuilder(operation.Target.Type))
+            {
+                ProcessBuilderAssignment(
+                    GetTarget(operation.Target),
+                    value);
+            }
+
             if (value is not null && value is not IObjectCreationOperation && !IsHandleCreatingInvocation(value))
             {
                 Target target = GetTarget(operation.Target);
@@ -2168,6 +2236,13 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             if (IsNativeTransfer(operation.Symbol.Type))
             {
                 ProcessTransferAssignment(
+                    new Target(operation.Symbol, operation.Syntax),
+                    value);
+            }
+
+            if (IsNativeBuilder(operation.Symbol.Type))
+            {
+                ProcessBuilderAssignment(
                     new Target(operation.Symbol, operation.Syntax),
                     value);
             }
@@ -2214,6 +2289,29 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 }
             }
 
+            if (value is not null
+                && IsNativeBuilder(value.Type)
+                && !IsBuilderFactoryInvocation(value))
+            {
+                string destination = operation.Parent is IInvocationOperation invocation
+                    ? invocation.TargetMethod.ToDisplayString(
+                        SymbolDisplayFormat.MinimallyQualifiedFormat)
+                    : "the call argument";
+                if (GetBuilder(value) is TransferState builder)
+                {
+                    ReportTransferCopy(
+                        builder,
+                        operation.Syntax,
+                        destination);
+                }
+                else
+                {
+                    ReportUnknownBuilderCopy(
+                        operation.Syntax,
+                        destination);
+                }
+            }
+
             if (value is not null && value is not IObjectCreationOperation)
             {
                 if (operation.Parent is IInvocationOperation composite
@@ -2244,6 +2342,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 {
                     if (operation.Parent is IInvocationOperation invocation
                         && (IsTransferFactoryInvocation(invocation)
+                            || IsBuilderFactoryInvocation(invocation)
                             || GetLifecycleEffect(invocation.TargetMethod, operation.Parameter)
                                 is not LifecycleEffect.None
                             || IsNonRetainingOwnerParameter(
@@ -2285,6 +2384,25 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     transfer,
                     operation.Syntax,
                     "the return value");
+            }
+
+            if (value is not null
+                && IsNativeBuilder(value.Type)
+                && !IsBuilderFactoryInvocation(value))
+            {
+                if (GetBuilder(value) is TransferState builder)
+                {
+                    ReportTransferCopy(
+                        builder,
+                        operation.Syntax,
+                        "the return value");
+                }
+                else
+                {
+                    ReportUnknownBuilderCopy(
+                        operation.Syntax,
+                        "the return value");
+                }
             }
 
             if (value is not null && value is not IObjectCreationOperation)
@@ -2357,13 +2475,21 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         {
             if (_closureDepth > 0)
             {
-                if (_transfers.TryGetValue(operation.Local, out TransferState? transfer)
-                    && IsCapturedLocal(operation.Local, operation.Syntax))
+                if (IsCapturedLocal(
+                    operation.Local,
+                    operation.Syntax))
                 {
-                    ReportTransferCopy(
-                        transfer,
-                        operation.Syntax,
-                        "a closure");
+                    _transfers.TryGetValue(
+                        operation.Local,
+                        out TransferState? transfer);
+                    transfer ??= GetNativeOwnership(operation);
+                    if (transfer is not null)
+                    {
+                        ReportTransferCopy(
+                            transfer,
+                            operation.Syntax,
+                            "a closure");
+                    }
                 }
 
                 if (_handles.TryGetValue(operation.Local, out HandleState? handle) && !handle.Returned)
@@ -2389,6 +2515,18 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                         owner.DisplayName,
                         "a closure");
                 }
+            }
+            else if (_isStandaloneClosureAnalysis
+                && IsNativeBuilder(operation.Type)
+                && IsCapturedLocal(
+                    operation.Local,
+                    operation.Syntax)
+                && GetBuilder(operation) is TransferState builder)
+            {
+                ReportTransferCopy(
+                    builder,
+                    operation.Syntax,
+                    "a closure");
             }
 
             base.VisitLocalReference(operation);
@@ -2418,15 +2556,32 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         {
             IOperation? operand = Unwrap(operation.Operand);
             if (operand is not null
-                && IsNativeTransfer(operand.Type)
+                && (IsNativeTransfer(operand.Type)
+                    || IsNativeBuilder(operand.Type))
                 && !IsNativeTransfer(operation.Type)
-                && GetTransfer(operand) is TransferState transfer)
+                && !IsNativeBuilder(operation.Type)
+                && !(IsNativeBuilder(operand.Type)
+                    && operation.IsImplicit
+                    && IsDirectUsingResourceConversion(
+                        operation.Syntax))
+                )
             {
-                ReportTransferCopy(
-                    transfer,
-                    operation.Syntax,
-                    operation.Type?.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)
-                        ?? "a converted value");
+                string destination = operation.Type?.ToDisplayString(
+                    SymbolDisplayFormat.MinimallyQualifiedFormat)
+                    ?? "a converted value";
+                if (GetNativeOwnership(operand) is TransferState transfer)
+                {
+                    ReportTransferCopy(
+                        transfer,
+                        operation.Syntax,
+                        destination);
+                }
+                else if (IsNativeBuilder(operand.Type))
+                {
+                    ReportUnknownBuilderCopy(
+                        operation.Syntax,
+                        destination);
+                }
             }
 
             if (operand is not null
@@ -2484,12 +2639,22 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             foreach (IOperation element in operation.Elements)
             {
                 if (IsNativeTransfer(element.Type)
-                    && GetTransfer(Unwrap(element)) is TransferState transfer)
+                    || IsNativeBuilder(element.Type))
                 {
-                    ReportTransferCopy(
-                        transfer,
-                        operation.Syntax,
-                        "a tuple");
+                    if (GetNativeOwnership(
+                        Unwrap(element)) is TransferState transfer)
+                    {
+                        ReportTransferCopy(
+                            transfer,
+                            operation.Syntax,
+                            "a tuple");
+                    }
+                    else if (IsNativeBuilder(element.Type))
+                    {
+                        ReportUnknownBuilderCopy(
+                            operation.Syntax,
+                            "a tuple");
+                    }
                 }
                 else if (IsHandleType(element.Type) && GetHandle(Unwrap(element)) is HandleState handle)
                 {
@@ -2511,12 +2676,22 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             foreach (IOperation element in operation.ElementValues)
             {
                 if (IsNativeTransfer(element.Type)
-                    && GetTransfer(Unwrap(element)) is TransferState transfer)
+                    || IsNativeBuilder(element.Type))
                 {
-                    ReportTransferCopy(
-                        transfer,
-                        operation.Syntax,
-                        "an array");
+                    if (GetNativeOwnership(
+                        Unwrap(element)) is TransferState transfer)
+                    {
+                        ReportTransferCopy(
+                            transfer,
+                            operation.Syntax,
+                            "an array");
+                    }
+                    else if (IsNativeBuilder(element.Type))
+                    {
+                        ReportUnknownBuilderCopy(
+                            operation.Syntax,
+                            "an array");
+                    }
                 }
                 else if (IsHandleType(element.Type) && GetHandle(Unwrap(element)) is HandleState handle)
                 {
@@ -2576,6 +2751,192 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     transfer.OwnershipIdentity,
                     TransferStatus.Disposed);
             }
+        }
+
+        private void ProcessBuilderInvocation(
+            IInvocationOperation operation)
+        {
+            IOperation? instance = Unwrap(operation.Instance);
+            TransferState? builder = GetBuilder(instance);
+            if (builder is null)
+            {
+                return;
+            }
+
+            if (operation.TargetMethod.Name == "Complete")
+            {
+                if (builder.Status != TransferStatus.Active)
+                {
+                    Report(
+                        NativeAllocationDiagnosticDescriptors.InvalidBuilderCompletion,
+                        operation.Syntax,
+                        builder.DisplayName,
+                        DescribeTransferStatus(builder.Status));
+                    return;
+                }
+
+                if (!HasSafeBuilderCompletionDestination(operation))
+                {
+                    Report(
+                        NativeAllocationDiagnosticDescriptors.BuilderCompletionEscape,
+                        operation.Syntax,
+                        builder.DisplayName);
+                }
+
+                MarkTransferIdentity(
+                    builder.OwnershipIdentity,
+                    TransferStatus.Moved);
+                return;
+            }
+
+            if (operation.IsImplicit
+                && operation.TargetMethod.Name == "Dispose"
+                && builder.Status is TransferStatus.Moved or TransferStatus.Disposed)
+            {
+                return;
+            }
+
+            if (!CheckBuilderActive(
+                builder,
+                operation.Syntax,
+                operation.TargetMethod.Name))
+            {
+                return;
+            }
+
+            if (operation.TargetMethod.Name == "Dispose")
+            {
+                MarkTransferIdentity(
+                    builder.OwnershipIdentity,
+                    TransferStatus.Disposed);
+            }
+        }
+
+        private void RegisterBuilderFactory(
+            IInvocationOperation operation)
+        {
+            Target target = FindTarget(operation);
+            if (target.Symbol is not ILocalSymbol
+                || !IsNativeBuilder(GetSymbolType(target.Symbol)))
+            {
+                Report(
+                    NativeAllocationDiagnosticDescriptors.BuilderAcquisitionEscape,
+                    operation.Syntax,
+                    operation.TargetMethod.Name);
+                return;
+            }
+
+            ReportActiveTransferOverwrite(target);
+            _transfers[target.Symbol] = TransferState.CreateBuilder(
+                target.Symbol,
+                operation.Syntax,
+                TransferStatus.Active,
+                mustEnd: true,
+                isUsing: IsUsingSyntax(
+                    operation.Syntax,
+                    target.Symbol));
+        }
+
+        private void ProcessBuilderAssignment(
+            Target target,
+            IOperation? value)
+        {
+            if (target.Symbol is null)
+            {
+                if (value is not null
+                    && IsNativeBuilder(value.Type)
+                    && !IsBuilderFactoryInvocation(value))
+                {
+                    if (GetBuilder(value) is TransferState discarded)
+                    {
+                        ReportTransferCopy(
+                            discarded,
+                            target.Syntax,
+                            "a discarded value");
+                    }
+                    else
+                    {
+                        ReportUnknownBuilderCopy(
+                            target.Syntax,
+                            "a discarded value");
+                    }
+                }
+
+                return;
+            }
+
+            if (value is null || IsNullValue(value))
+            {
+                ReportActiveTransferOverwrite(target);
+                _transfers[target.Symbol] = TransferState.CreateBuilder(
+                    target.Symbol,
+                    target.Syntax,
+                    TransferStatus.Unowned,
+                    mustEnd: false,
+                    isUsing: false);
+                return;
+            }
+
+            if (IsBuilderFactoryInvocation(value))
+            {
+                return;
+            }
+
+            if (IsNativeBuilder(value.Type))
+            {
+                TransferState? source = GetBuilder(value);
+                if (source is null)
+                {
+                    ReportActiveTransferOverwrite(target);
+                    Report(
+                        NativeAllocationDiagnosticDescriptors.BuilderAlias,
+                        target.Syntax,
+                        "the builder expression",
+                        target.Symbol.Name);
+                    _transfers[target.Symbol] = TransferState.CreateBuilder(
+                        target.Symbol,
+                        target.Syntax,
+                        TransferStatus.Ambiguous,
+                        mustEnd: target.Symbol is ILocalSymbol,
+                        isUsing: IsUsingSyntax(
+                            target.Syntax,
+                            target.Symbol));
+                    return;
+                }
+
+                if (SymbolEqualityComparer.Default.Equals(
+                    source.Symbol,
+                    target.Symbol))
+                {
+                    return;
+                }
+
+                ReportActiveTransferOverwrite(target);
+                ReportTransferCopy(
+                    source,
+                    target.Syntax,
+                    target.Symbol.Name);
+                _transfers[target.Symbol] = source.CloneFor(
+                    target.Symbol,
+                    mustEnd: target.Symbol is ILocalSymbol,
+                    isUsing: IsUsingSyntax(
+                        target.Syntax,
+                        target.Symbol),
+                    target.Syntax);
+            }
+        }
+
+        private bool HasSafeBuilderCompletionDestination(
+            IInvocationOperation completion)
+        {
+            Target target = FindTarget(completion);
+            if (target.Symbol is not null)
+            {
+                return IsNativeTransfer(
+                    GetSymbolType(target.Symbol));
+            }
+
+            return IsSafeTransferEscape(completion);
         }
 
         private void ProcessTransferMove(
@@ -2778,10 +3139,9 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 return;
             }
 
-            Report(
-                NativeAllocationDiagnosticDescriptors.TransferLifetime,
-                target.Syntax,
-                previous.DisplayName);
+            ReportOwnershipLifetime(
+                previous,
+                target.Syntax);
         }
 
         private TransferState? GetTransfer(IOperation? operation)
@@ -2801,7 +3161,9 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 symbol,
                 out TransferState? existing))
             {
-                return existing;
+                return existing.Kind == OwnershipKind.Transfer
+                    ? existing
+                    : null;
             }
 
             TransferState external = TransferState.CreateExternal(
@@ -2810,6 +3172,50 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             _transfers.Add(symbol, external);
             return external;
         }
+
+        private TransferState? GetBuilder(IOperation? operation)
+        {
+            if (operation is null || !IsNativeBuilder(operation.Type))
+            {
+                return null;
+            }
+
+            ISymbol? symbol = GetSymbol(operation);
+            if (symbol is null)
+            {
+                return null;
+            }
+
+            if (_transfers.TryGetValue(
+                symbol,
+                out TransferState? existing))
+            {
+                return existing.Kind == OwnershipKind.Builder
+                    ? existing
+                    : null;
+            }
+
+            TransferState external = TransferState.CreateExternalBuilder(
+                symbol,
+                operation.Syntax);
+            _transfers.Add(symbol, external);
+            if (symbol is not ILocalSymbol)
+            {
+                Report(
+                    NativeAllocationDiagnosticDescriptors.BuilderAlias,
+                    operation.Syntax,
+                    symbol.Name,
+                    "a nonlocal binding");
+            }
+
+            return external;
+        }
+
+        private TransferState? GetNativeOwnership(
+            IOperation? operation) =>
+            IsNativeBuilder(operation?.Type)
+                ? GetBuilder(operation)
+                : GetTransfer(operation);
 
         private bool CheckTransferActive(
             TransferState transfer,
@@ -2830,24 +3236,74 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             return false;
         }
 
+        private bool CheckBuilderActive(
+            TransferState builder,
+            SyntaxNode syntax,
+            string operation)
+        {
+            if (builder.Status == TransferStatus.Active)
+            {
+                return true;
+            }
+
+            Report(
+                NativeAllocationDiagnosticDescriptors.InactiveBuilderUse,
+                syntax,
+                builder.DisplayName,
+                operation,
+                DescribeTransferStatus(builder.Status));
+            return false;
+        }
+
         private void ReportTransferCopy(
             TransferState transfer,
             SyntaxNode syntax,
             string destination)
         {
-            if (!CheckTransferActive(
-                transfer,
-                syntax,
-                "copy"))
+            bool active = transfer.Kind == OwnershipKind.Builder
+                ? CheckBuilderActive(
+                    transfer,
+                    syntax,
+                    "copy")
+                : CheckTransferActive(
+                    transfer,
+                    syntax,
+                    "copy");
+            if (!active)
             {
                 return;
             }
 
             Report(
-                NativeAllocationDiagnosticDescriptors.TransferAlias,
+                transfer.Kind == OwnershipKind.Builder
+                    ? NativeAllocationDiagnosticDescriptors.BuilderAlias
+                    : NativeAllocationDiagnosticDescriptors.TransferAlias,
                 syntax,
                 transfer.DisplayName,
                 destination);
+        }
+
+        private void ReportUnknownBuilderCopy(
+            SyntaxNode syntax,
+            string destination)
+        {
+            Report(
+                NativeAllocationDiagnosticDescriptors.BuilderAlias,
+                syntax,
+                "the builder expression",
+                destination);
+        }
+
+        private void ReportOwnershipLifetime(
+            TransferState ownership,
+            SyntaxNode syntax)
+        {
+            Report(
+                ownership.Kind == OwnershipKind.Builder
+                    ? NativeAllocationDiagnosticDescriptors.BuilderLifetime
+                    : NativeAllocationDiagnosticDescriptors.TransferLifetime,
+                syntax,
+                ownership.DisplayName);
         }
 
         private void MarkTransferIdentity(
@@ -3146,6 +3602,13 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                         == "Supprocom.NativeAllocationManagement.NativeTransferPoolExtensions"
                 || invocation.TargetMethod.Name == "ScratchTransferable"
                     && IsNativeArena(invocation.TargetMethod.ContainingType));
+
+        private bool IsBuilderFactoryInvocation(IOperation operation) =>
+            operation is IInvocationOperation invocation
+            && invocation.TargetMethod.Name == "CreateBuilder"
+            && invocation.TargetMethod.ContainingType.ToDisplayString()
+                == "Supprocom.NativeAllocationManagement.NativeBuilderOwnerExtensions"
+            && IsNativeBuilder(invocation.Type);
 
         private void ReportTransferViewEscapes(
             IInvocationOperation operation)
@@ -5157,9 +5620,12 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         private static Target FindTarget(IOperation operation)
         {
             IOperation current = operation;
-            while (current.Parent is IConversionOperation conversion && conversion.Operand == current)
+            while (current.Parent is IConversionOperation conversion
+                    && conversion.Operand == current
+                || current.Parent is IParenthesizedOperation parenthesized
+                    && parenthesized.Operand == current)
             {
-                current = conversion;
+                current = current.Parent;
             }
 
             if (current.Parent is IVariableInitializerOperation initializer
@@ -5236,6 +5702,11 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         private bool IsNativeTransfer(ITypeSymbol? type)
         {
             return NativeSymbols.Is(type, _symbols.Transfer);
+        }
+
+        private bool IsNativeBuilder(ITypeSymbol? type)
+        {
+            return NativeSymbols.Is(type, _symbols.Builder);
         }
 
         private bool IsNativeLeaseView(ITypeSymbol? type)
@@ -5610,11 +6081,18 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             Ambiguous
         }
 
+        private enum OwnershipKind
+        {
+            Transfer,
+            Builder
+        }
+
         private sealed class TransferState
         {
             private TransferState(
                 ISymbol symbol,
                 string ownershipIdentity,
+                OwnershipKind kind,
                 TransferStatus status,
                 bool mustEnd,
                 bool isUsing,
@@ -5622,6 +6100,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             {
                 Symbol = symbol;
                 OwnershipIdentity = ownershipIdentity;
+                Kind = kind;
                 Status = status;
                 MustEnd = mustEnd;
                 IsUsing = isUsing;
@@ -5630,6 +6109,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
             internal ISymbol Symbol { get; }
             internal string OwnershipIdentity { get; }
+            internal OwnershipKind Kind { get; }
             internal TransferStatus Status { get; set; }
             internal bool MustEnd { get; set; }
             internal bool IsUsing { get; }
@@ -5642,6 +6122,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 new(
                     symbol,
                     CreateSymbolIdentity(symbol),
+                    OwnershipKind.Transfer,
                     TransferStatus.Active,
                     mustEnd: false,
                     isUsing: false,
@@ -5653,6 +6134,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 new(
                     symbol,
                     CreateSymbolIdentity(symbol),
+                    OwnershipKind.Transfer,
                     TransferStatus.Active,
                     mustEnd: true,
                     isUsing: false,
@@ -5667,6 +6149,34 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 new(
                     symbol,
                     CreateSyntaxIdentity(origin),
+                    OwnershipKind.Transfer,
+                    status,
+                    mustEnd,
+                    isUsing,
+                    origin);
+
+            internal static TransferState CreateExternalBuilder(
+                ISymbol symbol,
+                SyntaxNode syntax) =>
+                new(
+                    symbol,
+                    CreateSymbolIdentity(symbol),
+                    OwnershipKind.Builder,
+                    TransferStatus.Active,
+                    mustEnd: false,
+                    isUsing: false,
+                    syntax);
+
+            internal static TransferState CreateBuilder(
+                ISymbol symbol,
+                SyntaxNode origin,
+                TransferStatus status,
+                bool mustEnd,
+                bool isUsing) =>
+                new(
+                    symbol,
+                    CreateSyntaxIdentity(origin),
+                    OwnershipKind.Builder,
                     status,
                     mustEnd,
                     isUsing,
@@ -5676,6 +6186,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 new(
                     Symbol,
                     OwnershipIdentity,
+                    Kind,
                     Status,
                     MustEnd,
                     IsUsing,
@@ -5689,6 +6200,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 new(
                     symbol,
                     OwnershipIdentity,
+                    Kind,
                     Status,
                     mustEnd,
                     isUsing,

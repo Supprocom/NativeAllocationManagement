@@ -133,6 +133,41 @@ internal static class NativeAllocationDiagnosticDescriptors
         "Transfer parameter must own its value",
         "Native transfer parameter '{0}' uses '{1}'. Use a by-value owner, and borrow only through Access or Read callback views.");
 
+    internal static readonly DiagnosticDescriptor BuilderAlias = Create(
+        "NAM1028",
+        "Native builder ownership cannot be copied",
+        "Native builder '{0}' owns unpublished storage. Keep one local binding instead of copying it to '{1}'.");
+
+    internal static readonly DiagnosticDescriptor InactiveBuilderUse = Create(
+        "NAM1029",
+        "Inactive native builder cannot be used",
+        "Native builder '{0}' cannot run '{1}' because its ownership is {2}.");
+
+    internal static readonly DiagnosticDescriptor InvalidBuilderCompletion = Create(
+        "NAM1030",
+        "Native builder completion requires active ownership",
+        "NativeBuilder<T>.Complete cannot complete '{0}' because its ownership is {1}.");
+
+    internal static readonly DiagnosticDescriptor BuilderLifetime = Create(
+        "NAM1031",
+        "Native builder ownership must end",
+        "Native builder '{0}' remains active at lexical exit. Complete or dispose it before exit.");
+
+    internal static readonly DiagnosticDescriptor BuilderAcquisitionEscape = Create(
+        "NAM1032",
+        "Native builder acquisition requires one local owner",
+        "'{0}' must directly initialize a local NativeBuilder<T>. It cannot be returned, passed, discarded, stored, or aggregated.");
+
+    internal static readonly DiagnosticDescriptor UnsupportedBuilderParameter = Create(
+        "NAM1033",
+        "Native builder parameter is not permitted",
+        "Native builder parameter '{0}' creates an ownership alias. Keep the builder in its declaring method and publish one NativeTransfer<T>.");
+
+    internal static readonly DiagnosticDescriptor BuilderCompletionEscape = Create(
+        "NAM1034",
+        "Native builder completion requires a typed transfer destination",
+        "NativeBuilder<T>.Complete for '{0}' must publish directly to an exact NativeTransfer<T> destination.");
+
     internal static readonly DiagnosticDescriptor AnalyzerMissing = Create(
         "NAM9001",
         "Bundled analyzer is required",
@@ -164,6 +199,13 @@ internal static class NativeAllocationDiagnosticDescriptors
         TransferLifetime,
         TransferAcquisitionEscape,
         UnsupportedTransferParameter,
+        BuilderAlias,
+        InactiveBuilderUse,
+        InvalidBuilderCompletion,
+        BuilderLifetime,
+        BuilderAcquisitionEscape,
+        UnsupportedBuilderParameter,
+        BuilderCompletionEscape,
         AnalyzerMissing);
 
     private static DiagnosticDescriptor Create(
