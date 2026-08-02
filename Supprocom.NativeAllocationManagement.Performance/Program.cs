@@ -41,6 +41,12 @@ internal static class Program
             return await NativeBuilderBenchmark.RunCommandAsync(args);
         }
 
+        if (args.Length != 0
+            && args[0] is "--concurrent-arena" or "--concurrent-arena-worker")
+        {
+            return await ConcurrentArenaBenchmark.RunCommandAsync(args);
+        }
+
         if (args is ["--scoped-recycle-probe"])
         {
             Console.WriteLine(

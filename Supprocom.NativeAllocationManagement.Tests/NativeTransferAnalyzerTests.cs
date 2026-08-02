@@ -6,6 +6,42 @@ namespace Supprocom.NativeAllocationManagement.Tests;
 public sealed class NativeTransferAnalyzerTests
 {
     [Fact]
+    public async Task BoundedDirectSpanInitializationIsAccepted()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    using NativeArena arena = new();
+                    NativeTransfer<int> transfer =
+                        arena.ScratchTransferable<int>(
+                            32,
+                            static writer => writer.InitializeRemaining(
+                                static values =>
+                                {
+                                    for (int index = 0;
+                                        index < values.Length;
+                                        index++)
+                                    {
+                                        values[index] = index + 1;
+                                    }
+                                }));
+                    _ = transfer.Read(static view => view[0]);
+                    transfer.Dispose();
+                }
+            }
+            """);
+
+        Assert.True(
+            AnalyzerContractTests.NativeDiagnostics(diagnostics).Length == 0,
+            string.Join(Environment.NewLine, diagnostics));
+    }
+
+    [Fact]
     public async Task DestructiveMovesToAFieldAndBoundedChannelAreAccepted()
     {
         ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(

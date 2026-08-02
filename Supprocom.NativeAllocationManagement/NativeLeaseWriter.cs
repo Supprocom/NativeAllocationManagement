@@ -27,6 +27,22 @@ public readonly ref struct NativeLeaseWriter<T>
     /// <summary>Gets the number of elements that do not have a value.</summary>
     public int Remaining => Length - _initializedLength;
 
+    /// <summary>Initializes all remaining direct values in one bounded callback.</summary>
+    public void InitializeRemaining(
+        NativeSpanInitializer<T> initializer)
+    {
+        ArgumentNullException.ThrowIfNull(initializer);
+        if (RuntimeHelpers.IsReferenceOrContainsReferences<T>())
+        {
+            throw new NotSupportedException(
+                "Direct span initialization requires value storage without managed references.");
+        }
+
+        int start = _initializedLength;
+        initializer(_directValues[start..]);
+        _initializedLength = Length;
+    }
+
     /// <summary>Writes the next element in the logical range.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Write(T value)
