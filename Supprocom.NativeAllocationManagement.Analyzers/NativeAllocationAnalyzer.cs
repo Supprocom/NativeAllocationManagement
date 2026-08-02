@@ -257,6 +257,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         private readonly HashSet<ISymbol> _reportedScopedCompletions = new(SymbolEqualityComparer.Default);
         private readonly HashSet<ISymbol> _reportedRegionParameters = new(SymbolEqualityComparer.Default);
         private readonly HashSet<IInvocationOperation> _preprocessedTransferInvocations = [];
+        private Dictionary<TextSpan, IArgumentOperation>?
+            _sourceTransferDestinationArguments;
         private readonly Dictionary<ControlFlowRegion, List<FinallyAnalysisCacheEntry>>
             _finallyAnalysisCache = new();
         private readonly HashSet<int> _ownershipRelevantBlocks = [];
@@ -4093,31 +4095,54 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 return directArgument;
             }
 
-            ArgumentSyntax? argumentSyntax = move.Syntax
-                .Ancestors()
-                .OfType<ArgumentSyntax>()
-                .FirstOrDefault();
-            if (argumentSyntax is null)
+            if (_analysisRootOperation is null
+                || _analysisRootTree != move.Syntax.SyntaxTree)
             {
                 return null;
             }
 
-            SemanticModel model = _context.Compilation.GetSemanticModel(
-                argumentSyntax.SyntaxTree);
-            return model.GetOperation(
-                    argumentSyntax,
-                    _context.CancellationToken)
-                is IArgumentOperation sourceArgument
-                && IsDirectTransferProducerValue(
-                    sourceArgument.Value,
-                    move)
+            _sourceTransferDestinationArguments ??=
+                BuildSourceTransferDestinationArguments();
+            return _sourceTransferDestinationArguments.TryGetValue(
+                move.Syntax.Span,
+                out IArgumentOperation? sourceArgument)
                     ? sourceArgument
                     : null;
+        }
+
+        private Dictionary<TextSpan, IArgumentOperation>
+            BuildSourceTransferDestinationArguments()
+        {
+            Dictionary<TextSpan, IArgumentOperation> arguments = [];
+            foreach (IArgumentOperation argument in _analysisRootOperation!
+                .DescendantsAndSelf()
+                .OfType<IArgumentOperation>())
+            {
+                IInvocationOperation? producer =
+                    GetDirectTransferProducer(argument.Value);
+                if (producer is not null
+                    && !arguments.ContainsKey(producer.Syntax.Span))
+                {
+                    arguments.Add(producer.Syntax.Span, argument);
+                }
+            }
+
+            return arguments;
         }
 
         private bool IsDirectTransferProducerValue(
             IOperation value,
             IInvocationOperation producer)
+        {
+            IInvocationOperation? candidate =
+                GetDirectTransferProducer(value);
+            return candidate is not null
+                && candidate.Syntax.SyntaxTree == producer.Syntax.SyntaxTree
+                && candidate.Syntax.Span == producer.Syntax.Span;
+        }
+
+        private IInvocationOperation? GetDirectTransferProducer(
+            IOperation value)
         {
             IOperation current = value;
             while (true)
@@ -4141,8 +4166,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
             return current is IInvocationOperation candidate
                 && IsNativeTransfer(candidate.Type)
-                && candidate.Syntax.SyntaxTree == producer.Syntax.SyntaxTree
-                && candidate.Syntax.Span == producer.Syntax.Span;
+                    ? candidate
+                    : null;
         }
 
         private bool HasExactTransferParameterDeclaration(
