@@ -232,10 +232,14 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             _analysisRootTree = operationBlock.Syntax.SyntaxTree;
             _analysisRootSpan = operationBlock.Syntax.Span;
             _hasAnalysisRoot = true;
-            _isStandaloneClosureAnalysis = operationBlock.Parent is IAnonymousFunctionOperation;
-            ReportRegionParameters();
-            RegisterOwnerParameters();
-            RegisterTransferParameters();
+            IAnonymousFunctionOperation? closure =
+                operationBlock.Parent as IAnonymousFunctionOperation;
+            _isStandaloneClosureAnalysis = closure is not null;
+            IMethodSymbol? method = closure?.Symbol
+                ?? _context.OwningSymbol as IMethodSymbol;
+            ReportRegionParameters(method);
+            RegisterOwnerParameters(method);
+            RegisterTransferParameters(method);
             if (!ContainsNativeOwnership(operationBlock))
             {
                 return;
@@ -264,9 +268,10 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             _exitSnapshots.Add(CaptureSnapshot());
         }
 
-        private void RegisterOwnerParameters()
+        private void RegisterOwnerParameters(
+            IMethodSymbol? method)
         {
-            if (_context.OwningSymbol is not IMethodSymbol method)
+            if (method is null)
             {
                 return;
             }
@@ -310,9 +315,10 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     || IsNativeTransfer(operation.Type));
         }
 
-        private void RegisterTransferParameters()
+        private void RegisterTransferParameters(
+            IMethodSymbol? method)
         {
-            if (_context.OwningSymbol is not IMethodSymbol method)
+            if (method is null)
             {
                 return;
             }
@@ -354,9 +360,10 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             }
         }
 
-        private void ReportRegionParameters()
+        private void ReportRegionParameters(
+            IMethodSymbol? method)
         {
-            if (_context.OwningSymbol is not IMethodSymbol method)
+            if (method is null)
             {
                 return;
             }

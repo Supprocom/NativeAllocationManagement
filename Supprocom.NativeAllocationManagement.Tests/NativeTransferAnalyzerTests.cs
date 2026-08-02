@@ -458,6 +458,137 @@ public sealed class NativeTransferAnalyzerTests
     }
 
     [Fact]
+    public async Task OwnedReceiverDisposalInFinallyIsAccepted()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static int Consume(
+                    NativeTransfer<int> transfer)
+                {
+                    try
+                    {
+                        return transfer.Read(
+                            static view => view[0]);
+                    }
+                    finally
+                    {
+                        transfer.Dispose();
+                    }
+                }
+            }
+            """);
+
+        Assert.True(
+            AnalyzerContractTests.NativeDiagnostics(diagnostics).Length == 0,
+            string.Join(Environment.NewLine, diagnostics));
+    }
+
+    [Fact]
+    public async Task OwnedReceiverDisposalInFinallyWithoutReturnIsAccepted()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Consume(
+                    NativeTransfer<int> transfer)
+                {
+                    try
+                    {
+                        transfer.Access(
+                            static view => view[0] = 1);
+                    }
+                    finally
+                    {
+                        transfer.Dispose();
+                    }
+                }
+            }
+            """);
+
+        Assert.True(
+            AnalyzerContractTests.NativeDiagnostics(diagnostics).Length == 0,
+            string.Join(Environment.NewLine, diagnostics));
+    }
+
+    [Fact]
+    public async Task OwnedLambdaParameterDisposalIsAccepted()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using System;
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    Action<NativeTransfer<int>> consume =
+                        transfer => transfer.Dispose();
+                }
+            }
+            """);
+
+        Assert.True(
+            AnalyzerContractTests.NativeDiagnostics(diagnostics).Length == 0,
+            string.Join(Environment.NewLine, diagnostics));
+    }
+
+    [Fact]
+    public async Task OwnedLambdaParameterMustEnd()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using System;
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    Action<NativeTransfer<int>> drop =
+                        transfer => { };
+                }
+            }
+            """);
+
+        Assert.Contains(
+            "NAM1025",
+            AnalyzerContractTests.NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task RefLambdaTransferParameterIsRejected()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public delegate void RefConsumer(
+                ref NativeTransfer<int> transfer);
+
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    RefConsumer consume =
+                        (ref NativeTransfer<int> transfer) => { };
+                }
+            }
+            """);
+
+        Assert.Contains(
+            "NAM1027",
+            AnalyzerContractTests.NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
     public async Task OwnedReceiverMoveReturnIsAccepted()
     {
         ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
