@@ -13,6 +13,7 @@
     <None Include="..\conformance\native-allocation-ownership.json" CopyToOutputDirectory="PreserveNewest" />
     <ProjectReference Include="..\Supprocom.NativeAllocationManagement\Supprocom.NativeAllocationManagement.csproj" />
     <ProjectReference Include="..\Supprocom.NativeAllocationManagement.Analyzers\Supprocom.NativeAllocationManagement.Analyzers.csproj" />
+    <ProjectReference Include="..\Supprocom.NativeAllocationManagement.Performance\Supprocom.NativeAllocationManagement.Performance.csproj" />
     <ProjectReference Include="..\.Demos\01-VoxelChunkPipeline\SharedContract\SharedContract.csproj" />
     <ProjectReference Include="..\.Demos\01-VoxelChunkPipeline\SafeCSharp\SafeCSharp.csproj" />
     <ProjectReference Include="..\.Demos\01-VoxelChunkPipeline\NAM\NAM.csproj" />

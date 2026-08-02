@@ -29,6 +29,12 @@ internal static class Program
         CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;
         CultureInfo.CurrentUICulture = CultureInfo.InvariantCulture;
 
+        if (args.Length != 0
+            && args[0] is "--voxel-handoff" or "--voxel-handoff-worker")
+        {
+            return await VoxelHandoffBenchmark.RunCommandAsync(args);
+        }
+
         if (args is ["--scoped-recycle-probe"])
         {
             Console.WriteLine(
