@@ -2108,10 +2108,219 @@ internal sealed class NativeGenerationOwner
     }
 }
 
+internal sealed class NativeAllocationTable :
+    IEnumerable<NativeAllocation>
+{
+    private long _singleKey;
+    private NativeAllocation? _singleValue;
+    private Dictionary<long, NativeAllocation>? _many;
+
+    internal int Count => _many?.Count
+        ?? (_singleValue is null ? 0 : 1);
+
+    internal NativeAllocationTable Values => this;
+
+    internal void EnsureCapacity(int capacity)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(capacity);
+        if (_many is not null)
+        {
+            _many.EnsureCapacity(capacity);
+            return;
+        }
+
+        if (capacity <= 1)
+        {
+            return;
+        }
+
+        var many = new Dictionary<long, NativeAllocation>(capacity);
+        if (_singleValue is not null)
+        {
+            many.Add(_singleKey, _singleValue);
+            _singleKey = 0;
+            _singleValue = null;
+        }
+
+        _many = many;
+    }
+
+    internal void Add(
+        long key,
+        NativeAllocation value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        if (_many is not null)
+        {
+            _many.Add(key, value);
+            return;
+        }
+
+        if (_singleValue is null)
+        {
+            _singleKey = key;
+            _singleValue = value;
+            return;
+        }
+
+        if (_singleKey == key)
+        {
+            throw new ArgumentException(
+                "An allocation with the same ID is already active.",
+                nameof(key));
+        }
+
+        EnsureCapacity(2);
+        _many!.Add(key, value);
+    }
+
+    internal bool TryGetValue(
+        long key,
+        out NativeAllocation value)
+    {
+        if (_many is not null)
+        {
+            bool found = _many.TryGetValue(
+                key,
+                out NativeAllocation? foundValue);
+            value = foundValue!;
+            return found;
+        }
+
+        if (_singleValue is not null
+            && _singleKey == key)
+        {
+            value = _singleValue;
+            return true;
+        }
+
+        value = null!;
+        return false;
+    }
+
+    internal bool Remove(long key)
+    {
+        if (_many is null)
+        {
+            if (_singleValue is null
+                || _singleKey != key)
+            {
+                return false;
+            }
+
+            _singleKey = 0;
+            _singleValue = null;
+            return true;
+        }
+
+        bool removed = _many.Remove(key);
+        if (!removed)
+        {
+            return false;
+        }
+
+        if (_many.Count > 1)
+        {
+            return true;
+        }
+
+        if (_many.Count == 1)
+        {
+            foreach ((long remainingKey, NativeAllocation remainingValue)
+                in _many)
+            {
+                _singleKey = remainingKey;
+                _singleValue = remainingValue;
+            }
+        }
+
+        _many = null;
+        return true;
+    }
+
+    internal void Clear()
+    {
+        _many = null;
+        _singleKey = 0;
+        _singleValue = null;
+    }
+
+    public Enumerator GetEnumerator() =>
+        new(_singleValue, _many);
+
+    IEnumerator<NativeAllocation>
+        IEnumerable<NativeAllocation>.GetEnumerator() =>
+        GetEnumerator();
+
+    System.Collections.IEnumerator
+        System.Collections.IEnumerable.GetEnumerator() =>
+        GetEnumerator();
+
+    internal struct Enumerator : IEnumerator<NativeAllocation>
+    {
+        private readonly NativeAllocation? _single;
+        private Dictionary<long, NativeAllocation>.Enumerator _many;
+        private readonly bool _hasMany;
+        private bool _singleRead;
+
+        internal Enumerator(
+            NativeAllocation? single,
+            Dictionary<long, NativeAllocation>? many)
+        {
+            _single = single;
+            _many = many?.GetEnumerator() ?? default;
+            _hasMany = many is not null;
+            _singleRead = false;
+            Current = null!;
+        }
+
+        public NativeAllocation Current { get; private set; }
+
+        object System.Collections.IEnumerator.Current => Current;
+
+        public bool MoveNext()
+        {
+            if (_hasMany)
+            {
+                if (!_many.MoveNext())
+                {
+                    Current = null!;
+                    return false;
+                }
+
+                Current = _many.Current.Value;
+                return true;
+            }
+
+            if (_singleRead || _single is null)
+            {
+                Current = null!;
+                return false;
+            }
+
+            _singleRead = true;
+            Current = _single;
+            return true;
+        }
+
+        public void Reset() =>
+            throw new NotSupportedException();
+
+        public void Dispose()
+        {
+            if (_hasMany)
+            {
+                _many.Dispose();
+            }
+        }
+    }
+}
+
 internal sealed class NativeGeneration
 {
     private long _scopeEpoch;
     private int _memoryDetached;
+    private int _initializationsInProgress;
 
     internal NativeGeneration(long number)
     {
@@ -2123,7 +2332,7 @@ internal sealed class NativeGeneration
 
     internal NativeGenerationOwner Owner { get; }
 
-    internal Dictionary<long, NativeAllocation> Allocations { get; } = new();
+    internal NativeAllocationTable Allocations { get; } = new();
 
     // Ordinary leases reuse these records after an individual return.
     internal List<NativeAllocation> ReusableAllocations { get; } = [];
@@ -2133,6 +2342,8 @@ internal sealed class NativeGeneration
     internal List<NativeSlab> Slabs { get; } = [];
 
     internal List<NativeSlab> AvailableSlabs { get; } = [];
+
+    internal NativeAllocation? HotPoolAllocation { get; set; }
 
     internal List<NativeBumpSegment> BumpSegments { get; } = [];
 
@@ -2147,7 +2358,31 @@ internal sealed class NativeGeneration
 
     internal int LeaseReturnsInProgress { get; set; }
 
-    internal int InitializationsInProgress { get; set; }
+    internal int InitializationsInProgress
+    {
+        get => Volatile.Read(
+            ref _initializationsInProgress);
+        set => Volatile.Write(
+            ref _initializationsInProgress,
+            value);
+    }
+
+    internal void BeginInitialization() =>
+        Interlocked.Increment(
+            ref _initializationsInProgress);
+
+    internal void EndInitialization()
+    {
+        int remaining = Interlocked.Decrement(
+            ref _initializationsInProgress);
+        if (remaining < 0)
+        {
+            Interlocked.Increment(
+                ref _initializationsInProgress);
+            throw new InvalidOperationException(
+                "The generation has no active initializer to complete.");
+        }
+    }
 
     internal int ConcurrentBumpInitializationsInProgress { get; set; }
 
@@ -2214,6 +2449,14 @@ internal sealed class NativeGeneration
 
     internal void AddAvailableSlabOrdered(NativeSlab slab)
     {
+        if (AvailableSlabs.Count == 0
+            || AvailableSlabs[^1].AllocationOrdinal
+                < slab.AllocationOrdinal)
+        {
+            AvailableSlabs.Add(slab);
+            return;
+        }
+
         int index = 0;
         while (index < AvailableSlabs.Count && AvailableSlabs[index].AllocationOrdinal < slab.AllocationOrdinal)
         {
@@ -3272,7 +3515,7 @@ internal sealed class NativeOwnerKernel
                 generation.AddAvailableSlabOrdered(previous.Slab);
             }
 
-            generation.InitializationsInProgress--;
+            generation.EndInitialization();
         }
     }
 
@@ -3341,10 +3584,26 @@ internal sealed class NativeOwnerKernel
                 throw CreateStateException("Rent", "This owner does not expose typed pool leases.", 0);
             }
 
+            if (!scoped
+                && !_containsReferences
+                && length > 0
+                && TakeHotPoolAllocationLocked(
+                    generation,
+                    length)
+                    is NativeAllocation hotAllocation)
+            {
+                return BeginHotPoolInitializationLocked(
+                    generation,
+                    hotAllocation,
+                    length);
+            }
+
             NativeSlab? slab = null;
             if (length > 0)
             {
-                slab = TakeSmallestAvailableSlabLocked(generation, length);
+                slab = TakeSmallestAvailableSlabLocked(
+                    generation,
+                    length);
                 if (slab is null)
                 {
                     generation.Slabs.EnsureCapacity(checked(generation.Slabs.Count + 1));
@@ -3376,6 +3635,11 @@ internal sealed class NativeOwnerKernel
                     checked(generation.AvailableSlabs.Count + 1));
             }
 
+            nuint storageBytes = slab is null
+                ? 0
+                : checked(
+                    (nuint)length
+                    * (nuint)_storageElementSize);
             NativeAllocation allocation = RentAllocationLocked(
                 generation,
                 allocationId,
@@ -3384,10 +3648,10 @@ internal sealed class NativeOwnerKernel
                 offsetBytes: 0,
                 length,
                 slab?.Capacity ?? 0,
-                storageBytes: slab is null
-                    ? 0
-                    : checked((nuint)length * (nuint)_storageElementSize),
-                referenceRoots: _containsReferences ? generation.ReferenceRoots : null,
+                storageBytes,
+                referenceRoots: _containsReferences
+                    ? generation.ReferenceRoots
+                    : null,
                 scoped,
                 epoch);
             allocation.Lifecycle = NativeAllocationLifecycle.Initializing;
@@ -3398,7 +3662,7 @@ internal sealed class NativeOwnerKernel
                     checked(generation.ScopedRecordCount + 1);
             }
 
-            generation.InitializationsInProgress++;
+            generation.BeginInitialization();
             if (slab is not null)
             {
                 if (slab.HasBeenUsed)
@@ -3418,6 +3682,48 @@ internal sealed class NativeOwnerKernel
         }
     }
 
+    private (
+        NativeGeneration Generation,
+        NativeAllocation Allocation,
+        NativePoolLease Lease)
+        BeginHotPoolInitializationLocked(
+            NativeGeneration generation,
+            NativeAllocation allocation,
+            int length)
+    {
+        NativeSlab slab = allocation.Slab
+            ?? throw new InvalidOperationException(
+                "A hot pool allocation requires one native slab.");
+        long allocationId = NextAllocationIdLocked();
+        nuint storageBytes = checked(
+            (nuint)length
+            * (nuint)_storageElementSize);
+        allocation.Reset(
+            allocationId,
+            slab,
+            bumpSegment: null,
+            offsetBytes: 0,
+            length,
+            slab.Capacity,
+            storageBytes,
+            referenceRoots: null,
+            scoped: false,
+            generation.ScopeEpoch);
+        allocation.Lifecycle =
+            NativeAllocationLifecycle.Initializing;
+        generation.Allocations.Add(
+            allocationId,
+            allocation);
+        generation.BeginInitialization();
+        NativeMemoryTestHooks.RecordReusedNativeSegment();
+        return (
+            generation,
+            allocation,
+            new NativePoolLease(
+                allocationId,
+                allocation));
+    }
+
     private void CompleteInitialization(
         NativeGeneration generation,
         NativeAllocation allocation,
@@ -3427,6 +3733,22 @@ internal sealed class NativeOwnerKernel
         {
             throw new InvalidOperationException(
                 "The native lease initializer did not write all logical elements.");
+        }
+
+        if (!scoped
+            && !_containsReferences
+            && _kind == NativeOwnerKind.Pool
+            && ReferenceEquals(
+                Volatile.Read(ref _current),
+                generation)
+            && allocation.Lifecycle
+                == NativeAllocationLifecycle.Initializing)
+        {
+            allocation.InitializedLength = 0;
+            allocation.Lifecycle =
+                NativeAllocationLifecycle.Active;
+            generation.EndInitialization();
+            return;
         }
 
         lock (_gate)
@@ -3451,7 +3773,7 @@ internal sealed class NativeOwnerKernel
                 generation.ScopedCleanupPending.Add(allocation);
             }
 
-            generation.InitializationsInProgress--;
+            generation.EndInitialization();
         }
     }
 
@@ -3478,6 +3800,12 @@ internal sealed class NativeOwnerKernel
             else
             {
                 generation.ReusableAllocations.Add(allocation);
+                generation.HotPoolAllocation =
+                    generation.ReusableAllocations.Count == 1
+                    && generation.AvailableSlabs.Count == 0
+                    && allocation.Slab is not null
+                        ? allocation
+                        : null;
             }
 
             if (allocation.Slab is not null && allocation.Length > 0)
@@ -3485,7 +3813,7 @@ internal sealed class NativeOwnerKernel
                 generation.AddAvailableSlabOrdered(allocation.Slab);
             }
 
-            generation.InitializationsInProgress--;
+            generation.EndInitialization();
         }
     }
 
@@ -5557,7 +5885,7 @@ internal sealed class NativeOwnerKernel
             }
 
             NativeGeneration generation = _current!;
-            if (generation.Number != generationNumber || !generation.Allocations.TryGetValue(allocationId, out NativeAllocation? allocation))
+            if (generation.Number != generationNumber || !generation.Allocations.TryGetValue(allocationId, out NativeAllocation allocation))
             {
                 return;
             }
@@ -5634,6 +5962,11 @@ internal sealed class NativeOwnerKernel
                 if (!allocation.IsScoped)
                 {
                     generation.ReusableAllocations.Add(allocation);
+                    generation.HotPoolAllocation =
+                        generation.ReusableAllocations.Count == 1
+                        && generation.AvailableSlabs.Count == 1
+                            ? allocation
+                            : null;
                 }
             }
             catch
@@ -6286,6 +6619,38 @@ internal sealed class NativeOwnerKernel
         }
 
         return best;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static NativeAllocation?
+        TakeHotPoolAllocationLocked(
+            NativeGeneration generation,
+            int length)
+    {
+        NativeAllocation? allocation =
+            generation.HotPoolAllocation;
+        generation.HotPoolAllocation = null;
+        if (allocation?.Slab is not NativeSlab slab
+            || slab.Capacity < length
+            || allocation.Lifecycle
+                != NativeAllocationLifecycle.Returned
+            || generation.ReusableAllocations.Count != 1
+            || generation.AvailableSlabs.Count != 1
+            || !ReferenceEquals(
+                generation.ReusableAllocations[^1],
+                allocation)
+            || !ReferenceEquals(
+                generation.AvailableSlabs[^1],
+                slab))
+        {
+            return null;
+        }
+
+        generation.ReusableAllocations.RemoveAt(
+            generation.ReusableAllocations.Count - 1);
+        generation.AvailableSlabs.RemoveAt(
+            generation.AvailableSlabs.Count - 1);
+        return allocation;
     }
 
     private NativeBumpSegment? FindBumpSpaceLocked(NativeGeneration generation, nuint byteLength, nuint alignment, bool scoped)
