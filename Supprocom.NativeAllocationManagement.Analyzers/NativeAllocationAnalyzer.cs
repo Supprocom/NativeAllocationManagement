@@ -4086,7 +4086,9 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             IOperation current)
         {
             if (current.Parent is IArgumentOperation directArgument
-                && IsDirectMoveArgumentValue(directArgument.Value, move))
+                && IsDirectTransferProducerValue(
+                    directArgument.Value,
+                    move))
             {
                 return directArgument;
             }
@@ -4106,14 +4108,16 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     argumentSyntax,
                     _context.CancellationToken)
                 is IArgumentOperation sourceArgument
-                && IsDirectMoveArgumentValue(sourceArgument.Value, move)
+                && IsDirectTransferProducerValue(
+                    sourceArgument.Value,
+                    move)
                     ? sourceArgument
                     : null;
         }
 
-        private bool IsDirectMoveArgumentValue(
+        private bool IsDirectTransferProducerValue(
             IOperation value,
-            IInvocationOperation move)
+            IInvocationOperation producer)
         {
             IOperation current = value;
             while (true)
@@ -4136,9 +4140,9 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             }
 
             return current is IInvocationOperation candidate
-                && IsTransferMoveInvocation(candidate)
-                && candidate.Syntax.SyntaxTree == move.Syntax.SyntaxTree
-                && candidate.Syntax.Span == move.Syntax.Span;
+                && IsNativeTransfer(candidate.Type)
+                && candidate.Syntax.SyntaxTree == producer.Syntax.SyntaxTree
+                && candidate.Syntax.Span == producer.Syntax.Span;
         }
 
         private bool HasExactTransferParameterDeclaration(
