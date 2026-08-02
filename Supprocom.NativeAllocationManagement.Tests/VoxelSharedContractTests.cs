@@ -1740,6 +1740,30 @@ public sealed class VoxelSharedContractTests
     }
 
     [Fact]
+    public void PackageMetadataUsesTransferablePatchVersion()
+    {
+        string root = FindRepositoryRoot();
+        string project = File.ReadAllText(
+            Path.Combine(
+                root,
+                "Supprocom.NativeAllocationManagement",
+                "Supprocom.NativeAllocationManagement.csproj"));
+
+        Assert.Contains(
+            "<Version>0.1.1</Version>",
+            project,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "cross-thread transferable leases",
+            project,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "destructive move ownership",
+            project,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void VerificationReportStoresSelectedProfileAndActualWarmupSeparately()
     {
         const long capBytes = 268_435_456;

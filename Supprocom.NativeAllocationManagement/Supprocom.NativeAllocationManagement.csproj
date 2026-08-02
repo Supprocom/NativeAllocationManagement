@@ -6,15 +6,15 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <IsPackable>true</IsPackable>
     <PackageId>Supprocom.NativeAllocationManagement</PackageId>
-    <Version>0.1.0</Version>
+    <Version>0.1.1</Version>
     <Authors>Supprocom</Authors>
     <Company>Supprocom</Company>
-    <Description>Generation-safe C# owners for reusable typed pools, lexical regions, and heterogeneous native arenas with bundled ownership analysis.</Description>
-    <PackageDescription>Generation-safe C# owners for reusable typed pools, lexical regions, and heterogeneous native arenas with bundled ownership analysis.</PackageDescription>
+    <Description>Generation-safe C# owners for reusable typed pools, cross-thread transferable leases, lexical regions, and heterogeneous native arenas.</Description>
+    <PackageDescription>Generation-safe C# owners for reusable typed pools, cross-thread transferable leases, lexical regions, and heterogeneous native arenas with bundled ownership analysis.</PackageDescription>
     <PackageLicenseExpression>AGPL-3.0-only</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <PackageTags>native-memory;memory-pool;native-region;native-arena;roslyn-analyzer;scoped-recycling</PackageTags>
-    <PackageReleaseNotes>Add reusable heterogeneous arena generations, two-ended scoped recycling, delayed activation, and generic reference-safe leases.</PackageReleaseNotes>
+    <PackageTags>native-memory;memory-pool;native-transfer;cross-thread;native-region;native-arena;roslyn-analyzer;scoped-recycling</PackageTags>
+    <PackageReleaseNotes>Add initialized cross-thread native leases with destructive move ownership and bundled ownership diagnostics.</PackageReleaseNotes>
     <PackageOutputPath>$(MSBuildThisFileDirectory)..\artifacts\packages\</PackageOutputPath>
   </PropertyGroup>
 
