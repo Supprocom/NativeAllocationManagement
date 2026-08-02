@@ -89,6 +89,8 @@ public sealed class NativeBuilder<T> : IDisposable
     private int _state;
     private int _writerGate;
     private int _operationAdmission;
+    private int _borrowEpoch;
+    private int _activeBorrowAuthority;
     private int _count;
 
     internal NativeBuilder(
@@ -173,30 +175,10 @@ public sealed class NativeBuilder<T> : IDisposable
         EnterOperation(nameof(Write));
         try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            int required = checked(
-                _count + maximumAdditionalCount);
-            Span<T> values = _session.PrepareWrite(
-                _count,
-                required,
-                maximumAdditionalCount);
-            cancellationToken.ThrowIfCancellationRequested();
-
-            int committedCount = -1;
-            action(new NativeBuilderWriter<T>(
-                values,
-                ref committedCount));
-            cancellationToken.ThrowIfCancellationRequested();
-            if (committedCount < 0)
-            {
-                throw new InvalidOperationException(
-                    "The bounded builder write did not commit an initialized prefix.");
-            }
-
-            _session.CommitWrite(
-                _count,
-                committedCount);
-            _count = checked(_count + committedCount);
+            WriteCore(
+                maximumAdditionalCount,
+                action,
+                cancellationToken);
         }
         catch (Exception failure)
         {
@@ -205,6 +187,45 @@ public sealed class NativeBuilder<T> : IDisposable
         }
         finally
         {
+            ExitOperation();
+            GC.KeepAlive(this);
+        }
+    }
+
+    /// <summary>Provides one exclusive builder borrow to a bounded callback.</summary>
+    /// <param name="action">The callback that receives exclusive builder authority.</param>
+    /// <param name="cancellationToken">The token that can cancel the complete builder.</param>
+    public void Borrow(
+        NativeBuilderBorrowAction<T> action,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        EnterOperation(nameof(Borrow));
+        int authority = NextBorrowAuthority();
+        Volatile.Write(
+            ref _activeBorrowAuthority,
+            authority);
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            NativeBuilderBorrow<T> borrow = new(
+                this,
+                authority);
+            action(ref borrow);
+            cancellationToken.ThrowIfCancellationRequested();
+            ValidateBorrowAuthority(authority);
+        }
+        catch (Exception failure)
+        {
+            FailOperation(failure);
+            throw;
+        }
+        finally
+        {
+            Interlocked.CompareExchange(
+                ref _activeBorrowAuthority,
+                0,
+                authority);
             ExitOperation();
             GC.KeepAlive(this);
         }
@@ -309,6 +330,138 @@ public sealed class NativeBuilder<T> : IDisposable
         {
             ExitOperation();
             GC.KeepAlive(this);
+        }
+    }
+
+    internal int ReadBorrowedState(
+        int authority,
+        bool readCapacity)
+    {
+        ValidateBorrowAuthority(authority);
+        _session.Validate("NativeBuilder.Borrow");
+        return readCapacity
+            ? _session.Capacity
+            : _count;
+    }
+
+    internal void AppendBorrowed(
+        int authority,
+        T value,
+        CancellationToken cancellationToken)
+    {
+        ValidateBorrowAuthority(authority);
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            _session.Append(value, _count);
+            _count++;
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+        catch (Exception failure)
+        {
+            FailOperation(failure);
+            throw;
+        }
+    }
+
+    internal void AppendBorrowed(
+        int authority,
+        scoped ReadOnlySpan<T> source,
+        CancellationToken cancellationToken)
+    {
+        ValidateBorrowAuthority(authority);
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            int required = checked(_count + source.Length);
+            _session.Append(source, _count, required);
+            _count = required;
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+        catch (Exception failure)
+        {
+            FailOperation(failure);
+            throw;
+        }
+    }
+
+    internal void WriteBorrowed(
+        int authority,
+        int maximumAdditionalCount,
+        NativeBuilderWriteAction<T> action,
+        CancellationToken cancellationToken)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(
+            maximumAdditionalCount);
+        ArgumentNullException.ThrowIfNull(action);
+        ValidateBorrowAuthority(authority);
+        try
+        {
+            WriteCore(
+                maximumAdditionalCount,
+                action,
+                cancellationToken);
+        }
+        catch (Exception failure)
+        {
+            FailOperation(failure);
+            throw;
+        }
+    }
+
+    private void WriteCore(
+        int maximumAdditionalCount,
+        NativeBuilderWriteAction<T> action,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        int required = checked(
+            _count + maximumAdditionalCount);
+        Span<T> values = _session.PrepareWrite(
+            _count,
+            required,
+            maximumAdditionalCount);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        int committedCount = -1;
+        action(new NativeBuilderWriter<T>(
+            values,
+            ref committedCount));
+        cancellationToken.ThrowIfCancellationRequested();
+        if (committedCount < 0)
+        {
+            throw new InvalidOperationException(
+                "The bounded builder write did not commit an initialized prefix.");
+        }
+
+        _session.CommitWrite(
+            _count,
+            committedCount);
+        _count = checked(_count + committedCount);
+    }
+
+    private int NextBorrowAuthority()
+    {
+        int authority = Interlocked.Increment(
+            ref _borrowEpoch);
+        if (authority != 0)
+        {
+            return authority;
+        }
+
+        return Interlocked.Increment(ref _borrowEpoch);
+    }
+
+    private void ValidateBorrowAuthority(int authority)
+    {
+        if (authority == 0
+            || Volatile.Read(ref _activeBorrowAuthority)
+                != authority
+            || Volatile.Read(ref _state) != Active
+            || Volatile.Read(ref _writerGate) != 1)
+        {
+            throw new InvalidOperationException(
+                "The native builder borrow is not active in its callback.");
         }
     }
 

@@ -278,6 +278,169 @@ public sealed class NativeBuilderTests
     }
 
     [Fact]
+    public void ExclusiveBorrowPassesThroughNestedHelpers()
+    {
+        using NativePool<int> pool = new(
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeBuilder<int> builder =
+            pool.CreateBuilder(preLease: 2);
+
+        builder.Borrow(WriteNestedValues);
+        builder.Append(11);
+        NativeTransfer<int> transfer = builder.Complete();
+
+        Assert.Equal(
+            new[] { 2, 3, 5, 7, 11 },
+            transfer.Read(
+                static view => view.AsSpan().ToArray()));
+        transfer.Dispose();
+    }
+
+    [Fact]
+    public void BorrowCallbackFailureReturnsStorageExactlyOnce()
+    {
+        using NativePool<int> pool = new(
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeBuilder<int> builder =
+            pool.CreateBuilder(preLease: 2);
+
+        Assert.Throws<FormatException>(
+            () => builder.Borrow(WriteThenFail));
+
+        builder.Dispose();
+        builder.Dispose();
+        Assert.Equal(0, pool.CurrentAllocationRecordCountForTest);
+        Assert.Equal(0, pool.CurrentInitializationCountForTest);
+        Assert.Equal(
+            0,
+            pool.CurrentGenerationActiveOperationsForTest);
+    }
+
+    [Fact]
+    public void BorrowCallbackCancellationReturnsStorageExactlyOnce()
+    {
+        using NativePool<int> pool = new(
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeBuilder<int> builder =
+            pool.CreateBuilder(preLease: 2);
+        using CancellationTokenSource cancellation = new();
+
+        void Cancel(
+            scoped ref NativeBuilderBorrow<int> borrow)
+        {
+            borrow.Append(13);
+            cancellation.Cancel();
+        }
+
+        Assert.Throws<OperationCanceledException>(
+            () => builder.Borrow(Cancel, cancellation.Token));
+
+        builder.Dispose();
+        Assert.Equal(0, pool.CurrentAllocationRecordCountForTest);
+        Assert.Equal(
+            0,
+            pool.CurrentGenerationActiveOperationsForTest);
+    }
+
+    [Fact]
+    public void OwnerUseDuringBorrowFailsClosed()
+    {
+        using NativePool<int> pool = new(
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeBuilder<int> builder =
+            pool.CreateBuilder(preLease: 2);
+
+        void UseOwner(
+            scoped ref NativeBuilderBorrow<int> borrow)
+        {
+            _ = borrow.Count;
+            builder.Append(17);
+        }
+
+        Assert.Throws<InvalidOperationException>(
+            () => builder.Borrow(UseOwner));
+        Assert.Equal(0, pool.CurrentAllocationRecordCountForTest);
+        builder.Dispose();
+    }
+
+    [Fact]
+    public async Task ConcurrentBorrowIsRejected()
+    {
+        using NativePool<int> pool = new(
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeBuilder<int> builder =
+            pool.CreateBuilder(preLease: 2);
+        using ManualResetEventSlim entered = new(false);
+        using ManualResetEventSlim release = new(false);
+
+        void HoldBorrow(
+            scoped ref NativeBuilderBorrow<int> borrow)
+        {
+            borrow.Append(19);
+            entered.Set();
+            Assert.True(release.Wait(TimeSpan.FromSeconds(5)));
+        }
+
+        Task active = Task.Run(
+            () => builder.Borrow(HoldBorrow));
+        Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
+        Assert.Throws<InvalidOperationException>(
+            () => builder.Borrow(
+                static (scoped ref NativeBuilderBorrow<int> borrow) =>
+                    borrow.Append(23)));
+        release.Set();
+        await active.WaitAsync(TimeSpan.FromSeconds(5));
+
+        NativeTransfer<int> transfer = builder.Complete();
+        Assert.Equal(
+            new[] { 19 },
+            transfer.Read(
+                static view => view.AsSpan().ToArray()));
+        transfer.Dispose();
+    }
+
+    [Fact]
+    public void BorrowAuthorityExpiresAfterTheCallback()
+    {
+        using NativePool<int> pool = new(
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeBuilder<int> builder =
+            pool.CreateBuilder(preLease: 2);
+        int authority = 0;
+
+        void RecordAuthority(
+            scoped ref NativeBuilderBorrow<int> borrow)
+        {
+            authority = borrow.AuthorityForTest;
+            borrow.Append(29);
+        }
+
+        builder.Borrow(RecordAuthority);
+        NativeBuilderBorrow<int> stale = new(
+            builder,
+            authority);
+
+        bool staleRejected = false;
+        try
+        {
+            stale.Append(31);
+        }
+        catch (InvalidOperationException)
+        {
+            staleRejected = true;
+        }
+
+        Assert.True(staleRejected);
+        builder.Append(31);
+        NativeTransfer<int> transfer = builder.Complete();
+        Assert.Equal(
+            new[] { 29, 31 },
+            transfer.Read(
+                static view => view.AsSpan().ToArray()));
+        transfer.Dispose();
+    }
+
+    [Fact]
     public void GeometricGrowthCreatesNoManagedIntermediateArray()
     {
         Type? resolvedKernelType =
@@ -846,6 +1009,35 @@ public sealed class NativeBuilderTests
             pool.CreateBuilder(preLease: 8);
         builder.Append([1, 2, 3, 4]);
         return new WeakReference(builder);
+    }
+
+    private static void WriteNestedValues(
+        scoped ref NativeBuilderBorrow<int> borrow)
+    {
+        AppendNestedValues(ref borrow);
+        borrow.Write(
+            2,
+            static writer =>
+            {
+                Span<int> values = writer.AsSpan();
+                values[0] = 5;
+                values[1] = 7;
+                writer.Commit(2);
+            });
+    }
+
+    private static void AppendNestedValues(
+        scoped ref NativeBuilderBorrow<int> borrow)
+    {
+        borrow.Append(2);
+        borrow.Append(3);
+    }
+
+    private static void WriteThenFail(
+        scoped ref NativeBuilderBorrow<int> borrow)
+    {
+        borrow.Append(13);
+        throw new FormatException("Expected test failure.");
     }
 
     private static IEnumerable<OpCode> ReadOpCodes(MethodInfo method)
