@@ -112,6 +112,60 @@ public sealed class AllocatorPerformanceRegressionTests
             Assert.InRange(pair.ArrayPool.Attempt, 1, 3);
             Assert.InRange(pair.Arena.Attempt, 1, 3);
         }
+
+        ArenaScopedRegressionReport scopedReport =
+            await RunWorker<ArenaScopedRegressionReport>(
+                "ArenaScoped");
+        AssertArenaScopedReport(scopedReport);
+    }
+
+    private static void AssertArenaScopedReport(
+        ArenaScopedRegressionReport report)
+    {
+        string evidence = JsonSerializer.Serialize(report);
+
+        Assert.True(report.Passed, evidence);
+        Assert.Equal("0", report.TieredCompilation);
+        Assert.Equal("0", report.TieredPgo);
+        Assert.True(report.SampleCount >= 7, evidence);
+        Assert.Equal(report.SampleCount, report.Pairs.Length);
+        Assert.True(
+            report.MedianSpeedup >= report.MinimumSpeedup,
+            evidence);
+        Assert.True(report.AggregateSpeedup > 0d, evidence);
+
+        int arrayPoolFirst = report.Pairs.Count(
+            pair => pair.Order == "ArrayPool-ArenaScoped");
+        int arenaFirst = report.Pairs.Count(
+            pair => pair.Order == "ArenaScoped-ArrayPool");
+        Assert.InRange(
+            Math.Abs(arrayPoolFirst - arenaFirst),
+            0,
+            1);
+        foreach (ArenaScopedPairEvidence pair in report.Pairs)
+        {
+            Assert.Equal(
+                pair.ArrayPool.Checksum,
+                pair.Arena.Checksum);
+            Assert.Equal(
+                pair.ArrayPool.LogicalBytes,
+                pair.Arena.LogicalBytes);
+            Assert.True(pair.Speedup > 0d, evidence);
+            Assert.True(
+                pair.ArrayPool.ElapsedMilliseconds
+                    >= MinimumSampleMilliseconds,
+                evidence);
+            Assert.True(
+                pair.Arena.ElapsedMilliseconds
+                    >= MinimumSampleMilliseconds,
+                evidence);
+            Assert.True(pair.ArrayPool.Accepted, evidence);
+            Assert.True(pair.Arena.Accepted, evidence);
+            Assert.Equal(0, pair.Arena.ManagedAllocatedBytes);
+            Assert.Equal(0, pair.Arena.FreshSegmentCount);
+            Assert.InRange(pair.ArrayPool.Attempt, 1, 3);
+            Assert.InRange(pair.Arena.Attempt, 1, 3);
+        }
     }
 
     private static async Task<TReport> RunWorker<TReport>(

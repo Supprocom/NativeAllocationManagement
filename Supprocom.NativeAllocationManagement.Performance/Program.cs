@@ -45,6 +45,14 @@ internal static class Program
             return report.Passed ? 0 : 3;
         }
 
+        if (args is ["--allocator-regression-worker", "--kind", "ArenaScoped"])
+        {
+            ArenaScopedRegressionReport report =
+                ArenaScopedPerformanceRegression.Run();
+            Console.WriteLine(JsonSerializer.Serialize(report));
+            return report.Passed ? 0 : 3;
+        }
+
         if (args is ["--region-phase-comparison"])
         {
             NativeRegionPhaseReport report =

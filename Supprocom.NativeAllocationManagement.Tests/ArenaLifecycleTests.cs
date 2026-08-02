@@ -255,7 +255,7 @@ public sealed class ArenaLifecycleTests
     }
 
     [Fact]
-    public void VaryingScopedBatchSizesKeepOnlyCurrentRecordsLive()
+    public void VaryingScopedBatchSizesUseNoManagedRecords()
     {
         NativeArena arena = new(
             preAllocateBytes: 4096,
@@ -270,14 +270,14 @@ public sealed class ArenaLifecycleTests
         ArenaLease<uint> third = arena.ScratchScoped<uint>(
             8,
             static writer => writer.Fill(3));
-        Assert.Equal(3, arena.CurrentAllocationRecordCountForTest);
+        Assert.Equal(0, arena.CurrentAllocationRecordCountForTest);
         arena.RecycleScoped();
         Assert.Equal(0, arena.CurrentAllocationRecordCountForTest);
 
         ArenaLease<long> only = arena.ScratchScoped<long>(
             4,
             static writer => writer.Fill(4));
-        Assert.Equal(1, arena.CurrentAllocationRecordCountForTest);
+        Assert.Equal(0, arena.CurrentAllocationRecordCountForTest);
         arena.RecycleScoped();
         Assert.Equal(0, arena.CurrentAllocationRecordCountForTest);
 

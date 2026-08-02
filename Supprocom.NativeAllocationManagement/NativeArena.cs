@@ -128,12 +128,32 @@ public sealed class NativeArena : IDisposable
         int length,
         NativeLeaseInitializer<T> initializer)
     {
+        bool containsReferences =
+            RuntimeHelpers.IsReferenceOrContainsReferences<T>();
+        int elementSize = containsReferences
+            ? IntPtr.Size
+            : Unsafe.SizeOf<T>();
+        nuint alignment = containsReferences
+            ? (nuint)IntPtr.Size
+            : CalculateArenaAlignment(elementSize);
+        if (!containsReferences
+            && _kernel.IsArenaFastThread)
+        {
+            NativeArenaAllocation direct =
+                _kernel.LeaseArenaScopedBumpInitialized(
+                    length,
+                    elementSize,
+                    alignment,
+                    initializer);
+            return new ArenaLease<T>(_kernel, direct);
+        }
+
         NativeRegionAllocation allocation = _kernel.LeaseBumpInitialized(
             length,
-            NativeTypeLayout.StorageSize<T>(),
-            NativeTypeLayout.Alignment<T>(),
+            elementSize,
+            alignment,
             scoped: true,
-            NativeTypeLayout.ContainsReferences<T>(),
+            containsReferences,
             initializer);
         return new ArenaLease<T>(_kernel, allocation);
     }
@@ -198,6 +218,7 @@ public readonly ref struct ArenaLease<T>
     private readonly long _payload;
     private readonly int _length;
     private readonly int _capacity;
+    private readonly long _scopeEpoch;
 
     internal ArenaLease(
         NativeOwnerKernel kernel,
@@ -210,6 +231,7 @@ public readonly ref struct ArenaLease<T>
         _payload = allocation.AllocationId;
         _length = allocation.Length;
         _capacity = allocation.Capacity;
+        _scopeEpoch = long.MinValue;
     }
 
     internal ArenaLease(
@@ -223,6 +245,7 @@ public readonly ref struct ArenaLease<T>
         _payload = allocation.Pointer.ToInt64();
         _length = allocation.Length;
         _capacity = allocation.Capacity;
+        _scopeEpoch = allocation.ScopeEpoch;
     }
 
     internal NativeOwnerKernel KernelForComposite =>
@@ -360,7 +383,7 @@ public readonly ref struct ArenaLease<T>
         {
             NativeArenaLocalOperationToken localToken =
                 kernel.EnterArenaFastLocalOperation(
-                    GetGenerationState(nameof(Access)),
+                    CreateArenaAllocation(),
                     nameof(Access));
             try
             {
@@ -398,7 +421,7 @@ public readonly ref struct ArenaLease<T>
         {
             NativeArenaLocalOperationToken localToken =
                 kernel.EnterArenaFastLocalOperation(
-                    GetGenerationState(nameof(Read)),
+                    CreateArenaAllocation(),
                     nameof(Read));
             try
             {
@@ -503,7 +526,8 @@ public readonly ref struct ArenaLease<T>
             GetGenerationState("NativeArena.Scratch"),
             GetArenaPointer(),
             OriginalCursor: 0,
-            _length);
+            _length,
+            _scopeEpoch);
 
     private nuint CalculateArenaStorageBytes() =>
         checked(

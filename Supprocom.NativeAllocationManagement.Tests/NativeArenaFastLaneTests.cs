@@ -59,6 +59,102 @@ public sealed class NativeArenaFastLaneTests
     }
 
     [Fact]
+    public void WarmUnmanagedScopedScratchUsesNoRecordsAllocationsOrSlowPaths()
+    {
+        NativeMemoryTestHooks.Reset();
+        using NativeArena arena = new(
+            preAllocateBytes: 65_536,
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeLeaseInitializer<int> fillSeven =
+            static writer => writer.Fill(7);
+        NativeLeaseFunc<int, int> sumFour =
+            static view =>
+                view[0] + view[1] + view[2] + view[3];
+        ArenaLease<int> warm = arena.ScratchScoped<int>(
+            4,
+            fillSeven);
+        Assert.Equal(28, warm.Read(sumFour));
+        arena.RecycleScoped();
+        ArenaLease<int> reusedWarm = arena.ScratchScoped<int>(
+            4,
+            fillSeven);
+        Assert.Equal(28, reusedWarm.Read(sumFour));
+        arena.RecycleScoped();
+
+        NativeOwnerStatistics before = arena.GetStatistics();
+        NativeMemoryTestMetrics hooksBefore =
+            NativeMemoryTestHooks.Snapshot();
+        long slowPathsBefore =
+            arena.CurrentFastLaneSlowPathCountForTest;
+        long allocatedBefore =
+            GC.GetAllocatedBytesForCurrentThread();
+        int checksum = 0;
+        for (int index = 0; index < 1_000; index++)
+        {
+            ArenaLease<int> lease = arena.ScratchScoped<int>(
+                4,
+                fillSeven);
+            checksum = checked(
+                checksum
+                + lease.Read(sumFour));
+            arena.RecycleScoped();
+        }
+
+        long allocatedBytes =
+            GC.GetAllocatedBytesForCurrentThread()
+            - allocatedBefore;
+        NativeOwnerStatistics after = arena.GetStatistics();
+        NativeMemoryTestMetrics hooksAfter =
+            NativeMemoryTestHooks.Snapshot();
+
+        Assert.Equal(28_000, checksum);
+        Assert.Equal(0, allocatedBytes);
+        Assert.Equal(0, arena.CurrentAllocationRecordCountForTest);
+        Assert.Equal(before.RequestedBytes, after.RequestedBytes);
+        Assert.Equal(
+            slowPathsBefore,
+            arena.CurrentFastLaneSlowPathCountForTest);
+        Assert.Equal(
+            hooksBefore.BumpTraversalVisitCount,
+            hooksAfter.BumpTraversalVisitCount);
+        Assert.Equal(
+            before.FreshSegmentAllocationCount,
+            after.FreshSegmentAllocationCount);
+    }
+
+    [Fact]
+    public void ScopedRecycleInvalidatesFastHandlesOnly()
+    {
+        using NativeArena arena = new(
+            preAllocateBytes: 4_096,
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        ArenaLease<int> ordinary = arena.Scratch<int>(
+            1,
+            static writer => writer.Write(17));
+        ArenaLease<int> scoped = arena.ScratchScoped<int>(
+            1,
+            static writer => writer.Write(23));
+        long scopeEpoch =
+            arena.CaptureDiagnosticSnapshot().ScopeEpoch;
+
+        arena.RecycleScoped();
+
+        Assert.Equal(17, ordinary[0]);
+        Assert.IsType<NativeAllocationReturnedException>(
+            CaptureReturned(scoped));
+        Assert.Equal(
+            scopeEpoch + 1,
+            arena.CaptureDiagnosticSnapshot().ScopeEpoch);
+
+        ArenaLease<int> empty = arena.ScratchScoped<int>(
+            0,
+            static writer => writer.Fill(default!));
+        arena.RecycleScoped();
+        Assert.IsType<NativeAllocationReturnedException>(
+            CaptureReturned(empty));
+    }
+
+    [Fact]
     public void FailedFastInitializerRestoresTheWarmCursor()
     {
         NativeMemoryTestHooks.Reset();
@@ -134,5 +230,21 @@ public sealed class NativeArenaFastLaneTests
         Assert.Equal(
             beforeGrowth.FreshSegmentAllocationCount + 1,
             arena.GetStatistics().FreshSegmentAllocationCount);
+    }
+
+    private static Exception CaptureReturned<T>(
+        ArenaLease<T> lease)
+    {
+        try
+        {
+            _ = lease.Length;
+        }
+        catch (Exception exception)
+        {
+            return exception;
+        }
+
+        throw new Xunit.Sdk.XunitException(
+            "Expected a returned Arena lease.");
     }
 }
