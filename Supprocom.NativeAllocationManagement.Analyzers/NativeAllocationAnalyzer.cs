@@ -67,19 +67,25 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         {
             Pool = compilation.GetTypeByMetadataName(
                 Namespace + "NativePool`1");
-            Region = compilation.GetTypeByMetadataName(
+            IAssemblySymbol? runtimeAssembly = Pool?.ContainingAssembly;
+            if (runtimeAssembly is null)
+            {
+                return;
+            }
+
+            Region = runtimeAssembly.GetTypeByMetadataName(
                 Namespace + "NativeRegion");
-            Arena = compilation.GetTypeByMetadataName(
+            Arena = runtimeAssembly.GetTypeByMetadataName(
                 Namespace + "NativeArena");
-            Pooled = compilation.GetTypeByMetadataName(
+            Pooled = runtimeAssembly.GetTypeByMetadataName(
                 Namespace + "Pooled`1");
-            Local = compilation.GetTypeByMetadataName(
+            Local = runtimeAssembly.GetTypeByMetadataName(
                 Namespace + "Local`1");
-            ArenaLease = compilation.GetTypeByMetadataName(
+            ArenaLease = runtimeAssembly.GetTypeByMetadataName(
                 Namespace + "ArenaLease`1");
-            Transfer = compilation.GetTypeByMetadataName(
+            Transfer = runtimeAssembly.GetTypeByMetadataName(
                 Namespace + "NativeTransfer`1");
-            LeaseView = compilation.GetTypeByMetadataName(
+            LeaseView = runtimeAssembly.GetTypeByMetadataName(
                 Namespace + "NativeLeaseView`1");
         }
 
@@ -193,6 +199,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         private readonly HashSet<IInvocationOperation> _preprocessedTransferInvocations = [];
         private readonly Dictionary<ControlFlowRegion, List<FinallyAnalysisCacheEntry>>
             _finallyAnalysisCache = new();
+        private readonly HashSet<int> _ownershipRelevantBlocks = [];
         private int _closureDepth;
         private int _finallyProtectionDepth;
         private int _finallyDepth;
@@ -434,6 +441,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         {
             _context.CancellationToken.ThrowIfCancellationRequested();
             _finallyAnalysisCache.Clear();
+            BuildOwnershipRelevantBlocks(graph);
             BuildLocalLifetimeRegions(graph);
             BasicBlock entry = graph.Blocks.First(block => block.Kind == BasicBlockKind.Entry);
             FlowSnapshot initial = CaptureSnapshot();
@@ -478,10 +486,19 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     continue;
                 }
 
-                entryStates[block] = CloneSnapshot(incoming);
-                RestoreSnapshot(incoming);
-                VisitBlock(block);
-                FlowSnapshot outgoing = CaptureSnapshot();
+                FlowSnapshot stableIncoming = CloneSnapshot(incoming);
+                entryStates[block] = stableIncoming;
+                FlowSnapshot outgoing;
+                if (_ownershipRelevantBlocks.Contains(block.Ordinal))
+                {
+                    RestoreSnapshot(stableIncoming);
+                    VisitBlock(block);
+                    outgoing = CaptureSnapshot();
+                }
+                else
+                {
+                    outgoing = stableIncoming;
+                }
                 bool changed = !exitStates.TryGetValue(block, out FlowSnapshot? oldExit)
                     || !SnapshotEquivalent(oldExit, outgoing);
                 exitStates[block] = outgoing;
@@ -504,6 +521,11 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             {
                 _context.CancellationToken.ThrowIfCancellationRequested();
                 if (!entryStates.TryGetValue(block, out FlowSnapshot? incoming))
+                {
+                    continue;
+                }
+
+                if (!_ownershipRelevantBlocks.Contains(block.Ordinal))
                 {
                     continue;
                 }
@@ -710,6 +732,11 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
         private void VisitBlock(BasicBlock block)
         {
+            if (!_ownershipRelevantBlocks.Contains(block.Ordinal))
+            {
+                return;
+            }
+
             foreach (IOperation operation in block.Operations)
             {
                 Visit(operation);
@@ -719,6 +746,32 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             {
                 Visit(block.BranchValue);
             }
+        }
+
+        private void BuildOwnershipRelevantBlocks(ControlFlowGraph graph)
+        {
+            _ownershipRelevantBlocks.Clear();
+            foreach (BasicBlock block in graph.Blocks)
+            {
+                bool relevant = block.Operations.Any(OperationRequiresOwnershipVisit)
+                    || block.BranchValue is not null
+                        && OperationRequiresOwnershipVisit(block.BranchValue);
+                if (relevant)
+                {
+                    _ownershipRelevantBlocks.Add(block.Ordinal);
+                }
+            }
+        }
+
+        private bool OperationRequiresOwnershipVisit(IOperation operation)
+        {
+            return operation.DescendantsAndSelf().Any(candidate =>
+                IsOwnerType(candidate.Type)
+                || IsHandleType(candidate.Type)
+                || IsNativeTransfer(candidate.Type)
+                || candidate is IAwaitOperation
+                || candidate is IReturnOperation
+                || candidate is IThrowOperation);
         }
 
         private FlowSnapshot ApplyBranchTransfer(
@@ -847,9 +900,17 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                         continue;
                     }
 
-                    RestoreSnapshot(incoming);
-                    VisitBlock(block);
-                    FlowSnapshot outgoing = CaptureSnapshot();
+                    FlowSnapshot outgoing;
+                    if (_ownershipRelevantBlocks.Contains(block.Ordinal))
+                    {
+                        RestoreSnapshot(incoming);
+                        VisitBlock(block);
+                        outgoing = CaptureSnapshot();
+                    }
+                    else
+                    {
+                        outgoing = incoming;
+                    }
                     bool changed = !exitStates.TryGetValue(block, out FlowSnapshot? oldExit)
                         || !SnapshotEquivalent(oldExit, outgoing);
                     exitStates[block] = outgoing;
