@@ -47,7 +47,7 @@ public sealed class PublicSurfaceTests
             type => type.Name.Contains("Mesh", StringComparison.OrdinalIgnoreCase));
         Assert.NotNull(typeof(NativeArena).GetMethod("RecycleScoped"));
         Assert.NotNull(typeof(NativePool<int>).GetMethod("RecycleScoped"));
-        Assert.NotNull(typeof(NativeRegion).GetMethod("RecycleScoped"));
+        Assert.Null(typeof(NativeRegion).GetMethod("RecycleScoped"));
         Assert.Null(typeof(ArenaLease<int>).GetMethod("Dispose"));
         Assert.Null(typeof(Pooled<int>).GetMethod("TrimRetainedMemory"));
         Assert.Null(typeof(Local<int>).GetMethod("TrimRetainedMemory"));
