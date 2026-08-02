@@ -2275,7 +2275,9 @@ public sealed class AnalyzerContractTests
             .ToArray();
     }
 
-    internal static async Task<ImmutableArray<Diagnostic>> AnalyzeAsync(string source)
+    internal static async Task<ImmutableArray<Diagnostic>> AnalyzeAsync(
+        string source,
+        OutputKind outputKind = OutputKind.DynamicallyLinkedLibrary)
     {
         CSharpParseOptions parseOptions = new(LanguageVersion.Preview);
         SyntaxTree tree = CSharpSyntaxTree.ParseText(source, parseOptions);
@@ -2289,7 +2291,7 @@ public sealed class AnalyzerContractTests
             assemblyName: "NativeAllocationAnalyzerContract",
             syntaxTrees: [tree],
             references: references,
-            options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, allowUnsafe: true));
+            options: new CSharpCompilationOptions(outputKind, allowUnsafe: true));
 
         CompilationWithAnalyzers analyzed = compilation.WithAnalyzers(
             ImmutableArray.Create<DiagnosticAnalyzer>(new NativeAllocationAnalyzer()));

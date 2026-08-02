@@ -1925,7 +1925,9 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             try
             {
                 Visit(operation.Body);
-                tryPath = CaptureSnapshot();
+                tryPath = EndNestedTransferScope(
+                    operation.Body,
+                    CaptureSnapshot());
                 FlowSnapshot catchEntry = MergeSnapshotsForResult(before, tryPath);
                 paths = [tryPath, catchEntry];
 
@@ -1933,7 +1935,9 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 {
                     RestoreSnapshot(catchEntry);
                     Visit(catchClause);
-                    paths.Add(CaptureSnapshot());
+                    paths.Add(EndNestedTransferScope(
+                        catchClause,
+                        CaptureSnapshot()));
                 }
             }
             finally
@@ -1951,7 +1955,9 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     {
                         RestoreSnapshot(paths[index]);
                         Visit(operation.Finally);
-                        paths[index] = CaptureSnapshot();
+                        paths[index] = EndNestedTransferScope(
+                            operation.Finally,
+                            CaptureSnapshot());
                     }
                 }
                 finally
@@ -1961,6 +1967,53 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             }
 
             MergeSnapshots(paths.ToArray());
+        }
+
+        private FlowSnapshot EndNestedTransferScope(
+            IOperation scope,
+            FlowSnapshot snapshot)
+        {
+            FlowSnapshot result = CloneSnapshot(snapshot);
+            foreach (KeyValuePair<ISymbol, TransferState> pair in result.Transfers
+                .Where(pair => pair.Key is ILocalSymbol
+                    && IsDeclaredWithin(pair.Key, scope.Syntax))
+                .ToArray())
+            {
+                TransferState transfer = pair.Value;
+                if (transfer.MustEnd
+                    && !transfer.IsUsing
+                    && transfer.Status is TransferStatus.Active or TransferStatus.Ambiguous)
+                {
+                    Report(
+                        NativeAllocationDiagnosticDescriptors.TransferLifetime,
+                        transfer.Syntax,
+                        transfer.DisplayName);
+                }
+
+                result.Transfers.Remove(pair.Key);
+            }
+
+            return result;
+        }
+
+        private bool IsDeclaredWithin(
+            ISymbol symbol,
+            SyntaxNode scope)
+        {
+            foreach (SyntaxReference reference in symbol.DeclaringSyntaxReferences)
+            {
+                SyntaxNode declaration = reference.GetSyntax(
+                    _context.CancellationToken);
+                if (ReferenceEquals(
+                        declaration.SyntaxTree,
+                        scope.SyntaxTree)
+                    && scope.Span.Contains(declaration.SpanStart))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         public override void VisitPropertyReference(IPropertyReferenceOperation operation)

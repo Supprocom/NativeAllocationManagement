@@ -397,4 +397,76 @@ public sealed class NativeTransferAnalyzerTests
             AnalyzerContractTests.NativeDiagnostics(diagnostics).Length == 0,
             string.Join(Environment.NewLine, diagnostics));
     }
+
+    [Fact]
+    public async Task DisposalInFinallyInsideThreadCallbackIsAccepted()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using System.Threading;
+            using System.Threading.Channels;
+            using Supprocom.NativeAllocationManagement;
+
+            Channel<NativeTransfer<int>> channel =
+                Channel.CreateBounded<NativeTransfer<int>>(1);
+            Thread receiver = new(
+                () =>
+                {
+                    try
+                    {
+                        NativeTransfer<int> inbound = channel.Reader
+                            .ReadAsync()
+                            .AsTask()
+                            .GetAwaiter()
+                            .GetResult();
+                        try
+                        {
+                            _ = inbound.Read(static view => view[0]);
+                        }
+                        finally
+                        {
+                            inbound.Dispose();
+                        }
+                    }
+                    catch
+                    {
+                    }
+                });
+            receiver.Start();
+            """,
+            OutputKind.ConsoleApplication);
+
+        Assert.True(
+            AnalyzerContractTests.NativeDiagnostics(diagnostics).Length == 0,
+            string.Join(Environment.NewLine, diagnostics));
+    }
+
+    [Fact]
+    public async Task ActiveTransferDeclaredInTryIsRejectedAtTryExit()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run(NativePool<int> pool)
+                {
+                    try
+                    {
+                        NativeTransfer<int> transfer = pool.RentTransferable(
+                            1,
+                            static writer => writer.Fill(1));
+                    }
+                    catch
+                    {
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains(
+            "NAM1025",
+            AnalyzerContractTests.NativeDiagnostics(diagnostics));
+    }
 }
