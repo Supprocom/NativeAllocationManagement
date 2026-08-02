@@ -520,6 +520,48 @@ public sealed class NativeArenaConcurrentTransferTests
     }
 
     [Fact]
+    public void ReturnedWaveReusesStorageAroundAnOrdinaryArenaLease()
+    {
+        NativeMemoryTestHooks.Reset();
+        try
+        {
+            using NativeArena arena = new(
+                preAllocateBytes: 1_024,
+                returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            NativeTransfer<int> first =
+                arena.ScratchTransferable<int>(
+                    64,
+                    static writer => writer.Fill(17));
+            ArenaLease<long> anchor = arena.Scratch<long>(
+                32,
+                static writer => writer.Fill(29));
+            long allocationCount =
+                NativeMemoryTestHooks.Snapshot().AllocationCount;
+
+            first.Dispose();
+            NativeTransfer<int> replacement =
+                arena.ScratchTransferable<int>(
+                    64,
+                    static writer => writer.Fill(31));
+
+            Assert.Equal(
+                allocationCount,
+                NativeMemoryTestHooks.Snapshot().AllocationCount);
+            Assert.Equal(29, anchor.Read(static view => view[0]));
+            Assert.Equal(
+                31,
+                replacement.Read(static view => view[0]));
+            replacement.Dispose();
+            Assert.Equal(29, anchor.Read(static view => view[0]));
+            Assert.Equal(0, arena.CurrentConcurrentReservationCountForTest);
+        }
+        finally
+        {
+            NativeMemoryTestHooks.Reset();
+        }
+    }
+
+    [Fact]
     public void EmptyTransferPublishesAndReturnsExactlyOnce()
     {
         using NativeArena arena = new(

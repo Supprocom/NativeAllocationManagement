@@ -1299,6 +1299,7 @@ internal readonly record struct NativeBumpFreeRange(
 internal sealed class NativeBumpSegment
 {
     private readonly List<NativeBumpFreeRange> _concurrentFreeRanges = [];
+    private bool _concurrentFreeRangesConsolidated = true;
     private int _concurrentReservations;
 
     internal NativeBumpSegment(NativeSegment segment, long allocationOrdinal)
@@ -1337,9 +1338,140 @@ internal sealed class NativeBumpSegment
         nuint alignment,
         out nuint offset)
     {
-        offset = 0;
-        int bestIndex = -1;
-        nuint bestOffset = 0;
+        if (!TryFindConcurrentRange(
+                byteLength,
+                alignment,
+                out int bestIndex,
+                out nuint bestOffset)
+            && !_concurrentFreeRangesConsolidated)
+        {
+            ConsolidateConcurrentFreeRanges();
+            _ = TryFindConcurrentRange(
+                byteLength,
+                alignment,
+                out bestIndex,
+                out bestOffset);
+        }
+
+        if (bestIndex < 0)
+        {
+            offset = 0;
+            return false;
+        }
+
+        _concurrentFreeRanges.EnsureCapacity(
+            checked(_concurrentFreeRanges.Count + 1));
+        int reservationCount = checked(
+            _concurrentReservations + 1);
+        NativeBumpFreeRange selected =
+            _concurrentFreeRanges[bestIndex];
+        nuint selectedEnd = selected.End;
+        nuint allocationEnd = checked(
+            bestOffset + byteLength);
+        nuint leftLength = bestOffset - selected.Offset;
+        nuint rightLength = selectedEnd - allocationEnd;
+        if (leftLength != 0 && rightLength != 0)
+        {
+            _concurrentFreeRanges[bestIndex] = new(
+                selected.Offset,
+                leftLength);
+            _concurrentFreeRanges.Add(
+                new NativeBumpFreeRange(
+                    allocationEnd,
+                    rightLength));
+            _concurrentFreeRangesConsolidated = false;
+        }
+        else if (leftLength != 0)
+        {
+            _concurrentFreeRanges[bestIndex] = new(
+                selected.Offset,
+                leftLength);
+        }
+        else if (rightLength != 0)
+        {
+            _concurrentFreeRanges[bestIndex] = new(
+                allocationEnd,
+                rightLength);
+        }
+        else
+        {
+            RemoveConcurrentFreeRangeAt(bestIndex);
+        }
+
+        _concurrentReservations = reservationCount;
+        offset = bestOffset;
+        return true;
+    }
+
+    internal void ReserveConcurrentTail(
+        nuint originalCursor,
+        nuint offset,
+        nuint byteLength)
+    {
+        if (checked(offset + byteLength) != LowCursor
+            || offset < originalCursor)
+        {
+            throw new InvalidOperationException(
+                "The concurrent arena tail reservation is inconsistent.");
+        }
+
+        _concurrentFreeRanges.EnsureCapacity(
+            checked(_concurrentFreeRanges.Count + 1));
+        int reservationCount = checked(
+            _concurrentReservations + 1);
+        if (offset > originalCursor)
+        {
+            AppendConcurrentFreeRange(
+                originalCursor,
+                offset - originalCursor);
+        }
+
+        _concurrentReservations = reservationCount;
+    }
+
+    internal void PrepareConcurrentRangeReturn()
+    {
+        _concurrentFreeRanges.EnsureCapacity(
+            checked(_concurrentFreeRanges.Count + 1));
+    }
+
+    internal void ReleaseConcurrentRange(
+        nuint offset,
+        nuint byteLength)
+    {
+        if (_concurrentReservations <= 0)
+        {
+            throw new InvalidOperationException(
+                "The concurrent arena range was already returned.");
+        }
+
+        PrepareConcurrentRangeReturn();
+        ValidateConcurrentRange(offset, byteLength);
+        int reservationCount = checked(
+            _concurrentReservations - 1);
+        AppendConcurrentFreeRange(offset, byteLength);
+        _concurrentReservations = reservationCount;
+        if (reservationCount == 0)
+        {
+            ConsolidateConcurrentFreeRanges();
+        }
+    }
+
+    internal void ResetConcurrentRanges()
+    {
+        _concurrentFreeRanges.Clear();
+        _concurrentFreeRangesConsolidated = true;
+        _concurrentReservations = 0;
+    }
+
+    private bool TryFindConcurrentRange(
+        nuint byteLength,
+        nuint alignment,
+        out int bestIndex,
+        out nuint bestOffset)
+    {
+        bestIndex = -1;
+        bestOffset = 0;
         nuint bestWaste = nuint.MaxValue;
         for (int index = 0;
             index < _concurrentFreeRanges.Count;
@@ -1368,113 +1500,10 @@ internal sealed class NativeBumpSegment
             bestWaste = waste;
         }
 
-        if (bestIndex < 0)
-        {
-            return false;
-        }
-
-        _concurrentFreeRanges.EnsureCapacity(
-            checked(_concurrentFreeRanges.Count + 1));
-        int reservationCount = checked(
-            _concurrentReservations + 1);
-        NativeBumpFreeRange selected =
-            _concurrentFreeRanges[bestIndex];
-        nuint selectedEnd = selected.End;
-        nuint allocationEnd = checked(
-            bestOffset + byteLength);
-        nuint leftLength = bestOffset - selected.Offset;
-        nuint rightLength = selectedEnd - allocationEnd;
-        if (leftLength != 0 && rightLength != 0)
-        {
-            _concurrentFreeRanges[bestIndex] = new(
-                selected.Offset,
-                leftLength);
-            _concurrentFreeRanges.Insert(
-                bestIndex + 1,
-                new NativeBumpFreeRange(
-                    allocationEnd,
-                    rightLength));
-        }
-        else if (leftLength != 0)
-        {
-            _concurrentFreeRanges[bestIndex] = new(
-                selected.Offset,
-                leftLength);
-        }
-        else if (rightLength != 0)
-        {
-            _concurrentFreeRanges[bestIndex] = new(
-                allocationEnd,
-                rightLength);
-        }
-        else
-        {
-            _concurrentFreeRanges.RemoveAt(bestIndex);
-        }
-
-        _concurrentReservations = reservationCount;
-        offset = bestOffset;
-        return true;
+        return bestIndex >= 0;
     }
 
-    internal void ReserveConcurrentTail(
-        nuint originalCursor,
-        nuint offset,
-        nuint byteLength)
-    {
-        if (checked(offset + byteLength) != LowCursor
-            || offset < originalCursor)
-        {
-            throw new InvalidOperationException(
-                "The concurrent arena tail reservation is inconsistent.");
-        }
-
-        _concurrentFreeRanges.EnsureCapacity(
-            checked(_concurrentFreeRanges.Count + 1));
-        int reservationCount = checked(
-            _concurrentReservations + 1);
-        if (offset > originalCursor)
-        {
-            InsertConcurrentFreeRange(
-                originalCursor,
-                offset - originalCursor);
-        }
-
-        _concurrentReservations = reservationCount;
-    }
-
-    internal void PrepareConcurrentRangeReturn()
-    {
-        _concurrentFreeRanges.EnsureCapacity(
-            checked(_concurrentFreeRanges.Count + 1));
-    }
-
-    internal void ReleaseConcurrentRange(
-        nuint offset,
-        nuint byteLength)
-    {
-        if (_concurrentReservations <= 0)
-        {
-            throw new InvalidOperationException(
-                "The concurrent arena range was already returned.");
-        }
-
-        PrepareConcurrentRangeReturn();
-        ValidateConcurrentFreeRange(offset, byteLength);
-        int reservationCount = checked(
-            _concurrentReservations - 1);
-        InsertConcurrentFreeRange(offset, byteLength);
-        _concurrentReservations = reservationCount;
-        CompactConcurrentTail();
-    }
-
-    internal void ResetConcurrentRanges()
-    {
-        _concurrentFreeRanges.Clear();
-        _concurrentReservations = 0;
-    }
-
-    private void ValidateConcurrentFreeRange(
+    private void ValidateConcurrentRange(
         nuint offset,
         nuint byteLength)
     {
@@ -1484,19 +1513,9 @@ internal sealed class NativeBumpSegment
             throw new InvalidOperationException(
                 "The concurrent arena range is outside its segment.");
         }
-
-        foreach (NativeBumpFreeRange range in
-            _concurrentFreeRanges)
-        {
-            if (end > range.Offset && offset < range.End)
-            {
-                throw new InvalidOperationException(
-                    "The concurrent arena range overlaps returned storage.");
-            }
-        }
     }
 
-    private void InsertConcurrentFreeRange(
+    private void AppendConcurrentFreeRange(
         nuint offset,
         nuint byteLength)
     {
@@ -1505,38 +1524,51 @@ internal sealed class NativeBumpSegment
             return;
         }
 
-        nuint end = checked(offset + byteLength);
-        int index = 0;
-        while (index < _concurrentFreeRanges.Count
-            && _concurrentFreeRanges[index].Offset < offset)
-        {
-            index++;
-        }
-
-        if (index > 0
-            && _concurrentFreeRanges[index - 1].End == offset)
-        {
-            NativeBumpFreeRange previous =
-                _concurrentFreeRanges[index - 1];
-            offset = previous.Offset;
-            byteLength = checked(previous.Length + byteLength);
-            end = checked(offset + byteLength);
-            _concurrentFreeRanges.RemoveAt(index - 1);
-            index--;
-        }
-
-        if (index < _concurrentFreeRanges.Count
-            && _concurrentFreeRanges[index].Offset == end)
-        {
-            NativeBumpFreeRange next =
-                _concurrentFreeRanges[index];
-            byteLength = checked(byteLength + next.Length);
-            _concurrentFreeRanges.RemoveAt(index);
-        }
-
-        _concurrentFreeRanges.Insert(
-            index,
+        _concurrentFreeRanges.Add(
             new NativeBumpFreeRange(offset, byteLength));
+        _concurrentFreeRangesConsolidated = false;
+    }
+
+    private void ConsolidateConcurrentFreeRanges()
+    {
+        if (!_concurrentFreeRangesConsolidated
+            && _concurrentFreeRanges.Count > 1)
+        {
+            _concurrentFreeRanges.Sort(
+                static (left, right) => left.Offset.CompareTo(right.Offset));
+            int writeIndex = 0;
+            NativeBumpFreeRange merged = _concurrentFreeRanges[0];
+            for (int readIndex = 1;
+                readIndex < _concurrentFreeRanges.Count;
+                readIndex++)
+            {
+                NativeBumpFreeRange next =
+                    _concurrentFreeRanges[readIndex];
+                nuint mergedEnd = merged.End;
+                if (next.Offset <= mergedEnd)
+                {
+                    nuint end = Math.Max(mergedEnd, next.End);
+                    merged = new NativeBumpFreeRange(
+                        merged.Offset,
+                        end - merged.Offset);
+                    continue;
+                }
+
+                _concurrentFreeRanges[writeIndex++] = merged;
+                merged = next;
+            }
+
+            _concurrentFreeRanges[writeIndex++] = merged;
+            if (writeIndex < _concurrentFreeRanges.Count)
+            {
+                _concurrentFreeRanges.RemoveRange(
+                    writeIndex,
+                    _concurrentFreeRanges.Count - writeIndex);
+            }
+        }
+
+        _concurrentFreeRangesConsolidated = true;
+        CompactConcurrentTail();
     }
 
     private void CompactConcurrentTail()
@@ -1554,6 +1586,19 @@ internal sealed class NativeBumpSegment
             LowCursor = range.Offset;
             _concurrentFreeRanges.RemoveAt(index);
         }
+    }
+
+    private void RemoveConcurrentFreeRangeAt(int index)
+    {
+        int lastIndex = _concurrentFreeRanges.Count - 1;
+        if (index != lastIndex)
+        {
+            _concurrentFreeRanges[index] =
+                _concurrentFreeRanges[lastIndex];
+            _concurrentFreeRangesConsolidated = false;
+        }
+
+        _concurrentFreeRanges.RemoveAt(lastIndex);
     }
 
     private static nuint AlignUpRange(
