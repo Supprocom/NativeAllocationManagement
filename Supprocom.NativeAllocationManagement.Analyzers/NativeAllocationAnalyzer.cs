@@ -333,7 +333,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                         .GetSyntax(_context.CancellationToken);
                 _transfers.Add(
                     parameter,
-                    TransferState.CreateExternal(
+                    TransferState.CreateParameter(
                         parameter,
                         syntax));
             }
@@ -2843,7 +2843,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             operation.ConstantValue.HasValue
             && operation.ConstantValue.Value is null;
 
-        private static bool IsSafeTransferEscape(
+        private bool IsSafeTransferEscape(
             IInvocationOperation move)
         {
             IOperation current = move;
@@ -2853,12 +2853,17 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 current = conversion;
             }
 
-            return current.Parent is IArgumentOperation
-                or IReturnOperation
+            bool safeParent = current.Parent switch
+            {
+                IArgumentOperation argument =>
+                    IsNativeTransfer(argument.Parameter?.Type),
+                IReturnOperation => true,
+                _ => false
+            };
+            return safeParent
                 || move.Syntax.Ancestors()
                     .Any(ancestor => ancestor is ReturnStatementSyntax
-                        or ArrowExpressionClauseSyntax
-                        or ArgumentSyntax);
+                        or ArrowExpressionClauseSyntax);
         }
 
         private bool IsTransferMoveInvocation(IOperation operation) =>
@@ -5373,6 +5378,19 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     CreateSymbolIdentity(symbol),
                     TransferStatus.Active,
                     mustEnd: false,
+                    isUsing: false,
+                    syntax);
+
+            internal static TransferState CreateParameter(
+                IParameterSymbol symbol,
+                SyntaxNode syntax) =>
+                new(
+                    symbol,
+                    CreateSymbolIdentity(symbol),
+                    symbol.RefKind == RefKind.Out
+                        ? TransferStatus.Unowned
+                        : TransferStatus.Active,
+                    mustEnd: symbol.RefKind == RefKind.None,
                     isUsing: false,
                     syntax);
 

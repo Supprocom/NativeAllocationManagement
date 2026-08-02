@@ -4201,6 +4201,44 @@ internal sealed class NativeOwnerKernel
             operation,
             notifyHooks: true);
 
+    internal void TransferLeaseAuthority<TState>(
+        NativeGeneration expectedGeneration,
+        NativeAllocation expectedAllocation,
+        long generationNumber,
+        long allocationId,
+        string operation,
+        TState state,
+        Action<TState> publish)
+    {
+        ArgumentNullException.ThrowIfNull(publish);
+        NativeMemoryTestHooks.NotifyBeforeOperationEntry(
+            operation,
+            this);
+        lock (_gate)
+        {
+            NativeGeneration generation = EnsureActiveLocked(
+                operation,
+                generationNumber,
+                allocationId);
+            if (!ReferenceEquals(generation, expectedGeneration)
+                || !IsDirectHandleActive(
+                    generation,
+                    expectedAllocation,
+                    generationNumber,
+                    allocationId))
+            {
+                throw CreateReturnedException(
+                    operation,
+                    generationNumber,
+                    _generation,
+                    allocationId,
+                    "The transfer authority belongs to an inactive allocation.");
+            }
+
+            publish(state);
+        }
+    }
+
     private NativeOperationToken EnterOperationCore(
         NativeGeneration generation,
         NativeAllocation allocation,

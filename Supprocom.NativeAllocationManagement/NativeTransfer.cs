@@ -291,6 +291,23 @@ public sealed class NativeTransfer<T> : IDisposable
                 "NativeTransfer.Move found an active callback. The source will return after that callback ends.");
         }
 
+        try
+        {
+            _ownership.TransferAuthority(
+                new MovePublication(this, destination),
+                static publication => publication.Publish());
+        }
+        catch
+        {
+            _ownership.ReturnFromFinalizer();
+            Volatile.Write(ref _state, Disposed);
+            GC.SuppressFinalize(this);
+            throw;
+        }
+    }
+
+    private void PublishMove(NativeTransfer<T> destination)
+    {
         NativeOperationAdmission.Reset(
             ref destination._operationAdmission);
         Volatile.Write(ref destination._state, Active);
@@ -354,6 +371,13 @@ public sealed class NativeTransfer<T> : IDisposable
         {
         }
     }
+
+    private readonly record struct MovePublication(
+        NativeTransfer<T> Source,
+        NativeTransfer<T> Destination)
+    {
+        internal void Publish() => Source.PublishMove(Destination);
+    }
 }
 
 internal sealed class NativeTransferOwnership
@@ -398,6 +422,18 @@ internal sealed class NativeTransferOwnership
             _generation,
             _allocationId,
             operation);
+
+    internal void TransferAuthority<TState>(
+        TState state,
+        Action<TState> publish) =>
+        _kernel.TransferLeaseAuthority(
+            _generationState,
+            _allocationState,
+            _generation,
+            _allocationId,
+            "NativeTransfer.Move",
+            state,
+            publish);
 
     internal void Return(string operation)
     {

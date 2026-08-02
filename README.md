@@ -111,6 +111,10 @@ The bundled analyzer rejects copied ownership, inactive use, double moves, escap
 views, unfinished lifetimes, and direct acquisition into storage. These rules are
 `NAM1021` through `NAM1026`.
 
+An ordinary `NativeTransfer<T>` parameter receives ownership. The receiver must dispose
+or move that ownership on every method exit. Pass only a move expression to the receiver.
+An untyped parameter cannot receive transfer ownership.
+
 ## Typed pools
 
 Pool declarations are ordinary C# using declarations. The default constructor publishes

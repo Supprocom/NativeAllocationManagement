@@ -308,6 +308,104 @@ public sealed class NativeTransferTests
     }
 
     [Fact]
+    public void OwnerDisposalBeforeMovePublishesNoDestination()
+    {
+        NativePool<int> pool = new(
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeTransfer<int>? source = pool.RentTransferable(
+            1,
+            static writer => writer.Write(31));
+        NativeTransfer<int> alias = source;
+
+        pool.Dispose();
+
+        Assert.Throws<NativeAllocationDisposedException>(
+            () => NativeTransfer<int>.Move(ref source));
+        Assert.Null(source);
+        Assert.Throws<ObjectDisposedException>(
+            () => alias.Access(static _ => { }));
+    }
+
+    [Fact]
+    public void GenerationInvalidationBeforeMovePublishesNoDestination()
+    {
+        using NativePool<int> pool = new(
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeTransfer<int>? source = pool.RentTransferable(
+            1,
+            static writer => writer.Write(37));
+        NativeTransfer<int> alias = source;
+
+        pool.ReleaseLeasesToNativeMemory();
+
+        Assert.Throws<NativeAllocationReturnedException>(
+            () => NativeTransfer<int>.Move(ref source));
+        Assert.Null(source);
+        Assert.Throws<ObjectDisposedException>(
+            () => alias.Access(static _ => { }));
+        Assert.Equal(0, pool.CurrentAllocationRecordCountForTest);
+    }
+
+    [Fact]
+    public async Task OwnerDisposalWinningMoveRacePublishesNoDestination()
+    {
+        NativeMemoryTestHooks.Reset();
+        NativePool<int> pool = new(
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeTransfer<int>? source = pool.RentTransferable(
+            1,
+            static writer => writer.Write(43));
+        NativeTransfer<int> alias = source;
+        using ManualResetEventSlim moveReachedOwner = new(false);
+        using ManualResetEventSlim releaseMove = new(false);
+        NativeMemoryTestHooks.SetBeforeOperationEntry(
+            operation =>
+            {
+                if (operation != "NativeTransfer.Move")
+                {
+                    return;
+                }
+
+                moveReachedOwner.Set();
+                releaseMove.Wait();
+            });
+        Exception? moveFailure = null;
+        NativeTransfer<int>? destination = null;
+        try
+        {
+            Task move = Task.Run(
+                () =>
+                {
+                    try
+                    {
+                        destination = NativeTransfer<int>.Move(ref source);
+                    }
+                    catch (Exception exception)
+                    {
+                        moveFailure = exception;
+                    }
+                });
+
+            Assert.True(moveReachedOwner.Wait(TimeSpan.FromSeconds(5)));
+            pool.Dispose();
+            releaseMove.Set();
+            await move;
+        }
+        finally
+        {
+            releaseMove.Set();
+            NativeMemoryTestHooks.Reset();
+            pool.Dispose();
+        }
+
+        Assert.IsType<NativeAllocationDisposedException>(moveFailure);
+        Assert.Null(source);
+        Assert.Null(destination);
+        Assert.Throws<ObjectDisposedException>(
+            () => alias.Access(static _ => { }));
+    }
+
+    [Fact]
     public void TransferUsesMappedExternalArenaStorage()
     {
         NativeMemoryTestHooks.Reset();
