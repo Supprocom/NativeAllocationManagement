@@ -7,14 +7,25 @@ analyzer proves lexical ownership, generation transitions, bounded callbacks, an
 scoped-recycling completion in the consuming source.
 
 The package targets .NET 10 and supports unmanaged values, reference values, and value
-types that contain references through the same generic owner and handle model. Add a
-normal package reference and keep its analyzer asset enabled.
+types that contain references through the same generic owner and handle model.
+
+Install version `0.1.2` with the .NET CLI:
+
+```powershell
+dotnet add package Supprocom.NativeAllocationManagement --version 0.1.2
+```
+
+The equivalent project file entry is:
 
 ```xml
 <ItemGroup>
   <PackageReference Include="Supprocom.NativeAllocationManagement" Version="0.1.2" />
 </ItemGroup>
 ```
+
+The package contains the runtime assembly, the ownership analyzer, and its
+`buildTransitive` analyzer-presence check. Keep analyzer assets enabled in consuming
+projects.
 
 ## Build a growable native sequence
 
@@ -103,6 +114,18 @@ method must release that exact field. A property cannot receive builder completi
 
 Do not use the builder as cross-method ownership. Complete it and move or store the
 resulting transfer instead.
+
+The builder benchmark creates identical opaque and transparent packed-word streams.
+The managed path uses two `List<uint>` values, `ToArray`, and `Buffer.BlockCopy`.
+
+The native path completes two builders and moves both transfers through a bounded
+channel. The receiver reads GL-compatible byte spans and disposes both transfers.
+
+Run the Release benchmark with this command:
+
+```powershell
+dotnet run --project Supprocom.NativeAllocationManagement.Performance -c Release -- --native-builder --samples 10 --prelease 1024 --output native-builder.json
+```
 
 ## Transfer ownership across threads
 

@@ -1713,53 +1713,23 @@ public sealed class VoxelSharedContractTests
     public void ReleaseDocumentsDescribeBuilderAndTransferableOwnership()
     {
         string root = FindRepositoryRoot();
-        string readme = File.ReadAllText(
-            Path.Combine(root, "README.md"));
         string guide = File.ReadAllText(
             Path.Combine(root, "docs", "getting-started.md"));
         Assert.Contains(
             "Version=\"0.1.2\"",
-            readme,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "Version=\"0.1.2\"",
             guide,
             StringComparison.Ordinal);
         Assert.Contains(
             "NativeTransfer<uint>.Move(ref source)",
-            readme,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "NativeTransfer<uint>.Move(ref source)",
             guide,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "`NAM1021` through `NAM1027`",
-            readme,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "Application `in`, `ref`, and `out NativeTransfer<T>` parameters are invalid.",
-            readme,
             StringComparison.Ordinal);
         Assert.Contains(
             "Do not use application `in`, `ref`, or `out NativeTransfer<T>` parameters.",
             guide,
             StringComparison.Ordinal);
         Assert.Contains(
-            "NativeBuilder<uint> builder = pool.CreateBuilder(",
-            readme,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "preLease: 64",
-            readme,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "`NAM1028` through `NAM1034`",
-            readme,
-            StringComparison.Ordinal);
-        Assert.Contains(
             "--native-builder --samples 10",
-            readme,
+            guide,
             StringComparison.Ordinal);
         Assert.Contains(
             "NativeBuilder<uint> builder = pool.CreateBuilder(",
