@@ -19,7 +19,7 @@ public sealed class NativeBuilderAnalyzerTests
                 {
                     using NativePool<int> pool = new();
                     using NativeBuilder<int> builder =
-                        pool.CreateBuilder(initialCapacity: 1);
+                        pool.CreateBuilder(preLease: 1);
                     builder.Append(11);
                     builder.Append(new int[] { 13, 17 });
                     NativeTransfer<int> transfer = builder.Complete();
@@ -484,6 +484,89 @@ public sealed class NativeBuilderAnalyzerTests
             """);
 
         Assert.Contains("NAM1034", NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task VoxelRenderOwnerAcceptsTwoBuilderCompletions()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using System;
+            using System.Threading.Channels;
+            using System.Threading.Tasks;
+            using Supprocom.NativeAllocationManagement;
+
+            public sealed class ChunkRender : IDisposable
+            {
+                private NativeTransfer<uint>? _opaque;
+                private NativeTransfer<uint>? _transparent;
+
+                public ChunkRender(
+                    NativeTransfer<uint>? opaque,
+                    NativeTransfer<uint>? transparent)
+                {
+                    try
+                    {
+                        _opaque = NativeTransfer<uint>.Move(ref opaque);
+                        _transparent = NativeTransfer<uint>.Move(
+                            ref transparent);
+                    }
+                    catch
+                    {
+                        try
+                        {
+                            _opaque?.Dispose();
+                        }
+                        finally
+                        {
+                            _transparent?.Dispose();
+                        }
+
+                        throw;
+                    }
+                    finally
+                    {
+                        opaque?.Dispose();
+                        transparent?.Dispose();
+                    }
+                }
+
+                public void Access()
+                {
+                    _opaque!.Access(static view => _ = view.Length);
+                    _transparent!.Access(static view => _ = view.Length);
+                }
+
+                public void Dispose()
+                {
+                    _opaque?.Dispose();
+                    _transparent?.Dispose();
+                }
+            }
+
+            public static class Sample
+            {
+                public static async Task Run(NativePool<uint> pool)
+                {
+                    Channel<ChunkRender> channel =
+                        Channel.CreateBounded<ChunkRender>(1);
+                    using NativeBuilder<uint> opaque =
+                        pool.CreateBuilder(preLease: 4);
+                    using NativeBuilder<uint> transparent =
+                        pool.CreateBuilder(preLease: 4);
+                    opaque.Append(new uint[] { 1, 2, 3, 4 });
+                    transparent.Append(new uint[] { 5, 6 });
+                    await channel.Writer.WriteAsync(new ChunkRender(
+                        opaque.Complete(),
+                        transparent.Complete()));
+                    ChunkRender render = await channel.Reader.ReadAsync();
+                    render.Access();
+                    render.Dispose();
+                }
+            }
+            """);
+
+        AssertNoNativeDiagnostics(diagnostics);
     }
 
     private static Task<ImmutableArray<Diagnostic>> AnalyzeAsync(

@@ -1750,6 +1750,10 @@ public sealed class VoxelSharedContractTests
             readme,
             StringComparison.Ordinal);
         Assert.Contains(
+            "preLease: 64",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
             "`NAM1028` through `NAM1034`",
             readme,
             StringComparison.Ordinal);
@@ -1759,6 +1763,10 @@ public sealed class VoxelSharedContractTests
             StringComparison.Ordinal);
         Assert.Contains(
             "NativeBuilder<uint> builder = pool.CreateBuilder(",
+            guide,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "preLease: 64",
             guide,
             StringComparison.Ordinal);
         Assert.Contains(

@@ -9,29 +9,35 @@ public sealed class NativeBuilderBenchmarkTests
     public void NativeBuilderOutputMatchesListAndToArray()
     {
         NativeBuilderBenchmarkOptions options = CreateOptions();
-        uint[] managed = NativeBuilderBenchmark.BuildManagedOutput(options);
+        NativeBuilderExactOutput managed =
+            NativeBuilderBenchmark.BuildManagedOutput(options);
         using NativePool<uint> pool = new(
-            options.InitialCapacity,
-            NativeMemoryReturn.ToNativeMemory);
-        uint[] native = NativeBuilderBenchmark.BuildNativeOutput(
+            preLease: options.PreLease,
+            returnMemoryOnDispose:
+                NativeMemoryReturn.ToNativeMemory);
+        NativeBuilderExactOutput native =
+            NativeBuilderBenchmark.BuildNativeOutput(
             pool,
             options);
 
-        Assert.Equal(options.ElementCount, managed.Length);
-        Assert.Equal(managed, native);
+        Assert.Equal(
+            options.ElementCount,
+            managed.Opaque.Length + managed.Transparent.Length);
+        Assert.Equal(managed.Opaque, native.Opaque);
+        Assert.Equal(managed.Transparent, native.Transparent);
     }
 
     [Fact]
-    public void WorkersProduceEquivalentMeasuredEvidence()
+    public async Task WorkersProduceEquivalentMeasuredEvidence()
     {
         NativeBuilderBenchmarkOptions options = CreateOptions();
 
         NativeBuilderWorkerEvidence managed =
-            NativeBuilderBenchmark.RunWorker(
+            await NativeBuilderBenchmark.RunWorkerAsync(
                 NativeBuilderBenchmarkImplementation.ManagedList,
                 options);
         NativeBuilderWorkerEvidence native =
-            NativeBuilderBenchmark.RunWorker(
+            await NativeBuilderBenchmark.RunWorkerAsync(
                 NativeBuilderBenchmarkImplementation.NativeBuilder,
                 options);
 
@@ -47,6 +53,36 @@ public sealed class NativeBuilderBenchmarkTests
                 < managed.ManagedAllocatedBytes);
         Assert.Equal(0, native.NativeFreshSegmentAllocationDelta);
         Assert.True(native.NativeRetainedBytes > 0);
+        Assert.Equal(
+            options.ElementCount,
+            native.OpaqueElementCount
+                + native.TransparentElementCount);
+        Assert.True(native.PhaseEvidence.TotalMilliseconds > 0);
+        Assert.True(managed.PhaseEvidence.TotalMilliseconds > 0);
+    }
+
+    [Fact]
+    public void EmptyTransparentOutputKeepsExactParity()
+    {
+        NativeBuilderBenchmarkOptions options = CreateOptions() with
+        {
+            ElementCount = 3,
+            PreLease = 1,
+            BatchSize = 1
+        };
+        NativeBuilderExactOutput managed =
+            NativeBuilderBenchmark.BuildManagedOutput(options);
+        using NativePool<uint> pool = new(
+            preLease: options.PreLease,
+            returnMemoryOnDispose:
+                NativeMemoryReturn.ToNativeMemory);
+        NativeBuilderExactOutput native =
+            NativeBuilderBenchmark.BuildNativeOutput(pool, options);
+
+        Assert.Equal(3, managed.Opaque.Length);
+        Assert.Empty(managed.Transparent);
+        Assert.Equal(managed.Opaque, native.Opaque);
+        Assert.Equal(managed.Transparent, native.Transparent);
     }
 
     [Fact]
@@ -100,10 +136,10 @@ public sealed class NativeBuilderBenchmarkTests
     private static NativeBuilderBenchmarkOptions CreateOptions() =>
         new(
             ElementCount: 8_192,
-            InitialCapacity: 64,
+            PreLease: 64,
             BatchSize: 64,
             Iterations: 4,
-            WarmupIterations: 2,
+            WarmupIterations: 8,
             SampleCount: 2,
             Seed: 0x71C3);
 }

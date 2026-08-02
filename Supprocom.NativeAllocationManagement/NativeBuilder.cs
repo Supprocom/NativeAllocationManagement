@@ -4,35 +4,39 @@ namespace Supprocom.NativeAllocationManagement;
 public static class NativeBuilderOwnerExtensions
 {
     /// <summary>Creates one single-writer builder from a typed native pool.</summary>
+    /// <param name="pool">The typed owner that supplies native storage.</param>
+    /// <param name="preLease">The initial reservation in elements of <typeparamref name="T"/>.</param>
     public static NativeBuilder<T> CreateBuilder<T>(
         this NativePool<T> pool,
-        int initialCapacity = 0)
+        int preLease = 0)
         where T : unmanaged
     {
         ArgumentNullException.ThrowIfNull(pool);
         ArgumentOutOfRangeException.ThrowIfNegative(
-            initialCapacity);
+            preLease);
         return new NativeBuilder<T>(
             new NativeBuilderSession<T>(
                 pool.KernelForTransfer,
                 pool.KernelForTransfer.BeginPoolBuilder(
-                    initialCapacity)));
+                    preLease)));
     }
 
     /// <summary>Creates one single-writer builder from a heterogeneous arena.</summary>
+    /// <param name="arena">The heterogeneous owner that supplies native storage.</param>
+    /// <param name="preLease">The initial reservation in elements of <typeparamref name="T"/>.</param>
     public static NativeBuilder<T> CreateBuilder<T>(
         this NativeArena arena,
-        int initialCapacity = 0)
+        int preLease = 0)
         where T : unmanaged
     {
         ArgumentNullException.ThrowIfNull(arena);
         ArgumentOutOfRangeException.ThrowIfNegative(
-            initialCapacity);
+            preLease);
         return new NativeBuilder<T>(
             new NativeBuilderSession<T>(
                 arena.KernelForInitialization,
                 arena.KernelForInitialization.BeginArenaBuilder<T>(
-                    initialCapacity)));
+                    preLease)));
     }
 }
 

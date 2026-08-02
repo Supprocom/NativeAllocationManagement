@@ -12,7 +12,7 @@ public sealed class NativeBuilderTests
         using NativePool<int> pool = new(
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         using NativeBuilder<int> builder =
-            pool.CreateBuilder(initialCapacity: 1);
+            pool.CreateBuilder(preLease: 1);
 
         for (int value = 0; value < 100; value++)
         {
@@ -41,7 +41,7 @@ public sealed class NativeBuilderTests
         using NativePool<uint> pool = new(
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         using NativeBuilder<uint> builder =
-            pool.CreateBuilder(initialCapacity: 2);
+            pool.CreateBuilder(preLease: 2);
 
         builder.Append([2U, 3U]);
         builder.Append(5U);
@@ -61,7 +61,7 @@ public sealed class NativeBuilderTests
             preAllocateBytes: 32,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         using NativeBuilder<long> builder =
-            arena.CreateBuilder<long>(initialCapacity: 1);
+            arena.CreateBuilder<long>(preLease: 1);
 
         for (long value = 0; value < 100; value++)
         {
@@ -119,7 +119,7 @@ public sealed class NativeBuilderTests
         using NativePool<int> pool = new(
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         NativeBuilder<int> builder =
-            pool.CreateBuilder(initialCapacity: 4);
+            pool.CreateBuilder(preLease: 4);
         builder.Append([1, 2, 3]);
 
         builder.Dispose();
@@ -139,7 +139,7 @@ public sealed class NativeBuilderTests
             using NativePool<int> pool = new(
                 returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
             NativeBuilder<int> builder =
-                pool.CreateBuilder(initialCapacity: 1);
+                pool.CreateBuilder(preLease: 1);
             builder.Append(1);
             NativeMemoryTestHooks.FailNextAllocation();
 
@@ -163,7 +163,7 @@ public sealed class NativeBuilderTests
         using NativePool<int> pool = new(
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         NativeBuilder<int> builder =
-            pool.CreateBuilder(initialCapacity: 4);
+            pool.CreateBuilder(preLease: 4);
         using CancellationTokenSource cancellation = new();
         cancellation.Cancel();
 
@@ -181,7 +181,7 @@ public sealed class NativeBuilderTests
         using NativePool<int> pool = new(
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         NativeBuilder<int> builder =
-            pool.CreateBuilder(initialCapacity: 4);
+            pool.CreateBuilder(preLease: 4);
         builder.Append([1, 2, 3]);
         using CancellationTokenSource cancellation = new();
         cancellation.Cancel();
@@ -213,7 +213,7 @@ public sealed class NativeBuilderTests
                     byteLength: 4096));
             buffer.Dispose();
             using NativeBuilder<long> builder =
-                arena.CreateBuilder<long>(initialCapacity: 8);
+                arena.CreateBuilder<long>(preLease: 8);
             builder.Append([2L, 3L, 5L, 7L]);
 
             NativeTransfer<long> transfer = builder.Complete();
@@ -271,7 +271,7 @@ public sealed class NativeBuilderTests
             returnMemoryOnDispose:
                 NativeMemoryReturn.ToGarbageCollector);
         using NativeBuilder<int> builder =
-            pool.CreateBuilder(initialCapacity: 4);
+            pool.CreateBuilder(preLease: 4);
         builder.Append(31);
 
         Assert.Throws<NativeAllocationInUseException>(
@@ -363,7 +363,7 @@ public sealed class NativeBuilderTests
             using NativePool<int> pool = new(
                 returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
             using (NativeBuilder<int> first =
-                pool.CreateBuilder(initialCapacity: 1))
+                pool.CreateBuilder(preLease: 1))
             {
                 for (int value = 0; value < 100; value++)
                 {
@@ -377,7 +377,7 @@ public sealed class NativeBuilderTests
             long allocations =
                 NativeMemoryTestHooks.Snapshot().AllocationCount;
             using (NativeBuilder<int> second =
-                pool.CreateBuilder(initialCapacity: 1))
+                pool.CreateBuilder(preLease: 1))
             {
                 for (int value = 0; value < 100; value++)
                 {
@@ -403,7 +403,7 @@ public sealed class NativeBuilderTests
         NativePool<int> pool)
     {
         NativeBuilder<int> builder =
-            pool.CreateBuilder(initialCapacity: 8);
+            pool.CreateBuilder(preLease: 8);
         builder.Append([1, 2, 3, 4]);
         return new WeakReference(builder);
     }

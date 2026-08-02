@@ -3320,14 +3320,14 @@ internal sealed class NativeOwnerKernel
     }
 
     internal NativeBuilderInitialization BeginPoolBuilder(
-        int initialCapacity)
+        int preLease)
     {
         (
             NativeGeneration Generation,
             NativeAllocation Allocation,
             NativePoolLease Lease) reservation =
             BeginPoolInitialization(
-                initialCapacity,
+                preLease,
                 scoped: false);
         reservation.Allocation.SetBuilderLength(
             reservation.Allocation.Capacity);
@@ -3339,12 +3339,12 @@ internal sealed class NativeOwnerKernel
     }
 
     internal NativeBuilderInitialization BeginArenaBuilder<T>(
-        int initialCapacity)
+        int preLease)
         where T : unmanaged
     {
         NativeBumpInitialization reservation =
             BeginBumpInitialization(
-                initialCapacity,
+                preLease,
                 NativeTypeLayout.StorageSize<T>(),
                 NativeTypeLayout.Alignment<T>(),
                 scoped: false,

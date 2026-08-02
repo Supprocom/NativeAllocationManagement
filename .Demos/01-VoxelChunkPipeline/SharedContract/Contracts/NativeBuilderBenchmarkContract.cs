@@ -8,17 +8,28 @@ public enum NativeBuilderBenchmarkImplementation
 
 public sealed record NativeBuilderBenchmarkOptions(
     int ElementCount,
-    int InitialCapacity,
+    int PreLease,
     int BatchSize,
     int Iterations,
     int WarmupIterations,
     int SampleCount,
     int Seed);
 
+public sealed record NativeBuilderPhaseEvidence(
+    double AllocationMilliseconds,
+    double InitializationMilliseconds,
+    double PublicationMilliseconds,
+    double HandoffMilliseconds,
+    double AccessMilliseconds,
+    double DisposalMilliseconds,
+    double TotalMilliseconds);
+
 public sealed record NativeBuilderWorkerEvidence(
     NativeBuilderBenchmarkImplementation Implementation,
     int ElementCount,
-    int InitialCapacity,
+    int OpaqueElementCount,
+    int TransparentElementCount,
+    int PreLease,
     int BatchSize,
     int Iterations,
     int WarmupIterations,
@@ -48,6 +59,7 @@ public sealed record NativeBuilderWorkerEvidence(
     string TieredPgo,
     int ProcessorCount,
     bool ServerGc,
+    NativeBuilderPhaseEvidence PhaseEvidence,
     bool ExactParity);
 
 public sealed record NativeBuilderPairEvidence(

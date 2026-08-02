@@ -29,7 +29,7 @@ using Supprocom.NativeAllocationManagement;
 
 using NativePool<uint> pool = new(preLease: 1_024);
 using NativeBuilder<uint> builder = pool.CreateBuilder(
-    initialCapacity: 64);
+    preLease: 64);
 Span<uint> batch = stackalloc uint[64];
 
 for (int offset = 0; offset < 4_096; offset += batch.Length)
@@ -52,6 +52,9 @@ finally
     output.Dispose();
 }
 ```
+
+`preLease` reserves builder capacity in units of `T`. Use the owner
+`preAllocateBytes` parameter to reserve raw bytes.
 
 `Append(T)` writes one value directly. `Append(ReadOnlySpan<T>)` copies one batch directly
 into the unused native range.

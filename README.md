@@ -59,7 +59,7 @@ using Supprocom.NativeAllocationManagement;
 
 using NativePool<uint> pool = new(preLease: 1_024);
 using NativeBuilder<uint> builder = pool.CreateBuilder(
-    initialCapacity: 64);
+    preLease: 64);
 Span<uint> batch = stackalloc uint[64];
 
 for (int offset = 0; offset < 4_096; offset += batch.Length)
@@ -83,6 +83,9 @@ finally
     output.Dispose();
 }
 ```
+
+`preLease` reserves builder capacity in units of `T`. Use the owner
+`preAllocateBytes` parameter when the reservation unit must be raw bytes.
 
 `Complete` publishes the current allocation without a final element copy. The transfer
 view has the exact initialized length, while its retained capacity can be larger.
@@ -108,15 +111,20 @@ or proven bounded channel. Diagnostics `NAM1028` through `NAM1034` enforce these
 An arena builder can use storage supplied through `ReserveExternalMemory`. Growth beyond
 that mapped range follows the arena's normal segment policy.
 
-The included builder benchmark compares the same batch generator in both paths. The
-managed path uses `List<uint>` growth and `ToArray`.
+The builder benchmark generates identical opaque and transparent packed-word streams.
+The managed path uses two `List<uint>` values, `ToArray`, and `Buffer.BlockCopy`.
 
-The native path uses pool-backed builder growth and zero-copy completion. The harness
-records paired confidence, allocations, external peak working set, throughput, and exact
-output parity.
+The native path completes two builders into transfers. A render owner receives them
+through destructive moves and crosses a bounded channel.
+
+The receiver reads GL-compatible byte spans and disposes both transfers. A separate
+untimed trace records allocation, initialization, publication, handoff, access, and disposal.
+
+The primary clock has no per-operation phase instrumentation. The report includes paired
+confidence, allocations, peak working set, throughput, and exact output hashes.
 
 ```powershell
-dotnet run --project Supprocom.NativeAllocationManagement.Performance -c Release -- --native-builder --samples 10 --output native-builder.json
+dotnet run --project Supprocom.NativeAllocationManagement.Performance -c Release -- --native-builder --samples 10 --prelease 1024 --output native-builder.json
 ```
 
 ## Transferable cross-thread leases

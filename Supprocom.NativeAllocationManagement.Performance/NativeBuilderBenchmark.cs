@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Globalization;
 using System.Numerics;
@@ -6,6 +7,7 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Threading.Channels;
 using Supprocom.NativeAllocationManagement.Demos.VoxelChunkPipeline.SharedContract;
 
 namespace Supprocom.NativeAllocationManagement.Performance;
@@ -13,7 +15,7 @@ namespace Supprocom.NativeAllocationManagement.Performance;
 internal static class NativeBuilderBenchmark
 {
     private const int DefaultElementCount = 262_144;
-    private const int DefaultInitialCapacity = 1_024;
+    private const int DefaultPreLease = 1_024;
     private const int DefaultBatchSize = 256;
     private const int DefaultIterations = 128;
     private const int DefaultWarmupIterations = 16;
@@ -34,7 +36,7 @@ internal static class NativeBuilderBenchmark
                     ReadRequiredOption(args, "--implementation"),
                     ignoreCase: true);
             NativeBuilderBenchmarkOptions options = ParseOptions(args);
-            NativeBuilderWorkerEvidence evidence = RunWorker(
+            NativeBuilderWorkerEvidence evidence = await RunWorkerAsync(
                 implementation,
                 options);
             Console.WriteLine(JsonSerializer.Serialize(
@@ -156,16 +158,14 @@ internal static class NativeBuilderBenchmark
             DateTimeOffset.UtcNow);
     }
 
-    internal static NativeBuilderWorkerEvidence RunWorker(
+    internal static async Task<NativeBuilderWorkerEvidence> RunWorkerAsync(
         NativeBuilderBenchmarkImplementation implementation,
         NativeBuilderBenchmarkOptions options)
     {
         ValidateOptions(options);
         Stopwatch setupClock = Stopwatch.StartNew();
-        uint[] expected = BuildManagedOutput(options);
-        string exactHash = Convert.ToHexString(
-            SHA256.HashData(MemoryMarshal.AsBytes(
-                expected.AsSpan())));
+        NativeBuilderExactOutput expected = BuildManagedOutput(options);
+        string exactHash = ComputeExactHash(expected);
         long expectedChecksum = Consume(expected);
         NativePool<uint>? pool = null;
         bool exactParity;
@@ -173,29 +173,33 @@ internal static class NativeBuilderBenchmark
             == NativeBuilderBenchmarkImplementation.NativeBuilder)
         {
             pool = new NativePool<uint>(
-                options.InitialCapacity,
-                NativeMemoryReturn.ToNativeMemory);
-            uint[] nativeOutput = BuildNativeOutput(pool, options);
-            exactParity = nativeOutput.AsSpan().SequenceEqual(expected);
+                preLease: options.PreLease,
+                returnMemoryOnDispose:
+                    NativeMemoryReturn.ToNativeMemory);
+            NativeBuilderExactOutput nativeOutput =
+                BuildNativeOutput(pool, options);
+            exactParity = OutputsEqual(nativeOutput, expected);
         }
         else
         {
-            exactParity = BuildManagedOutput(options)
-                .AsSpan()
-                .SequenceEqual(expected);
+            exactParity = OutputsEqual(
+                BuildManagedOutput(options),
+                expected);
         }
 
         setupClock.Stop();
         Stopwatch warmupClock = Stopwatch.StartNew();
-        long warmupChecksum = implementation
+        NativeBuilderBatchResult warmup = implementation
             == NativeBuilderBenchmarkImplementation.ManagedList
-                ? RunManagedBatch(options, options.WarmupIterations)
-                : RunNativeBatch(
+                ? await RunManagedBatchAsync(
+                    options,
+                    options.WarmupIterations)
+                : await RunNativeBatchAsync(
                     pool!,
                     options,
                     options.WarmupIterations);
         warmupClock.Stop();
-        if (warmupChecksum != unchecked(
+        if (warmup.Checksum != unchecked(
             expectedChecksum * options.WarmupIterations))
         {
             throw new InvalidDataException(
@@ -213,22 +217,22 @@ internal static class NativeBuilderBenchmark
         long workingSetBefore = process.WorkingSet64;
         NativeOwnerStatistics statisticsBefore =
             pool?.GetStatistics() ?? default;
-        Stopwatch measuredClock = Stopwatch.StartNew();
-        long measuredChecksum = implementation
+        NativeBuilderBatchResult measured = implementation
             == NativeBuilderBenchmarkImplementation.ManagedList
-                ? RunManagedBatch(options, options.Iterations)
-                : RunNativeBatch(
+                ? await RunManagedBatchAsync(
+                    options,
+                    options.Iterations)
+                : await RunNativeBatchAsync(
                     pool!,
                     options,
                     options.Iterations);
-        measuredClock.Stop();
         process.Refresh();
         long workingSetAfter = process.WorkingSet64;
         long managedAllocated = GC.GetTotalAllocatedBytes(
             precise: true) - allocatedBefore;
         long expectedMeasuredChecksum = unchecked(
             expectedChecksum * options.Iterations);
-        if (measuredChecksum != expectedMeasuredChecksum)
+        if (measured.Checksum != expectedMeasuredChecksum)
         {
             throw new InvalidDataException(
                 "The measured native builder output checksum changed.");
@@ -236,18 +240,25 @@ internal static class NativeBuilderBenchmark
 
         NativeOwnerStatistics statistics =
             pool?.GetStatistics() ?? default;
+        NativeBuilderPhaseEvidence phaseEvidence = implementation
+            == NativeBuilderBenchmarkImplementation.ManagedList
+                ? MeasureManagedPhases(options)
+                : MeasureNativePhases(pool!, options);
         long logicalBytes = checked(
             (long)options.ElementCount
             * sizeof(uint)
             * options.Iterations);
-        double elapsedMilliseconds =
-            measuredClock.Elapsed.TotalMilliseconds;
+        double elapsedMilliseconds = measured.ElapsedMilliseconds;
         pool?.Dispose();
-        Volatile.Write(ref _sink, measuredChecksum);
+        Volatile.Write(ref _sink, measured.Checksum);
+        (int opaqueCount, int transparentCount) =
+            GetOutputCounts(options.ElementCount);
         return new NativeBuilderWorkerEvidence(
             implementation,
             options.ElementCount,
-            options.InitialCapacity,
+            opaqueCount,
+            transparentCount,
+            options.PreLease,
             options.BatchSize,
             options.Iterations,
             options.WarmupIterations,
@@ -272,7 +283,7 @@ internal static class NativeBuilderBenchmark
             statistics.FreshSegmentAllocationCount,
             statistics.FreshSegmentAllocationCount
                 - statisticsBefore.FreshSegmentAllocationCount,
-            measuredChecksum,
+            measured.Checksum,
             exactHash,
             GetInformationalVersion(typeof(NativePool<>).Assembly),
             GetInformationalVersion(typeof(NativeBuilderBenchmark).Assembly),
@@ -282,6 +293,7 @@ internal static class NativeBuilderBenchmark
                 "DOTNET_TieredPGO") ?? "unset",
             Environment.ProcessorCount,
             System.Runtime.GCSettings.IsServerGC,
+            phaseEvidence,
             exactParity);
     }
 
@@ -294,127 +306,266 @@ internal static class NativeBuilderBenchmark
             : NativeBuilderBenchmarkImplementation.NativeBuilder;
     }
 
-    internal static uint[] BuildManagedOutput(
+    internal static NativeBuilderExactOutput BuildManagedOutput(
         NativeBuilderBenchmarkOptions options)
     {
-        List<uint> values = new(options.InitialCapacity);
-        Span<uint> batch = stackalloc uint[options.BatchSize];
-        for (int offset = 0;
-            offset < options.ElementCount;
-            offset += options.BatchSize)
-        {
-            int length = Math.Min(
-                options.BatchSize,
-                options.ElementCount - offset);
-            Span<uint> current = batch[..length];
-            FillBatch(current, offset, options.Seed);
-            AppendToList(values, current);
-        }
-
-        return values.ToArray();
+        (List<uint> opaque, List<uint> transparent) =
+            CreateManagedLists(options);
+        return new NativeBuilderExactOutput(
+            opaque.ToArray(),
+            transparent.ToArray());
     }
 
-    internal static uint[] BuildNativeOutput(
+    internal static NativeBuilderExactOutput BuildNativeOutput(
         NativePool<uint> pool,
         NativeBuilderBenchmarkOptions options)
     {
-        using NativeBuilder<uint> builder = pool.CreateBuilder(
-            options.InitialCapacity);
-        Span<uint> batch = stackalloc uint[options.BatchSize];
-        for (int offset = 0;
-            offset < options.ElementCount;
-            offset += options.BatchSize)
-        {
-            int length = Math.Min(
-                options.BatchSize,
-                options.ElementCount - offset);
-            Span<uint> current = batch[..length];
-            FillBatch(current, offset, options.Seed);
-            builder.Append(current);
-        }
-
-        NativeTransfer<uint> transfer = builder.Complete();
+        NativeBuilderVoxelPacket packet = CreateNativePacket(
+            pool,
+            options);
         try
         {
-            return transfer.Read(
-                static view => view.AsSpan().ToArray());
+            return packet.CopyExactOutput();
         }
         finally
         {
-            transfer.Dispose();
+            packet.Dispose();
         }
     }
 
-    private static long RunManagedBatch(
-        NativeBuilderBenchmarkOptions options,
-        int iterations)
+    private static async Task<NativeBuilderBatchResult>
+        RunManagedBatchAsync(
+            NativeBuilderBenchmarkOptions options,
+            int iterations)
     {
-        long checksum = 0;
-        Span<uint> batch = stackalloc uint[options.BatchSize];
-        for (int iteration = 0;
-            iteration < iterations;
-            iteration++)
+        Channel<ManagedBuilderVoxelPacket> channel =
+            Channel.CreateBounded<ManagedBuilderVoxelPacket>(
+                new BoundedChannelOptions(1)
+                {
+                    SingleReader = true,
+                    SingleWriter = true
+                });
+        TaskCompletionSource ready = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<long> consumer = Task.Run(async () =>
         {
-            List<uint> values = new(options.InitialCapacity);
-            for (int offset = 0;
-                offset < options.ElementCount;
-                offset += options.BatchSize)
+            long checksum = 0;
+            ready.SetResult();
+            await foreach (ManagedBuilderVoxelPacket packet
+                in channel.Reader.ReadAllAsync())
             {
-                int length = Math.Min(
-                    options.BatchSize,
-                    options.ElementCount - offset);
-                Span<uint> current = batch[..length];
-                FillBatch(current, offset, options.Seed);
-                AppendToList(values, current);
+                checksum = unchecked(checksum + packet.Consume());
+                packet.Dispose();
             }
 
-            uint[] output = values.ToArray();
-            checksum = unchecked(checksum + Consume(output));
+            return checksum;
+        });
+        await ready.Task;
+        Stopwatch clock = Stopwatch.StartNew();
+        try
+        {
+            for (int iteration = 0;
+                iteration < iterations;
+                iteration++)
+            {
+                await channel.Writer.WriteAsync(
+                    CreateManagedPacket(options));
+            }
+        }
+        finally
+        {
+            channel.Writer.TryComplete();
         }
 
-        return checksum;
+        long checksum = await consumer;
+        clock.Stop();
+        return new NativeBuilderBatchResult(
+            checksum,
+            clock.Elapsed.TotalMilliseconds);
     }
 
-    private static long RunNativeBatch(
+    private static async Task<NativeBuilderBatchResult>
+        RunNativeBatchAsync(
+            NativePool<uint> pool,
+            NativeBuilderBenchmarkOptions options,
+            int iterations)
+    {
+        Channel<NativeBuilderVoxelPacket> channel =
+            Channel.CreateBounded<NativeBuilderVoxelPacket>(
+                new BoundedChannelOptions(1)
+                {
+                    SingleReader = true,
+                    SingleWriter = true
+                });
+        TaskCompletionSource ready = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<long> consumer = Task.Run(async () =>
+        {
+            long checksum = 0;
+            ready.SetResult();
+            await foreach (NativeBuilderVoxelPacket packet
+                in channel.Reader.ReadAllAsync())
+            {
+                try
+                {
+                    checksum = unchecked(
+                        checksum + packet.Consume());
+                }
+                finally
+                {
+                    packet.Dispose();
+                }
+            }
+
+            return checksum;
+        });
+        await ready.Task;
+        Stopwatch clock = Stopwatch.StartNew();
+        try
+        {
+            for (int iteration = 0;
+                iteration < iterations;
+                iteration++)
+            {
+                NativeBuilderVoxelPacket? packet =
+                    CreateNativePacket(pool, options);
+                try
+                {
+                    await channel.Writer.WriteAsync(packet);
+                    packet = null;
+                }
+                finally
+                {
+                    packet?.Dispose();
+                }
+            }
+        }
+        finally
+        {
+            channel.Writer.TryComplete();
+        }
+
+        long checksum = await consumer;
+        clock.Stop();
+        return new NativeBuilderBatchResult(
+            checksum,
+            clock.Elapsed.TotalMilliseconds);
+    }
+
+    private static ManagedBuilderVoxelPacket CreateManagedPacket(
+        NativeBuilderBenchmarkOptions options) =>
+        new(BuildManagedOutput(options));
+
+    private static NativeBuilderVoxelPacket CreateNativePacket(
         NativePool<uint> pool,
-        NativeBuilderBenchmarkOptions options,
-        int iterations)
+        NativeBuilderBenchmarkOptions options)
     {
-        long checksum = 0;
-        Span<uint> batch = stackalloc uint[options.BatchSize];
-        for (int iteration = 0;
-            iteration < iterations;
-            iteration++)
+        using NativeBuilder<uint> opaque = pool.CreateBuilder(
+            preLease: options.PreLease);
+        using NativeBuilder<uint> transparent = pool.CreateBuilder(
+            preLease: options.PreLease);
+        (int opaqueCount, int transparentCount) =
+            GetOutputCounts(options.ElementCount);
+        AppendToBuilder(
+            opaque,
+            opaqueCount,
+            options,
+            transparentOutput: false);
+        AppendToBuilder(
+            transparent,
+            transparentCount,
+            options,
+            transparentOutput: true);
+        return PublishNativePacket(opaque, transparent);
+    }
+
+    private static NativeBuilderVoxelPacket PublishNativePacket(
+        NativeBuilder<uint> opaqueBuilder,
+        NativeBuilder<uint> transparentBuilder)
+    {
+        NativeTransfer<uint>? opaque = null;
+        NativeTransfer<uint>? transparent = null;
+        try
         {
-            using NativeBuilder<uint> builder = pool.CreateBuilder(
-                options.InitialCapacity);
-            for (int offset = 0;
-                offset < options.ElementCount;
-                offset += options.BatchSize)
-            {
-                int length = Math.Min(
-                    options.BatchSize,
-                    options.ElementCount - offset);
-                Span<uint> current = batch[..length];
-                FillBatch(current, offset, options.Seed);
-                builder.Append(current);
-            }
-
-            NativeTransfer<uint> transfer = builder.Complete();
-            try
-            {
-                checksum = unchecked(
-                    checksum
-                    + transfer.Read(
-                        static view => Consume(view.AsSpan())));
-            }
-            finally
-            {
-                transfer.Dispose();
-            }
+            opaque = opaqueBuilder.Complete();
+            transparent = transparentBuilder.Complete();
+            return new NativeBuilderVoxelPacket(
+                NativeTransfer<uint>.Move(ref opaque),
+                NativeTransfer<uint>.Move(ref transparent));
         }
+        finally
+        {
+            opaque?.Dispose();
+            transparent?.Dispose();
+        }
+    }
 
-        return checksum;
+    private static (List<uint> Opaque, List<uint> Transparent)
+        CreateManagedLists(NativeBuilderBenchmarkOptions options)
+    {
+        (int opaqueCount, int transparentCount) =
+            GetOutputCounts(options.ElementCount);
+        List<uint> opaque = new(options.PreLease);
+        List<uint> transparent = new(options.PreLease);
+        AppendToList(
+            opaque,
+            opaqueCount,
+            options,
+            transparentOutput: false);
+        AppendToList(
+            transparent,
+            transparentCount,
+            options,
+            transparentOutput: true);
+        return (opaque, transparent);
+    }
+
+    private static void AppendToList(
+        List<uint> values,
+        int elementCount,
+        NativeBuilderBenchmarkOptions options,
+        bool transparentOutput)
+    {
+        Span<uint> batch = stackalloc uint[options.BatchSize];
+        for (int offset = 0;
+            offset < elementCount;
+            offset += options.BatchSize)
+        {
+            int length = Math.Min(
+                options.BatchSize,
+                elementCount - offset);
+            Span<uint> current = batch[..length];
+            FillBatch(
+                current,
+                offset,
+                options.Seed,
+                transparentOutput);
+            AppendToList(values, current);
+        }
+    }
+
+    private static void AppendToBuilder(
+        NativeBuilder<uint> builder,
+        int elementCount,
+        NativeBuilderBenchmarkOptions options,
+        bool transparentOutput)
+    {
+        Span<uint> batch = stackalloc uint[options.BatchSize];
+        for (int offset = 0;
+            offset < elementCount;
+            offset += options.BatchSize)
+        {
+            int length = Math.Min(
+                options.BatchSize,
+                elementCount - offset);
+            Span<uint> current = batch[..length];
+            FillBatch(
+                current,
+                offset,
+                options.Seed,
+                transparentOutput);
+            builder.Append(current);
+        }
     }
 
     private static void AppendToList(
@@ -431,10 +582,12 @@ internal static class NativeBuilderBenchmark
     private static void FillBatch(
         Span<uint> destination,
         int offset,
-        int seed)
+        int seed,
+        bool transparentOutput)
     {
         uint state = unchecked((uint)seed)
-            ^ unchecked((uint)offset * 0x9E3779B9U);
+            ^ unchecked((uint)offset * 0x9E3779B9U)
+            ^ (transparentOutput ? 0xA24BAED4U : 0x51A7C3E1U);
         for (int index = 0;
             index < destination.Length;
             index++)
@@ -450,20 +603,221 @@ internal static class NativeBuilderBenchmark
         }
     }
 
-    private static long Consume(ReadOnlySpan<uint> values)
+    private static (int Opaque, int Transparent) GetOutputCounts(
+        int elementCount)
     {
-        if (values.IsEmpty)
+        int transparent = elementCount / 4;
+        return (elementCount - transparent, transparent);
+    }
+
+    private static bool OutputsEqual(
+        NativeBuilderExactOutput left,
+        NativeBuilderExactOutput right) =>
+        left.Opaque.AsSpan().SequenceEqual(right.Opaque)
+        && left.Transparent.AsSpan().SequenceEqual(right.Transparent);
+
+    private static string ComputeExactHash(
+        NativeBuilderExactOutput output)
+    {
+        using IncrementalHash hash = IncrementalHash.CreateHash(
+            HashAlgorithmName.SHA256);
+        Span<byte> length = stackalloc byte[sizeof(int)];
+        BinaryPrimitives.WriteInt32LittleEndian(
+            length,
+            output.Opaque.Length);
+        hash.AppendData(length);
+        hash.AppendData(MemoryMarshal.AsBytes(output.Opaque.AsSpan()));
+        BinaryPrimitives.WriteInt32LittleEndian(
+            length,
+            output.Transparent.Length);
+        hash.AppendData(length);
+        hash.AppendData(MemoryMarshal.AsBytes(
+            output.Transparent.AsSpan()));
+        return Convert.ToHexString(hash.GetHashAndReset());
+    }
+
+    private static long Consume(NativeBuilderExactOutput output) =>
+        ConsumeUploads(
+            MemoryMarshal.AsBytes(output.Opaque.AsSpan()),
+            MemoryMarshal.AsBytes(output.Transparent.AsSpan()));
+
+    private static long ConsumeUploads(
+        ReadOnlySpan<byte> opaque,
+        ReadOnlySpan<byte> transparent) =>
+        unchecked(
+            ConsumeUpload(opaque)
+            + RotateLeft(
+                ConsumeUpload(transparent),
+                17)
+            + opaque.Length
+            + ((long)transparent.Length << 32));
+
+    private static long ConsumeUpload(ReadOnlySpan<byte> upload)
+    {
+        ulong hash = 14695981039346656037UL;
+        int offset = 0;
+        for (;
+            offset <= upload.Length - sizeof(ulong);
+            offset += sizeof(ulong))
         {
-            return 0;
+            ulong value = BinaryPrimitives.ReadUInt64LittleEndian(
+                upload.Slice(offset, sizeof(ulong)));
+            hash = unchecked(
+                BitOperations.RotateLeft(hash ^ value, 11)
+                * 1099511628211UL);
         }
 
-        int middle = values.Length / 2;
-        return unchecked((long)(
-            values[0]
-            ^ BitOperations.RotateLeft(values[middle], 7)
-            ^ BitOperations.RotateLeft(values[^1], 17)
-            ^ (uint)values.Length));
+        for (; offset < upload.Length; offset++)
+        {
+            hash = unchecked(
+                (hash ^ upload[offset]) * 1099511628211UL);
+        }
+
+        return unchecked((long)(hash ^ (ulong)upload.Length));
     }
+
+    private static long RotateLeft(long value, int offset) =>
+        unchecked((long)BitOperations.RotateLeft(
+            unchecked((ulong)value),
+            offset));
+
+    private static NativeBuilderPhaseEvidence MeasureManagedPhases(
+        NativeBuilderBenchmarkOptions options)
+    {
+        long totalStart = Stopwatch.GetTimestamp();
+        long phaseStart = Stopwatch.GetTimestamp();
+        (int opaqueCount, int transparentCount) =
+            GetOutputCounts(options.ElementCount);
+        List<uint> opaque = new(options.PreLease);
+        List<uint> transparent = new(options.PreLease);
+        Channel<ManagedBuilderVoxelPacket> channel =
+            Channel.CreateBounded<ManagedBuilderVoxelPacket>(1);
+        double allocation = ElapsedMilliseconds(phaseStart);
+
+        phaseStart = Stopwatch.GetTimestamp();
+        AppendToList(
+            opaque,
+            opaqueCount,
+            options,
+            transparentOutput: false);
+        AppendToList(
+            transparent,
+            transparentCount,
+            options,
+            transparentOutput: true);
+        double initialization = ElapsedMilliseconds(phaseStart);
+
+        phaseStart = Stopwatch.GetTimestamp();
+        ManagedBuilderVoxelPacket packet = new(
+            new NativeBuilderExactOutput(
+                opaque.ToArray(),
+                transparent.ToArray()));
+        double publication = ElapsedMilliseconds(phaseStart);
+
+        phaseStart = Stopwatch.GetTimestamp();
+        if (!channel.Writer.TryWrite(packet)
+            || !channel.Reader.TryRead(out ManagedBuilderVoxelPacket? received))
+        {
+            packet.Dispose();
+            throw new InvalidOperationException(
+                "The managed builder phase handoff failed.");
+        }
+
+        double handoff = ElapsedMilliseconds(phaseStart);
+        phaseStart = Stopwatch.GetTimestamp();
+        long checksum = received.Consume();
+        double access = ElapsedMilliseconds(phaseStart);
+        phaseStart = Stopwatch.GetTimestamp();
+        received.Dispose();
+        double disposal = ElapsedMilliseconds(phaseStart);
+        Volatile.Write(ref _sink, checksum);
+        return new NativeBuilderPhaseEvidence(
+            allocation,
+            initialization,
+            publication,
+            handoff,
+            access,
+            disposal,
+            ElapsedMilliseconds(totalStart));
+    }
+
+    private static NativeBuilderPhaseEvidence MeasureNativePhases(
+        NativePool<uint> pool,
+        NativeBuilderBenchmarkOptions options)
+    {
+        long totalStart = Stopwatch.GetTimestamp();
+        long phaseStart = Stopwatch.GetTimestamp();
+        using NativeBuilder<uint> opaque = pool.CreateBuilder(
+            preLease: options.PreLease);
+        using NativeBuilder<uint> transparent = pool.CreateBuilder(
+            preLease: options.PreLease);
+        Channel<NativeBuilderVoxelPacket> channel =
+            Channel.CreateBounded<NativeBuilderVoxelPacket>(1);
+        double allocation = ElapsedMilliseconds(phaseStart);
+
+        (int opaqueCount, int transparentCount) =
+            GetOutputCounts(options.ElementCount);
+        phaseStart = Stopwatch.GetTimestamp();
+        AppendToBuilder(
+            opaque,
+            opaqueCount,
+            options,
+            transparentOutput: false);
+        AppendToBuilder(
+            transparent,
+            transparentCount,
+            options,
+            transparentOutput: true);
+        double initialization = ElapsedMilliseconds(phaseStart);
+
+        NativeBuilderVoxelPacket? packet = null;
+        NativeBuilderVoxelPacket? received = null;
+        try
+        {
+            phaseStart = Stopwatch.GetTimestamp();
+            packet = PublishNativePacket(opaque, transparent);
+            double publication = ElapsedMilliseconds(phaseStart);
+
+            phaseStart = Stopwatch.GetTimestamp();
+            if (!channel.Writer.TryWrite(packet)
+                || !channel.Reader.TryRead(out received))
+            {
+                throw new InvalidOperationException(
+                    "The native builder phase handoff failed.");
+            }
+
+            packet = null;
+            double handoff = ElapsedMilliseconds(phaseStart);
+            phaseStart = Stopwatch.GetTimestamp();
+            long checksum = received.Consume();
+            double access = ElapsedMilliseconds(phaseStart);
+            phaseStart = Stopwatch.GetTimestamp();
+            received.Dispose();
+            received = null;
+            opaque.Dispose();
+            transparent.Dispose();
+            double disposal = ElapsedMilliseconds(phaseStart);
+            Volatile.Write(ref _sink, checksum);
+            return new NativeBuilderPhaseEvidence(
+                allocation,
+                initialization,
+                publication,
+                handoff,
+                access,
+                disposal,
+                ElapsedMilliseconds(totalStart));
+        }
+        finally
+        {
+            packet?.Dispose();
+            received?.Dispose();
+        }
+    }
+
+    private static double ElapsedMilliseconds(long start) =>
+        (Stopwatch.GetTimestamp() - start)
+        * 1_000d
+        / Stopwatch.Frequency;
 
     private static async Task<NativeBuilderWorkerEvidence>
         RunIsolatedWorkerAsync(
@@ -570,8 +924,8 @@ internal static class NativeBuilderBenchmark
         arguments.Add("--elements");
         arguments.Add(options.ElementCount.ToString(
             CultureInfo.InvariantCulture));
-        arguments.Add("--initial-capacity");
-        arguments.Add(options.InitialCapacity.ToString(
+        arguments.Add("--prelease");
+        arguments.Add(options.PreLease.ToString(
             CultureInfo.InvariantCulture));
         arguments.Add("--batch-size");
         arguments.Add(options.BatchSize.ToString(
@@ -601,8 +955,8 @@ internal static class NativeBuilderBenchmark
                 != NativeBuilderBenchmarkImplementation.NativeBuilder
             || managed.ElementCount != options.ElementCount
             || native.ElementCount != options.ElementCount
-            || managed.InitialCapacity != options.InitialCapacity
-            || native.InitialCapacity != options.InitialCapacity
+            || managed.PreLease != options.PreLease
+            || native.PreLease != options.PreLease
             || managed.BatchSize != options.BatchSize
             || native.BatchSize != options.BatchSize
             || managed.Iterations != options.Iterations
@@ -628,8 +982,8 @@ internal static class NativeBuilderBenchmark
                 DefaultElementCount),
             ReadInt32Option(
                 args,
-                "--initial-capacity",
-                DefaultInitialCapacity),
+                "--prelease",
+                DefaultPreLease),
             ReadInt32Option(
                 args,
                 "--batch-size",
@@ -660,7 +1014,7 @@ internal static class NativeBuilderBenchmark
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
             options.ElementCount);
         ArgumentOutOfRangeException.ThrowIfNegative(
-            options.InitialCapacity);
+            options.PreLease);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
             options.BatchSize);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(
@@ -734,4 +1088,122 @@ internal static class NativeBuilderBenchmark
         options.Converters.Add(new JsonStringEnumConverter());
         return options;
     }
+
+    private sealed class ManagedBuilderVoxelPacket : IDisposable
+    {
+        private readonly byte[] _opaqueUpload;
+        private readonly byte[] _transparentUpload;
+
+        internal ManagedBuilderVoxelPacket(
+            NativeBuilderExactOutput output)
+        {
+            _opaqueUpload = ToUpload(output.Opaque);
+            _transparentUpload = ToUpload(output.Transparent);
+        }
+
+        internal long Consume() => ConsumeUploads(
+            _opaqueUpload,
+            _transparentUpload);
+
+        public void Dispose()
+        {
+            GC.KeepAlive(this);
+        }
+
+        private static byte[] ToUpload(uint[] source)
+        {
+            byte[] upload = new byte[checked(
+                source.Length * sizeof(uint))];
+            Buffer.BlockCopy(
+                source,
+                0,
+                upload,
+                0,
+                upload.Length);
+            return upload;
+        }
+    }
+
+    private sealed class NativeBuilderVoxelPacket : IDisposable
+    {
+        private NativeTransfer<uint>? _opaque;
+        private NativeTransfer<uint>? _transparent;
+        private int _disposed;
+
+        internal NativeBuilderVoxelPacket(
+            NativeTransfer<uint>? opaque,
+            NativeTransfer<uint>? transparent)
+        {
+            try
+            {
+                _opaque = NativeTransfer<uint>.Move(ref opaque);
+                _transparent = NativeTransfer<uint>.Move(
+                    ref transparent);
+            }
+            catch
+            {
+                try
+                {
+                    _opaque?.Dispose();
+                }
+                finally
+                {
+                    _transparent?.Dispose();
+                }
+
+                throw;
+            }
+            finally
+            {
+                opaque?.Dispose();
+                transparent?.Dispose();
+            }
+        }
+
+        internal NativeBuilderExactOutput CopyExactOutput() => new(
+            _opaque!.Read(
+                static view => view.AsSpan().ToArray()),
+            _transparent!.Read(
+                static view => view.AsSpan().ToArray()));
+
+        internal long Consume()
+        {
+            long opaque = _opaque!.Read(
+                static view => ConsumeUpload(
+                    MemoryMarshal.AsBytes(view.AsSpan())));
+            long transparent = _transparent!.Read(
+                static view => ConsumeUpload(
+                    MemoryMarshal.AsBytes(view.AsSpan())));
+            return unchecked(
+                opaque
+                + RotateLeft(transparent, 17)
+                + _opaque.Length * sizeof(uint)
+                + ((long)_transparent.Length * sizeof(uint) << 32));
+        }
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            {
+                return;
+            }
+
+            try
+            {
+                _opaque?.Dispose();
+            }
+            finally
+            {
+                _transparent?.Dispose();
+            }
+        }
+    }
+
+    private readonly record struct NativeBuilderBatchResult(
+        long Checksum,
+        double ElapsedMilliseconds);
 }
+
+internal sealed record NativeBuilderExactOutput(
+    uint[] Opaque,
+    uint[] Transparent);
