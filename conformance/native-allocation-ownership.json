@@ -54,6 +54,7 @@
     "name": "conditional-helper",
     "compilerRejected": false,
     "expectedDiagnostics": [
+      { "id": "NAM1001", "count": 1, "facts": [{ "line": 2, "column": 113, "provenance": "pool -> the call argument" }] },
       { "id": "NAM1009", "count": 1, "facts": [{ "line": 2, "column": 131, "provenance": "pool -> LeaseFromMemory" }] }
     ],
     "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run(bool condition) { NativePool<int> pool = new(); MaybeReturn(pool, condition); pool.LeaseFromMemory(); } private static void MaybeReturn(NativePool<int> pool, bool condition) { if (condition) { pool.ReturnMemoryToNativeMemory(); } } }"

@@ -311,6 +311,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     syntax)
                 {
                     IsExternalReceiver = true,
+                    CanAssumeActiveWhenAbsent = true,
                     ScopedOwnerEligible = false
                 };
                 _owners.Add(parameter, owner);
@@ -1483,7 +1484,14 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     }
                 }
 
-                if (!presentOnEveryPath)
+                bool canAssumeActiveWhenAbsent =
+                    merged.CanAssumeActiveWhenAbsent
+                    && paths
+                        .Where(path => path.Owners.ContainsKey(symbol))
+                        .Select(path => path.Owners[symbol])
+                        .All(IsImplicitlyActiveOwner);
+                if (!presentOnEveryPath
+                    && !canAssumeActiveWhenAbsent)
                 {
                     merged.Ambiguous = true;
                     merged.ScopedOwnerEligible = false;
@@ -1501,7 +1509,10 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     merged.ScopedPendingAmbiguous = true;
                 }
 
-                merged.GenerationRelation = MergeOwnerGenerationRelation(paths, first);
+                merged.GenerationRelation = !presentOnEveryPath
+                    && canAssumeActiveWhenAbsent
+                        ? GenerationRelationKind.Exact
+                        : MergeOwnerGenerationRelation(paths, first);
                 if (merged.GenerationRelation == GenerationRelationKind.Unknown)
                 {
                     merged.Generation = paths
@@ -1687,6 +1698,16 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
             return new FlowSnapshot(owners, handles, transfers, [.. snapshot.Regions], borrowed);
         }
+
+        private static bool IsImplicitlyActiveOwner(OwnerState owner) =>
+            !owner.Returned
+            && !owner.Disposed
+            && !owner.Unleased
+            && !owner.Ambiguous
+            && owner.Generation == 0
+            && owner.GenerationRelation == GenerationRelationKind.Exact
+            && !owner.ScopedPending
+            && !owner.ScopedPendingAmbiguous;
 
         private static GenerationRelationKind MergeOwnerGenerationRelation(
             IReadOnlyList<FlowSnapshot> paths,
@@ -4104,6 +4125,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 requiresDeterministicReturn,
                 operation.Syntax,
                 regionScope);
+            owner.CanAssumeActiveWhenAbsent = target.Symbol is IFieldSymbol stableField
+                && IsStableFieldOwner(stableField);
             owner.ScopedOwnerEligible = target.Symbol is ILocalSymbol
                 && (!isRegion || isUsing);
             switch (GetDeclarationActivation(operation))
@@ -4833,6 +4856,12 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 symbol is IFieldSymbol,
                 requiresDeterministicReturn: false,
                 operation.Syntax);
+            owner.CanAssumeActiveWhenAbsent = symbol switch
+            {
+                IParameterSymbol => true,
+                IFieldSymbol field => IsStableFieldOwner(field),
+                _ => false
+            };
             if (symbol is not null)
             {
                 owner.IsExternalReceiver = _context is OperationContextAdapter
@@ -4844,6 +4873,12 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
             return owner;
         }
+
+        private bool IsStableFieldOwner(IFieldSymbol field) =>
+            field.IsReadOnly
+            && !field.IsStatic
+            && !IsNativeRegion(field.Type)
+            && HasFieldDisposalPath(field);
 
         private bool IsSymbolDeclaredInsideAnalysisRoot(ISymbol symbol)
         {
@@ -5296,7 +5331,10 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             IParameterSymbol? parameter)
         {
             if (parameter is null
-                || IsNativeRegion(parameter.Type)
+                || (!IsNativePool(parameter.Type)
+                    && !IsNativeArena(parameter.Type))
+                || parameter.RefKind != RefKind.None
+                || method.IsAsync
                 || method.DeclaringSyntaxReferences.Length != 1)
             {
                 return false;
@@ -5322,6 +5360,14 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             {
                 SyntaxNode syntax = method.DeclaringSyntaxReferences[0]
                     .GetSyntax(_context.CancellationToken);
+                if (syntax.DescendantNodes().Any(node =>
+                    node is AwaitExpressionSyntax
+                        or YieldStatementSyntax))
+                {
+                    _nonRetainingOwnerParameters[cacheKey] = false;
+                    return false;
+                }
+
                 SemanticModel model = _context.Compilation.GetSemanticModel(
                     syntax.SyntaxTree);
                 IOperation? operation = model.GetOperation(
@@ -5358,15 +5404,15 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 ancestor is not null;
                 ancestor = ancestor.Parent)
             {
+                if (ancestor.Syntax == methodSyntax)
+                {
+                    break;
+                }
+
                 if (ancestor is IAnonymousFunctionOperation
                     or ILocalFunctionOperation)
                 {
                     return false;
-                }
-
-                if (ancestor.Syntax == methodSyntax)
-                {
-                    break;
                 }
             }
 
@@ -5380,20 +5426,55 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             if (current.Parent is IInvocationOperation invocation
                 && ReferenceEquals(Unwrap(invocation.Instance), reference))
             {
-                return true;
+                return IsApprovedBorrowedOwnerInvocation(invocation);
             }
 
-            if (current.Parent is IPropertyReferenceOperation property
-                && ReferenceEquals(Unwrap(property.Instance), reference))
+            if (current.Parent is not IArgumentOperation argument
+                || argument.Parent is not IInvocationOperation call)
+            {
+                return false;
+            }
+
+            return IsApprovedBorrowedOwnerFactoryArgument(call, argument)
+                || IsNonRetainingOwnerParameter(
+                    call.TargetMethod,
+                    argument.Parameter);
+        }
+
+        private bool IsApprovedBorrowedOwnerInvocation(
+            IInvocationOperation invocation)
+        {
+            if (IsTransferFactoryInvocation(invocation)
+                || IsBuilderFactoryInvocation(invocation))
             {
                 return true;
             }
 
-            return current.Parent is IArgumentOperation argument
-                && argument.Parent is IInvocationOperation call
-                && IsNonRetainingOwnerParameter(
-                    call.TargetMethod,
-                    argument.Parameter);
+            string name = invocation.TargetMethod.Name;
+            if (IsNativePool(invocation.TargetMethod.ContainingType))
+            {
+                return name is "Rent" or "GetStatistics";
+            }
+
+            return IsNativeArena(invocation.TargetMethod.ContainingType)
+                && name is "ScratchTransferable"
+                    or "GetStatistics"
+                    or "CaptureDiagnosticSnapshot";
+        }
+
+        private bool IsApprovedBorrowedOwnerFactoryArgument(
+            IInvocationOperation invocation,
+            IArgumentOperation argument)
+        {
+            if (argument.Parameter?.RefKind != RefKind.None)
+            {
+                return false;
+            }
+
+            return (IsNativePool(argument.Parameter.Type)
+                    || IsNativeArena(argument.Parameter.Type))
+                && (IsTransferFactoryInvocation(invocation)
+                    || IsBuilderFactoryInvocation(invocation));
         }
 
         private LifecycleEffect AnalyzeLifecycleSummary(IMethodSymbol method, IParameterSymbol parameter)
@@ -6236,6 +6317,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             internal bool Unleased { get; set; }
             internal bool ScopedOwnerEligible { get; set; }
             internal bool IsExternalReceiver { get; set; }
+            internal bool CanAssumeActiveWhenAbsent { get; set; }
             internal bool Ambiguous { get; set; }
             internal bool ScopedPending { get; set; }
             internal bool ScopedPendingAmbiguous { get; set; }
@@ -6263,6 +6345,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 copy.Unleased = Unleased;
                 copy.ScopedOwnerEligible = ScopedOwnerEligible;
                 copy.IsExternalReceiver = IsExternalReceiver;
+                copy.CanAssumeActiveWhenAbsent = CanAssumeActiveWhenAbsent;
                 copy.Ambiguous = Ambiguous;
                 copy.ScopedPending = ScopedPending;
                 copy.ScopedPendingAmbiguous = ScopedPendingAmbiguous;

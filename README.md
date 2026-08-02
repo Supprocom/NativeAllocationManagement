@@ -226,6 +226,35 @@ values.Access(view =>
 });
 ```
 
+A source-visible synchronous helper can borrow a local pool by value. The analyzer proves
+that each pool reference has an approved, non-retaining use.
+
+```csharp
+static void RunBatch<T>(NativePool<T> pool, int count)
+    where T : unmanaged
+{
+    for (int index = 0; index < count; index++)
+    {
+        using Pooled<T> lease = pool.Rent(
+            128,
+            static writer => writer.Fill(default));
+        lease.Access(static values => values[0] = default);
+    }
+}
+```
+
+`Rent`, `RentTransferable`, `CreateBuilder`, `GetStatistics`, and another verified helper
+are approved. Each acquired value must still end on every path.
+
+Async methods, iterators, closures, storage, conversions, returns, writable references,
+and unknown calls fail the proof. These rules keep pool authority with the caller.
+
+A long-running worker can keep one pool in a readonly instance field. The worker type must
+provide a verified `Dispose` path for that field.
+
+Repeated loop rentals are valid when each lease ends on every branch, return, and exception
+path. The analyzer rejects owner transitions with live leases and rents after disposal.
+
 `Pooled<T>.Dispose()` clears and returns one typed lease to the pool. A pool can also
 end or roll its complete generation with `ReturnMemoryToNativeMemory()`,
 `ReturnMemoryToGarbageCollector()`, `ReleaseLeasesToNativeMemory()`, or

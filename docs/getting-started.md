@@ -279,6 +279,86 @@ operation gate. `Pooled<T>.Dispose()` clears one logical lease before returning 
 to the idle bank. A zero-length lease has generation and allocation identity even though
 it owns no native bytes.
 
+## Borrow a local pool in a helper
+
+A source-visible synchronous helper can borrow a `NativePool<T>` parameter by value. The
+caller keeps ownership when the helper returns.
+
+```csharp
+using Supprocom.NativeAllocationManagement;
+
+using NativePool<int> pool = new();
+RunBatch(pool, 8);
+
+static void RunBatch<T>(NativePool<T> pool, int count)
+    where T : unmanaged
+{
+    for (int index = 0; index < count; index++)
+    {
+        NativeTransfer<T> transfer = pool.RentTransferable(
+            128,
+            static writer => writer.Fill(default));
+        try
+        {
+            transfer.Access(static values => values[0] = default);
+        }
+        finally
+        {
+            transfer.Dispose();
+        }
+    }
+}
+```
+
+The analyzer reads the helper source. It permits `Rent`, `RentTransferable`,
+`CreateBuilder`, `GetStatistics`, and a call to another verified helper.
+
+The produced lease, transfer, or builder must end on every path. The helper cannot store,
+return, box, convert, capture, or forward the pool to an unknown call.
+
+An async method, iterator, `ref` parameter, or `out` parameter fails the proof. A local
+pool therefore cannot cross a suspension or enter retained state through this contract.
+
+## Rent from a persistent worker pool
+
+A long-running worker can keep one pool in a readonly instance field. The declaring type
+must provide a verified disposal path for that exact field.
+
+```csharp
+using Supprocom.NativeAllocationManagement;
+
+public sealed class Worker : IDisposable
+{
+    private readonly NativePool<int> _pool = new(initialCapacity: 1_024);
+
+    public void Process(int count)
+    {
+        for (int index = 0; index < count; index++)
+        {
+            Pooled<int> lease = _pool.Rent(
+                128,
+                static writer => writer.Fill(default));
+            try
+            {
+                lease.Access(static values => values[0] = 1);
+            }
+            finally
+            {
+                lease.Dispose();
+            }
+        }
+    }
+
+    public void Dispose() => _pool.Dispose();
+}
+```
+
+The field stays in its active generation when it first appears inside a loop. Each lease
+must still end on every branch, early return, and exception path.
+
+A return, field store, capture, or async suspension of `Pooled<T>` remains invalid. An
+owner return, release, or disposal also invalidates later field operations.
+
 ## Heterogeneous regions
 
 `NativeRegion` is a one-shot heterogeneous lexical owner. Its only accepted ownership
