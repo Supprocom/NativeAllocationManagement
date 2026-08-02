@@ -175,6 +175,46 @@ internal readonly struct NativeBumpInitialization
     internal bool StartedScope { get; }
 }
 
+internal readonly struct NativeBuilderInitialization
+{
+    internal NativeBuilderInitialization(
+        NativeAllocation allocation)
+    {
+        Allocation = allocation;
+        AllocationId = allocation.Id;
+        GenerationNumber = allocation.GenerationState.Number;
+        BumpInitialization = default;
+        IsBump = false;
+    }
+
+    internal NativeBuilderInitialization(
+        NativeBumpInitialization bumpInitialization)
+    {
+        Allocation = bumpInitialization.Allocation;
+        AllocationId = Allocation.Id;
+        GenerationNumber = Allocation.GenerationState.Number;
+        BumpInitialization = bumpInitialization;
+        IsBump = true;
+    }
+
+    internal NativeAllocation Allocation { get; }
+
+    internal NativeGeneration Generation =>
+        Allocation.GenerationState;
+
+    internal long AllocationId { get; }
+
+    internal long GenerationNumber { get; }
+
+    internal NativeBumpInitialization BumpInitialization { get; }
+
+    internal bool IsBump { get; }
+}
+
+internal readonly record struct NativeBuilderCompletion(
+    NativeAllocation Allocation,
+    bool IsBump);
+
 internal readonly record struct NativeBumpBatchRequest(
     int Length,
     nuint ByteLength,
@@ -1386,6 +1426,19 @@ internal sealed class NativeAllocation
         NativeOperationAdmission.Count(ref _operationAdmission);
 
     internal int InitializedLength { get; set; }
+
+    internal void SetBuilderLength(int length)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(length);
+        if (length > Capacity)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(length),
+                "The builder length exceeds its native capacity.");
+        }
+
+        Length = length;
+    }
 
     internal void Reset(
         long id,
@@ -2656,6 +2709,281 @@ internal sealed class NativeOwnerKernel
             throw;
         }
     }
+
+    internal NativeBuilderInitialization BeginPoolBuilder(
+        int initialCapacity)
+    {
+        (
+            NativeGeneration Generation,
+            NativeAllocation Allocation,
+            NativePoolLease Lease) reservation =
+            BeginPoolInitialization(
+                initialCapacity,
+                scoped: false);
+        reservation.Allocation.SetBuilderLength(
+            reservation.Allocation.Capacity);
+        NativeBuilderInitialization initialization = new(
+            reservation.Allocation);
+        return EnterBuilderInitialization(
+            initialization,
+            "NativeBuilder.Create");
+    }
+
+    internal NativeBuilderInitialization BeginArenaBuilder<T>(
+        int initialCapacity)
+        where T : unmanaged
+    {
+        NativeBumpInitialization reservation =
+            BeginBumpInitialization(
+                initialCapacity,
+                NativeTypeLayout.StorageSize<T>(),
+                NativeTypeLayout.Alignment<T>(),
+                scoped: false,
+                containsReferences: false);
+        return EnterBuilderInitialization(
+            new NativeBuilderInitialization(reservation),
+            "NativeBuilder.Create");
+    }
+
+    private NativeBuilderInitialization EnterBuilderInitialization(
+        NativeBuilderInitialization initialization,
+        string operation)
+    {
+        try
+        {
+            lock (_gate)
+            {
+                NativeGeneration generation = initialization.Generation;
+                NativeAllocation allocation = initialization.Allocation;
+                if (!ReferenceEquals(generation, _current)
+                    || generation.Number
+                        != initialization.GenerationNumber
+                    || _lifecycle != NativeOwnerLifecycle.Active
+                    || allocation.Id
+                        != initialization.AllocationId
+                    || allocation.Lifecycle
+                        != NativeAllocationLifecycle.Initializing)
+                {
+                    throw CreateStateException(
+                        operation,
+                        "The builder allocation is not current.",
+                        initialization.AllocationId);
+                }
+
+                if (!generation.TryEnterOperation())
+                {
+                    throw CreateInUseException(
+                        operation,
+                        generation.Number,
+                        initialization.AllocationId,
+                        generation.ActiveOperations,
+                        "The generation stopped accepting builder operations.");
+                }
+            }
+
+            return initialization;
+        }
+        catch
+        {
+            AbortBuilderInitialization(initialization);
+            throw;
+        }
+    }
+
+    internal void ValidateBuilderAccess(
+        NativeBuilderInitialization initialization,
+        string operation)
+    {
+        NativeGeneration generation = initialization.Generation;
+        NativeAllocation allocation = initialization.Allocation;
+        if (!generation.MemoryDetached
+            && generation.Number
+                == initialization.GenerationNumber
+            && allocation.Id
+                == initialization.AllocationId
+            && allocation.Lifecycle
+                == NativeAllocationLifecycle.Initializing)
+        {
+            return;
+        }
+
+        lock (_gate)
+        {
+            throw CreateReturnedException(
+                operation,
+                initialization.GenerationNumber,
+                _generation,
+                initialization.AllocationId,
+                "The builder allocation is no longer active.");
+        }
+    }
+
+    internal NativeBuilderInitialization GrowBuilder<T>(
+        NativeBuilderInitialization current,
+        int newCapacity,
+        int initializedLength)
+        where T : unmanaged
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(newCapacity);
+        ArgumentOutOfRangeException.ThrowIfNegative(
+            initializedLength);
+        if (newCapacity <= current.Allocation.Capacity
+            || initializedLength > current.Allocation.Capacity)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(newCapacity),
+                "Builder growth requires a larger native capacity.");
+        }
+
+        NativeBuilderInitialization next;
+        if (current.IsBump)
+        {
+            NativeBumpInitialization reservation =
+                BeginBumpInitialization(
+                    newCapacity,
+                    NativeTypeLayout.StorageSize<T>(),
+                    NativeTypeLayout.Alignment<T>(),
+                    scoped: false,
+                    containsReferences: false,
+                    allowExistingInitialization: true);
+            next = new NativeBuilderInitialization(reservation);
+        }
+        else
+        {
+            (
+                NativeGeneration Generation,
+                NativeAllocation Allocation,
+                NativePoolLease Lease) reservation =
+                BeginPoolInitialization(
+                    newCapacity,
+                    scoped: false);
+            reservation.Allocation.SetBuilderLength(
+                reservation.Allocation.Capacity);
+            next = new NativeBuilderInitialization(
+                reservation.Allocation);
+        }
+
+        try
+        {
+            current.Allocation.AsSpan<T>()
+                .Slice(0, initializedLength)
+                .CopyTo(next.Allocation.AsSpan<T>());
+            next.Allocation.InitializedLength = initializedLength;
+            ReplaceBuilderInitialization(
+                current,
+                next,
+                initializedLength);
+            return next;
+        }
+        catch
+        {
+            AbortBuilderInitialization(next);
+            throw;
+        }
+    }
+
+    private void ReplaceBuilderInitialization(
+        NativeBuilderInitialization current,
+        NativeBuilderInitialization next,
+        int initializedLength)
+    {
+        lock (_gate)
+        {
+            NativeGeneration generation = current.Generation;
+            NativeAllocation previous = current.Allocation;
+            NativeAllocation replacement = next.Allocation;
+            if (!ReferenceEquals(generation, _current)
+                || !ReferenceEquals(generation, next.Generation)
+                || _lifecycle != NativeOwnerLifecycle.Active
+                || generation.MemoryDetached
+                || previous.Id != current.AllocationId
+                || replacement.Id != next.AllocationId
+                || previous.Lifecycle
+                    != NativeAllocationLifecycle.Initializing
+                || replacement.Lifecycle
+                    != NativeAllocationLifecycle.Initializing
+                || previous.InitializedLength != initializedLength
+                || replacement.InitializedLength != initializedLength)
+            {
+                throw CreateStateException(
+                    "NativeBuilder.Grow",
+                    "The builder generation changed during growth.",
+                    current.AllocationId);
+            }
+
+            generation.ReusableAllocations.EnsureCapacity(
+                checked(generation.ReusableAllocations.Count + 1));
+            if (previous.Slab is not null
+                && previous.Length > 0)
+            {
+                generation.AvailableSlabs.EnsureCapacity(
+                    checked(generation.AvailableSlabs.Count + 1));
+            }
+
+            previous.Lifecycle =
+                NativeAllocationLifecycle.Returned;
+            previous.InitializedLength = 0;
+            generation.Allocations.Remove(current.AllocationId);
+            generation.ReusableAllocations.Add(previous);
+            if (previous.Slab is not null
+                && previous.Length > 0)
+            {
+                generation.AddAvailableSlabOrdered(previous.Slab);
+            }
+
+            generation.InitializationsInProgress--;
+        }
+    }
+
+    internal NativeBuilderCompletion CompleteBuilder(
+        NativeBuilderInitialization initialization,
+        int length)
+    {
+        NativeAllocation allocation = initialization.Allocation;
+        allocation.SetBuilderLength(length);
+        allocation.InitializedLength = length;
+        if (initialization.IsBump)
+        {
+            CompleteBumpInitialization(
+                initialization.BumpInitialization);
+        }
+        else
+        {
+            CompleteInitialization(
+                initialization.Generation,
+                allocation,
+                scoped: false);
+        }
+
+        return new NativeBuilderCompletion(
+            allocation,
+            initialization.IsBump);
+    }
+
+    internal void AbortBuilderInitialization(
+        NativeBuilderInitialization initialization)
+    {
+        if (initialization.Allocation is null)
+        {
+            return;
+        }
+
+        if (initialization.IsBump)
+        {
+            AbortBumpInitialization(
+                initialization.BumpInitialization);
+        }
+        else
+        {
+            AbortPoolInitialization(
+                initialization.Generation,
+                initialization.Allocation);
+        }
+    }
+
+    internal void ExitBuilderGeneration(
+        NativeGeneration generation) =>
+        ExitGenerationOperation(generation);
 
     private (
         NativeGeneration Generation,
