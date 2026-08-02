@@ -35,6 +35,12 @@ internal static class Program
             return await VoxelHandoffBenchmark.RunCommandAsync(args);
         }
 
+        if (args.Length != 0
+            && args[0] is "--native-builder" or "--native-builder-worker")
+        {
+            return await NativeBuilderBenchmark.RunCommandAsync(args);
+        }
+
         if (args is ["--scoped-recycle-probe"])
         {
             Console.WriteLine(

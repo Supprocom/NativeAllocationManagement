@@ -105,7 +105,8 @@ internal static class VoxelHandoffBenchmark
         double nativeMean = pairs.Average(pair => pair.Native.ElapsedMilliseconds);
         double[] speedups = pairs.Select(pair => pair.ManagedToNativeSpeedup).ToArray();
         double speedupMean = speedups.Average();
-        double confidenceLower = ConfidenceLower95(speedups);
+        double confidenceLower =
+            PairedBenchmarkStatistics.ConfidenceLower95(speedups);
         long logicalBytes = pairs[0].Managed.LogicalBytes;
         bool parity = pairs.All(pair => pair.Managed.ExactParity
             && pair.Native.ExactParity
@@ -122,8 +123,12 @@ internal static class VoxelHandoffBenchmark
             nativeMean,
             speedupMean,
             confidenceLower,
-            LogicalGigabytesPerSecond(logicalBytes, managedMean),
-            LogicalGigabytesPerSecond(logicalBytes, nativeMean),
+            PairedBenchmarkStatistics.LogicalGigabytesPerSecond(
+                logicalBytes,
+                managedMean),
+            PairedBenchmarkStatistics.LogicalGigabytesPerSecond(
+                logicalBytes,
+                nativeMean),
             parity,
             balancedOrder,
             speedupMean > 1d && confidenceLower > 1d,
@@ -612,65 +617,6 @@ internal static class VoxelHandoffBenchmark
 
         return null;
     }
-
-    private static double ConfidenceLower95(double[] samples)
-    {
-        if (samples.Length < 2)
-        {
-            return double.NaN;
-        }
-
-        double mean = samples.Average();
-        double sumSquares = samples.Sum(value =>
-            (value - mean) * (value - mean));
-        double standardDeviation = Math.Sqrt(
-            sumSquares / (samples.Length - 1));
-        return mean - StudentCritical95(samples.Length - 1)
-            * standardDeviation
-            / Math.Sqrt(samples.Length);
-    }
-
-    private static double StudentCritical95(int degreesOfFreedom) =>
-        degreesOfFreedom switch
-        {
-            1 => 12.706,
-            2 => 4.303,
-            3 => 3.182,
-            4 => 2.776,
-            5 => 2.571,
-            6 => 2.447,
-            7 => 2.365,
-            8 => 2.306,
-            9 => 2.262,
-            10 => 2.228,
-            11 => 2.201,
-            12 => 2.179,
-            13 => 2.160,
-            14 => 2.145,
-            15 => 2.131,
-            16 => 2.120,
-            17 => 2.110,
-            18 => 2.101,
-            19 => 2.093,
-            20 => 2.086,
-            21 => 2.080,
-            22 => 2.074,
-            23 => 2.069,
-            24 => 2.064,
-            25 => 2.060,
-            26 => 2.056,
-            27 => 2.052,
-            28 => 2.048,
-            29 => 2.045,
-            _ => 1.96
-        };
-
-    private static double LogicalGigabytesPerSecond(
-        long logicalBytes,
-        double elapsedMilliseconds) =>
-        logicalBytes
-        / (1024d * 1024d * 1024d)
-        / (elapsedMilliseconds / 1000d);
 
     private static string GetInformationalVersion(Assembly assembly) =>
         assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()
