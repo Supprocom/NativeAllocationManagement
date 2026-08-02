@@ -22,6 +22,12 @@ public sealed class NativeArena : IDisposable
     internal long CurrentFastLaneSlowPathCountForTest =>
         _kernel.ArenaFastSlowPathCountForTest();
 
+    internal (
+        long SlowPaths,
+        long SlotCreations,
+        int DictionaryRecords) CurrentTransferMetricsForTest =>
+        _kernel.ArenaTransferMetricsForTest();
+
     internal int QuarantinedSegmentCountForTest => _kernel.QuarantinedSegmentCountForTest();
 
     internal int QuarantinedGenerationCountForTest => _kernel.QuarantinedGenerationCountForTest();
@@ -121,6 +127,20 @@ public sealed class NativeArena : IDisposable
             _kernel,
             allocation,
             "NativeArena.ScratchTransferable");
+    }
+
+    internal NativeArenaTransferBatch<T> CreateTransferBatch<T>(
+        int count,
+        int length)
+        where T : unmanaged
+    {
+        NativeArenaTransferBatchState state =
+            _kernel.CreateArenaTransferBatch(
+                count,
+                length,
+                NativeTypeLayout.StorageSize<T>(),
+                NativeTypeLayout.Alignment<T>());
+        return new NativeArenaTransferBatch<T>(state);
     }
 
     /// <summary>Initializes a scoped heterogeneous range before publication.</summary>

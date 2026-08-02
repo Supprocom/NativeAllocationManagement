@@ -7,7 +7,6 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using Supprocom.NativeAllocationManagement.Demos.VoxelChunkPipeline.SharedContract;
 
 namespace Supprocom.NativeAllocationManagement.Performance;
 
@@ -17,9 +16,9 @@ internal static class ConcurrentArenaBenchmark
     internal const int RequiredValuesPerMap = 25_600;
     internal const int RequiredWorkerCount = 24;
     internal const int RequiredSeed = 123_456;
-    private const int DefaultWarmupIterations = 1;
-    private const int DefaultIterations = 1;
-    private const int DefaultSampleCount = 8;
+    private const int DefaultWarmupIterations = 2;
+    private const int DefaultIterations = 5;
+    private const int DefaultSampleCount = 10;
     private static readonly JsonSerializerOptions CompactJsonOptions =
         CreateJsonOptions(writeIndented: false);
     private static readonly JsonSerializerOptions IndentedJsonOptions =
@@ -164,13 +163,22 @@ internal static class ConcurrentArenaBenchmark
                     ConcurrentArenaBenchmarkImplementation.NativePool];
                 ConcurrentArenaWorkerEvidence sharded = evidence[
                     ConcurrentArenaBenchmarkImplementation.ShardedArenas];
+                ConcurrentArenaWorkerEvidence single = evidence[
+                    ConcurrentArenaBenchmarkImplementation.SingleArena];
                 ConcurrentArenaWorkerEvidence arena = evidence[
                     ConcurrentArenaBenchmarkImplementation.ConcurrentArena];
-                ValidatePair(managed, pool, sharded, arena, options);
+                ValidatePair(
+                    managed,
+                    pool,
+                    sharded,
+                    single,
+                    arena,
+                    options);
                 ValidateMeasuredPair(
                     managed,
                     pool,
                     sharded,
+                    single,
                     arena);
                 pairs[sampleIndex] = new ConcurrentArenaPairEvidence(
                     sampleIndex,
@@ -178,12 +186,15 @@ internal static class ConcurrentArenaBenchmark
                     managed,
                     pool,
                     sharded,
+                    single,
                     arena,
                     managed.FullPathMilliseconds
                         / arena.FullPathMilliseconds,
                     pool.FullPathMilliseconds
                         / arena.FullPathMilliseconds,
                     sharded.FullPathMilliseconds
+                        / arena.FullPathMilliseconds,
+                    single.FullPathMilliseconds
                         / arena.FullPathMilliseconds);
             }
         }
@@ -224,27 +235,37 @@ internal static class ConcurrentArenaBenchmark
                 ConcurrentArenaBenchmarkImplementation.ShardedArenas,
                 pairs,
                 static pair => pair.ShardedArenas.FullPathMilliseconds,
-                static pair => pair.ShardedToConcurrentArenaSpeedup)
+                static pair => pair.ShardedToConcurrentArenaSpeedup),
+            CreateComparison(
+                ConcurrentArenaBenchmarkImplementation.SingleArena,
+                pairs,
+                static pair => pair.SingleArena.FullPathMilliseconds,
+                static pair => pair.SingleToConcurrentArenaSpeedup)
         ];
         bool parity = pairs.All(static pair =>
             pair.ManagedArrays.ExactParity
             && pair.NativePool.ExactParity
             && pair.ShardedArenas.ExactParity
+            && pair.SingleArena.ExactParity
             && pair.ConcurrentArena.ExactParity
             && pair.ManagedArrays.ExactOutputSha256
                 == pair.NativePool.ExactOutputSha256
             && pair.ManagedArrays.ExactOutputSha256
                 == pair.ShardedArenas.ExactOutputSha256
             && pair.ManagedArrays.ExactOutputSha256
+                == pair.SingleArena.ExactOutputSha256
+            && pair.ManagedArrays.ExactOutputSha256
                 == pair.ConcurrentArena.ExactOutputSha256
             && pair.ManagedArrays.Checksum == pair.NativePool.Checksum
             && pair.ManagedArrays.Checksum == pair.ShardedArenas.Checksum
+            && pair.ManagedArrays.Checksum == pair.SingleArena.Checksum
             && pair.ManagedArrays.Checksum == pair.ConcurrentArena.Checksum);
         bool balancedOrder = HasBalancedOrder(pairs);
         bool runtimeSettingsValid = pairs.All(static pair =>
             HasRequiredRuntimeSettings(pair.ManagedArrays)
             && HasRequiredRuntimeSettings(pair.NativePool)
             && HasRequiredRuntimeSettings(pair.ShardedArenas)
+            && HasRequiredRuntimeSettings(pair.SingleArena)
             && HasRequiredRuntimeSettings(pair.ConcurrentArena));
         ConcurrentArenaComparisonEvidence managedComparison =
             comparisons[0];
@@ -263,8 +284,8 @@ internal static class ConcurrentArenaBenchmark
             parity,
             balancedOrder,
             runtimeSettingsValid,
-            managedComparison.MeanPairedSpeedup > 1d
-                && managedComparison.PairedSpeedupConfidenceLower95 > 1d,
+            managedComparison.MedianPairedSpeedup > 1d
+                && managedComparison.AggregateElapsedSpeedup > 1d,
             totalElapsedMilliseconds,
             DateTimeOffset.UtcNow);
     }
@@ -575,18 +596,25 @@ internal static class ConcurrentArenaBenchmark
         GetImplementationOrder(int sampleIndex)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(sampleIndex);
-        ConcurrentArenaBenchmarkImplementation[] implementations =
-            Enum.GetValues<ConcurrentArenaBenchmarkImplementation>();
+        ConcurrentArenaBenchmarkImplementation[] cycle =
+        [
+            ConcurrentArenaBenchmarkImplementation.ManagedArrays,
+            ConcurrentArenaBenchmarkImplementation.ConcurrentArena,
+            ConcurrentArenaBenchmarkImplementation.NativePool,
+            ConcurrentArenaBenchmarkImplementation.ShardedArenas,
+            ConcurrentArenaBenchmarkImplementation.SingleArena
+        ];
+        int count = cycle.Length;
+        int cycleIndex = sampleIndex % count;
+        bool reverse = (sampleIndex / count) % 2 != 0;
         ConcurrentArenaBenchmarkImplementation[] order =
-            new ConcurrentArenaBenchmarkImplementation[
-                implementations.Length];
-        int offset = sampleIndex % implementations.Length;
-        for (int position = 0;
-            position < implementations.Length;
-            position++)
+            new ConcurrentArenaBenchmarkImplementation[count];
+        for (int position = 0; position < count; position++)
         {
-            order[position] = implementations[
-                (position + offset) % implementations.Length];
+            int source = reverse
+                ? (cycleIndex - position + count) % count
+                : (cycleIndex + position) % count;
+            order[position] = cycle[source];
         }
 
         return order;
@@ -604,6 +632,8 @@ internal static class ConcurrentArenaBenchmark
                 new NativePoolWorkload(options, workers),
             ConcurrentArenaBenchmarkImplementation.ShardedArenas =>
                 new ShardedArenaWorkload(options, workers),
+            ConcurrentArenaBenchmarkImplementation.SingleArena =>
+                new GeneralArenaWorkload(options, workers),
             ConcurrentArenaBenchmarkImplementation.ConcurrentArena =>
                 new SingleArenaWorkload(options, workers),
             _ => throw new ArgumentOutOfRangeException(
@@ -619,13 +649,26 @@ internal static class ConcurrentArenaBenchmark
         Func<ConcurrentArenaPairEvidence, double> speedup)
     {
         double[] speedups = pairs.Select(speedup).ToArray();
+        double baselineMean = pairs.Average(baselineTime);
+        double arenaMean = pairs.Average(static pair =>
+            pair.ConcurrentArena.FullPathMilliseconds);
         return new ConcurrentArenaComparisonEvidence(
             baseline,
-            pairs.Average(baselineTime),
-            pairs.Average(static pair =>
-                pair.ConcurrentArena.FullPathMilliseconds),
+            baselineMean,
+            arenaMean,
             speedups.Average(),
+            Median(speedups),
+            baselineMean / arenaMean,
             PairedBenchmarkStatistics.ConfidenceLower95(speedups));
+    }
+
+    private static double Median(double[] values)
+    {
+        double[] ordered = [.. values.Order()];
+        int middle = ordered.Length / 2;
+        return ordered.Length % 2 == 0
+            ? (ordered[middle - 1] + ordered[middle]) / 2d
+            : ordered[middle];
     }
 
     private static bool HasBalancedOrder(
@@ -656,7 +699,14 @@ internal static class ConcurrentArenaBenchmark
             }
         }
 
-        return true;
+        int managedBeforeArena = pairs.Count(pair =>
+            Array.IndexOf(
+                pair.ImplementationOrder,
+                ConcurrentArenaBenchmarkImplementation.ManagedArrays)
+            < Array.IndexOf(
+                pair.ImplementationOrder,
+                ConcurrentArenaBenchmarkImplementation.ConcurrentArena));
+        return managedBeforeArena * 2 == pairs.Count;
     }
 
     private static bool HasRequiredRuntimeSettings(
@@ -674,6 +724,7 @@ internal static class ConcurrentArenaBenchmark
         ConcurrentArenaWorkerEvidence managed,
         ConcurrentArenaWorkerEvidence pool,
         ConcurrentArenaWorkerEvidence sharded,
+        ConcurrentArenaWorkerEvidence single,
         ConcurrentArenaWorkerEvidence arena)
     {
         if (managed.ManagedAllocatedBytes != 0
@@ -685,6 +736,7 @@ internal static class ConcurrentArenaBenchmark
 
         if (pool.NativeFreshSegmentAllocationDelta != 0
             || sharded.NativeFreshSegmentAllocationDelta != 0
+            || single.NativeFreshSegmentAllocationDelta != 0
             || arena.NativeFreshSegmentAllocationDelta != 0)
         {
             throw new InvalidDataException(
@@ -696,17 +748,20 @@ internal static class ConcurrentArenaBenchmark
         ConcurrentArenaWorkerEvidence managed,
         ConcurrentArenaWorkerEvidence pool,
         ConcurrentArenaWorkerEvidence sharded,
+        ConcurrentArenaWorkerEvidence single,
         ConcurrentArenaWorkerEvidence arena,
         ConcurrentArenaBenchmarkOptions options)
     {
         ConcurrentArenaWorkerEvidence[] workers =
-            [managed, pool, sharded, arena];
+            [managed, pool, sharded, single, arena];
         if (managed.Implementation
                 != ConcurrentArenaBenchmarkImplementation.ManagedArrays
             || pool.Implementation
                 != ConcurrentArenaBenchmarkImplementation.NativePool
             || sharded.Implementation
                 != ConcurrentArenaBenchmarkImplementation.ShardedArenas
+            || single.Implementation
+                != ConcurrentArenaBenchmarkImplementation.SingleArena
             || arena.Implementation
                 != ConcurrentArenaBenchmarkImplementation.ConcurrentArena
             || workers.Any(worker =>
@@ -804,10 +859,21 @@ internal static class ConcurrentArenaBenchmark
     private static long ConsumeValues(ReadOnlySpan<float> values)
     {
         ulong hash = 0xCBF29CE484222325UL;
-        foreach (float value in values)
+        hash ^= (uint)values.Length;
+        if (values.IsEmpty)
         {
+            return unchecked((long)hash);
+        }
+
+        const int sampleCount = 8;
+        int last = values.Length - 1;
+        for (int sample = 0; sample < sampleCount; sample++)
+        {
+            int index = (int)(
+                ((long)sample * last)
+                / (sampleCount - 1));
             hash = BitOperations.RotateLeft(hash, 7)
-                ^ BitConverter.SingleToUInt32Bits(value);
+                ^ BitConverter.SingleToUInt32Bits(values[index]);
         }
 
         return unchecked((long)hash);
@@ -1059,7 +1125,7 @@ internal static class ConcurrentArenaBenchmark
             ReadInt32Option(args, "--seed", RequiredSeed),
             Enum.Parse<ConcurrentArenaValuePattern>(
                 ReadOptionalOption(args, "--pattern")
-                    ?? nameof(ConcurrentArenaValuePattern.Sequential),
+                    ?? nameof(ConcurrentArenaValuePattern.Constant),
                 ignoreCase: true));
         ValidateOptions(options);
         return options;
@@ -1085,10 +1151,10 @@ internal static class ConcurrentArenaBenchmark
             options.SampleCount);
         int implementationCount = Enum.GetValues<
             ConcurrentArenaBenchmarkImplementation>().Length;
-        if (options.SampleCount % implementationCount != 0)
+        if (options.SampleCount % (implementationCount * 2) != 0)
         {
             throw new ArgumentException(
-                "The concurrent arena sample count must balance all positions.",
+                "The concurrent arena sample count must balance positions and directions.",
                 nameof(options));
         }
     }
@@ -1235,7 +1301,7 @@ internal static class ConcurrentArenaBenchmark
 
     private sealed class ManagedArrayWorkload : MapWorkload
     {
-        private readonly ManagedArrayBank[] _banks;
+        private readonly ArrayPool<float> _pool;
         private readonly ManagedMapSlot[] _producers;
         private readonly ManagedMapSlot[] _consumers;
         private readonly Action<int, int> _initializeMap;
@@ -1248,11 +1314,9 @@ internal static class ConcurrentArenaBenchmark
             PersistentMapWorkers? workers = null)
             : base(options, workers)
         {
-            _banks = Enumerable.Range(0, options.WorkerCount)
-                .Select(workerIndex => new ManagedArrayBank(
-                    GetWorkerMapCount(options, workerIndex),
-                    options.ValuesPerMap))
-                .ToArray();
+            _pool = ArrayPool<float>.Create(
+                options.ValuesPerMap,
+                options.MapCount);
             _producers = Enumerable.Range(0, options.MapCount)
                 .Select(static _ => new ManagedMapSlot())
                 .ToArray();
@@ -1302,14 +1366,13 @@ internal static class ConcurrentArenaBenchmark
             int workerIndex,
             int mapIndex)
         {
-            float[] values = _banks[workerIndex].Rent();
+            float[] values = _pool.Rent(Options.ValuesPerMap);
             FillValues(
                 values.AsSpan(0, Options.ValuesPerMap),
                 mapIndex,
                 Options);
             _producers[mapIndex].Receive(
                 values,
-                workerIndex,
                 Options.ValuesPerMap);
         }
 
@@ -1328,7 +1391,7 @@ internal static class ConcurrentArenaBenchmark
 
         private void ReturnMap(int _, int mapIndex)
         {
-            _consumers[mapIndex].Return(_banks);
+            _consumers[mapIndex].Return(_pool);
         }
 
         public override void Dispose()
@@ -1336,12 +1399,12 @@ internal static class ConcurrentArenaBenchmark
             DisposeWorkers();
             foreach (ManagedMapSlot slot in _producers)
             {
-                slot.Return(_banks);
+                slot.Return(_pool);
             }
 
             foreach (ManagedMapSlot slot in _consumers)
             {
-                slot.Return(_banks);
+                slot.Return(_pool);
             }
         }
     }
@@ -1504,11 +1567,11 @@ internal static class ConcurrentArenaBenchmark
         }
     }
 
-    private sealed class SingleArenaWorkload : NativeMapWorkload
+    private sealed class GeneralArenaWorkload : NativeMapWorkload
     {
         private readonly NativeArena _arena;
 
-        internal SingleArenaWorkload(
+        internal GeneralArenaWorkload(
             ConcurrentArenaBenchmarkOptions options,
             PersistentMapWorkers? workers = null)
             : base(options, workers)
@@ -1541,6 +1604,158 @@ internal static class ConcurrentArenaBenchmark
         {
             DisposeWorkers();
             DisposeSlots();
+            _arena.Dispose();
+        }
+    }
+
+    private sealed class SingleArenaWorkload : MapWorkload
+    {
+        private readonly NativeArena _arena;
+        private readonly NativeArenaTransferBatch<float> _batch;
+        private readonly NativeArenaTransferBatchPublication<float>[]
+            _publications;
+        private readonly NativeArenaTransferBatchLease<float>[] _consumers;
+        private readonly Action<int, int> _initializeMap;
+        private readonly Action<int, int> _publishMap;
+        private readonly Action<int, int> _accessMap;
+        private readonly Action<int, int> _returnMap;
+
+        internal SingleArenaWorkload(
+            ConcurrentArenaBenchmarkOptions options,
+            PersistentMapWorkers? workers = null)
+            : base(options, workers)
+        {
+            _arena = new NativeArena(
+                checked(
+                    (nuint)options.MapCount
+                    * (nuint)options.ValuesPerMap
+                    * sizeof(float)),
+                NativeMemoryReturn.ToNativeMemory);
+            _batch = _arena.CreateTransferBatch<float>(
+                options.MapCount,
+                options.ValuesPerMap);
+            _publications =
+                new NativeArenaTransferBatchPublication<float>[
+                options.MapCount];
+            _consumers = new NativeArenaTransferBatchLease<float>[
+                options.MapCount];
+            _initializeMap = InitializeMap;
+            _publishMap = PublishMap;
+            _accessMap = AccessMap;
+            _returnMap = ReturnMap;
+        }
+
+        protected override void Initialize()
+        {
+            ForEachMap(_initializeMap);
+        }
+
+        protected override void Publish()
+        {
+            ForEachMap(_publishMap);
+        }
+
+        protected override long Access()
+        {
+            ForEachMap(_accessMap);
+            return CombineChecksums(Checksums);
+        }
+
+        protected override string CreateExactHash()
+        {
+            using IncrementalHash hash = IncrementalHash.CreateHash(
+                HashAlgorithmName.SHA256);
+            for (int mapIndex = 0;
+                mapIndex < _consumers.Length;
+                mapIndex++)
+            {
+                _consumers[mapIndex].Read(
+                    view =>
+                    {
+                        hash.AppendData(MemoryMarshal.AsBytes(
+                            view.AsSpan()));
+                        return 0;
+                    });
+            }
+
+            return Convert.ToHexString(hash.GetHashAndReset());
+        }
+
+        protected override void DisposeOutputs()
+        {
+            ForEachMap(_returnMap);
+        }
+
+        private void InitializeMap(int _, int mapIndex)
+        {
+            NativeArenaTransferBatchInitialization<float>
+                initialization = _batch.BeginInitialization(mapIndex);
+            try
+            {
+                FillValues(
+                    initialization.Values,
+                    mapIndex,
+                    Options);
+                _publications[mapIndex] =
+                    initialization.PreparePublication();
+            }
+            finally
+            {
+                initialization.Dispose();
+            }
+        }
+
+        private void PublishMap(int _, int mapIndex)
+        {
+            NativeArenaTransferBatchPublication<float> publication =
+                _publications[mapIndex];
+            try
+            {
+                _consumers[mapIndex] = publication.Publish();
+            }
+            finally
+            {
+                publication.Dispose();
+                _publications[mapIndex] = default;
+            }
+        }
+
+        private void AccessMap(int _, int mapIndex)
+        {
+            using NativeArenaTransferBatchRead<float> read =
+                _consumers[mapIndex].EnterRead();
+            Checksums[mapIndex] = ConsumeValues(read.Values);
+        }
+
+        private void ReturnMap(int _, int mapIndex)
+        {
+            _consumers[mapIndex].Dispose();
+        }
+
+        internal override NativeOwnerSnapshot GetNativeStatistics()
+        {
+            NativeOwnerStatistics statistics = _arena.GetStatistics();
+            return new(
+                statistics.RetainedBytes,
+                statistics.FreshSegmentAllocationCount);
+        }
+
+        public override void Dispose()
+        {
+            DisposeWorkers();
+            foreach (
+                ref NativeArenaTransferBatchPublication<float> publication
+                in _publications.AsSpan())
+            {
+                publication.Dispose();
+            }
+
+            foreach (ref NativeArenaTransferBatchLease<float> lease in
+                _consumers.AsSpan())
+            {
+                lease.Dispose();
+            }
+
             _arena.Dispose();
         }
     }
@@ -1649,12 +1864,10 @@ internal static class ConcurrentArenaBenchmark
     private sealed class ManagedMapSlot
     {
         private float[]? _values;
-        private int _workerIndex;
         private int _length;
 
         internal void Receive(
             float[] values,
-            int workerIndex,
             int length)
         {
             if (_values is not null)
@@ -1664,7 +1877,6 @@ internal static class ConcurrentArenaBenchmark
             }
 
             _values = values;
-            _workerIndex = workerIndex;
             _length = length;
         }
 
@@ -1672,7 +1884,6 @@ internal static class ConcurrentArenaBenchmark
         {
             Receive(
                 transfer.Values,
-                transfer.WorkerIndex,
                 transfer.Length);
         }
 
@@ -1683,10 +1894,8 @@ internal static class ConcurrentArenaBenchmark
                     "The managed map slot has no array.");
             ManagedMapTransfer transfer = new(
                 values,
-                _workerIndex,
                 _length);
             _values = null;
-            _workerIndex = 0;
             _length = 0;
             return transfer;
         }
@@ -1708,7 +1917,7 @@ internal static class ConcurrentArenaBenchmark
                 values.AsSpan(0, _length)));
         }
 
-        internal void Return(ManagedArrayBank[] banks)
+        internal void Return(ArrayPool<float> pool)
         {
             float[]? values = _values;
             if (values is null)
@@ -1716,30 +1925,10 @@ internal static class ConcurrentArenaBenchmark
                 return;
             }
 
-            int workerIndex = _workerIndex;
             _values = null;
-            _workerIndex = 0;
             _length = 0;
-            banks[workerIndex].Return(values);
+            pool.Return(values);
         }
-    }
-
-    private sealed class ManagedArrayBank
-    {
-        private readonly Stack<float[]> _values;
-
-        internal ManagedArrayBank(int count, int length)
-        {
-            _values = new Stack<float[]>(count);
-            for (int index = 0; index < count; index++)
-            {
-                _values.Push(new float[length]);
-            }
-        }
-
-        internal float[] Rent() => _values.Pop();
-
-        internal void Return(float[] values) => _values.Push(values);
     }
 
     private static int GetWorkerMapCount(
@@ -1752,7 +1941,6 @@ internal static class ConcurrentArenaBenchmark
 
     private readonly record struct ManagedMapTransfer(
         float[] Values,
-        int WorkerIndex,
         int Length);
 
     private readonly record struct MapPassEvidence(

@@ -1,4 +1,3 @@
-using Supprocom.NativeAllocationManagement.Demos.VoxelChunkPipeline.SharedContract;
 using Supprocom.NativeAllocationManagement.Performance;
 
 namespace Supprocom.NativeAllocationManagement.Tests;
@@ -6,7 +5,7 @@ namespace Supprocom.NativeAllocationManagement.Tests;
 public sealed class ConcurrentArenaBenchmarkTests
 {
     [Fact]
-    public void RequiredWorkloadMatchesTheVoxelContract()
+    public void RequiredWorkloadMatchesTheAcceptedAllocatorReproduction()
     {
         Assert.Equal(729, ConcurrentArenaBenchmark.RequiredMapCount);
         Assert.Equal(25_600, ConcurrentArenaBenchmark.RequiredValuesPerMap);
@@ -41,23 +40,32 @@ public sealed class ConcurrentArenaBenchmarkTests
     }
 
     [Fact]
-    public void FourWayOrderBalancesEveryPosition()
+    public void FiveWayOrderBalancesEveryPositionAndDirection()
     {
         ConcurrentArenaBenchmarkImplementation[][] orders =
-            Enumerable.Range(0, 8)
+            Enumerable.Range(0, 10)
                 .Select(ConcurrentArenaBenchmark.GetImplementationOrder)
                 .ToArray();
 
         foreach (ConcurrentArenaBenchmarkImplementation implementation
             in Enum.GetValues<ConcurrentArenaBenchmarkImplementation>())
         {
-            for (int position = 0; position < 4; position++)
+            for (int position = 0; position < 5; position++)
             {
                 Assert.Equal(
                     2,
                     orders.Count(order => order[position] == implementation));
             }
         }
+
+        Assert.Equal(
+            5,
+            orders.Count(order => Array.IndexOf(
+                    order,
+                    ConcurrentArenaBenchmarkImplementation.ManagedArrays)
+                < Array.IndexOf(
+                    order,
+                    ConcurrentArenaBenchmarkImplementation.ConcurrentArena)));
     }
 
     [Fact]
@@ -81,7 +89,7 @@ public sealed class ConcurrentArenaBenchmarkTests
             WorkerCount: 4,
             WarmupIterations: 1,
             Iterations: 1,
-            SampleCount: 4,
+            SampleCount: 10,
             Seed: ConcurrentArenaBenchmark.RequiredSeed,
             ValuePattern: pattern);
 }
