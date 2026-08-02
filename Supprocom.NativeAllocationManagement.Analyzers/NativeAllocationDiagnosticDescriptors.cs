@@ -168,6 +168,31 @@ internal static class NativeAllocationDiagnosticDescriptors
         "Native builder completion requires a typed transfer destination",
         "NativeBuilder<T>.Complete for '{0}' must publish directly to an exact NativeTransfer<T> destination.");
 
+    internal static readonly DiagnosticDescriptor WorkspaceAlias = Create(
+        "NAM1036",
+        "Native workspace ownership cannot be copied",
+        "Native workspace '{0}' owns one persistent range. Keep one local binding instead of copying it to '{1}'.");
+
+    internal static readonly DiagnosticDescriptor InactiveWorkspaceUse = Create(
+        "NAM1037",
+        "Native workspace operation requires active authority",
+        "Native workspace '{0}' cannot run '{1}' because its authority is {2}.");
+
+    internal static readonly DiagnosticDescriptor WorkspaceLifetime = Create(
+        "NAM1038",
+        "Native workspace ownership must end",
+        "Native workspace '{0}' remains active at lexical exit. Dispose it before exit.");
+
+    internal static readonly DiagnosticDescriptor WorkspaceAcquisitionEscape = Create(
+        "NAM1039",
+        "Native workspace acquisition requires one local owner",
+        "'{0}' must directly initialize a local NativeWorkspace<T>. It cannot be returned, passed, discarded, stored, or aggregated.");
+
+    internal static readonly DiagnosticDescriptor UnsupportedWorkspaceParameter = Create(
+        "NAM1040",
+        "Native workspace parameter must be a scoped read-only borrow",
+        "Native workspace parameter '{0}' uses '{1}'. Use scoped in for a bounded borrow, or keep ownership in the declaring method.");
+
     internal static readonly DiagnosticDescriptor AnalyzerMissing = Create(
         "NAM9001",
         "Bundled analyzer is required",
@@ -206,6 +231,11 @@ internal static class NativeAllocationDiagnosticDescriptors
         BuilderAcquisitionEscape,
         UnsupportedBuilderParameter,
         BuilderCompletionEscape,
+        WorkspaceAlias,
+        InactiveWorkspaceUse,
+        WorkspaceLifetime,
+        WorkspaceAcquisitionEscape,
+        UnsupportedWorkspaceParameter,
         AnalyzerMissing);
 
     private static DiagnosticDescriptor Create(

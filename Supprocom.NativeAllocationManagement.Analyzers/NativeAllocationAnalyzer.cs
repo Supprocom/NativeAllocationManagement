@@ -87,6 +87,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 Namespace + "NativeTransfer`1");
             Builder = runtimeAssembly.GetTypeByMetadataName(
                 Namespace + "NativeBuilder`1");
+            Workspace = runtimeAssembly.GetTypeByMetadataName(
+                Namespace + "NativeWorkspace`1");
             LeaseView = runtimeAssembly.GetTypeByMetadataName(
                 Namespace + "NativeLeaseView`1");
         }
@@ -107,6 +109,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
         internal INamedTypeSymbol? Builder { get; }
 
+        internal INamedTypeSymbol? Workspace { get; }
+
         internal INamedTypeSymbol? LeaseView { get; }
 
         internal bool IsAvailable =>
@@ -118,6 +122,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             && ArenaLease is not null
             && Transfer is not null
             && Builder is not null
+            && Workspace is not null
             && LeaseView is not null;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -250,6 +255,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             RegisterOwnerParameters(method);
             RegisterTransferParameters(method);
             RegisterBuilderParameters(method);
+            RegisterWorkspaceParameters(method);
             if (!ContainsNativeOwnership(operationBlock))
             {
                 return;
@@ -324,7 +330,49 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 .Any(operation => IsOwnerType(operation.Type)
                     || IsHandleType(operation.Type)
                     || IsNativeTransfer(operation.Type)
-                    || IsNativeBuilder(operation.Type));
+                    || IsNativeBuilder(operation.Type)
+                    || IsNativeWorkspace(operation.Type));
+        }
+
+        private void RegisterWorkspaceParameters(
+            IMethodSymbol? method)
+        {
+            if (method is null)
+            {
+                return;
+            }
+
+            foreach (IParameterSymbol parameter in method.Parameters
+                .Where(parameter => IsNativeWorkspace(parameter.Type)))
+            {
+                if (_transfers.ContainsKey(parameter))
+                {
+                    continue;
+                }
+
+                SyntaxNode syntax = parameter.DeclaringSyntaxReferences
+                    .FirstOrDefault()
+                    ?.GetSyntax(_context.CancellationToken)
+                    ?? method.DeclaringSyntaxReferences
+                        .First()
+                        .GetSyntax(_context.CancellationToken);
+                bool isBorrow = parameter.RefKind == RefKind.In
+                    && parameter.ScopedKind != ScopedKind.None;
+                if (!isBorrow)
+                {
+                    Report(
+                        NativeAllocationDiagnosticDescriptors.UnsupportedWorkspaceParameter,
+                        syntax,
+                        parameter.Name,
+                        ParameterModifier(parameter.RefKind));
+                }
+
+                _transfers.Add(
+                    parameter,
+                    TransferState.CreateWorkspaceBorrow(
+                        parameter,
+                        syntax));
+            }
         }
 
         private void RegisterBuilderParameters(
@@ -619,7 +667,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     if (IsOwnerType(local.Type)
                         || IsHandleType(local.Type)
                         || IsNativeTransfer(local.Type)
-                        || IsNativeBuilder(local.Type))
+                        || IsNativeBuilder(local.Type)
+                        || IsNativeWorkspace(local.Type))
                     {
                         _localLifetimeRegions[local] = region;
                     }
@@ -837,6 +886,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 || IsHandleType(candidate.Type)
                 || IsNativeTransfer(candidate.Type)
                 || IsNativeBuilder(candidate.Type)
+                || IsNativeWorkspace(candidate.Type)
                 || candidate is IAwaitOperation
                 || candidate is IReturnOperation
                 || candidate is IThrowOperation);
@@ -1919,6 +1969,16 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 ProcessBuilderInvocation(operation);
             }
 
+            if (IsWorkspaceFactoryInvocation(operation))
+            {
+                RegisterWorkspaceFactory(operation);
+            }
+            else if (IsNativeWorkspace(
+                operation.TargetMethod.ContainingType))
+            {
+                ProcessWorkspaceInvocation(operation);
+            }
+
             if (operation.IsImplicit)
             {
                 base.VisitInvocation(operation);
@@ -2248,6 +2308,15 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     operation.Property.Name);
             }
 
+            if (IsNativeWorkspace(operation.Instance?.Type)
+                && GetWorkspace(Unwrap(operation.Instance)) is TransferState workspace)
+            {
+                CheckWorkspaceActive(
+                    workspace,
+                    operation.Syntax,
+                    operation.Property.Name);
+            }
+
             HandleState? handle = GetHandle(Unwrap(operation.Instance));
             if (handle is not null)
             {
@@ -2285,6 +2354,13 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     value);
             }
 
+            if (IsNativeWorkspace(operation.Target.Type))
+            {
+                ProcessWorkspaceAssignment(
+                    GetTarget(operation.Target),
+                    value);
+            }
+
             if (value is not null && value is not IObjectCreationOperation && !IsHandleCreatingInvocation(value))
             {
                 Target target = GetTarget(operation.Target);
@@ -2316,6 +2392,13 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             if (IsNativeBuilder(operation.Symbol.Type))
             {
                 ProcessBuilderAssignment(
+                    new Target(operation.Symbol, operation.Syntax),
+                    value);
+            }
+
+            if (IsNativeWorkspace(operation.Symbol.Type))
+            {
+                ProcessWorkspaceAssignment(
                     new Target(operation.Symbol, operation.Syntax),
                     value);
             }
@@ -2385,6 +2468,30 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 }
             }
 
+            if (value is not null
+                && IsNativeWorkspace(value.Type)
+                && !IsWorkspaceFactoryInvocation(value)
+                && !IsWorkspaceBorrowArgument(operation))
+            {
+                string destination = operation.Parent is IInvocationOperation invocation
+                    ? invocation.TargetMethod.ToDisplayString(
+                        SymbolDisplayFormat.MinimallyQualifiedFormat)
+                    : "the call argument";
+                if (GetWorkspace(value) is TransferState workspace)
+                {
+                    ReportTransferCopy(
+                        workspace,
+                        operation.Syntax,
+                        destination);
+                }
+                else
+                {
+                    ReportUnknownWorkspaceCopy(
+                        operation.Syntax,
+                        destination);
+                }
+            }
+
             if (value is not null && value is not IObjectCreationOperation)
             {
                 if (operation.Parent is IInvocationOperation composite
@@ -2416,6 +2523,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     if (operation.Parent is IInvocationOperation invocation
                         && (IsTransferFactoryInvocation(invocation)
                             || IsBuilderFactoryInvocation(invocation)
+                            || IsWorkspaceFactoryInvocation(invocation)
                             || GetLifecycleEffect(invocation.TargetMethod, operation.Parameter)
                                 is not LifecycleEffect.None
                             || IsNonRetainingOwnerParameter(
@@ -2473,6 +2581,25 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 else
                 {
                     ReportUnknownBuilderCopy(
+                        operation.Syntax,
+                        "the return value");
+                }
+            }
+
+            if (value is not null
+                && IsNativeWorkspace(value.Type)
+                && !IsWorkspaceFactoryInvocation(value))
+            {
+                if (GetWorkspace(value) is TransferState workspace)
+                {
+                    ReportTransferCopy(
+                        workspace,
+                        operation.Syntax,
+                        "the return value");
+                }
+                else
+                {
+                    ReportUnknownWorkspaceCopy(
                         operation.Syntax,
                         "the return value");
                 }
@@ -2591,7 +2718,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             }
             else if (_isStandaloneClosureAnalysis
                 && (IsNativeTransfer(operation.Type)
-                    || IsNativeBuilder(operation.Type))
+                    || IsNativeBuilder(operation.Type)
+                    || IsNativeWorkspace(operation.Type))
                 && IsCapturedLocal(
                     operation.Local,
                     operation.Syntax)
@@ -2631,11 +2759,17 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             IOperation? operand = Unwrap(operation.Operand);
             if (operand is not null
                 && (IsNativeTransfer(operand.Type)
-                    || IsNativeBuilder(operand.Type))
+                    || IsNativeBuilder(operand.Type)
+                    || IsNativeWorkspace(operand.Type))
                 && !IsNativeTransfer(operation.Type)
                 && !IsNativeBuilder(operation.Type)
+                && !IsNativeWorkspace(operation.Type)
                 && !IsNullComparisonConversion(operation)
                 && !(IsNativeBuilder(operand.Type)
+                    && operation.IsImplicit
+                    && IsDirectUsingResourceConversion(
+                        operation.Syntax))
+                && !(IsNativeWorkspace(operand.Type)
                     && operation.IsImplicit
                     && IsDirectUsingResourceConversion(
                         operation.Syntax))
@@ -2654,6 +2788,12 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 else if (IsNativeBuilder(operand.Type))
                 {
                     ReportUnknownBuilderCopy(
+                        operation.Syntax,
+                        destination);
+                }
+                else if (IsNativeWorkspace(operand.Type))
+                {
+                    ReportUnknownWorkspaceCopy(
                         operation.Syntax,
                         destination);
                 }
@@ -2734,7 +2874,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             foreach (IOperation element in operation.Elements)
             {
                 if (IsNativeTransfer(element.Type)
-                    || IsNativeBuilder(element.Type))
+                    || IsNativeBuilder(element.Type)
+                    || IsNativeWorkspace(element.Type))
                 {
                     if (GetNativeOwnership(
                         Unwrap(element)) is TransferState transfer)
@@ -2747,6 +2888,12 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     else if (IsNativeBuilder(element.Type))
                     {
                         ReportUnknownBuilderCopy(
+                            operation.Syntax,
+                            "a tuple");
+                    }
+                    else if (IsNativeWorkspace(element.Type))
+                    {
+                        ReportUnknownWorkspaceCopy(
                             operation.Syntax,
                             "a tuple");
                     }
@@ -2771,7 +2918,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             foreach (IOperation element in operation.ElementValues)
             {
                 if (IsNativeTransfer(element.Type)
-                    || IsNativeBuilder(element.Type))
+                    || IsNativeBuilder(element.Type)
+                    || IsNativeWorkspace(element.Type))
                 {
                     if (GetNativeOwnership(
                         Unwrap(element)) is TransferState transfer)
@@ -2784,6 +2932,12 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     else if (IsNativeBuilder(element.Type))
                     {
                         ReportUnknownBuilderCopy(
+                            operation.Syntax,
+                            "an array");
+                    }
+                    else if (IsNativeWorkspace(element.Type))
+                    {
+                        ReportUnknownWorkspaceCopy(
                             operation.Syntax,
                             "an array");
                     }
@@ -3069,6 +3223,39 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             }
         }
 
+        private void ProcessWorkspaceInvocation(
+            IInvocationOperation operation)
+        {
+            IOperation? instance = Unwrap(operation.Instance);
+            TransferState? workspace = GetWorkspace(instance);
+            if (workspace is null)
+            {
+                return;
+            }
+
+            if (operation.IsImplicit
+                && operation.TargetMethod.Name == "Dispose"
+                && workspace.Status == TransferStatus.Disposed)
+            {
+                return;
+            }
+
+            if (!CheckWorkspaceActive(
+                    workspace,
+                    operation.Syntax,
+                    operation.TargetMethod.Name))
+            {
+                return;
+            }
+
+            if (operation.TargetMethod.Name == "Dispose")
+            {
+                MarkTransferIdentity(
+                    workspace.OwnershipIdentity,
+                    TransferStatus.Disposed);
+            }
+        }
+
         private void RegisterBuilderFactory(
             IInvocationOperation operation)
         {
@@ -3085,6 +3272,31 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
             ReportActiveTransferOverwrite(target);
             _transfers[target.Symbol] = TransferState.CreateBuilder(
+                target.Symbol,
+                operation.Syntax,
+                TransferStatus.Active,
+                mustEnd: true,
+                isUsing: IsUsingSyntax(
+                    operation.Syntax,
+                    target.Symbol));
+        }
+
+        private void RegisterWorkspaceFactory(
+            IInvocationOperation operation)
+        {
+            Target target = FindTarget(operation);
+            if (target.Symbol is not ILocalSymbol
+                || !IsNativeWorkspace(GetSymbolType(target.Symbol)))
+            {
+                Report(
+                    NativeAllocationDiagnosticDescriptors.WorkspaceAcquisitionEscape,
+                    operation.Syntax,
+                    operation.TargetMethod.Name);
+                return;
+            }
+
+            ReportActiveTransferOverwrite(target);
+            _transfers[target.Symbol] = TransferState.CreateWorkspace(
                 target.Symbol,
                 operation.Syntax,
                 TransferStatus.Active,
@@ -3151,6 +3363,83 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                         "the builder expression",
                         target.Symbol.Name);
                     _transfers[target.Symbol] = TransferState.CreateBuilder(
+                        target.Symbol,
+                        target.Syntax,
+                        TransferStatus.Ambiguous,
+                        mustEnd: target.Symbol is ILocalSymbol,
+                        isUsing: IsUsingSyntax(
+                            target.Syntax,
+                            target.Symbol));
+                    return;
+                }
+
+                if (SymbolEqualityComparer.Default.Equals(
+                    source.Symbol,
+                    target.Symbol))
+                {
+                    return;
+                }
+
+                ReportActiveTransferOverwrite(target);
+                ReportTransferCopy(
+                    source,
+                    target.Syntax,
+                    target.Symbol.Name);
+                _transfers[target.Symbol] = source.CloneFor(
+                    target.Symbol,
+                    mustEnd: target.Symbol is ILocalSymbol,
+                    isUsing: IsUsingSyntax(
+                        target.Syntax,
+                        target.Symbol),
+                target.Syntax);
+            }
+        }
+
+        private void ProcessWorkspaceAssignment(
+            Target target,
+            IOperation? value)
+        {
+            if (target.Symbol is null)
+            {
+                if (value is not null
+                    && IsNativeWorkspace(value.Type)
+                    && !IsWorkspaceFactoryInvocation(value))
+                {
+                    if (GetWorkspace(value) is TransferState discarded)
+                    {
+                        ReportTransferCopy(
+                            discarded,
+                            target.Syntax,
+                            "a discarded value");
+                    }
+                    else
+                    {
+                        ReportUnknownWorkspaceCopy(
+                            target.Syntax,
+                            "a discarded value");
+                    }
+                }
+
+                return;
+            }
+
+            if (IsWorkspaceFactoryInvocation(value))
+            {
+                return;
+            }
+
+            if (value is not null && IsNativeWorkspace(value.Type))
+            {
+                TransferState? source = GetWorkspace(value);
+                if (source is null)
+                {
+                    ReportActiveTransferOverwrite(target);
+                    Report(
+                        NativeAllocationDiagnosticDescriptors.WorkspaceAlias,
+                        target.Syntax,
+                        "the workspace expression",
+                        target.Symbol.Name);
+                    _transfers[target.Symbol] = TransferState.CreateWorkspace(
                         target.Symbol,
                         target.Syntax,
                         TransferStatus.Ambiguous,
@@ -3468,11 +3757,52 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             return external;
         }
 
+        private TransferState? GetWorkspace(IOperation? operation)
+        {
+            if (operation is null || !IsNativeWorkspace(operation.Type))
+            {
+                return null;
+            }
+
+            ISymbol? symbol = GetSymbol(operation);
+            if (symbol is null)
+            {
+                return null;
+            }
+
+            if (_transfers.TryGetValue(
+                symbol,
+                out TransferState? existing))
+            {
+                return existing.Kind is OwnershipKind.Workspace
+                    or OwnershipKind.WorkspaceBorrow
+                        ? existing
+                        : null;
+            }
+
+            TransferState external = TransferState.CreateExternalWorkspace(
+                symbol,
+                operation.Syntax);
+            _transfers.Add(symbol, external);
+            if (symbol is not ILocalSymbol)
+            {
+                Report(
+                    NativeAllocationDiagnosticDescriptors.WorkspaceAlias,
+                    operation.Syntax,
+                    symbol.Name,
+                    "a nonlocal binding");
+            }
+
+            return external;
+        }
+
         private TransferState? GetNativeOwnership(
             IOperation? operation) =>
             IsNativeBuilder(operation?.Type)
                 ? GetBuilder(operation)
-                : GetTransfer(operation);
+                : IsNativeWorkspace(operation?.Type)
+                    ? GetWorkspace(operation)
+                    : GetTransfer(operation);
 
         private bool CheckTransferActive(
             TransferState transfer,
@@ -3512,29 +3842,72 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             return false;
         }
 
+        private bool CheckWorkspaceActive(
+            TransferState workspace,
+            SyntaxNode syntax,
+            string operation)
+        {
+            if (workspace.Status != TransferStatus.Active)
+            {
+                Report(
+                    NativeAllocationDiagnosticDescriptors.InactiveWorkspaceUse,
+                    syntax,
+                    workspace.DisplayName,
+                    operation,
+                    DescribeTransferStatus(workspace.Status));
+                return false;
+            }
+
+            if (workspace.Kind == OwnershipKind.WorkspaceBorrow
+                && operation == "Dispose")
+            {
+                Report(
+                    NativeAllocationDiagnosticDescriptors.InactiveWorkspaceUse,
+                    syntax,
+                    workspace.DisplayName,
+                    operation,
+                    "borrowed");
+                return false;
+            }
+
+            return true;
+        }
+
         private void ReportTransferCopy(
             TransferState transfer,
             SyntaxNode syntax,
             string destination)
         {
-            bool active = transfer.Kind == OwnershipKind.Builder
-                ? CheckBuilderActive(
+            bool active = transfer.Kind switch
+            {
+                OwnershipKind.Builder => CheckBuilderActive(
+                    transfer,
+                    syntax,
+                    "copy"),
+                OwnershipKind.Workspace or OwnershipKind.WorkspaceBorrow =>
+                    CheckWorkspaceActive(
+                        transfer,
+                        syntax,
+                        "copy"),
+                _ => CheckTransferActive(
                     transfer,
                     syntax,
                     "copy")
-                : CheckTransferActive(
-                    transfer,
-                    syntax,
-                    "copy");
+            };
             if (!active)
             {
                 return;
             }
 
             Report(
-                transfer.Kind == OwnershipKind.Builder
-                    ? NativeAllocationDiagnosticDescriptors.BuilderAlias
-                    : NativeAllocationDiagnosticDescriptors.TransferAlias,
+                transfer.Kind switch
+                {
+                    OwnershipKind.Builder =>
+                        NativeAllocationDiagnosticDescriptors.BuilderAlias,
+                    OwnershipKind.Workspace or OwnershipKind.WorkspaceBorrow =>
+                        NativeAllocationDiagnosticDescriptors.WorkspaceAlias,
+                    _ => NativeAllocationDiagnosticDescriptors.TransferAlias
+                },
                 syntax,
                 transfer.DisplayName,
                 destination);
@@ -3551,14 +3924,30 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 destination);
         }
 
+        private void ReportUnknownWorkspaceCopy(
+            SyntaxNode syntax,
+            string destination)
+        {
+            Report(
+                NativeAllocationDiagnosticDescriptors.WorkspaceAlias,
+                syntax,
+                "the workspace expression",
+                destination);
+        }
+
         private void ReportOwnershipLifetime(
             TransferState ownership,
             SyntaxNode syntax)
         {
             Report(
-                ownership.Kind == OwnershipKind.Builder
-                    ? NativeAllocationDiagnosticDescriptors.BuilderLifetime
-                    : NativeAllocationDiagnosticDescriptors.TransferLifetime,
+                ownership.Kind switch
+                {
+                    OwnershipKind.Builder =>
+                        NativeAllocationDiagnosticDescriptors.BuilderLifetime,
+                    OwnershipKind.Workspace or OwnershipKind.WorkspaceBorrow =>
+                        NativeAllocationDiagnosticDescriptors.WorkspaceLifetime,
+                    _ => NativeAllocationDiagnosticDescriptors.TransferLifetime
+                },
                 syntax,
                 ownership.DisplayName);
         }
@@ -3866,6 +4255,23 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             && invocation.TargetMethod.ContainingType.ToDisplayString()
                 == "Supprocom.NativeAllocationManagement.NativeBuilderOwnerExtensions"
             && IsNativeBuilder(invocation.Type);
+
+        private bool IsWorkspaceFactoryInvocation(IOperation? operation) =>
+            operation is IInvocationOperation invocation
+            && invocation.TargetMethod.Name == "CreateWorkspace"
+            && invocation.TargetMethod.ContainingType.ToDisplayString()
+                == "Supprocom.NativeAllocationManagement.NativeWorkspacePoolExtensions"
+            && IsNativeWorkspace(invocation.Type);
+
+        private bool IsWorkspaceBorrowArgument(
+            IArgumentOperation argument) =>
+            argument.Parameter is
+            {
+                RefKind: RefKind.In,
+                ScopedKind: not ScopedKind.None
+            }
+            && IsNativeWorkspace(argument.Parameter.Type)
+            && argument.Parameter.DeclaringSyntaxReferences.Length != 0;
 
         private void ReportTransferViewEscapes(
             IInvocationOperation operation)
@@ -6026,6 +6432,11 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             return NativeSymbols.Is(type, _symbols.Builder);
         }
 
+        private bool IsNativeWorkspace(ITypeSymbol? type)
+        {
+            return NativeSymbols.Is(type, _symbols.Workspace);
+        }
+
         private bool IsNativeLeaseView(ITypeSymbol? type)
         {
             return NativeSymbols.Is(type, _symbols.LeaseView);
@@ -6403,7 +6814,9 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         private enum OwnershipKind
         {
             Transfer,
-            Builder
+            Builder,
+            Workspace,
+            WorkspaceBorrow
         }
 
         private sealed class TransferState
@@ -6500,6 +6913,45 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     mustEnd,
                     isUsing,
                     origin);
+
+            internal static TransferState CreateExternalWorkspace(
+                ISymbol symbol,
+                SyntaxNode syntax) =>
+                new(
+                    symbol,
+                    CreateSymbolIdentity(symbol),
+                    OwnershipKind.Workspace,
+                    TransferStatus.Active,
+                    mustEnd: false,
+                    isUsing: false,
+                    syntax);
+
+            internal static TransferState CreateWorkspace(
+                ISymbol symbol,
+                SyntaxNode origin,
+                TransferStatus status,
+                bool mustEnd,
+                bool isUsing) =>
+                new(
+                    symbol,
+                    CreateSyntaxIdentity(origin),
+                    OwnershipKind.Workspace,
+                    status,
+                    mustEnd,
+                    isUsing,
+                    origin);
+
+            internal static TransferState CreateWorkspaceBorrow(
+                ISymbol symbol,
+                SyntaxNode syntax) =>
+                new(
+                    symbol,
+                    CreateSymbolIdentity(symbol),
+                    OwnershipKind.WorkspaceBorrow,
+                    TransferStatus.Active,
+                    mustEnd: false,
+                    isUsing: false,
+                    syntax);
 
             internal TransferState Clone() =>
                 new(
