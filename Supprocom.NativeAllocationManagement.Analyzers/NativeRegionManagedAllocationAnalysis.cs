@@ -3,6 +3,7 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Diagnostics;
+using Microsoft.CodeAnalysis.FlowAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 using Microsoft.CodeAnalysis.Text;
 
@@ -198,29 +199,32 @@ internal sealed class NativeRegionManagedAllocationAnalysis
                 continue;
             }
 
-            IMethodSymbol? sourceMethod = ResolveDelegateSource(
+            ImmutableArray<IMethodSymbol> sourceMethods = ResolveDelegateSources(
                 argument.Value,
+                invocation.Syntax,
                 context.CancellationToken);
-            if (sourceMethod is null
-                || !SymbolEqualityComparer.Default.Equals(
-                    sourceMethod.ContainingAssembly,
-                    _compilation.Assembly)
-                || sourceMethod.DeclaringSyntaxReferences.Length == 0)
+            foreach (IMethodSymbol sourceMethod in sourceMethods)
             {
-                continue;
-            }
+                if (!SymbolEqualityComparer.Default.Equals(
+                        sourceMethod.ContainingAssembly,
+                        _compilation.Assembly)
+                    || sourceMethod.DeclaringSyntaxReferences.Length == 0)
+                {
+                    continue;
+                }
 
-            ImmutableArray<AllocationFinding> summary = GetDirectSummary(
-                sourceMethod,
-                context.CancellationToken);
-            foreach (AllocationFinding finding in summary)
-            {
-                Report(
-                    context,
-                    finding.Source,
-                    finding.Kind + " in synchronous native initializer",
-                    region,
-                    finding.Source);
+                ImmutableArray<AllocationFinding> summary = GetDirectSummary(
+                    sourceMethod,
+                    context.CancellationToken);
+                foreach (AllocationFinding finding in summary)
+                {
+                    Report(
+                        context,
+                        finding.Source,
+                        finding.Kind + " in synchronous native initializer",
+                        region,
+                        finding.Source);
+                }
             }
         }
     }
@@ -239,19 +243,25 @@ internal sealed class NativeRegionManagedAllocationAnalysis
             return invocation.TargetMethod;
         }
 
-        return ResolveDelegateSource(
+        ImmutableArray<IMethodSymbol> sourceMethods = ResolveDelegateSources(
             invocation.Instance,
+            invocation.Syntax,
             cancellationToken);
+        return sourceMethods.Length == 1
+            ? sourceMethods[0]
+            : null;
     }
 
-    private IMethodSymbol? ResolveDelegateSource(
+    private ImmutableArray<IMethodSymbol> ResolveDelegateSources(
         IOperation? operation,
+        SyntaxNode useSyntax,
         CancellationToken cancellationToken)
     {
         IOperation? value = Unwrap(operation);
         if (value is IDelegateCreationOperation delegateCreation)
         {
-            return GetDelegateTargetMethod(delegateCreation.Target);
+            return ToMethodArray(GetDelegateTargetMethod(
+                delegateCreation.Target));
         }
 
         IMethodSymbol? directMethod = value is null
@@ -259,36 +269,404 @@ internal sealed class NativeRegionManagedAllocationAnalysis
             : GetDelegateTargetMethod(value);
         if (directMethod is not null)
         {
-            return directMethod;
+            return [directMethod];
         }
 
         if (value is ILocalReferenceOperation localReference)
         {
-            SyntaxNode? declaration = localReference.Local.DeclaringSyntaxReferences
-                .FirstOrDefault()
-                ?.GetSyntax(cancellationToken);
-            if (declaration is VariableDeclaratorSyntax
-                {
-                    Initializer.Value: ExpressionSyntax initializer
-                })
+            return ResolveReachingDelegateSources(
+                localReference.Local,
+                useSyntax,
+                cancellationToken);
+        }
+
+        return [];
+    }
+
+    private ImmutableArray<IMethodSymbol> ResolveReachingDelegateSources(
+        ILocalSymbol local,
+        SyntaxNode useSyntax,
+        CancellationToken cancellationToken)
+    {
+        SemanticModel model = _compilation.GetSemanticModel(
+            useSyntax.SyntaxTree);
+        ControlFlowGraph? graph = TryCreateControlFlowGraph(
+            model,
+            useSyntax,
+            cancellationToken);
+        if (graph is null
+            || !TryGetContainingBlock(
+                graph,
+                useSyntax,
+                out BasicBlock useBlock))
+        {
+            return [];
+        }
+
+        DelegateFlowState?[] inputs =
+            new DelegateFlowState?[graph.Blocks.Length];
+        DelegateFlowState?[] outputs =
+            new DelegateFlowState?[graph.Blocks.Length];
+        int maximumPasses = graph.Blocks.Length > 64
+            ? 4096
+            : Math.Max(8, graph.Blocks.Length * graph.Blocks.Length);
+        bool changed = true;
+        for (int pass = 0; pass < maximumPasses && changed; pass++)
+        {
+            changed = false;
+            foreach (BasicBlock block in graph.Blocks)
             {
-                SemanticModel model = _compilation.GetSemanticModel(
-                    initializer.SyntaxTree);
-                IOperation? localValue = Unwrap(model.GetOperation(
-                    initializer,
-                    cancellationToken));
-                if (localValue is IDelegateCreationOperation localDelegate)
+                DelegateFlowState? input = block.Ordinal == 0
+                    ? DelegateFlowState.Unknown()
+                    : MergePredecessors(block, outputs);
+                if (!DelegateFlowState.AreEqual(
+                    inputs[block.Ordinal],
+                    input))
                 {
-                    return GetDelegateTargetMethod(localDelegate.Target);
+                    inputs[block.Ordinal] = input?.Clone();
+                    changed = true;
                 }
 
-                return localValue is null
-                    ? null
-                    : GetDelegateTargetMethod(localValue);
+                DelegateFlowState? output = input?.Clone();
+                if (output is not null)
+                {
+                    ApplyBlockMutations(
+                        block,
+                        output,
+                        local,
+                        model,
+                        int.MaxValue,
+                        cancellationToken);
+                }
+
+                if (!DelegateFlowState.AreEqual(
+                    outputs[block.Ordinal],
+                    output))
+                {
+                    outputs[block.Ordinal] = output;
+                    changed = true;
+                }
+            }
+        }
+
+        if (changed || inputs[useBlock.Ordinal] is not DelegateFlowState state)
+        {
+            return [];
+        }
+
+        DelegateFlowState reaching = state.Clone();
+        ApplyBlockMutations(
+            useBlock,
+            reaching,
+            local,
+            model,
+            useSyntax.SpanStart,
+            cancellationToken);
+        if (reaching.HasUnknownSource)
+        {
+            return [];
+        }
+
+        return reaching.Sources
+            .OrderBy(GetDeclarationStart)
+            .ThenBy(method => method.Name, StringComparer.Ordinal)
+            .ToImmutableArray();
+    }
+
+    private static ControlFlowGraph? TryCreateControlFlowGraph(
+        SemanticModel model,
+        SyntaxNode useSyntax,
+        CancellationToken cancellationToken)
+    {
+        foreach (SyntaxNode candidate in useSyntax.AncestorsAndSelf())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            IOperation? operation = model.GetOperation(
+                candidate,
+                cancellationToken);
+            if (operation is not IMethodBodyOperation
+                && operation is not IConstructorBodyOperation
+                && operation is not IBlockOperation { Parent: null })
+            {
+                continue;
+            }
+
+            try
+            {
+                return ControlFlowGraph.Create(
+                    candidate,
+                    model,
+                    cancellationToken);
+            }
+            catch (ArgumentException)
+            {
+                return null;
+            }
+            catch (InvalidOperationException)
+            {
+                return null;
             }
         }
 
         return null;
+    }
+
+    private static bool TryGetContainingBlock(
+        ControlFlowGraph graph,
+        SyntaxNode useSyntax,
+        out BasicBlock result)
+    {
+        foreach (BasicBlock block in graph.Blocks)
+        {
+            if (block.Operations.Any(operation => ContainsUse(
+                    operation,
+                    useSyntax))
+                || block.BranchValue is not null
+                    && ContainsUse(block.BranchValue, useSyntax))
+            {
+                result = block;
+                return true;
+            }
+        }
+
+        result = null!;
+        return false;
+    }
+
+    private static bool ContainsUse(
+        IOperation operation,
+        SyntaxNode useSyntax)
+    {
+        return ReferenceEquals(
+                operation.Syntax.SyntaxTree,
+                useSyntax.SyntaxTree)
+            && operation.Syntax.Span.Contains(useSyntax.Span);
+    }
+
+    private static DelegateFlowState? MergePredecessors(
+        BasicBlock block,
+        DelegateFlowState?[] outputs)
+    {
+        DelegateFlowState? merged = null;
+        foreach (ControlFlowBranch branch in block.Predecessors)
+        {
+            DelegateFlowState? predecessor = outputs[branch.Source.Ordinal];
+            if (predecessor is null)
+            {
+                continue;
+            }
+
+            if (merged is null)
+            {
+                merged = predecessor.Clone();
+            }
+            else
+            {
+                merged.Merge(predecessor);
+            }
+        }
+
+        return merged;
+    }
+
+    private static void ApplyBlockMutations(
+        BasicBlock block,
+        DelegateFlowState state,
+        ILocalSymbol local,
+        SemanticModel model,
+        int beforePosition,
+        CancellationToken cancellationToken)
+    {
+        foreach (IOperation operation in block.Operations)
+        {
+            ApplyOperationMutations(
+                operation,
+                state,
+                local,
+                model,
+                beforePosition,
+                cancellationToken);
+        }
+
+        if (block.BranchValue is not null)
+        {
+            ApplyOperationMutations(
+                block.BranchValue,
+                state,
+                local,
+                model,
+                beforePosition,
+                cancellationToken);
+        }
+    }
+
+    private static void ApplyOperationMutations(
+        IOperation root,
+        DelegateFlowState state,
+        ILocalSymbol local,
+        SemanticModel model,
+        int beforePosition,
+        CancellationToken cancellationToken)
+    {
+        IEnumerable<IOperation> mutations = root.DescendantsAndSelf()
+            .Where(operation => operation.Syntax.SpanStart < beforePosition)
+            .Where(operation => !IsDeferredOperation(
+                operation.Syntax,
+                root.Syntax))
+            .Where(operation => IsDelegateMutation(
+                operation,
+                local))
+            .OrderBy(operation => operation.Syntax.SpanStart)
+            .ThenBy(operation => operation.Syntax.Span.Length);
+        foreach (IOperation mutation in mutations)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            switch (mutation)
+            {
+                case ISimpleAssignmentOperation assignment
+                    when IsExactLocalReference(
+                        assignment.Target,
+                        local):
+                    ReplaceWithAssignedSource(
+                        state,
+                        GetOriginalAssignedValue(
+                            assignment,
+                            local,
+                            model,
+                            cancellationToken));
+                    break;
+
+                case IVariableDeclaratorOperation declarator
+                    when SymbolEqualityComparer.Default.Equals(
+                        declarator.Symbol,
+                        local):
+                    ReplaceWithAssignedSource(
+                        state,
+                        declarator.Initializer?.Value);
+                    break;
+
+                default:
+                    state.ReplaceWithUnknown();
+                    break;
+            }
+        }
+    }
+
+    private static bool IsDelegateMutation(
+        IOperation operation,
+        ILocalSymbol local)
+    {
+        return operation switch
+        {
+            ISimpleAssignmentOperation assignment =>
+                ReferencesLocal(assignment.Target, local)
+                || assignment.IsRef
+                    && ReferencesLocal(assignment.Value, local),
+            ICompoundAssignmentOperation assignment =>
+                ReferencesLocal(assignment.Target, local),
+            IDeconstructionAssignmentOperation assignment =>
+                ReferencesLocal(assignment.Target, local),
+            IVariableDeclaratorOperation declarator =>
+                SymbolEqualityComparer.Default.Equals(
+                    declarator.Symbol,
+                    local)
+                && declarator.Initializer is not null,
+            IArgumentOperation argument =>
+                argument.Parameter?.RefKind != RefKind.None
+                && ReferencesLocal(argument.Value, local),
+            _ => false
+        };
+    }
+
+    private static bool IsExactLocalReference(
+        IOperation operation,
+        ILocalSymbol local)
+    {
+        return Unwrap(operation) is ILocalReferenceOperation reference
+            && SymbolEqualityComparer.Default.Equals(
+                reference.Local,
+                local);
+    }
+
+    private static bool ReferencesLocal(
+        IOperation operation,
+        ILocalSymbol local)
+    {
+        return operation.DescendantsAndSelf()
+            .OfType<ILocalReferenceOperation>()
+            .Any(reference => SymbolEqualityComparer.Default.Equals(
+                reference.Local,
+                local));
+    }
+
+    private static IOperation? GetOriginalAssignedValue(
+        ISimpleAssignmentOperation assignment,
+        ILocalSymbol local,
+        SemanticModel model,
+        CancellationToken cancellationToken)
+    {
+        if (assignment.Syntax is AssignmentExpressionSyntax syntax)
+        {
+            return model.GetOperation(
+                syntax.Right,
+                cancellationToken);
+        }
+
+        VariableDeclaratorSyntax? declarator = assignment.Syntax
+            .AncestorsAndSelf()
+            .OfType<VariableDeclaratorSyntax>()
+            .FirstOrDefault(candidate => SymbolEqualityComparer.Default.Equals(
+                model.GetDeclaredSymbol(candidate, cancellationToken),
+                local));
+        return declarator?.Initializer is { Value: ExpressionSyntax value }
+            ? model.GetOperation(value, cancellationToken)
+            : assignment.Value;
+    }
+
+    private static void ReplaceWithAssignedSource(
+        DelegateFlowState state,
+        IOperation? value)
+    {
+        ImmutableArray<IMethodSymbol> sources =
+            GetDirectDelegateSources(value);
+        if (sources.IsDefaultOrEmpty)
+        {
+            state.ReplaceWithUnknown();
+            return;
+        }
+
+        state.Replace(sources);
+    }
+
+    private static ImmutableArray<IMethodSymbol> GetDirectDelegateSources(
+        IOperation? operation)
+    {
+        IOperation? value = Unwrap(operation);
+        if (value is IDelegateCreationOperation delegateCreation)
+        {
+            return ToMethodArray(GetDelegateTargetMethod(
+                delegateCreation.Target));
+        }
+
+        return value is null
+            ? []
+            : ToMethodArray(GetDelegateTargetMethod(value));
+    }
+
+    private static ImmutableArray<IMethodSymbol> ToMethodArray(
+        IMethodSymbol? method)
+    {
+        return method is null
+            ? []
+            : [method];
+    }
+
+    private static int GetDeclarationStart(IMethodSymbol method)
+    {
+        return method.DeclaringSyntaxReferences
+            .FirstOrDefault()
+            ?.Span.Start
+            ?? int.MaxValue;
     }
 
     private static IMethodSymbol? GetDelegateTargetMethod(IOperation target)
@@ -1081,6 +1459,68 @@ internal sealed class NativeRegionManagedAllocationAnalysis
         internal string Kind { get; }
 
         internal SyntaxNode Source { get; }
+    }
+
+    private sealed class DelegateFlowState
+    {
+        private readonly HashSet<IMethodSymbol> _sources;
+
+        private DelegateFlowState(bool hasUnknownSource)
+        {
+            HasUnknownSource = hasUnknownSource;
+            _sources = new HashSet<IMethodSymbol>(
+                SymbolEqualityComparer.Default);
+        }
+
+        private DelegateFlowState(DelegateFlowState source)
+        {
+            HasUnknownSource = source.HasUnknownSource;
+            _sources = new HashSet<IMethodSymbol>(
+                source._sources,
+                SymbolEqualityComparer.Default);
+        }
+
+        internal bool HasUnknownSource { get; private set; }
+
+        internal IEnumerable<IMethodSymbol> Sources => _sources;
+
+        internal static DelegateFlowState Unknown() => new(true);
+
+        internal DelegateFlowState Clone() => new(this);
+
+        internal void Merge(DelegateFlowState other)
+        {
+            HasUnknownSource |= other.HasUnknownSource;
+            _sources.UnionWith(other._sources);
+        }
+
+        internal void Replace(IEnumerable<IMethodSymbol> sources)
+        {
+            HasUnknownSource = false;
+            _sources.Clear();
+            _sources.UnionWith(sources);
+        }
+
+        internal void ReplaceWithUnknown()
+        {
+            HasUnknownSource = true;
+            _sources.Clear();
+        }
+
+        internal static bool AreEqual(
+            DelegateFlowState? first,
+            DelegateFlowState? second)
+        {
+            if (ReferenceEquals(first, second))
+            {
+                return true;
+            }
+
+            return first is not null
+                && second is not null
+                && first.HasUnknownSource == second.HasUnknownSource
+                && first._sources.SetEquals(second._sources);
+        }
     }
 
     private sealed class AllocationFindingComparer : IEqualityComparer<AllocationFinding>

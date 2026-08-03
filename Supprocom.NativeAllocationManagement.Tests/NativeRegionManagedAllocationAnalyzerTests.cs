@@ -420,6 +420,146 @@ public sealed class NativeRegionManagedAllocationAnalyzerTests
     }
 
     [Fact]
+    public async Task ReassignedAllocatingInitializerReportsReachedCallback()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    using NativeRegion region = new();
+                    NativeLeaseInitializer<int> initializer =
+                        static writer => writer.Fill(1);
+                    initializer = static writer =>
+                    {
+                        _ = new object();
+                        writer.Fill(2);
+                    };
+
+                    Local<int> local = region.Lease<int>(1, initializer);
+                    _ = local[0];
+                }
+            }
+            """);
+
+        Diagnostic warning = Assert.Single(
+            ManagedAllocationDiagnostics(diagnostics));
+        AssertNoAnalyzerFailures(diagnostics);
+        Assert.Equal(
+            "new object()",
+            warning.Location.SourceTree!.GetText()
+                .ToString(warning.Location.SourceSpan));
+    }
+
+    [Fact]
+    public async Task ReassignedAllocationFreeInitializerDoesNotReportStaleCallback()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    using NativeRegion region = new();
+                    NativeLeaseInitializer<int> initializer = static writer =>
+                    {
+                        _ = new object();
+                        writer.Fill(1);
+                    };
+
+                    initializer = static writer => writer.Fill(2);
+                    Local<int> local = region.Lease<int>(1, initializer);
+                    _ = local[0];
+                }
+            }
+            """);
+
+        AssertNoAnalyzerFailures(diagnostics);
+        Assert.Empty(ManagedAllocationDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task BranchAssignedInitializersReportEveryReachingCallback()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run(bool first)
+                {
+                    using NativeRegion region = new();
+                    NativeLeaseInitializer<int> initializer;
+                    if (first)
+                    {
+                        initializer = static writer =>
+                        {
+                            _ = new object();
+                            writer.Fill(1);
+                        };
+                    }
+                    else
+                    {
+                        initializer = static writer =>
+                        {
+                            _ = new byte[1];
+                            writer.Fill(2);
+                        };
+                    }
+
+                    Local<int> local = region.Lease<int>(1, initializer);
+                    _ = local[0];
+                }
+            }
+            """);
+
+        Diagnostic[] warnings = ManagedAllocationDiagnostics(diagnostics);
+        AssertNoAnalyzerFailures(diagnostics);
+        Assert.Equal(2, warnings.Length);
+        AssertKind(warnings, "class object creation");
+        AssertKind(warnings, "array creation");
+    }
+
+    [Fact]
+    public async Task RefMutatedInitializerDoesNotUseStaleSourceAuthority()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    using NativeRegion region = new();
+                    NativeLeaseInitializer<int> initializer = static writer =>
+                    {
+                        _ = new object();
+                        writer.Fill(1);
+                    };
+
+                    Replace(ref initializer);
+                    Local<int> local = region.Lease<int>(1, initializer);
+                    _ = local[0];
+                }
+
+                private static void Replace(
+                    ref NativeLeaseInitializer<int> initializer) =>
+                    initializer = static writer => writer.Fill(2);
+            }
+            """);
+
+        AssertNoAnalyzerFailures(diagnostics);
+        Assert.Empty(ManagedAllocationDiagnostics(diagnostics));
+    }
+
+    [Fact]
     public async Task CanonicalNativeAllocationFamiliesDoNotWarn()
     {
         ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
