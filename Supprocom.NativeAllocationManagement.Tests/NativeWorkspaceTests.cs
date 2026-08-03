@@ -556,6 +556,38 @@ public sealed class NativeWorkspaceTests
     }
 
     [Fact]
+    public void ProcessKeepsWorkspaceStateAliveThroughBothCallbacks()
+    {
+        NativePool<int> pool = new(
+            preLease: 8,
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+
+        WeakReference state = ProcessWithForcedCollections(pool);
+
+        ReleaseWorkspaceState(state);
+        Assert.Equal(0, pool.CurrentAllocationRecordCountForTest);
+        Assert.Equal(0, pool.CurrentInitializationCountForTest);
+        Assert.Equal(0, pool.CurrentGenerationActiveOperationsForTest);
+        pool.Dispose();
+    }
+
+    [Fact]
+    public void ExplicitStateProcessKeepsWorkspaceStateAliveThroughCallback()
+    {
+        NativePool<int> pool = new(
+            preLease: 8,
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+
+        WeakReference state = ProcessWithStateAndForcedCollection(pool);
+
+        ReleaseWorkspaceState(state);
+        Assert.Equal(0, pool.CurrentAllocationRecordCountForTest);
+        Assert.Equal(0, pool.CurrentInitializationCountForTest);
+        Assert.Equal(0, pool.CurrentGenerationActiveOperationsForTest);
+        pool.Dispose();
+    }
+
+    [Fact]
     public void AbandonedWorkspaceFinalizerReturnsItsRecord()
     {
         using NativePool<int> pool = new(
@@ -577,6 +609,102 @@ public sealed class NativeWorkspaceTests
         Assert.Equal(
             0,
             pool.CurrentAllocationRecordCountForTest);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static WeakReference ProcessWithForcedCollections(
+        NativePool<int> pool)
+    {
+        NativeWorkspace<int> workspace =
+            pool.CreateWorkspace(8);
+        WeakReference state = new(workspace.StateForTest);
+
+        int result = workspace.Process(
+            8,
+            values =>
+            {
+                ForceFullCollection();
+                Assert.True(state.IsAlive);
+                Assert.Equal(
+                    1,
+                    pool.CurrentInitializationCountForTest);
+                Assert.Equal(
+                    1,
+                    pool.CurrentGenerationActiveOperationsForTest);
+                values.Fill(17);
+            },
+            values =>
+            {
+                ForceFullCollection();
+                Assert.True(state.IsAlive);
+                Assert.Equal(
+                    1,
+                    pool.CurrentInitializationCountForTest);
+                Assert.Equal(
+                    1,
+                    pool.CurrentGenerationActiveOperationsForTest);
+                return Sum(values);
+            });
+
+        Assert.Equal(136, result);
+        return state;
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static WeakReference ProcessWithStateAndForcedCollection(
+        NativePool<int> pool)
+    {
+        NativeWorkspace<int> workspace =
+            pool.CreateWorkspace(8);
+        ProcessLifetimeState state = new(
+            pool,
+            new WeakReference(workspace.StateForTest),
+            Value: 19);
+
+        int result = workspace.Process(
+            8,
+            state,
+            static (values, callbackState) =>
+            {
+                ForceFullCollection();
+                Assert.True(callbackState.WorkspaceState.IsAlive);
+                Assert.Equal(
+                    1,
+                    callbackState.Pool.CurrentInitializationCountForTest);
+                Assert.Equal(
+                    1,
+                    callbackState.Pool
+                        .CurrentGenerationActiveOperationsForTest);
+                values.Fill(callbackState.Value);
+                return Sum(values);
+            });
+
+        Assert.Equal(152, result);
+        return state.WorkspaceState;
+    }
+
+    private static void ForceFullCollection()
+    {
+        GC.Collect(
+            2,
+            GCCollectionMode.Forced,
+            blocking: true,
+            compacting: true);
+        GC.WaitForPendingFinalizers();
+        GC.Collect(
+            2,
+            GCCollectionMode.Forced,
+            blocking: true,
+            compacting: true);
+    }
+
+    private static void ReleaseWorkspaceState(
+        WeakReference state)
+    {
+        NativeWorkspaceState<int> workspaceState =
+            Assert.IsType<NativeWorkspaceState<int>>(
+                state.Target);
+        workspaceState.Release();
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
@@ -605,4 +733,9 @@ public sealed class NativeWorkspaceTests
     private readonly record struct ProcessState(
         int Value,
         int Addend);
+
+    private sealed record ProcessLifetimeState(
+        NativePool<int> Pool,
+        WeakReference WorkspaceState,
+        int Value);
 }

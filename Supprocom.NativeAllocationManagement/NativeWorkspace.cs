@@ -264,11 +264,18 @@ internal sealed class NativeWorkspaceState<T>
         NativeSpanReader<T, TResult> reader,
         CancellationToken cancellationToken)
     {
-        ValidateProcess(length);
-        Span<T> values = CreateSpan(length);
-        initializer(values);
-        cancellationToken.ThrowIfCancellationRequested();
-        return reader(values);
+        try
+        {
+            ValidateProcess(length);
+            Span<T> values = CreateSpan(length);
+            initializer(values);
+            cancellationToken.ThrowIfCancellationRequested();
+            return reader(values);
+        }
+        finally
+        {
+            GC.KeepAlive(this);
+        }
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -278,11 +285,18 @@ internal sealed class NativeWorkspaceState<T>
         NativeSpanStateProcessor<T, TState, TResult> processor,
         CancellationToken cancellationToken)
     {
-        ValidateProcess(length);
-        Span<T> values = CreateSpan(length);
-        TResult result = processor(values, state);
-        cancellationToken.ThrowIfCancellationRequested();
-        return result;
+        try
+        {
+            ValidateProcess(length);
+            Span<T> values = CreateSpan(length);
+            TResult result = processor(values, state);
+            cancellationToken.ThrowIfCancellationRequested();
+            return result;
+        }
+        finally
+        {
+            GC.KeepAlive(this);
+        }
     }
 
     internal void Reset()
