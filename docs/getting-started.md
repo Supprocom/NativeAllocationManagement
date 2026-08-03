@@ -455,6 +455,58 @@ must still end on every branch, early return, and exception path.
 A return, field store, capture, or async suspension of `Pooled<T>` remains invalid. An
 owner return, release, or disposal also invalidates later field operations.
 
+## Reuse one fixed worker workspace
+
+`NativeWorkspace<T>` retains one typed native range for one worker thread. Use it when
+each batch has a known maximum size.
+
+The explicit-state `Process` overload gives one bounded span to one static callback.
+It passes caller state without a closure allocation.
+
+```csharp
+using Supprocom.NativeAllocationManagement;
+
+using NativePool<float> pool = new(preLease: 51_200);
+using NativeWorkspace<float> workspace = pool.CreateWorkspace(51_200);
+
+ulong checksum = 0;
+for (int batchIndex = 0; batchIndex < 729; batchIndex++)
+{
+    var state = new MapState(batchIndex, checksum);
+    checksum = workspace.Process(
+        25_600,
+        in state,
+        static (values, current) =>
+        {
+            for (int index = 0; index < values.Length; index++)
+            {
+                values[index] = current.BatchIndex + index;
+            }
+
+            ulong result = current.Checksum;
+            foreach (float value in values)
+            {
+                result = unchecked(result * 31 + (uint)value);
+            }
+
+            return result;
+        });
+}
+
+readonly record struct MapState(
+    int BatchIndex,
+    ulong Checksum);
+```
+
+The workspace checks its owner thread before each operation. The callback cannot keep
+the scoped span after `Process` returns.
+
+Cancellation is checked before and after the callback. A callback exception or
+cancellation leaves the workspace ready for the next `Process` call.
+
+The overload does not publish the temporary range. `Length` remains zero. Call
+`Initialize` when later `Access` or `Read` operations must use a published range.
+
 ## Heterogeneous regions
 
 `NativeRegion` is a one-shot heterogeneous lexical owner. Its only accepted ownership

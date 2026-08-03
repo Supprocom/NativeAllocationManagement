@@ -2300,6 +2300,28 @@ public sealed class AnalyzerContractTests
         return await analyzed.GetAnalyzerDiagnosticsAsync();
     }
 
+    internal static ImmutableArray<Diagnostic> Compile(
+        string source,
+        OutputKind outputKind = OutputKind.DynamicallyLinkedLibrary)
+    {
+        CSharpParseOptions parseOptions = new(LanguageVersion.Preview);
+        SyntaxTree tree = CSharpSyntaxTree.ParseText(source, parseOptions);
+        List<MetadataReference> references =
+        [
+            ..GetTrustedPlatformReferences(),
+            MetadataReference.CreateFromFile(
+                typeof(NativePool<int>).Assembly.Location)
+        ];
+        CSharpCompilation compilation = CSharpCompilation.Create(
+            assemblyName: "NativeAllocationCompilerContract",
+            syntaxTrees: [tree],
+            references: references,
+            options: new CSharpCompilationOptions(
+                outputKind,
+                allowUnsafe: true));
+        return compilation.GetDiagnostics();
+    }
+
     private static IEnumerable<MetadataReference> GetTrustedPlatformReferences()
     {
         string trustedAssemblies =

@@ -60,6 +60,14 @@ internal static class Program
             return await PooledPerformanceRegression.RunCommandAsync(args);
         }
 
+        if (args.Length != 0
+            && args[0] is "--native-workspace-state"
+                or "--native-workspace-state-worker"
+                or "--native-workspace-state-pair-worker")
+        {
+            return await NativeWorkspaceStateBenchmark.RunCommandAsync(args);
+        }
+
         if (args is ["--scoped-recycle-probe"])
         {
             Console.WriteLine(

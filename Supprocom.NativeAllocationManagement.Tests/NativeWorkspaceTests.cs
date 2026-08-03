@@ -430,7 +430,129 @@ public sealed class NativeWorkspaceTests
             workspace.Process(
                 8,
                 static values => values.Fill(29),
-                static values => Sum(values)));
+            static values => Sum(values)));
+    }
+
+    [Fact]
+    public void ExplicitStateProcessForwardsStateWithoutPublishingTheRange()
+    {
+        using NativePool<int> pool = new(
+            preLease: 8,
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeWorkspace<int> workspace =
+            pool.CreateWorkspace(8);
+
+        int result = workspace.Process(
+            8,
+            new ProcessState(Value: 7, Addend: 5),
+            static (values, state) =>
+            {
+                values.Fill(state.Value);
+                return Sum(values) + state.Addend;
+            });
+
+        Assert.Equal(61, result);
+        Assert.Equal(0, workspace.Length);
+        Assert.Equal(
+            35,
+            workspace.Process(
+                5,
+                new ProcessState(Value: 6, Addend: 5),
+                static (values, state) =>
+                {
+                    values.Fill(state.Value);
+                    return Sum(values) + state.Addend;
+                }));
+    }
+
+    [Fact]
+    public void ExplicitStateProcessFailureAndCancellationPermitReuse()
+    {
+        using NativePool<int> pool = new(
+            preLease: 8,
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeWorkspace<int> workspace =
+            pool.CreateWorkspace(8);
+
+        InvalidOperationException? callbackFailure = null;
+        try
+        {
+            workspace.Process<int, int>(
+                8,
+                19,
+                static (values, state) =>
+                {
+                    values.Fill(state);
+                    throw new InvalidOperationException("state callback");
+                });
+            Assert.Fail("The failed state callback completed.");
+        }
+        catch (InvalidOperationException exception)
+        {
+            callbackFailure = exception;
+        }
+
+        Assert.NotNull(callbackFailure);
+        Assert.Equal("state callback", callbackFailure.Message);
+        Assert.Equal(0, workspace.Length);
+
+        using CancellationTokenSource cancellation = new();
+        try
+        {
+            workspace.Process(
+                8,
+                cancellation,
+                static (values, state) =>
+                {
+                    values.Fill(23);
+                    state.Cancel();
+                    return Sum(values);
+                },
+                cancellation.Token);
+            Assert.Fail("The canceled state callback completed.");
+        }
+        catch (OperationCanceledException)
+        {
+        }
+
+        Assert.Equal(0, workspace.Length);
+
+        Assert.Equal(
+            232,
+            workspace.Process(
+                8,
+                29,
+                static (values, state) =>
+                {
+                    values.Fill(state);
+                    return Sum(values);
+                }));
+    }
+
+    [Fact]
+    public void ExplicitStateProcessRejectsDisposedWorkspace()
+    {
+        using NativePool<int> pool = new(
+            preLease: 8,
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeWorkspace<int> workspace = pool.CreateWorkspace(8);
+        workspace.Dispose();
+
+        try
+        {
+            workspace.Process(
+                8,
+                31,
+                static (values, state) =>
+                {
+                    values.Fill(state);
+                    return Sum(values);
+                });
+            Assert.Fail("The disposed workspace processed a range.");
+        }
+        catch (ObjectDisposedException)
+        {
+        }
     }
 
     [Fact]
@@ -479,4 +601,8 @@ public sealed class NativeWorkspaceTests
 
         return result;
     }
+
+    private readonly record struct ProcessState(
+        int Value,
+        int Addend);
 }

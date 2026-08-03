@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace Supprocom.NativeAllocationManagement;
 
@@ -85,6 +86,24 @@ public readonly ref struct NativeWorkspace<T>
             cancellationToken);
     }
 
+    /// <summary>Processes one range through a static callback and explicit state.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public TResult Process<TState, TResult>(
+        int length,
+        scoped in TState state,
+        NativeSpanStateProcessor<T, TState, TResult> processor,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(processor);
+        ArgumentOutOfRangeException.ThrowIfNegative(length);
+        cancellationToken.ThrowIfCancellationRequested();
+        return _state.Process(
+            length,
+            state,
+            processor,
+            cancellationToken);
+    }
+
     /// <summary>Removes logical visibility and retains the fixed native capacity.</summary>
     public void Reset() => _state.Reset();
 
@@ -109,6 +128,7 @@ internal sealed class NativeWorkspaceState<T>
     private int _state = Uninitialized;
     private int _length;
     private int _published;
+    private nint _address;
 
     internal NativeWorkspaceState(
         NativeOwnerKernel kernel)
@@ -129,6 +149,14 @@ internal sealed class NativeWorkspaceState<T>
                 "NativeWorkspaceState ownership");
             initialization.Allocation.SetBuilderLength(0);
             initialization.Allocation.InitializedLength = 0;
+            Span<T> capacitySpan =
+                initialization.Allocation.AsCapacitySpan<T>();
+            unsafe
+            {
+                _address = (nint)Unsafe.AsPointer(
+                    ref MemoryMarshal.GetReference(capacitySpan));
+            }
+
             _generation = initialization.Generation;
             _initialization = initialization;
             _capacity = initialization.Allocation.Capacity;
@@ -236,27 +264,25 @@ internal sealed class NativeWorkspaceState<T>
         NativeSpanReader<T, TResult> reader,
         CancellationToken cancellationToken)
     {
-        Validate(nameof(NativeWorkspace<T>.Process));
-        if (_published != 0)
-        {
-            throw new InvalidOperationException(
-                "NativeWorkspace.Process requires Reset after a published range.");
-        }
-
-        if (length > _capacity)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(length),
-                "The logical length exceeds the workspace capacity.");
-        }
-
-        NativeAllocation allocation = _initialization.Allocation;
-        Span<T> values = allocation
-            .AsCapacitySpan<T>()
-            .Slice(0, length);
+        ValidateProcess(length);
+        Span<T> values = CreateSpan(length);
         initializer(values);
         cancellationToken.ThrowIfCancellationRequested();
         return reader(values);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal TResult Process<TState, TResult>(
+        int length,
+        scoped in TState state,
+        NativeSpanStateProcessor<T, TState, TResult> processor,
+        CancellationToken cancellationToken)
+    {
+        ValidateProcess(length);
+        Span<T> values = CreateSpan(length);
+        TResult result = processor(values, state);
+        cancellationToken.ThrowIfCancellationRequested();
+        return result;
     }
 
     internal void Reset()
@@ -325,6 +351,28 @@ internal sealed class NativeWorkspaceState<T>
                 $"NativeWorkspace<{typeof(T).Name}>");
         }
 
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private unsafe Span<T> CreateSpan(int length) =>
+        new((void*)_address, length);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void ValidateProcess(int length)
+    {
+        Validate(nameof(NativeWorkspace<T>.Process));
+        if (_published != 0)
+        {
+            throw new InvalidOperationException(
+                "NativeWorkspace.Process requires Reset after a published range.");
+        }
+
+        if (length > _capacity)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(length),
+                "The logical length exceeds the workspace capacity.");
+        }
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

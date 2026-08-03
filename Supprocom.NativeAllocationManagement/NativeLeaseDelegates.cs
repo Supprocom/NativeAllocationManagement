@@ -13,6 +13,11 @@ public delegate void NativeSpanInitializer<T>(scoped Span<T> values);
 public delegate TResult NativeSpanReader<T, TResult>(
     scoped ReadOnlySpan<T> values);
 
+/// <summary>Processes one bounded direct native span with explicit caller state.</summary>
+public delegate TResult NativeSpanStateProcessor<T, TState, TResult>(
+    scoped Span<T> values,
+    TState state);
+
 /// <summary>Initializes all elements before NAM publishes a readable lease.</summary>
 public delegate void NativeLeaseInitializer<T>(
     scoped NativeLeaseWriter<T> writer);

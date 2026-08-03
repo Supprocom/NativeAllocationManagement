@@ -30,6 +30,87 @@ public sealed class NativeWorkspaceAnalyzerTests
     }
 
     [Fact]
+    public async Task ExplicitStateStaticProcessCallbackIsAccepted()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static int Run(NativePool<int> pool)
+                {
+                    using NativeWorkspace<int> workspace =
+                        pool.CreateWorkspace(16);
+                    ProcessState state = new(7, 5);
+                    return workspace.Process(
+                        16,
+                        in state,
+                        static (values, state) =>
+                        {
+                            values.Fill(state.Value);
+                            int sum = 0;
+                            foreach (int value in values)
+                            {
+                                sum += value;
+                            }
+
+                            return sum + state.Addend;
+                        });
+                }
+
+                private readonly record struct ProcessState(
+                    int Value,
+                    int Addend);
+            }
+            """);
+
+        AssertNoNativeDiagnostics(diagnostics);
+        Assert.DoesNotContain(
+            diagnostics,
+            static diagnostic => diagnostic.Severity
+                == DiagnosticSeverity.Error);
+    }
+
+    [Fact]
+    public async Task ExplicitStateProcessViewCannotEscapeItsCallback()
+    {
+        const string source =
+            """
+            using System;
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                private static Action? retained;
+
+                public static void Run(NativePool<int> pool)
+                {
+                    using NativeWorkspace<int> workspace =
+                        pool.CreateWorkspace(16);
+                    workspace.Process(
+                        16,
+                        7,
+                        static (values, state) =>
+                        {
+                            retained = () => values[0] = state;
+                            return 0;
+                        });
+                }
+            }
+            """;
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(source);
+        ImmutableArray<Diagnostic> compilerDiagnostics =
+            AnalyzerContractTests.Compile(source);
+
+        Assert.Contains(
+            compilerDiagnostics,
+            static diagnostic => diagnostic.Severity
+                == DiagnosticSeverity.Error);
+        AssertNoNativeDiagnostics(diagnostics);
+    }
+
+    [Fact]
     public async Task ExplicitFinallyDisposalIsAccepted()
     {
         ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(

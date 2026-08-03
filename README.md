@@ -6,6 +6,7 @@ heterogeneous lifetime. `NativeArena` provides reusable heterogeneous storage.
 
 `NativeBuilder<T>` writes growable unmanaged sequences without managed intermediate
 arrays. `NativeTransfer<T>` moves heap-storable ownership across thread boundaries.
+`NativeWorkspace<T>` reuses one fixed typed range in a worker hot loop.
 
 The runtime checks owner state, generation identity, allocation identity, and active
 operations. The bundled Roslyn analyzer checks ownership and bounded-view rules in the
@@ -16,8 +17,8 @@ consumer source. The package targets .NET 10.
 The [getting-started guide][getting-started] contains installation instructions,
 complete examples, lifecycle rules, analyzer diagnostics, and cleanup requirements.
 
-The guide covers typed pools, lexical regions, reusable arenas, growable builders,
-cross-thread transfers, delayed activation, scoped recycling, statistics, and trimming.
+The guide covers typed pools, fixed workspaces, lexical regions, reusable arenas,
+growable builders, cross-thread transfers, scoped recycling, statistics, and trimming.
 
 [getting-started]: https://github.com/Supprocom/NativeAllocationManagement/blob/main/docs/getting-started.md
 
