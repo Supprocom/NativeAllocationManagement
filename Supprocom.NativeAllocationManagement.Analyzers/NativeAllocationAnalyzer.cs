@@ -967,7 +967,9 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
             if (branch.Destination is null
                 && branch.Source is not null
-                && branch.Semantics is (ControlFlowBranchSemantics.Throw or ControlFlowBranchSemantics.StructuredExceptionHandling))
+                && (branch.Semantics == ControlFlowBranchSemantics.Throw
+                    || (branch.Semantics == ControlFlowBranchSemantics.StructuredExceptionHandling
+                        && !IsFinallyBlock(graph, branch.Source))))
             {
                 return FlattenRegions(graph.Root)
                 .Where(region => region.Kind == ControlFlowRegionKind.TryAndFinally)
@@ -2655,7 +2657,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
             if (operation.Syntax is YieldStatementSyntax)
             {
-                ReportActiveHandlesAcrossBoundary(operation.Syntax);
+                ReportActiveOwnershipAcrossBoundary(operation.Syntax);
             }
             else if (!_cfgMode && _finallyProtectionDepth == 0 && _finallyDepth == 0)
             {
@@ -2677,7 +2679,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
         public override void VisitAwait(IAwaitOperation operation)
         {
-            ReportActiveHandlesAcrossBoundary(operation.Syntax);
+            ReportActiveOwnershipAcrossBoundary(operation.Syntax);
             base.VisitAwait(operation);
         }
 
@@ -5318,7 +5320,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 target.Symbol?.Name ?? "an escaping destination");
         }
 
-        private void ReportActiveHandlesAcrossBoundary(SyntaxNode syntax)
+        private void ReportActiveOwnershipAcrossBoundary(SyntaxNode syntax)
         {
             foreach (HandleState handle in _handles.Values)
             {
@@ -5333,6 +5335,21 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     }
                     Report(NativeAllocationDiagnosticDescriptors.AcrossAsync, syntax, handle.DisplayName);
                 }
+            }
+
+            foreach (TransferState ownership in _transfers.Values)
+            {
+                if (ownership.Kind is not (OwnershipKind.Workspace or OwnershipKind.WorkspaceBorrow)
+                    || ownership.Status is not (TransferStatus.Active or TransferStatus.Ambiguous))
+                {
+                    continue;
+                }
+
+                Report(
+                    NativeAllocationDiagnosticDescriptors.WorkspaceAlias,
+                    syntax,
+                    ownership.DisplayName,
+                    "an asynchronous boundary");
             }
         }
 

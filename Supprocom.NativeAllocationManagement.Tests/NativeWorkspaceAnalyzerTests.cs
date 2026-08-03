@@ -98,6 +98,98 @@ public sealed class NativeWorkspaceAnalyzerTests
     }
 
     [Fact]
+    public async Task PersistentWorkspaceBorrowSurvivesNestedCleanupAndExceptionLoops()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using System;
+            using System.Threading;
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run(
+                    CancellationToken token,
+                    bool condition)
+                {
+                    using NativePool<float> pool = new(
+                        preLease: 51_200,
+                        returnMemoryOnDispose:
+                            NativeMemoryReturn.ToNativeMemory);
+                    using NativeWorkspace<float> workspace =
+                        pool.CreateWorkspace(51_200);
+                    int lastValue = 0;
+                    try
+                    {
+                        while (!token.IsCancellationRequested)
+                        {
+                            if (!TryTake(out int value))
+                            {
+                                continue;
+                            }
+
+                            lastValue = value;
+                            try
+                            {
+                                if (condition)
+                                {
+                                    using IDisposable scope = new Scope();
+                                    continue;
+                                }
+
+                                Action<int> publish = static value =>
+                                {
+                                    _ = value;
+                                };
+                                while (!token.IsCancellationRequested
+                                    && TryTake(out int batch))
+                                {
+                                    Generate(in workspace);
+                                    publish(batch);
+                                }
+                            }
+                            catch (Exception)
+                            {
+                            }
+                        }
+                    }
+                    catch (OperationCanceledException)
+                    {
+                    }
+                    catch (Exception)
+                    {
+                        _ = lastValue;
+                    }
+                }
+
+                private static void Generate(
+                    scoped in NativeWorkspace<float> workspace)
+                {
+                    workspace.Process(
+                        51_200,
+                        static values => values.Fill(1),
+                        static values => values[0]);
+                }
+
+                private static bool TryTake(out int value)
+                {
+                    value = 1;
+                    return true;
+                }
+
+                private sealed class Scope : IDisposable
+                {
+                    public void Dispose()
+                    {
+                    }
+                }
+            }
+            """);
+
+        AssertNoNativeDiagnostics(diagnostics);
+    }
+
+    [Fact]
     public async Task WorkspaceCopyIsRejected()
     {
         ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
@@ -269,6 +361,67 @@ public sealed class NativeWorkspaceAnalyzerTests
                         pool.CreateWorkspace(8);
                     Action action = () => workspace.Reset();
                     action();
+                    workspace.Dispose();
+                }
+            }
+            """);
+
+        Assert.Contains("NAM1036", NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task WorkspaceReturnAndRefStructStorageAreRejected()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public ref struct WorkspaceHolder
+            {
+                public NativeWorkspace<int> Value;
+            }
+
+            public static class Sample
+            {
+                public static NativeWorkspace<int> Return(
+                    NativePool<int> pool)
+                {
+                    NativeWorkspace<int> workspace =
+                        pool.CreateWorkspace(8);
+                    return workspace;
+                }
+
+                public static void Store(NativePool<int> pool)
+                {
+                    NativeWorkspace<int> workspace =
+                        pool.CreateWorkspace(8);
+                    WorkspaceHolder holder = default;
+                    holder.Value = workspace;
+                    workspace.Dispose();
+                }
+            }
+            """);
+
+        string[] ids = NativeDiagnostics(diagnostics);
+        Assert.Contains("NAM1036", ids);
+        Assert.Contains("NAM1038", ids);
+    }
+
+    [Fact]
+    public async Task WorkspaceAcrossAsyncSuspensionIsRejected()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using System.Threading.Tasks;
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static async Task Run(NativePool<int> pool)
+                {
+                    NativeWorkspace<int> workspace =
+                        pool.CreateWorkspace(8);
+                    await Task.Yield();
                     workspace.Dispose();
                 }
             }
