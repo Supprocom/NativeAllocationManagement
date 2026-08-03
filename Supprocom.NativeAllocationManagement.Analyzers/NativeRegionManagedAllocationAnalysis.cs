@@ -11,9 +11,12 @@ namespace Supprocom.NativeAllocationManagement.Analyzers;
 internal sealed class NativeRegionManagedAllocationAnalysis
 {
     private const string AllowMarker = "// NAMALLOW";
+    private const string LeaseInitializerMetadataName =
+        "Supprocom.NativeAllocationManagement.NativeLeaseInitializer`1";
 
     private readonly Compilation _compilation;
     private readonly NativeAllocationAnalyzer.NativeSymbols _symbols;
+    private readonly INamedTypeSymbol? _leaseInitializer;
     private readonly HashSet<ISymbol> _canonicalAllocations = new(
         SymbolEqualityComparer.Default);
     private readonly object _scopeGate = new();
@@ -28,6 +31,18 @@ internal sealed class NativeRegionManagedAllocationAnalysis
     {
         _compilation = compilation;
         _symbols = symbols;
+        INamedTypeSymbol? leaseInitializer =
+            compilation.GetTypeByMetadataName(
+                LeaseInitializerMetadataName);
+        IAssemblySymbol? runtimeAssembly =
+            symbols.Region?.ContainingAssembly
+            ?? symbols.Arena?.ContainingAssembly
+            ?? symbols.Pool?.ContainingAssembly;
+        _leaseInitializer = SymbolEqualityComparer.Default.Equals(
+            leaseInitializer?.ContainingAssembly,
+            runtimeAssembly)
+                ? leaseInitializer
+                : null;
         AddCanonicalAllocations(symbols.Region, symbols.Local);
         AddCanonicalAllocations(symbols.Arena, symbols.ArenaLease);
         AddCanonicalAllocations(symbols.Pool, symbols.Pooled);
@@ -111,6 +126,10 @@ internal sealed class NativeRegionManagedAllocationAnalysis
     {
         if (IsCanonicalAllocation(invocation.TargetMethod))
         {
+            AnalyzeCanonicalInitializers(
+                context,
+                invocation,
+                region);
             return;
         }
 
@@ -160,6 +179,52 @@ internal sealed class NativeRegionManagedAllocationAnalysis
         }
     }
 
+    private void AnalyzeCanonicalInitializers(
+        OperationAnalysisContext context,
+        IInvocationOperation invocation,
+        RegionScope region)
+    {
+        if (_leaseInitializer is null)
+        {
+            return;
+        }
+
+        foreach (IArgumentOperation argument in invocation.Arguments)
+        {
+            if (!NativeAllocationAnalyzer.NativeSymbols.Is(
+                    argument.Parameter?.Type,
+                    _leaseInitializer))
+            {
+                continue;
+            }
+
+            IMethodSymbol? sourceMethod = ResolveDelegateSource(
+                argument.Value,
+                context.CancellationToken);
+            if (sourceMethod is null
+                || !SymbolEqualityComparer.Default.Equals(
+                    sourceMethod.ContainingAssembly,
+                    _compilation.Assembly)
+                || sourceMethod.DeclaringSyntaxReferences.Length == 0)
+            {
+                continue;
+            }
+
+            ImmutableArray<AllocationFinding> summary = GetDirectSummary(
+                sourceMethod,
+                context.CancellationToken);
+            foreach (AllocationFinding finding in summary)
+            {
+                Report(
+                    context,
+                    finding.Source,
+                    finding.Kind + " in synchronous native initializer",
+                    region,
+                    finding.Source);
+            }
+        }
+    }
+
     private bool IsCanonicalAllocation(IMethodSymbol method)
     {
         return _canonicalAllocations.Contains(method.OriginalDefinition);
@@ -174,13 +239,30 @@ internal sealed class NativeRegionManagedAllocationAnalysis
             return invocation.TargetMethod;
         }
 
-        IOperation? instance = Unwrap(invocation.Instance);
-        if (instance is IDelegateCreationOperation delegateCreation)
+        return ResolveDelegateSource(
+            invocation.Instance,
+            cancellationToken);
+    }
+
+    private IMethodSymbol? ResolveDelegateSource(
+        IOperation? operation,
+        CancellationToken cancellationToken)
+    {
+        IOperation? value = Unwrap(operation);
+        if (value is IDelegateCreationOperation delegateCreation)
         {
             return GetDelegateTargetMethod(delegateCreation.Target);
         }
 
-        if (instance is ILocalReferenceOperation localReference)
+        IMethodSymbol? directMethod = value is null
+            ? null
+            : GetDelegateTargetMethod(value);
+        if (directMethod is not null)
+        {
+            return directMethod;
+        }
+
+        if (value is ILocalReferenceOperation localReference)
         {
             SyntaxNode? declaration = localReference.Local.DeclaringSyntaxReferences
                 .FirstOrDefault()
@@ -192,17 +274,17 @@ internal sealed class NativeRegionManagedAllocationAnalysis
             {
                 SemanticModel model = _compilation.GetSemanticModel(
                     initializer.SyntaxTree);
-                IOperation? value = Unwrap(model.GetOperation(
+                IOperation? localValue = Unwrap(model.GetOperation(
                     initializer,
                     cancellationToken));
-                if (value is IDelegateCreationOperation localDelegate)
+                if (localValue is IDelegateCreationOperation localDelegate)
                 {
                     return GetDelegateTargetMethod(localDelegate.Target);
                 }
 
-                return value is null
+                return localValue is null
                     ? null
-                    : GetDelegateTargetMethod(value);
+                    : GetDelegateTargetMethod(localValue);
             }
         }
 

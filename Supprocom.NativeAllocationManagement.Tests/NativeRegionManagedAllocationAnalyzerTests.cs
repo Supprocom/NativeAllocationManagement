@@ -282,6 +282,144 @@ public sealed class NativeRegionManagedAllocationAnalyzerTests
     }
 
     [Fact]
+    public async Task CanonicalStaticLambdaInitializersReportManagedAllocations()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    using NativePool<int> pool = new();
+                    using NativeArena arena = new();
+                    using NativeRegion region = new();
+                    Local<int> local = region.Lease<int>(
+                        1,
+                        static writer =>
+                        {
+                            _ = new object();
+                            writer.Fill(1);
+                        });
+                    ArenaLease<int> scratch = arena.Scratch<int>(
+                        1,
+                        static writer =>
+                        {
+                            _ = new object();
+                            writer.Fill(2);
+                        });
+                    Pooled<int> pooled = pool.Rent(
+                        1,
+                        static writer =>
+                        {
+                            _ = new object();
+                            writer.Fill(3);
+                        });
+                    _ = local[0] + scratch[0] + pooled[0];
+                    pooled.Dispose();
+                }
+            }
+            """);
+
+        Diagnostic[] warnings = ManagedAllocationDiagnostics(diagnostics);
+        AssertNoAnalyzerFailures(diagnostics);
+        Assert.Equal(3, warnings.Length);
+        Assert.All(warnings, warning => Assert.Equal(
+            "new object()",
+            warning.Location.SourceTree!.GetText()
+                .ToString(warning.Location.SourceSpan)));
+    }
+
+    [Fact]
+    public async Task CanonicalSourceMethodInitializersReportManagedAllocations()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    using NativePool<int> pool = new();
+                    using NativeArena arena = new();
+                    using NativeRegion region = new();
+                    Local<int> local = region.Lease<int>(1, InitializeRegion);
+                    ArenaLease<int> scratch = arena.Scratch<int>(1, InitializeArena);
+                    Pooled<int> pooled = pool.Rent(1, InitializePool);
+                    _ = local[0] + scratch[0] + pooled[0];
+                    pooled.Dispose();
+                }
+
+                private static void InitializeRegion(
+                    scoped NativeLeaseWriter<int> writer)
+                {
+                    _ = new object();
+                    writer.Fill(1);
+                }
+
+                private static void InitializeArena(
+                    scoped NativeLeaseWriter<int> writer)
+                {
+                    _ = new object();
+                    writer.Fill(2);
+                }
+
+                private static void InitializePool(
+                    scoped NativeLeaseWriter<int> writer)
+                {
+                    _ = new object();
+                    writer.Fill(3);
+                }
+            }
+            """);
+
+        Diagnostic[] warnings = ManagedAllocationDiagnostics(diagnostics);
+        AssertNoAnalyzerFailures(diagnostics);
+        Assert.Equal(3, warnings.Length);
+        Assert.All(warnings, warning => Assert.Equal(
+            "new object()",
+            warning.Location.SourceTree!.GetText()
+                .ToString(warning.Location.SourceSpan)));
+    }
+
+    [Fact]
+    public async Task AllocationFreeNativeInitializerCallbacksDoNotWarn()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    using NativePool<int> pool = new();
+                    using NativeArena arena = new();
+                    using NativeRegion region = new();
+                    Local<int> local = region.Lease<int>(
+                        1,
+                        static writer => writer.Fill(1));
+                    ArenaLease<int> scratch = arena.Scratch<int>(
+                        1,
+                        Initialize);
+                    Pooled<int> pooled = pool.Rent(1, Initialize);
+                    _ = local[0] + scratch[0] + pooled[0];
+                    pooled.Dispose();
+                }
+
+                private static void Initialize(
+                    scoped NativeLeaseWriter<int> writer) =>
+                    writer.Fill(2);
+            }
+            """);
+
+        AssertNoAnalyzerFailures(diagnostics);
+        Assert.Empty(ManagedAllocationDiagnostics(diagnostics));
+    }
+
+    [Fact]
     public async Task CanonicalNativeAllocationFamiliesDoNotWarn()
     {
         ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
