@@ -1716,7 +1716,7 @@ public sealed class VoxelSharedContractTests
         string guide = File.ReadAllText(
             Path.Combine(root, "docs", "getting-started.md"));
         Assert.Contains(
-            "Version=\"0.1.2\"",
+            "Version=\"0.1.3\"",
             guide,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -1750,7 +1750,7 @@ public sealed class VoxelSharedContractTests
     }
 
     [Fact]
-    public void PackageMetadataUsesBuilderPatchVersion()
+    public void PackageMetadataUsesCurrentPatchVersion()
     {
         string root = FindRepositoryRoot();
         string project = File.ReadAllText(
@@ -1760,7 +1760,7 @@ public sealed class VoxelSharedContractTests
                 "Supprocom.NativeAllocationManagement.csproj"));
 
         Assert.Contains(
-            "<Version>0.1.2</Version>",
+            "<Version>0.1.3</Version>",
             project,
             StringComparison.Ordinal);
         Assert.Contains(

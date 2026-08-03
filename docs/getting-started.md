@@ -9,17 +9,17 @@ scoped-recycling completion in the consuming source.
 The package targets .NET 10 and supports unmanaged values, reference values, and value
 types that contain references through the same generic owner and handle model.
 
-Install version `0.1.2` with the .NET CLI:
+Install version `0.1.3` with the .NET CLI:
 
 ```powershell
-dotnet add package Supprocom.NativeAllocationManagement --version 0.1.2
+dotnet add package Supprocom.NativeAllocationManagement --version 0.1.3
 ```
 
 The equivalent project file entry is:
 
 ```xml
 <ItemGroup>
-  <PackageReference Include="Supprocom.NativeAllocationManagement" Version="0.1.2" />
+  <PackageReference Include="Supprocom.NativeAllocationManagement" Version="0.1.3" />
 </ItemGroup>
 ```
 
