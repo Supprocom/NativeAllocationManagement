@@ -24,7 +24,9 @@ public sealed class AllocatorPerformanceRegressionTests
         Assert.True(
             report.MedianSpeedup >= report.MinimumSpeedup,
             evidence);
-        Assert.True(report.AggregateSpeedup > 0d, evidence);
+        Assert.True(
+            report.AggregateSpeedup >= report.MinimumSpeedup,
+            evidence);
 
         int arrayPoolFirst = report.Pairs.Count(
             pair => pair.Order == "ArrayPool-Region");
@@ -79,7 +81,9 @@ public sealed class AllocatorPerformanceRegressionTests
         Assert.True(
             report.MedianSpeedup >= report.MinimumSpeedup,
             evidence);
-        Assert.True(report.AggregateSpeedup > 0d, evidence);
+        Assert.True(
+            report.AggregateSpeedup >= report.MinimumSpeedup,
+            evidence);
 
         int arrayPoolFirst = report.Pairs.Count(
             pair => pair.Order == "ArrayPool-Arena");
@@ -132,7 +136,9 @@ public sealed class AllocatorPerformanceRegressionTests
         Assert.True(
             report.MedianSpeedup >= report.MinimumSpeedup,
             evidence);
-        Assert.True(report.AggregateSpeedup > 0d, evidence);
+        Assert.True(
+            report.AggregateSpeedup >= report.MinimumSpeedup,
+            evidence);
 
         int arrayPoolFirst = report.Pairs.Count(
             pair => pair.Order == "ArrayPool-ArenaScoped");
@@ -221,5 +227,20 @@ public sealed class AllocatorPerformanceRegressionTests
         Assert.True(process.ExitCode == 0, evidence);
         Assert.DoesNotContain("Unhandled exception", error);
         return report;
+    }
+
+    [Theory]
+    [InlineData(1.50d, 1.49d)]
+    [InlineData(2.00d, 0.75d)]
+    public void QuickGatesRejectPassingMedianWithFailingAggregate(
+        double medianSpeedup,
+        double aggregateSpeedup)
+    {
+        Assert.True(medianSpeedup >= 1.50d);
+        Assert.False(
+            AllocatorPerformanceAcceptance.MeetsMinimumSpeedup(
+                medianSpeedup,
+                aggregateSpeedup,
+                1.50d));
     }
 }

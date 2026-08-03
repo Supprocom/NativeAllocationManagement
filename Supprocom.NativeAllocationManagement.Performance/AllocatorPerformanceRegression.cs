@@ -78,7 +78,10 @@ internal static class AllocatorPerformanceRegression
         double regionTotal = pairs.Sum(
             pair => pair.Region.ElapsedMilliseconds);
         double aggregate = arrayPoolTotal / regionTotal;
-        bool passed = median >= RegionMinimumSpeedup
+        bool passed = AllocatorPerformanceAcceptance.MeetsMinimumSpeedup(
+                median,
+                aggregate,
+                RegionMinimumSpeedup)
             && pairs.All(pair =>
                 pair.ArrayPool.Gen0Collections == 0
                 && pair.ArrayPool.Gen1Collections == 0
@@ -422,6 +425,16 @@ internal static class AllocatorPerformanceRegression
         int Narrow,
         short Small,
         byte Flag);
+}
+
+internal static class AllocatorPerformanceAcceptance
+{
+    internal static bool MeetsMinimumSpeedup(
+        double medianSpeedup,
+        double aggregateSpeedup,
+        double minimumSpeedup) =>
+        medianSpeedup >= minimumSpeedup
+        && aggregateSpeedup >= minimumSpeedup;
 }
 
 internal sealed record RegionRegressionReport(

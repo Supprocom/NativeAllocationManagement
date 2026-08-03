@@ -78,7 +78,10 @@ internal static class ArenaPerformanceRegression
         double arenaTotal = pairs.Sum(
             pair => pair.Arena.ElapsedMilliseconds);
         double aggregate = arrayPoolTotal / arenaTotal;
-        bool passed = median >= MinimumSpeedup
+        bool passed = AllocatorPerformanceAcceptance.MeetsMinimumSpeedup(
+                median,
+                aggregate,
+                MinimumSpeedup)
             && pairs.All(pair =>
                 pair.ArrayPool.Accepted
                 && pair.Arena.Accepted
