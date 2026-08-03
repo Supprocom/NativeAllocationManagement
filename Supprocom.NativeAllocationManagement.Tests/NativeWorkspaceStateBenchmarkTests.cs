@@ -23,35 +23,27 @@ public sealed class NativeWorkspaceStateBenchmarkTests
     }
 
     [Fact]
-    public void SixSampleScheduleBalancesEveryImplementationPosition()
+    public void SixSampleScheduleBalancesTheAcceptancePair()
     {
         NativeWorkspaceStateImplementation[][] orders = Enumerable
             .Range(0, 6)
             .Select(NativeWorkspaceStateBenchmark.GetImplementationOrder)
             .ToArray();
 
-        foreach (NativeWorkspaceStateImplementation implementation
-            in Enum.GetValues<NativeWorkspaceStateImplementation>())
-        {
-            for (int position = 0; position < 3; position++)
-            {
-                Assert.Equal(
-                    2,
-                    orders.Count(order =>
-                        order[position] == implementation));
-            }
-        }
-
         Assert.Equal(
             3,
-            orders.Count(order =>
-                Array.IndexOf(
-                    order,
-                    NativeWorkspaceStateImplementation.ManagedArray)
-                < Array.IndexOf(
-                    order,
-                    NativeWorkspaceStateImplementation
-                        .ExplicitStateWorkspace)));
+            orders.Count(order => order[0]
+                == NativeWorkspaceStateImplementation.ManagedArray));
+        Assert.Equal(
+            3,
+            orders.Count(order => order[0]
+                == NativeWorkspaceStateImplementation
+                    .ExplicitStateWorkspace));
+        Assert.All(
+            orders,
+            order => Assert.Equal(
+                NativeWorkspaceStateImplementation.CapturingWorkspace,
+                order[2]));
     }
 
     [Fact]
@@ -150,5 +142,39 @@ public sealed class NativeWorkspaceStateBenchmarkTests
         Assert.True(explicitState.CancellationCleanupPassed);
         Assert.True(explicitState.SetupManagedAllocatedBytes
             < managed.SetupManagedAllocatedBytes);
+    }
+
+    [Fact]
+    public void ReducedPairUsesTheSamePersistentWorkerThreads()
+    {
+        var options = new NativeWorkspaceStateOptions(
+            MapCount: 24,
+            MapSize: 16,
+            WorkspaceLength: 512,
+            WorkerCount: 4,
+            SampleCount: 6,
+            WarmupCount: 1,
+            MeasurementPassCount: 2,
+            Seed: 123_456);
+
+        NativeWorkspaceStateIsolatedPairEvidence pair =
+            NativeWorkspaceStateBenchmark.RunSharedPairWorker(
+                sampleIndex: 0,
+                options);
+        NativeWorkspaceStateWorkerEvidence managed = pair.Evidence
+            .Single(evidence => evidence.Implementation
+                == NativeWorkspaceStateImplementation.ManagedArray);
+        NativeWorkspaceStateWorkerEvidence native = pair.Evidence
+            .Single(evidence => evidence.Implementation
+                == NativeWorkspaceStateImplementation
+                    .ExplicitStateWorkspace);
+
+        Assert.Equal(4, managed.WorkerThreadIds.Distinct().Count());
+        Assert.Equal(
+            managed.WorkerThreadIds,
+            native.WorkerThreadIds);
+        Assert.Equal(managed.OutputSha256, native.OutputSha256);
+        Assert.True(native.ExactlyOnceCleanupPassed);
+        Assert.True(native.CancellationCleanupPassed);
     }
 }

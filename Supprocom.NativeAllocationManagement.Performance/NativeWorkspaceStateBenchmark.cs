@@ -71,20 +71,12 @@ internal static class NativeWorkspaceStateBenchmark
                 args,
                 "--sample-index",
                 defaultValue: -1);
-            NativeWorkspaceStateImplementation[] order =
-                GetImplementationOrder(sampleIndex);
-            NativeWorkspaceStateWorkerEvidence[] evidence = order
-                .Select(implementation => RunWorker(
-                    implementation,
-                    options))
-                .ToArray();
+            NativeWorkspaceStateIsolatedPairEvidence pair =
+                RunSharedPairWorker(sampleIndex, options);
             Console.WriteLine(JsonSerializer.Serialize(
-                new NativeWorkspaceStateIsolatedPairEvidence(
-                    sampleIndex,
-                    order,
-                    evidence),
+                pair,
                 CompactJson));
-            return evidence.All(static result =>
+            return pair.Evidence.All(static result =>
                 result.Completed
                 && result.CancellationCleanupPassed
                 && result.ExactlyOnceCleanupPassed
@@ -271,16 +263,11 @@ internal static class NativeWorkspaceStateBenchmark
         ValidateOptions(options);
         NativeMemoryStatistics nativeBaseline =
             NativeMemoryDiagnostics.Snapshot();
-        long setupAllocationBefore =
-            GC.GetTotalAllocatedBytes(precise: true);
         Stopwatch setupClock = Stopwatch.StartNew();
-        var execution = new WorkspaceExecution(
-            implementation,
-            options);
+        var execution = new WorkspaceExecution(options);
         setupClock.Stop();
         long setupManagedAllocatedBytes =
-            GC.GetTotalAllocatedBytes(precise: true)
-                - setupAllocationBefore;
+            execution.ReadSetupAllocatedBytes(implementation);
         double warmupMilliseconds = 0d;
         double elapsedMilliseconds = 0d;
         double[] measurementPassMilliseconds =
@@ -303,7 +290,7 @@ internal static class NativeWorkspaceStateBenchmark
                 warmupIndex < options.WarmupCount;
                 warmupIndex++)
             {
-                execution.RunBatch();
+                execution.RunBatch(implementation);
             }
 
             warmupClock.Stop();
@@ -322,7 +309,7 @@ internal static class NativeWorkspaceStateBenchmark
                 passIndex++)
             {
                 measurementPassMilliseconds[passIndex] =
-                    execution.RunBatch();
+                    execution.RunBatch(implementation);
             }
 
             elapsedMilliseconds =
@@ -356,6 +343,7 @@ internal static class NativeWorkspaceStateBenchmark
             options.WorkerCount,
             options.MapCount,
             options.MapSize,
+            execution.ReadWorkerThreadIds(),
             setupClock.Elapsed.TotalMilliseconds,
             warmupMilliseconds,
             elapsedMilliseconds,
@@ -387,47 +375,237 @@ internal static class NativeWorkspaceStateBenchmark
             Completed: true);
     }
 
+    internal static NativeWorkspaceStateIsolatedPairEvidence
+        RunSharedPairWorker(
+            int sampleIndex,
+            NativeWorkspaceStateOptions options)
+    {
+        ValidateOptions(options);
+        ArgumentOutOfRangeException.ThrowIfNegative(sampleIndex);
+        NativeWorkspaceStateImplementation[] order =
+            GetImplementationOrder(sampleIndex);
+        NativeMemoryStatistics nativeBaseline =
+            NativeMemoryDiagnostics.Snapshot();
+        Stopwatch setupClock = Stopwatch.StartNew();
+        var execution = new WorkspaceExecution(options);
+        setupClock.Stop();
+        var warmupMilliseconds = order.ToDictionary(
+            static implementation => implementation,
+            static _ => 0d);
+        var measurementMilliseconds = order.ToDictionary(
+            static implementation => implementation,
+            _ => new double[options.MeasurementPassCount]);
+        var managedAllocatedBytes = order.ToDictionary(
+            static implementation => implementation,
+            static _ => 0L);
+        var gen0Collections = order.ToDictionary(
+            static implementation => implementation,
+            static _ => 0);
+        var gen1Collections = order.ToDictionary(
+            static implementation => implementation,
+            static _ => 0);
+        var gen2Collections = order.ToDictionary(
+            static implementation => implementation,
+            static _ => 0);
+        var checksums = order.ToDictionary(
+            static implementation => implementation,
+            static _ => Array.Empty<ulong>());
+        var setupAllocatedBytes = order.ToDictionary(
+            static implementation => implementation,
+            implementation => execution.ReadSetupAllocatedBytes(
+                implementation));
+        int[] workerThreadIds = execution.ReadWorkerThreadIds();
+        long freshSegmentsBefore = 0;
+        long freshSegmentsAfter = 0;
+        long workingSetBeforeBytes = 0;
+        long primaryWorkingSetAfterBytes = 0;
+        long capturingWorkingSetAfterBytes = 0;
+        long peakWorkingSetBytes = 0;
+        bool cancellationCleanupPassed = false;
+        try
+        {
+            for (int warmupIndex = 0;
+                warmupIndex < options.WarmupCount;
+                warmupIndex++)
+            {
+                foreach (NativeWorkspaceStateImplementation implementation
+                    in order)
+                {
+                    warmupMilliseconds[implementation] +=
+                        execution.RunBatch(implementation);
+                }
+            }
+
+            freshSegmentsBefore = execution.ReadFreshSegmentCount();
+            Process process = Process.GetCurrentProcess();
+            process.Refresh();
+            workingSetBeforeBytes = process.WorkingSet64;
+            for (int passIndex = 0;
+                passIndex < options.MeasurementPassCount;
+                passIndex++)
+            {
+                for (int orderIndex = 0; orderIndex < 2; orderIndex++)
+                {
+                    NativeWorkspaceStateImplementation implementation =
+                        order[orderIndex];
+                    MeasureSharedPass(
+                        execution,
+                        implementation,
+                        passIndex,
+                        measurementMilliseconds,
+                        managedAllocatedBytes,
+                        gen0Collections,
+                        gen1Collections,
+                        gen2Collections);
+                    checksums[implementation] =
+                        execution.ReadChecksums();
+                }
+            }
+
+            process.Refresh();
+            primaryWorkingSetAfterBytes = process.WorkingSet64;
+            NativeWorkspaceStateImplementation capturing =
+                NativeWorkspaceStateImplementation.CapturingWorkspace;
+            for (int passIndex = 0;
+                passIndex < options.MeasurementPassCount;
+                passIndex++)
+            {
+                MeasureSharedPass(
+                    execution,
+                    capturing,
+                    passIndex,
+                    measurementMilliseconds,
+                    managedAllocatedBytes,
+                    gen0Collections,
+                    gen1Collections,
+                    gen2Collections);
+                checksums[capturing] = execution.ReadChecksums();
+            }
+
+            process.Refresh();
+            capturingWorkingSetAfterBytes = process.WorkingSet64;
+            peakWorkingSetBytes = process.PeakWorkingSet64;
+            freshSegmentsAfter = execution.ReadFreshSegmentCount();
+            cancellationCleanupPassed =
+                execution.VerifyCancellationCleanup();
+        }
+        finally
+        {
+            execution.Dispose();
+        }
+
+        NativeMemoryStatistics nativeFinal =
+            NativeMemoryDiagnostics.Snapshot();
+        bool exactlyOnceCleanupPassed =
+            nativeFinal.OutstandingNativeBytes
+                == nativeBaseline.OutstandingNativeBytes;
+        bool tieredCompilationDisabled = string.Equals(
+            Environment.GetEnvironmentVariable(
+                "DOTNET_TieredCompilation"),
+            "0",
+            StringComparison.Ordinal);
+        bool tieredPgoDisabled = string.Equals(
+            Environment.GetEnvironmentVariable("DOTNET_TieredPGO"),
+            "0",
+            StringComparison.Ordinal);
+        NativeWorkspaceStateWorkerEvidence[] evidence = order
+            .Select(implementation =>
+            {
+                double elapsed = measurementMilliseconds[
+                    implementation].Average();
+                return new NativeWorkspaceStateWorkerEvidence(
+                    implementation,
+                    options.WorkerCount,
+                    options.MapCount,
+                    options.MapSize,
+                    workerThreadIds,
+                    setupClock.Elapsed.TotalMilliseconds,
+                    warmupMilliseconds[implementation],
+                    elapsed,
+                    measurementMilliseconds[implementation],
+                    checked((double)options.MapCount
+                        / (elapsed / 1_000d)),
+                    setupAllocatedBytes[implementation],
+                    managedAllocatedBytes[implementation],
+                    gen0Collections[implementation],
+                    gen1Collections[implementation],
+                    gen2Collections[implementation],
+                    workingSetBeforeBytes,
+                    implementation
+                        == NativeWorkspaceStateImplementation
+                            .CapturingWorkspace
+                            ? capturingWorkingSetAfterBytes
+                            : primaryWorkingSetAfterBytes,
+                    peakWorkingSetBytes,
+                    implementation
+                        == NativeWorkspaceStateImplementation.ManagedArray
+                            ? 0
+                            : freshSegmentsAfter
+                                - freshSegmentsBefore,
+                    ComputeOutputSha256(checksums[implementation]),
+                    checksums[implementation],
+                    cancellationCleanupPassed,
+                    exactlyOnceCleanupPassed,
+                    tieredCompilationDisabled,
+                    tieredPgoDisabled,
+                    Completed: true);
+            })
+            .ToArray();
+        return new NativeWorkspaceStateIsolatedPairEvidence(
+            sampleIndex,
+            order,
+            evidence);
+    }
+
+    private static void MeasureSharedPass(
+        WorkspaceExecution execution,
+        NativeWorkspaceStateImplementation implementation,
+        int passIndex,
+        IDictionary<
+            NativeWorkspaceStateImplementation,
+            double[]> measurementMilliseconds,
+        IDictionary<NativeWorkspaceStateImplementation, long>
+            managedAllocatedBytes,
+        IDictionary<NativeWorkspaceStateImplementation, int>
+            gen0Collections,
+        IDictionary<NativeWorkspaceStateImplementation, int>
+            gen1Collections,
+        IDictionary<NativeWorkspaceStateImplementation, int>
+            gen2Collections)
+    {
+        long allocationBefore =
+            GC.GetTotalAllocatedBytes(precise: true);
+        int gen0Before = GC.CollectionCount(0);
+        int gen1Before = GC.CollectionCount(1);
+        int gen2Before = GC.CollectionCount(2);
+        measurementMilliseconds[implementation][passIndex] =
+            execution.RunBatch(implementation);
+        managedAllocatedBytes[implementation] +=
+            GC.GetTotalAllocatedBytes(precise: true)
+                - allocationBefore;
+        gen0Collections[implementation] +=
+            GC.CollectionCount(0) - gen0Before;
+        gen1Collections[implementation] +=
+            GC.CollectionCount(1) - gen1Before;
+        gen2Collections[implementation] +=
+            GC.CollectionCount(2) - gen2Before;
+    }
+
     internal static NativeWorkspaceStateImplementation[]
         GetImplementationOrder(int sampleIndex) =>
-        (sampleIndex % RequiredSampleCount) switch
-        {
-            0 =>
-            [
-                NativeWorkspaceStateImplementation.ManagedArray,
-                NativeWorkspaceStateImplementation.CapturingWorkspace,
-                NativeWorkspaceStateImplementation.ExplicitStateWorkspace
-            ],
-            1 =>
-            [
-                NativeWorkspaceStateImplementation.ExplicitStateWorkspace,
-                NativeWorkspaceStateImplementation.CapturingWorkspace,
-                NativeWorkspaceStateImplementation.ManagedArray
-            ],
-            2 =>
-            [
-                NativeWorkspaceStateImplementation.CapturingWorkspace,
-                NativeWorkspaceStateImplementation.ManagedArray,
-                NativeWorkspaceStateImplementation.ExplicitStateWorkspace
-            ],
-            3 =>
-            [
-                NativeWorkspaceStateImplementation.CapturingWorkspace,
-                NativeWorkspaceStateImplementation.ExplicitStateWorkspace,
-                NativeWorkspaceStateImplementation.ManagedArray
-            ],
-            4 =>
+        (sampleIndex & 1) == 0
+            ?
             [
                 NativeWorkspaceStateImplementation.ManagedArray,
                 NativeWorkspaceStateImplementation.ExplicitStateWorkspace,
-                NativeWorkspaceStateImplementation.CapturingWorkspace
-            ],
-            _ =>
-            [
-                NativeWorkspaceStateImplementation.ExplicitStateWorkspace,
-                NativeWorkspaceStateImplementation.ManagedArray,
                 NativeWorkspaceStateImplementation.CapturingWorkspace
             ]
-        };
+            :
+            [
+                NativeWorkspaceStateImplementation.ExplicitStateWorkspace,
+                NativeWorkspaceStateImplementation.ManagedArray,
+                NativeWorkspaceStateImplementation.CapturingWorkspace
+            ];
 
     internal static bool EvaluateGate(
         bool exactParity,
@@ -456,30 +634,24 @@ internal static class NativeWorkspaceStateBenchmark
     private static bool IsBalancedOrder(
         IReadOnlyList<NativeWorkspaceStatePairEvidence> pairs)
     {
-        foreach (NativeWorkspaceStateImplementation implementation
-            in Enum.GetValues<NativeWorkspaceStateImplementation>())
-        {
-            for (int position = 0; position < 3; position++)
-            {
-                if (pairs.Count(pair =>
-                        pair.ImplementationOrder[position]
-                            == implementation)
-                    != pairs.Count / 3)
-                {
-                    return false;
-                }
-            }
-        }
-
         return pairs.Count(pair =>
-                Array.IndexOf(
-                    pair.ImplementationOrder.ToArray(),
-                    NativeWorkspaceStateImplementation.ManagedArray)
-                < Array.IndexOf(
-                    pair.ImplementationOrder.ToArray(),
-                    NativeWorkspaceStateImplementation
-                        .ExplicitStateWorkspace))
-            == pairs.Count / 2;
+                pair.ImplementationOrder[0]
+                    == NativeWorkspaceStateImplementation.ManagedArray
+                && pair.ImplementationOrder[1]
+                    == NativeWorkspaceStateImplementation
+                        .ExplicitStateWorkspace)
+                == pairs.Count / 2
+            && pairs.Count(pair =>
+                pair.ImplementationOrder[0]
+                    == NativeWorkspaceStateImplementation
+                        .ExplicitStateWorkspace
+                && pair.ImplementationOrder[1]
+                    == NativeWorkspaceStateImplementation.ManagedArray)
+                == pairs.Count / 2
+            && pairs.All(pair =>
+                pair.ImplementationOrder[2]
+                    == NativeWorkspaceStateImplementation
+                        .CapturingWorkspace);
     }
 
     private static async Task<NativeWorkspaceStateIsolatedPairEvidence>
@@ -577,6 +749,15 @@ internal static class NativeWorkspaceStateBenchmark
         {
             throw new InvalidDataException(
                 "The paired workspace outputs are not equal.");
+        }
+
+        if (!managed.WorkerThreadIds.SequenceEqual(
+                capturing.WorkerThreadIds)
+            || !managed.WorkerThreadIds.SequenceEqual(
+                explicitState.WorkerThreadIds))
+        {
+            throw new InvalidDataException(
+                "The paired workspace paths did not use the same workers.");
         }
     }
 
@@ -768,17 +949,13 @@ internal static class NativeWorkspaceStateBenchmark
 
     private sealed class WorkspaceExecution : IDisposable
     {
-        private readonly NativeWorkspaceStateOptions _options;
         private readonly CountdownEvent _ready;
         private readonly CountdownEvent _completed;
         private readonly WorkspaceWorker[] _workers;
         private int _disposed;
 
-        internal WorkspaceExecution(
-            NativeWorkspaceStateImplementation implementation,
-            NativeWorkspaceStateOptions options)
+        internal WorkspaceExecution(NativeWorkspaceStateOptions options)
         {
-            _options = options;
             _ready = new CountdownEvent(options.WorkerCount);
             _completed = new CountdownEvent(options.WorkerCount);
             _workers = new WorkspaceWorker[options.WorkerCount];
@@ -787,7 +964,6 @@ internal static class NativeWorkspaceStateBenchmark
                 workerIndex++)
             {
                 _workers[workerIndex] = new WorkspaceWorker(
-                    implementation,
                     options,
                     workerIndex,
                     _ready,
@@ -803,13 +979,38 @@ internal static class NativeWorkspaceStateBenchmark
             ThrowWorkerFailure();
         }
 
-        internal double RunBatch()
+        internal double RunBatch(
+            NativeWorkspaceStateImplementation implementation)
         {
             Stopwatch clock = Stopwatch.StartNew();
-            RunCommand(WorkspaceWorkerCommand.Run);
+            RunCommand(implementation switch
+            {
+                NativeWorkspaceStateImplementation.ManagedArray =>
+                    WorkspaceWorkerCommand.RunManaged,
+                NativeWorkspaceStateImplementation
+                    .CapturingWorkspace =>
+                    WorkspaceWorkerCommand.RunCapturing,
+                NativeWorkspaceStateImplementation
+                    .ExplicitStateWorkspace =>
+                    WorkspaceWorkerCommand.RunExplicitState,
+                _ => throw new ArgumentOutOfRangeException(
+                    nameof(implementation))
+            });
             clock.Stop();
             return clock.Elapsed.TotalMilliseconds;
         }
+
+        internal long ReadSetupAllocatedBytes(
+            NativeWorkspaceStateImplementation implementation) =>
+            implementation == NativeWorkspaceStateImplementation.ManagedArray
+                ? _workers.Sum(static worker =>
+                    worker.ManagedSetupAllocatedBytes)
+                : _workers.Sum(static worker =>
+                    worker.NativeSetupAllocatedBytes);
+
+        internal int[] ReadWorkerThreadIds() => _workers
+            .Select(static worker => worker.ManagedThreadId)
+            .ToArray();
 
         internal long ReadFreshSegmentCount()
         {
@@ -895,7 +1096,6 @@ internal static class NativeWorkspaceStateBenchmark
 
     private sealed class WorkspaceWorker : IDisposable
     {
-        private readonly NativeWorkspaceStateImplementation _implementation;
         private readonly NativeWorkspaceStateOptions _options;
         private readonly int _workerIndex;
         private readonly CountdownEvent _ready;
@@ -906,13 +1106,11 @@ internal static class NativeWorkspaceStateBenchmark
         private int _readySignaled;
 
         internal WorkspaceWorker(
-            NativeWorkspaceStateImplementation implementation,
             NativeWorkspaceStateOptions options,
             int workerIndex,
             CountdownEvent ready,
             CountdownEvent completed)
         {
-            _implementation = implementation;
             _options = options;
             _workerIndex = workerIndex;
             _ready = ready;
@@ -931,7 +1129,13 @@ internal static class NativeWorkspaceStateBenchmark
 
         internal long FreshSegmentAllocationCount { get; private set; }
 
+        internal long ManagedSetupAllocatedBytes { get; private set; }
+
+        internal long NativeSetupAllocatedBytes { get; private set; }
+
         internal bool CancellationCleanupPassed { get; private set; } = true;
+
+        internal int ManagedThreadId { get; private set; }
 
         internal void Begin(WorkspaceWorkerCommand command)
         {
@@ -948,108 +1152,77 @@ internal static class NativeWorkspaceStateBenchmark
         {
             try
             {
-                if (_implementation
-                    == NativeWorkspaceStateImplementation.ManagedArray)
+                ManagedThreadId = Environment.CurrentManagedThreadId;
+                long allocationBefore =
+                    GC.GetAllocatedBytesForCurrentThread();
+                var managedWorkspace = new float[
+                    _options.WorkspaceLength];
+                ManagedSetupAllocatedBytes =
+                    GC.GetAllocatedBytesForCurrentThread()
+                        - allocationBefore;
+
+                allocationBefore =
+                    GC.GetAllocatedBytesForCurrentThread();
+                using NativePool<float> pool = new(
+                    preLease: _options.WorkspaceLength,
+                    returnMemoryOnDispose:
+                        NativeMemoryReturn.ToNativeMemory);
+                using NativeWorkspace<float> nativeWorkspace =
+                    pool.CreateWorkspace(_options.WorkspaceLength);
+                NativeSetupAllocatedBytes =
+                    GC.GetAllocatedBytesForCurrentThread()
+                        - allocationBefore;
+                SignalReady();
+                while (WaitForCommand() is WorkspaceWorkerCommand command)
                 {
-                    RunManaged();
-                }
-                else
-                {
-                    RunNative();
+                    if (command == WorkspaceWorkerCommand.Stop)
+                    {
+                        CompleteCommand();
+                        break;
+                    }
+
+                    try
+                    {
+                        switch (command)
+                        {
+                            case WorkspaceWorkerCommand.RunManaged:
+                                Checksum = RunManagedPartition(
+                                    managedWorkspace);
+                                break;
+                            case WorkspaceWorkerCommand.RunCapturing:
+                                Checksum = RunCapturingPartition(
+                                    in nativeWorkspace);
+                                break;
+                            case WorkspaceWorkerCommand.RunExplicitState:
+                                Checksum = RunExplicitStatePartition(
+                                    in nativeWorkspace);
+                                break;
+                            case WorkspaceWorkerCommand.Snapshot:
+                                FreshSegmentAllocationCount = pool
+                                    .GetStatistics()
+                                    .FreshSegmentAllocationCount;
+                                break;
+                            case WorkspaceWorkerCommand.CancellationProbe:
+                                CancellationCleanupPassed =
+                                    VerifyCancellationCleanup(
+                                        in nativeWorkspace);
+                                break;
+                        }
+                    }
+                    catch (Exception exception)
+                    {
+                        Failure = exception;
+                    }
+                    finally
+                    {
+                        CompleteCommand();
+                    }
                 }
             }
             catch (Exception exception)
             {
                 Failure = exception;
                 SignalReady();
-            }
-        }
-
-        private void RunManaged()
-        {
-            var workspace = new float[_options.WorkspaceLength];
-            SignalReady();
-            while (WaitForCommand() is WorkspaceWorkerCommand command)
-            {
-                if (command == WorkspaceWorkerCommand.Stop)
-                {
-                    CompleteCommand();
-                    break;
-                }
-
-                try
-                {
-                    switch (command)
-                    {
-                        case WorkspaceWorkerCommand.Run:
-                            Checksum = RunManagedPartition(workspace);
-                            break;
-                        case WorkspaceWorkerCommand.Snapshot:
-                            FreshSegmentAllocationCount = 0;
-                            break;
-                        case WorkspaceWorkerCommand.CancellationProbe:
-                            CancellationCleanupPassed = true;
-                            break;
-                    }
-                }
-                catch (Exception exception)
-                {
-                    Failure = exception;
-                }
-                finally
-                {
-                    CompleteCommand();
-                }
-            }
-        }
-
-        private void RunNative()
-        {
-            using NativePool<float> pool = new(
-                preLease: _options.WorkspaceLength,
-                returnMemoryOnDispose:
-                    NativeMemoryReturn.ToNativeMemory);
-            using NativeWorkspace<float> workspace =
-                pool.CreateWorkspace(_options.WorkspaceLength);
-            SignalReady();
-            while (WaitForCommand() is WorkspaceWorkerCommand command)
-            {
-                if (command == WorkspaceWorkerCommand.Stop)
-                {
-                    CompleteCommand();
-                    break;
-                }
-
-                try
-                {
-                    switch (command)
-                    {
-                        case WorkspaceWorkerCommand.Run:
-                            Checksum = _implementation
-                                == NativeWorkspaceStateImplementation
-                                    .CapturingWorkspace
-                                    ? RunCapturingPartition(in workspace)
-                                    : RunExplicitStatePartition(in workspace);
-                            break;
-                        case WorkspaceWorkerCommand.Snapshot:
-                            FreshSegmentAllocationCount = pool
-                                .GetStatistics()
-                                .FreshSegmentAllocationCount;
-                            break;
-                        case WorkspaceWorkerCommand.CancellationProbe:
-                            CancellationCleanupPassed =
-                                VerifyCancellationCleanup(in workspace);
-                            break;
-                    }
-                }
-                catch (Exception exception)
-                {
-                    Failure = exception;
-                }
-                finally
-                {
-                    CompleteCommand();
-                }
             }
         }
 
@@ -1204,7 +1377,9 @@ internal static class NativeWorkspaceStateBenchmark
 
     private enum WorkspaceWorkerCommand
     {
-        Run,
+        RunManaged,
+        RunCapturing,
+        RunExplicitState,
         Snapshot,
         CancellationProbe,
         Stop
@@ -1233,6 +1408,7 @@ internal sealed record NativeWorkspaceStateWorkerEvidence(
     int WorkerCount,
     int MapCount,
     int MapSize,
+    IReadOnlyList<int> WorkerThreadIds,
     double SetupMilliseconds,
     double WarmupMilliseconds,
     double ElapsedMilliseconds,
