@@ -134,49 +134,61 @@ internal sealed class NativeRegionManagedAllocationAnalysis
             return;
         }
 
-        IMethodSymbol? sourceMethod = ResolveSourceMethod(
+        ImmutableArray<IMethodSymbol> sourceMethods = ResolveSourceMethods(
             invocation,
             context.CancellationToken);
-        if (sourceMethod is null
-            || !SymbolEqualityComparer.Default.Equals(
-                sourceMethod.ContainingAssembly,
-                _compilation.Assembly)
-            || sourceMethod.DeclaringSyntaxReferences.Length == 0)
+        HashSet<string> stateMachines = new(StringComparer.Ordinal);
+        HashSet<AllocationFinding> findings = new(
+            AllocationFindingComparer.Instance);
+        foreach (IMethodSymbol sourceMethod in sourceMethods)
         {
-            return;
-        }
+            if (!SymbolEqualityComparer.Default.Equals(
+                    sourceMethod.ContainingAssembly,
+                    _compilation.Assembly)
+                || sourceMethod.DeclaringSyntaxReferences.Length == 0)
+            {
+                continue;
+            }
 
-        if (sourceMethod.IsAsync)
-        {
-            Report(
-                context,
-                invocation.Syntax,
-                "async state-machine creation",
-                region,
-                invocation.Syntax);
-        }
+            if (sourceMethod.IsAsync
+                && stateMachines.Add("async state-machine creation"))
+            {
+                Report(
+                    context,
+                    invocation.Syntax,
+                    "async state-machine creation",
+                    region,
+                    invocation.Syntax);
+            }
 
-        if (IsIterator(sourceMethod, context.CancellationToken))
-        {
-            Report(
-                context,
-                invocation.Syntax,
-                "iterator state-machine creation",
-                region,
-                invocation.Syntax);
-        }
+            if (IsIterator(sourceMethod, context.CancellationToken)
+                && stateMachines.Add("iterator state-machine creation"))
+            {
+                Report(
+                    context,
+                    invocation.Syntax,
+                    "iterator state-machine creation",
+                    region,
+                    invocation.Syntax);
+            }
 
-        ImmutableArray<AllocationFinding> summary = GetDirectSummary(
-            sourceMethod,
-            context.CancellationToken);
-        foreach (AllocationFinding finding in summary)
-        {
-            Report(
-                context,
-                invocation.Syntax,
-                finding.Kind + " in source method '" + sourceMethod.Name + "'",
-                region,
-                finding.Source);
+            ImmutableArray<AllocationFinding> summary = GetDirectSummary(
+                sourceMethod,
+                context.CancellationToken);
+            foreach (AllocationFinding finding in summary)
+            {
+                if (!findings.Add(finding))
+                {
+                    continue;
+                }
+
+                Report(
+                    context,
+                    invocation.Syntax,
+                    finding.Kind + " in source method '" + sourceMethod.Name + "'",
+                    region,
+                    finding.Source);
+            }
         }
     }
 
@@ -201,7 +213,6 @@ internal sealed class NativeRegionManagedAllocationAnalysis
 
             ImmutableArray<IMethodSymbol> sourceMethods = ResolveDelegateSources(
                 argument.Value,
-                invocation.Syntax,
                 context.CancellationToken);
             foreach (IMethodSymbol sourceMethod in sourceMethods)
             {
@@ -234,28 +245,26 @@ internal sealed class NativeRegionManagedAllocationAnalysis
         return _canonicalAllocations.Contains(method.OriginalDefinition);
     }
 
-    private IMethodSymbol? ResolveSourceMethod(
+    private ImmutableArray<IMethodSymbol> ResolveSourceMethods(
         IInvocationOperation invocation,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        HashSet<ISymbol>? activeResolutions = null)
     {
         if (invocation.TargetMethod.MethodKind != MethodKind.DelegateInvoke)
         {
-            return invocation.TargetMethod;
+            return [invocation.TargetMethod];
         }
 
-        ImmutableArray<IMethodSymbol> sourceMethods = ResolveDelegateSources(
+        return ResolveDelegateSources(
             invocation.Instance,
-            invocation.Syntax,
-            cancellationToken);
-        return sourceMethods.Length == 1
-            ? sourceMethods[0]
-            : null;
+            cancellationToken,
+            activeResolutions);
     }
 
     private ImmutableArray<IMethodSymbol> ResolveDelegateSources(
         IOperation? operation,
-        SyntaxNode useSyntax,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        HashSet<ISymbol>? activeResolutions = null)
     {
         IOperation? value = Unwrap(operation);
         if (value is IDelegateCreationOperation delegateCreation)
@@ -274,10 +283,25 @@ internal sealed class NativeRegionManagedAllocationAnalysis
 
         if (value is ILocalReferenceOperation localReference)
         {
-            return ResolveReachingDelegateSources(
-                localReference.Local,
-                useSyntax,
-                cancellationToken);
+            activeResolutions ??= new HashSet<ISymbol>(
+                SymbolEqualityComparer.Default);
+            if (!activeResolutions.Add(localReference.Local))
+            {
+                return [];
+            }
+
+            try
+            {
+                return ResolveReachingDelegateSources(
+                    localReference.Local,
+                    localReference.Syntax,
+                    cancellationToken,
+                    activeResolutions);
+            }
+            finally
+            {
+                activeResolutions.Remove(localReference.Local);
+            }
         }
 
         return [];
@@ -286,7 +310,8 @@ internal sealed class NativeRegionManagedAllocationAnalysis
     private ImmutableArray<IMethodSymbol> ResolveReachingDelegateSources(
         ILocalSymbol local,
         SyntaxNode useSyntax,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        HashSet<ISymbol> activeResolutions)
     {
         SemanticModel model = _compilation.GetSemanticModel(
             useSyntax.SyntaxTree);
@@ -336,7 +361,8 @@ internal sealed class NativeRegionManagedAllocationAnalysis
                         local,
                         model,
                         int.MaxValue,
-                        cancellationToken);
+                        cancellationToken,
+                        activeResolutions);
                 }
 
                 if (!DelegateFlowState.AreEqual(
@@ -361,7 +387,8 @@ internal sealed class NativeRegionManagedAllocationAnalysis
             local,
             model,
             useSyntax.SpanStart,
-            cancellationToken);
+            cancellationToken,
+            activeResolutions);
         if (reaching.HasUnknownSource)
         {
             return [];
@@ -469,13 +496,14 @@ internal sealed class NativeRegionManagedAllocationAnalysis
         return merged;
     }
 
-    private static void ApplyBlockMutations(
+    private void ApplyBlockMutations(
         BasicBlock block,
         DelegateFlowState state,
         ILocalSymbol local,
         SemanticModel model,
         int beforePosition,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        HashSet<ISymbol> activeResolutions)
     {
         foreach (IOperation operation in block.Operations)
         {
@@ -485,7 +513,8 @@ internal sealed class NativeRegionManagedAllocationAnalysis
                 local,
                 model,
                 beforePosition,
-                cancellationToken);
+                cancellationToken,
+                activeResolutions);
         }
 
         if (block.BranchValue is not null)
@@ -496,33 +525,44 @@ internal sealed class NativeRegionManagedAllocationAnalysis
                 local,
                 model,
                 beforePosition,
-                cancellationToken);
+                cancellationToken,
+                activeResolutions);
         }
     }
 
-    private static void ApplyOperationMutations(
+    private void ApplyOperationMutations(
         IOperation root,
         DelegateFlowState state,
         ILocalSymbol local,
         SemanticModel model,
         int beforePosition,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        HashSet<ISymbol> activeResolutions)
     {
         IEnumerable<IOperation> mutations = root.DescendantsAndSelf()
-            .Where(operation => operation.Syntax.SpanStart < beforePosition)
+            .Where(operation => operation.Syntax.Span.End <= beforePosition)
             .Where(operation => !IsDeferredOperation(
                 operation.Syntax,
                 root.Syntax))
             .Where(operation => IsDelegateMutation(
                 operation,
                 local))
-            .OrderBy(operation => operation.Syntax.SpanStart)
-            .ThenBy(operation => operation.Syntax.Span.Length);
+            .OrderBy(operation => operation.Syntax.Span.End)
+            .ThenBy(operation => operation.Syntax.SpanStart);
         foreach (IOperation mutation in mutations)
         {
             cancellationToken.ThrowIfCancellationRequested();
             switch (mutation)
             {
+                case IInvocationOperation invocation:
+                    ApplyInvocationMutation(
+                        state,
+                        invocation,
+                        local,
+                        cancellationToken,
+                        activeResolutions);
+                    break;
+
                 case ISimpleAssignmentOperation assignment
                     when IsExactLocalReference(
                         assignment.Target,
@@ -572,10 +612,309 @@ internal sealed class NativeRegionManagedAllocationAnalysis
                     local)
                 && declarator.Initializer is not null,
             IArgumentOperation argument =>
-                argument.Parameter?.RefKind != RefKind.None
+                IsWritableReference(argument.Parameter)
                 && ReferencesLocal(argument.Value, local),
+            IInvocationOperation => true,
             _ => false
         };
+    }
+
+    private void ApplyInvocationMutation(
+        DelegateFlowState state,
+        IInvocationOperation invocation,
+        ILocalSymbol local,
+        CancellationToken cancellationToken,
+        HashSet<ISymbol> activeResolutions)
+    {
+        ImmutableArray<IMethodSymbol> sourceMethods =
+            GetInvocationMutationSources(
+                invocation,
+                cancellationToken,
+                activeResolutions);
+        if (sourceMethods.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        DelegateFlowState input = state.Clone();
+        DelegateFlowState? merged = null;
+        foreach (IMethodSymbol sourceMethod in sourceMethods)
+        {
+            DelegateFlowState alternative = input.Clone();
+            List<DelegateMutationEffect> effects = [];
+            AddMutationEffect(
+                effects,
+                GetDelegateMutationEffect(
+                    sourceMethod,
+                    local,
+                    cancellationToken));
+            foreach (IArgumentOperation argument in invocation.Arguments)
+            {
+                if (argument.Parameter is not IParameterSymbol parameter
+                    || !IsWritableReference(parameter)
+                    || !ReferencesLocal(argument.Value, local)
+                    || parameter.Ordinal < 0
+                    || parameter.Ordinal >= sourceMethod.Parameters.Length)
+                {
+                    continue;
+                }
+
+                AddMutationEffect(
+                    effects,
+                    GetDelegateMutationEffect(
+                        sourceMethod,
+                        sourceMethod.Parameters[parameter.Ordinal],
+                        cancellationToken));
+            }
+
+            if (effects.Count > 1)
+            {
+                alternative.ReplaceWithUnknown();
+            }
+            else if (effects.Count == 1)
+            {
+                alternative.Apply(effects[0]);
+            }
+
+            if (merged is null)
+            {
+                merged = alternative;
+            }
+            else
+            {
+                merged.Merge(alternative);
+            }
+        }
+
+        if (merged is not null)
+        {
+            state.CopyFrom(merged);
+        }
+    }
+
+    private ImmutableArray<IMethodSymbol> GetInvocationMutationSources(
+        IInvocationOperation invocation,
+        CancellationToken cancellationToken,
+        HashSet<ISymbol> activeResolutions)
+    {
+        if (!IsCanonicalAllocation(invocation.TargetMethod))
+        {
+            return ResolveSourceMethods(
+                invocation,
+                cancellationToken,
+                activeResolutions);
+        }
+
+        ImmutableArray<IMethodSymbol>.Builder sources =
+            ImmutableArray.CreateBuilder<IMethodSymbol>();
+        foreach (IArgumentOperation argument in invocation.Arguments)
+        {
+            if (!NativeAllocationAnalyzer.NativeSymbols.Is(
+                    argument.Parameter?.Type,
+                    _leaseInitializer))
+            {
+                continue;
+            }
+
+            sources.AddRange(ResolveDelegateSources(
+                argument.Value,
+                cancellationToken,
+                activeResolutions));
+        }
+
+        return sources
+            .Distinct<IMethodSymbol>(SymbolEqualityComparer.Default)
+            .ToImmutableArray();
+    }
+
+    private static void AddMutationEffect(
+        ICollection<DelegateMutationEffect> effects,
+        DelegateMutationEffect effect)
+    {
+        if (effect.HasMutation)
+        {
+            effects.Add(effect);
+        }
+    }
+
+    private DelegateMutationEffect GetDelegateMutationEffect(
+        IMethodSymbol sourceMethod,
+        ISymbol target,
+        CancellationToken cancellationToken)
+    {
+        if (!SymbolEqualityComparer.Default.Equals(
+                sourceMethod.ContainingAssembly,
+                _compilation.Assembly)
+            || !TryGetMethodBody(
+                sourceMethod,
+                cancellationToken,
+                out IOperation? body,
+                out SyntaxNode? declaration)
+            || body is null
+            || declaration is null)
+        {
+            return DelegateMutationEffect.None;
+        }
+
+        List<IOperation> mutations = body.DescendantsAndSelf()
+            .Where(operation => !IsDeferredOperation(
+                operation.Syntax,
+                declaration))
+            .Where(operation => IsSymbolMutation(
+                operation,
+                target))
+            .OrderBy(operation => operation.Syntax.Span.End)
+            .ThenBy(operation => operation.Syntax.SpanStart)
+            .ToList();
+        if (mutations.Count == 0)
+        {
+            return DelegateMutationEffect.None;
+        }
+
+        if (mutations.Count != 1
+            || mutations[0] is not ISimpleAssignmentOperation assignment
+            || !IsExactSymbolReference(assignment.Target, target))
+        {
+            return DelegateMutationEffect.Unknown;
+        }
+
+        SemanticModel model = _compilation.GetSemanticModel(
+            assignment.Syntax.SyntaxTree);
+        IOperation? value = assignment.Syntax is AssignmentExpressionSyntax syntax
+            ? model.GetOperation(syntax.Right, cancellationToken)
+            : assignment.Value;
+        ImmutableArray<IMethodSymbol> sources =
+            GetDirectDelegateSources(value);
+        if (sources.IsDefaultOrEmpty)
+        {
+            return DelegateMutationEffect.Unknown;
+        }
+
+        return DelegateMutationEffect.Known(
+            sources,
+            preservesInput: !IsDefinitelyExecuted(
+                assignment.Syntax,
+                declaration,
+                model,
+                target));
+    }
+
+    private static bool IsSymbolMutation(
+        IOperation operation,
+        ISymbol target)
+    {
+        return operation switch
+        {
+            ISimpleAssignmentOperation assignment =>
+                ReferencesSymbol(assignment.Target, target)
+                || assignment.IsRef
+                    && ReferencesSymbol(assignment.Value, target),
+            ICompoundAssignmentOperation assignment =>
+                ReferencesSymbol(assignment.Target, target),
+            IDeconstructionAssignmentOperation assignment =>
+                ReferencesSymbol(assignment.Target, target),
+            IArgumentOperation argument =>
+                IsWritableReference(argument.Parameter)
+                && ReferencesSymbol(argument.Value, target),
+            _ => false
+        };
+    }
+
+    private static bool IsWritableReference(IParameterSymbol? parameter)
+    {
+        return parameter?.RefKind is RefKind.Ref or RefKind.Out;
+    }
+
+    private static bool IsExactSymbolReference(
+        IOperation operation,
+        ISymbol target)
+    {
+        IOperation? value = Unwrap(operation);
+        return value switch
+        {
+            ILocalReferenceOperation local =>
+                SymbolEqualityComparer.Default.Equals(
+                    local.Local,
+                    target),
+            IParameterReferenceOperation parameter =>
+                SymbolEqualityComparer.Default.Equals(
+                    parameter.Parameter,
+                    target),
+            _ => false
+        };
+    }
+
+    private static bool ReferencesSymbol(
+        IOperation operation,
+        ISymbol target)
+    {
+        return operation.DescendantsAndSelf().Any(candidate =>
+            candidate is ILocalReferenceOperation local
+                && SymbolEqualityComparer.Default.Equals(
+                    local.Local,
+                    target)
+            || candidate is IParameterReferenceOperation parameter
+                && SymbolEqualityComparer.Default.Equals(
+                    parameter.Parameter,
+                    target));
+    }
+
+    private static bool IsDefinitelyExecuted(
+        SyntaxNode mutation,
+        SyntaxNode declaration,
+        SemanticModel model,
+        ISymbol target)
+    {
+        SyntaxNode? executable = declaration switch
+        {
+            AnonymousFunctionExpressionSyntax anonymous => anonymous.Body,
+            LocalFunctionStatementSyntax { Body: not null } local => local.Body,
+            LocalFunctionStatementSyntax { ExpressionBody: not null } local =>
+                local.ExpressionBody.Expression,
+            BaseMethodDeclarationSyntax { Body: not null } method => method.Body,
+            BaseMethodDeclarationSyntax { ExpressionBody: not null } method =>
+                method.ExpressionBody.Expression,
+            _ => null
+        };
+        if (executable is not null)
+        {
+            try
+            {
+                DataFlowAnalysis analysis = model.AnalyzeDataFlow(executable);
+                if (analysis.Succeeded
+                    && analysis.AlwaysAssigned.Any(symbol =>
+                        SymbolEqualityComparer.Default.Equals(
+                            symbol,
+                            target)))
+                {
+                    return true;
+                }
+            }
+            catch (ArgumentException)
+            {
+            }
+        }
+
+        if (executable is ExpressionSyntax expression)
+        {
+            return expression.Span.Equals(mutation.Span);
+        }
+
+        if (executable is not BlockSyntax block)
+        {
+            return false;
+        }
+
+        StatementSyntax? statement = mutation.AncestorsAndSelf()
+            .OfType<StatementSyntax>()
+            .FirstOrDefault(candidate => ReferenceEquals(
+                candidate.Parent,
+                block));
+        return statement is not null
+            && block.Statements.Count > 0
+            && ReferenceEquals(block.Statements[0], statement)
+            && statement is ExpressionStatementSyntax expressionStatement
+            && expressionStatement.Expression.Span.Equals(mutation.Span);
     }
 
     private static bool IsExactLocalReference(
@@ -1507,6 +1846,30 @@ internal sealed class NativeRegionManagedAllocationAnalysis
             _sources.Clear();
         }
 
+        internal void Apply(DelegateMutationEffect effect)
+        {
+            if (effect.HasUnknownSource)
+            {
+                ReplaceWithUnknown();
+                return;
+            }
+
+            if (!effect.PreservesInput)
+            {
+                Replace(effect.Sources);
+                return;
+            }
+
+            _sources.UnionWith(effect.Sources);
+        }
+
+        internal void CopyFrom(DelegateFlowState source)
+        {
+            HasUnknownSource = source.HasUnknownSource;
+            _sources.Clear();
+            _sources.UnionWith(source._sources);
+        }
+
         internal static bool AreEqual(
             DelegateFlowState? first,
             DelegateFlowState? second)
@@ -1521,6 +1884,49 @@ internal sealed class NativeRegionManagedAllocationAnalysis
                 && first.HasUnknownSource == second.HasUnknownSource
                 && first._sources.SetEquals(second._sources);
         }
+    }
+
+    private readonly struct DelegateMutationEffect
+    {
+        private DelegateMutationEffect(
+            bool hasMutation,
+            bool hasUnknownSource,
+            bool preservesInput,
+            ImmutableArray<IMethodSymbol> sources)
+        {
+            HasMutation = hasMutation;
+            HasUnknownSource = hasUnknownSource;
+            PreservesInput = preservesInput;
+            Sources = sources;
+        }
+
+        internal bool HasMutation { get; }
+
+        internal bool HasUnknownSource { get; }
+
+        internal bool PreservesInput { get; }
+
+        internal ImmutableArray<IMethodSymbol> Sources { get; }
+
+        internal static DelegateMutationEffect None { get; } = new(
+            hasMutation: false,
+            hasUnknownSource: false,
+            preservesInput: true,
+            sources: []);
+
+        internal static DelegateMutationEffect Unknown { get; } = new(
+            hasMutation: true,
+            hasUnknownSource: true,
+            preservesInput: false,
+            sources: []);
+
+        internal static DelegateMutationEffect Known(
+            ImmutableArray<IMethodSymbol> sources,
+            bool preservesInput) => new(
+                hasMutation: true,
+                hasUnknownSource: false,
+                preservesInput,
+                sources);
     }
 
     private sealed class AllocationFindingComparer : IEqualityComparer<AllocationFinding>
