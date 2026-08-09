@@ -336,7 +336,7 @@ public sealed class ArenaLifecycleTests
     {
         NativeMemoryTestHooks.Reset();
         NativeMemoryTestMetrics before = NativeMemoryTestHooks.Snapshot();
-        NativePool<string> pool = new(preLease: 4, doNotLeaseOnDeclaration: true);
+        NativeConcurrentPool<string> pool = new(preLease: 4, doNotLeaseOnDeclaration: true);
         NativeConcurrentArena arena = new(preAllocateBytes: 64, doNotLeaseOnDeclaration: true);
         NativeMemoryTestMetrics afterConstruction = NativeMemoryTestHooks.Snapshot();
 
@@ -422,8 +422,8 @@ public sealed class ArenaLifecycleTests
         GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
         GC.WaitForPendingFinalizers();
         Assert.False(weak.IsAlive);
-        NativePool<object> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        Pooled<object> reused = pool.LeaseScoped(1, static writer => writer.Fill(default!));
+        NativeConcurrentPool<object> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        ConcurrentPooled<object> reused = pool.LeaseScoped(1, static writer => writer.Fill(default!));
         Assert.Null(reused[0]);
         pool.RecycleScoped();
         pool.Dispose();
@@ -458,8 +458,8 @@ public sealed class ArenaLifecycleTests
 
     private static WeakReference CreateRecycledReference()
     {
-        NativePool<object> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        Pooled<object> pooled = pool.LeaseScoped(1, static writer => writer.Fill(default!));
+        NativeConcurrentPool<object> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        ConcurrentPooled<object> pooled = pool.LeaseScoped(1, static writer => writer.Fill(default!));
         object held = new();
         WeakReference weak = new(held);
         pooled[0] = held;
@@ -471,8 +471,8 @@ public sealed class ArenaLifecycleTests
 
     private static WeakReference ReturnPoolReference(NativeMemoryReturn policy)
     {
-        NativePool<object> pool = new(returnMemoryOnDispose: policy);
-        Pooled<object> lease = pool.Rent(1, static writer => writer.Fill(default!));
+        NativeConcurrentPool<object> pool = new(returnMemoryOnDispose: policy);
+        ConcurrentPooled<object> lease = pool.Rent(1, static writer => writer.Fill(default!));
         object held = new();
         WeakReference weak = new(held);
         lease[0] = held;
@@ -532,19 +532,19 @@ public sealed class ArenaLifecycleTests
     [Fact]
     public void PoolAndArenaTrimFormsFreeWholeIdleUnitsAndAllowGrowth()
     {
-        Func<NativePool<int>, nuint>[] poolTrims =
+        Func<NativeConcurrentPool<int>, nuint>[] poolTrims =
         [
             static pool => pool.TrimRetainedMemory(),
             static pool => pool.TrimRetainedMemoryByBytes(1),
             static pool => pool.TrimRetainedMemoryByLeaseSize(1)
         ];
 
-        foreach (Func<NativePool<int>, nuint> trim in poolTrims)
+        foreach (Func<NativeConcurrentPool<int>, nuint> trim in poolTrims)
         {
-            NativePool<int> pool = new(preLease: 8, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            NativeConcurrentPool<int> pool = new(preLease: 8, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
             nuint released = trim(pool);
             Assert.True(released >= (nuint)(8 * sizeof(int)));
-            Pooled<int> lease = pool.Rent(1, static writer => writer.Fill(default!));
+            ConcurrentPooled<int> lease = pool.Rent(1, static writer => writer.Fill(default!));
             Assert.Equal(0, lease[0]);
             lease.Dispose();
             pool.Dispose();

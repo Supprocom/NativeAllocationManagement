@@ -31,7 +31,7 @@ public sealed class LifecycleConformanceTests
 
         if (testCase.Owner == "pool")
         {
-            NativePool<int> pool = new(testCase.InitialReservation, returnPolicy, testCase.DelayedActivation);
+            NativeConcurrentPool<int> pool = new(testCase.InitialReservation, returnPolicy, testCase.DelayedActivation);
             states.Add(pool.CurrentLifecycle);
             if (testCase.ReturnKind == "disposeBeforeActivation")
             {
@@ -122,7 +122,7 @@ public sealed class LifecycleConformanceTests
         throw new InvalidDataException($"Unknown lifecycle owner '{testCase.Owner}'.");
     }
 
-    private static void ExecuteReturn(NativePool<int> pool, string returnKind)
+    private static void ExecuteReturn(NativeConcurrentPool<int> pool, string returnKind)
     {
         switch (returnKind)
         {

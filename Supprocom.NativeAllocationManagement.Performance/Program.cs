@@ -391,7 +391,7 @@ internal static class Program
             if (method < 2)
             {
                 int value = editHeavyMethod && method == 0 ? 1 : 0;
-                source.AppendLine($"public static void Method{method}() {{ NativePool<int> pool = new(); Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!)); value[0] = {value}; value.Dispose(); pool.Dispose(); }}");
+                source.AppendLine($"public static void Method{method}() {{ NativePool<int> pool = new(); Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!)); value.Access(static view => view[0] = {value}); value.Dispose(); pool.Dispose(); }}");
             }
             else
             {

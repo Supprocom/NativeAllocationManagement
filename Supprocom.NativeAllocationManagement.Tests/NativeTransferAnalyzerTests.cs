@@ -59,7 +59,7 @@ public sealed class NativeTransferAnalyzerTests
             {
                 public static async Task Run()
                 {
-                    using NativePool<int> pool = new();
+                    using NativeConcurrentPool<int> pool = new();
                     NativeTransfer<int>? first = pool.RentTransferable(
                         4,
                         static writer => writer.Fill(7));
@@ -99,7 +99,7 @@ public sealed class NativeTransferAnalyzerTests
             {
                 public static void Run()
                 {
-                    using NativePool<int> pool = new();
+                    using NativeConcurrentPool<int> pool = new();
                     NativeTransfer<int>? source = pool.RentTransferable(
                         1,
                         static writer => writer.Fill(1));
@@ -125,7 +125,7 @@ public sealed class NativeTransferAnalyzerTests
             {
                 public static void Run()
                 {
-                    using NativePool<int> pool = new();
+                    using NativeConcurrentPool<int> pool = new();
                     NativeTransfer<int>? source = pool.RentTransferable(
                         1,
                         static writer => writer.Fill(1));
@@ -151,7 +151,7 @@ public sealed class NativeTransferAnalyzerTests
             {
                 public static void Run()
                 {
-                    using NativePool<int> pool = new();
+                    using NativeConcurrentPool<int> pool = new();
                     NativeTransfer<int> source = pool.RentTransferable(
                         1,
                         static writer => writer.Fill(1));
@@ -175,7 +175,7 @@ public sealed class NativeTransferAnalyzerTests
             {
                 public static void Run()
                 {
-                    using NativePool<int> pool = new();
+                    using NativeConcurrentPool<int> pool = new();
                     NativeTransfer<int>? source = pool.RentTransferable(
                         1,
                         static writer => writer.Fill(1));
@@ -204,7 +204,7 @@ public sealed class NativeTransferAnalyzerTests
             {
                 public static void Run()
                 {
-                    using NativePool<int> pool = new();
+                    using NativeConcurrentPool<int> pool = new();
                     NativeTransfer<int> transfer = pool.RentTransferable(
                         1,
                         static writer => writer.Fill(1));
@@ -228,7 +228,7 @@ public sealed class NativeTransferAnalyzerTests
             {
                 public static void Run()
                 {
-                    using NativePool<int> pool = new();
+                    using NativeConcurrentPool<int> pool = new();
                     using NativeTransfer<int>? transfer = pool.RentTransferable(
                         1,
                         static writer => writer.Fill(1));
@@ -252,7 +252,7 @@ public sealed class NativeTransferAnalyzerTests
             {
                 public static void Run()
                 {
-                    using NativePool<int> pool = new();
+                    using NativeConcurrentPool<int> pool = new();
                     NativeTransfer<int> transfer = pool.RentTransferable(
                         1,
                         static writer => writer.Fill(1));
@@ -276,7 +276,7 @@ public sealed class NativeTransferAnalyzerTests
 
             public sealed class Sample
             {
-                private readonly NativePool<int> _pool = new();
+                private readonly NativeConcurrentPool<int> _pool = new();
                 private NativeTransfer<int>? _transfer;
 
                 public void Run()
@@ -302,7 +302,7 @@ public sealed class NativeTransferAnalyzerTests
             {
                 public static void Run()
                 {
-                    using NativePool<int> pool = new();
+                    using NativeConcurrentPool<int> pool = new();
                     NativeTransfer<int> transfer = pool.RentTransferable(
                         1,
                         static writer => writer.Fill(1));
@@ -326,7 +326,7 @@ public sealed class NativeTransferAnalyzerTests
             {
                 public static void Run()
                 {
-                    using NativePool<int> pool = new();
+                    using NativeConcurrentPool<int> pool = new();
                     NativeTransfer<int> transfer = pool.RentTransferable(
                         1,
                         static writer => writer.Fill(1));
@@ -358,7 +358,7 @@ public sealed class NativeTransferAnalyzerTests
             {
                 public static void Run()
                 {
-                    using NativePool<int> pool = new();
+                    using NativeConcurrentPool<int> pool = new();
                     NativeTransfer<int> transfer = pool.RentTransferable(
                         1,
                         static writer => writer.Fill(1));
@@ -389,7 +389,7 @@ public sealed class NativeTransferAnalyzerTests
             {
                 public static void Run(bool move)
                 {
-                    using NativePool<int> pool = new();
+                    using NativeConcurrentPool<int> pool = new();
                     NativeTransfer<int>? source = pool.RentTransferable(
                         1,
                         static writer => writer.Fill(1));
@@ -419,7 +419,7 @@ public sealed class NativeTransferAnalyzerTests
             public static class Sample
             {
                 public static NativeTransfer<int> Create(
-                    NativePool<int> pool)
+                    NativeConcurrentPool<int> pool)
                 {
                     NativeTransfer<int>? source = pool.RentTransferable(
                         1,
@@ -642,7 +642,7 @@ public sealed class NativeTransferAnalyzerTests
             {
                 public static void Run()
                 {
-                    using NativePool<int> pool = new();
+                    using NativeConcurrentPool<int> pool = new();
                     NativeTransfer<int>? source = pool.RentTransferable(
                         1,
                         static writer => writer.Fill(1));
@@ -668,7 +668,7 @@ public sealed class NativeTransferAnalyzerTests
 
             public static class Sample
             {
-                public static {{returnType}} Create(NativePool<int> pool)
+                public static {{returnType}} Create(NativeConcurrentPool<int> pool)
                 {
                     NativeTransfer<int>? source = pool.RentTransferable(
                         1,
@@ -693,7 +693,7 @@ public sealed class NativeTransferAnalyzerTests
             public static class Sample
             {
                 public static (NativeTransfer<int> Transfer, int Count) Create(
-                    NativePool<int> pool)
+                    NativeConcurrentPool<int> pool)
                 {
                     NativeTransfer<int>? source = pool.RentTransferable(
                         1,
@@ -717,7 +717,7 @@ public sealed class NativeTransferAnalyzerTests
 
             public static class Sample
             {
-                public static object[] Create(NativePool<int> pool)
+                public static object[] Create(NativeConcurrentPool<int> pool)
                 {
                     NativeTransfer<int>? source = pool.RentTransferable(
                         1,
@@ -977,7 +977,7 @@ public sealed class NativeTransferAnalyzerTests
             {
                 public static void Run()
                 {
-                    using NativePool<int> pool = new();
+                    using NativeConcurrentPool<int> pool = new();
                     NativeTransfer<int>? source = pool.RentTransferable(
                         1,
                         static writer => writer.Fill(1));
@@ -1006,7 +1006,7 @@ public sealed class NativeTransferAnalyzerTests
             {
                 public static void Run()
                 {
-                    using NativePool<int> pool = new();
+                    using NativeConcurrentPool<int> pool = new();
                     NativeTransfer<int>? source = pool.RentTransferable(
                         1,
                         static writer => writer.Fill(1));
@@ -1158,7 +1158,7 @@ public sealed class NativeTransferAnalyzerTests
             public static class Sample
             {
                 public static void Run(
-                    NativePool<float> pool,
+                    NativeConcurrentPool<float> pool,
                     Owner?[] owners)
                 {
                     Parallel.For(0, owners.Length, index =>
@@ -1318,7 +1318,7 @@ public sealed class NativeTransferAnalyzerTests
             public static class Sample
             {
                 public static void Create(
-                    NativePool<float> pool,
+                    NativeConcurrentPool<float> pool,
                     Owner?[] owners,
                     int index)
                 {
@@ -1368,7 +1368,7 @@ public sealed class NativeTransferAnalyzerTests
 
             public static class Sample
             {
-                public static void Run(NativePool<float> pool)
+                public static void Run(NativeConcurrentPool<float> pool)
                 {
                     Owner? owner = null;
                     Task.Run(() =>
@@ -1410,7 +1410,7 @@ public sealed class NativeTransferAnalyzerTests
 
             public static class Sample
             {
-                public static void Run(NativePool<float> pool)
+                public static void Run(NativeConcurrentPool<float> pool)
                 {
                     Parallel.For(0, 1, _ =>
                     {
@@ -1442,7 +1442,7 @@ public sealed class NativeTransferAnalyzerTests
 
             public static class Sample
             {
-                public static void Run(NativePool<float> pool)
+                public static void Run(NativeConcurrentPool<float> pool)
                 {
                     Parallel.For(0, 1, _ =>
                     {
@@ -1470,7 +1470,7 @@ public sealed class NativeTransferAnalyzerTests
 
             public static class Sample
             {
-                public static void Run(NativePool<float> pool)
+                public static void Run(NativeConcurrentPool<float> pool)
                 {
                     NativeTransfer<float>? source = pool.RentTransferable(
                         4,
@@ -1498,7 +1498,7 @@ public sealed class NativeTransferAnalyzerTests
 
             public static class Sample
             {
-                public static void Run(NativePool<float> pool)
+                public static void Run(NativeConcurrentPool<float> pool)
                 {
                     NativeTransfer<float>? source = pool.RentTransferable(
                         4,
@@ -1555,7 +1555,7 @@ public sealed class NativeTransferAnalyzerTests
             {
                 public static void Run()
                 {
-                    using NativePool<int> pool = new();
+                    using NativeConcurrentPool<int> pool = new();
                     NativeTransfer<int>? source = pool.RentTransferable(
                         1,
                         static writer => writer.Fill(1));
@@ -1616,7 +1616,7 @@ public sealed class NativeTransferAnalyzerTests
             {
                 public static void Run()
                 {
-                    using NativePool<int> pool = new();
+                    using NativeConcurrentPool<int> pool = new();
                     NativeTransfer<int>? source = pool.RentTransferable(
                         1,
                         static writer => writer.Fill(1));
@@ -1645,7 +1645,7 @@ public sealed class NativeTransferAnalyzerTests
             {
                 public static void Run()
                 {
-                    using NativePool<int> pool = new();
+                    using NativeConcurrentPool<int> pool = new();
                     NativeTransfer<int>? source = pool.RentTransferable(
                         1,
                         static writer => writer.Fill(1));
@@ -1763,7 +1763,7 @@ public sealed class NativeTransferAnalyzerTests
             {
                 public static void Run()
                 {
-                    using NativePool<int> pool = new();
+                    using NativeConcurrentPool<int> pool = new();
                     NativeTransfer<int> transfer = pool.RentTransferable(
                         1,
                         static writer => writer.Fill(7));
@@ -1836,7 +1836,7 @@ public sealed class NativeTransferAnalyzerTests
 
             public static class Sample
             {
-                public static void Run(NativePool<int> pool)
+                public static void Run(NativeConcurrentPool<int> pool)
                 {
                     try
                     {

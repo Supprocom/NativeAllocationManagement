@@ -1,208 +1,216 @@
+using System.Runtime.CompilerServices;
+using System.Diagnostics.CodeAnalysis;
+
 namespace Supprocom.NativeAllocationManagement;
 
-/// <summary>A generation-bound pooled handle whose view exists only during bounded operations.</summary>
-/// <typeparam name="T">The value or reference type stored by the pool.</typeparam>
+/// <summary>A token-bound capability for one typed native slab.</summary>
+/// <typeparam name="T">The unmanaged value type in the slab.</typeparam>
 public readonly ref struct Pooled<T>
+    where T : unmanaged
 {
-    private readonly NativeOwnerKernel? _kernel;
-    private readonly long _generation;
-    private readonly long _allocationId;
-    private readonly NativeGeneration? _generationState;
-    private readonly NativeAllocation? _allocationState;
+    private readonly NativePoolKernel<T>? _kernel;
+    private readonly int _slabIndex;
+    private readonly long _token;
+    private readonly IntPtr _pointer;
+    private readonly int _length;
+    private readonly int _capacity;
 
     internal Pooled(
-        NativeOwnerKernel kernel,
-        NativePoolLease lease)
+        NativePoolKernel<T> kernel,
+        int slabIndex,
+        long token,
+        IntPtr pointer,
+        int length,
+        int capacity)
     {
         _kernel = kernel;
-        _generation = lease.Generation;
-        _allocationId = lease.AllocationId;
-        _generationState = lease.GenerationState;
-        _allocationState = lease.AllocationState;
+        _slabIndex = slabIndex;
+        _token = token;
+        _pointer = pointer;
+        _length = length;
+        _capacity = capacity;
     }
 
-    internal NativeOwnerKernel KernelForComposite =>
-        GetKernel("NativeLeaseOperations.Access");
+    /// <summary>Gets the immutable logical element count.</summary>
+    public int Length => _length;
 
-    internal long GenerationForComposite => _generation;
+    /// <summary>Gets the immutable physical element capacity.</summary>
+    public int Capacity => _capacity;
 
-    internal long AllocationIdForComposite => _allocationId;
-
-    internal NativeGeneration GenerationStateForComposite =>
-        GetGenerationState("NativeLeaseOperations.Access");
-
-    internal NativeAllocation AllocationStateForComposite =>
-        GetAllocationState("NativeLeaseOperations.Access");
-
-    internal NativeOperationToken EnterForComposite(string operation) =>
-        EnterOperation(operation);
-
-    /// <summary>Gets the logical element count.</summary>
-    public int Length => GetMetadata(nameof(Length)).Length;
-
-    /// <summary>Gets the physical slab capacity in elements.</summary>
-    public int Capacity => GetMetadata(nameof(Capacity)).Capacity;
-
-    /// <summary>Reads or writes one value through the owner operation gate.</summary>
-    public T this[int index]
-    {
-        get
-        {
-            NativeOperationToken token = EnterIndexedOperation("get_Item", index);
-            try
-            {
-                return token.GetValue<T>(index);
-            }
-            finally
-            {
-                token.Dispose();
-            }
-        }
-        set
-        {
-            NativeOperationToken token = EnterIndexedOperation("set_Item", index);
-            try
-            {
-                token.SetValue(index, value);
-            }
-            finally
-            {
-                token.Dispose();
-            }
-        }
-    }
-
-    /// <summary>Zeroes the logical range while holding one native operation token.</summary>
+    /// <summary>Clears the logical range during one validated borrow.</summary>
     public void Clear()
     {
-        NativeOperationToken token = EnterOperation(nameof(Clear));
+        PooledBorrow<T> borrow = EnterBorrow(nameof(Clear));
         try
         {
-            token.GetView<T>().Clear();
+            borrow.View.Clear();
         }
         finally
         {
-            token.Dispose();
+            borrow.Dispose();
         }
     }
 
-    /// <summary>Copies exactly the logical range from a bounded source span.</summary>
+    /// <summary>Copies one exact source during one validated borrow.</summary>
     public void CopyFrom(scoped ReadOnlySpan<T> source)
     {
-        NativeHandleMetadata metadata = GetMetadata(nameof(CopyFrom));
-        if (source.Length != metadata.Length)
+        if (source.Length != _length)
         {
-            throw new ArgumentException("The source length must equal the pooled logical length.", nameof(source));
+            throw new ArgumentException(
+                "The source length must equal the pooled logical length.",
+                nameof(source));
         }
 
-        NativeOperationToken token = EnterOperation(nameof(CopyFrom));
+        PooledBorrow<T> borrow = EnterBorrow(nameof(CopyFrom));
         try
         {
-            token.GetView<T>().CopyFrom(source);
+            borrow.View.CopyFrom(source);
         }
         finally
         {
-            token.Dispose();
+            borrow.Dispose();
         }
     }
 
-    /// <summary>Copies exactly the logical range into a bounded destination span.</summary>
+    /// <summary>Copies the logical range during one validated borrow.</summary>
     public void CopyTo(scoped Span<T> destination)
     {
-        NativeHandleMetadata metadata = GetMetadata(nameof(CopyTo));
-        if (destination.Length < metadata.Length)
+        if (destination.Length < _length)
         {
-            throw new ArgumentException("The destination must contain at least the pooled logical length.", nameof(destination));
+            throw new ArgumentException(
+                "The destination must contain the pooled logical length.",
+                nameof(destination));
         }
 
-        NativeOperationToken token = EnterOperation(nameof(CopyTo));
+        PooledBorrow<T> borrow = EnterBorrow(nameof(CopyTo));
         try
         {
-            token.GetView<T>().CopyTo(destination);
+            borrow.View.CopyTo(destination);
         }
         finally
         {
-            token.Dispose();
+            borrow.Dispose();
         }
     }
 
-    /// <summary>Runs one synchronous bounded mutation callback.</summary>
+    /// <summary>Runs one bounded write callback after one token check.</summary>
     public void Access(NativeLeaseAction<T> action)
     {
         ArgumentNullException.ThrowIfNull(action);
-        NativeOperationToken token = EnterOperation(nameof(Access));
+        PooledBorrow<T> borrow = EnterBorrow(nameof(Access));
         try
         {
-            action(token.GetView<T>());
+            action(borrow.View);
         }
         finally
         {
-            token.Dispose();
+            borrow.Dispose();
         }
     }
 
-    /// <summary>Runs one synchronous bounded read callback and returns its managed result.</summary>
+    /// <summary>Runs one bounded read callback after one token check.</summary>
     public TResult Read<TResult>(NativeLeaseFunc<T, TResult> action)
     {
         ArgumentNullException.ThrowIfNull(action);
-        NativeOperationToken token = EnterOperation(nameof(Read));
+        PooledBorrow<T> borrow = EnterBorrow(nameof(Read));
         try
         {
-            return action(token.GetView<T>());
+            return action(borrow.View);
         }
         finally
         {
-            token.Dispose();
+            borrow.Dispose();
         }
     }
 
-    /// <summary>Returns this lease's slab to the active pool generation.</summary>
-    public void Dispose() => GetKernel(nameof(Dispose)).ReturnLease(_generation, _allocationId);
-
-    private NativeOperationToken EnterIndexedOperation(string operation, int index)
+    /// <summary>Processes one logical prefix during one validated borrow.</summary>
+    public TResult Process<TState, TResult>(
+        int logicalLength,
+        TState state,
+        NativeSpanStateProcessor<T, TState, TResult> processor)
     {
-        NativeHandleMetadata metadata = GetMetadata(operation);
-        ValidateIndex(index, metadata.Length);
-        return EnterOperation(operation);
-    }
-
-    private NativeOwnerKernel GetKernel(string operation) =>
-        _kernel ?? throw new NativeAllocationUninitializedException(nameof(Pooled<T>), operation);
-
-    private NativeGeneration GetGenerationState(string operation) =>
-        _generationState
-        ?? throw new NativeAllocationUninitializedException(
-            nameof(Pooled<T>),
-            operation);
-
-    private NativeAllocation GetAllocationState(string operation) =>
-        _allocationState
-        ?? throw new NativeAllocationUninitializedException(
-            nameof(Pooled<T>),
-            operation);
-
-    private NativeOperationToken EnterOperation(string operation) =>
-        GetKernel(operation).EnterOperation(
-            GetGenerationState(operation),
-            GetAllocationState(operation),
-            _generation,
-            _allocationId,
-            operation);
-
-    private NativeHandleMetadata GetMetadata(string operation) =>
-        GetKernel(operation).ValidateHandle(
-            GetGenerationState(operation),
-            GetAllocationState(operation),
-            _generation,
-            _allocationId,
-            operation);
-
-    private static void ValidateIndex(int index, int length)
-    {
-        ArgumentOutOfRangeException.ThrowIfNegative(index);
-        if (index >= length)
+        ArgumentNullException.ThrowIfNull(processor);
+        NativePoolKernel<T> kernel = GetKernel(nameof(Process));
+        IntPtr pointer = kernel.EnterBorrow(
+            _slabIndex,
+            _token,
+            logicalLength,
+            nameof(Process));
+        try
         {
-            throw new ArgumentOutOfRangeException(nameof(index), index, "The index is outside the logical pooled range.");
+            unsafe
+            {
+                return processor(
+                    new Span<T>((void*)pointer, logicalLength),
+                    state);
+            }
+        }
+        finally
+        {
+            kernel.ExitBorrow(_slabIndex);
         }
     }
+
+    /// <summary>Returns this slab exactly once.</summary>
+    public void Dispose() => GetKernel(nameof(Dispose)).Return(
+        _slabIndex,
+        _token,
+        _length);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal PooledBorrow<T> EnterBorrow(string operation)
+    {
+        NativePoolKernel<T> kernel = GetKernel(operation);
+        IntPtr pointer = kernel.EnterBorrow(
+            _slabIndex,
+            _token,
+            _length,
+            operation);
+        return new PooledBorrow<T>(
+            kernel,
+            _slabIndex,
+            pointer,
+            _length);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private NativePoolKernel<T> GetKernel(string operation)
+    {
+        NativePoolKernel<T>? kernel = _kernel;
+        if (kernel is null)
+        {
+            ThrowUninitialized(operation);
+        }
+
+        return kernel;
+    }
+
+    [DoesNotReturn]
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void ThrowUninitialized(string operation) =>
+        throw new NativeAllocationUninitializedException(
+            nameof(Pooled<T>),
+            operation);
+}
+
+internal readonly ref struct PooledBorrow<T>
+    where T : unmanaged
+{
+    private readonly NativePoolKernel<T> _kernel;
+    private readonly int _slabIndex;
+
+    internal PooledBorrow(
+        NativePoolKernel<T> kernel,
+        int slabIndex,
+        IntPtr pointer,
+        int length)
+    {
+        _kernel = kernel;
+        _slabIndex = slabIndex;
+        View = new NativeLeaseView<T>(pointer, length);
+    }
+
+    internal NativeLeaseView<T> View { get; }
+
+    internal void Dispose() => _kernel.ExitBorrow(_slabIndex);
 }

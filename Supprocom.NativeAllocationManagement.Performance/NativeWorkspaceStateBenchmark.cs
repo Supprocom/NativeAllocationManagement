@@ -1163,7 +1163,7 @@ internal static class NativeWorkspaceStateBenchmark
 
                 allocationBefore =
                     GC.GetAllocatedBytesForCurrentThread();
-                using NativePool<float> pool = new(
+                using NativeConcurrentPool<float> pool = new(
                     preLease: _options.WorkspaceLength,
                     returnMemoryOnDispose:
                         NativeMemoryReturn.ToNativeMemory);

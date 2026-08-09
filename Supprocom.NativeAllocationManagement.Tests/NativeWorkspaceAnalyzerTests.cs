@@ -14,7 +14,7 @@ public sealed class NativeWorkspaceAnalyzerTests
 
             public static class Sample
             {
-                public static int Run(NativePool<int> pool)
+                public static int Run(NativeConcurrentPool<int> pool)
                 {
                     using NativeWorkspace<int> workspace =
                         pool.CreateWorkspace(16);
@@ -38,7 +38,7 @@ public sealed class NativeWorkspaceAnalyzerTests
 
             public static class Sample
             {
-                public static int Run(NativePool<int> pool)
+                public static int Run(NativeConcurrentPool<int> pool)
                 {
                     using NativeWorkspace<int> workspace =
                         pool.CreateWorkspace(16);
@@ -84,7 +84,7 @@ public sealed class NativeWorkspaceAnalyzerTests
             {
                 private static Action? retained;
 
-                public static void Run(NativePool<int> pool)
+                public static void Run(NativeConcurrentPool<int> pool)
                 {
                     using NativeWorkspace<int> workspace =
                         pool.CreateWorkspace(16);
@@ -120,7 +120,7 @@ public sealed class NativeWorkspaceAnalyzerTests
             public static class Sample
             {
                 public static void Run(
-                    NativePool<int> pool,
+                    NativeConcurrentPool<int> pool,
                     bool stop)
                 {
                     NativeWorkspace<int> workspace =
@@ -157,7 +157,7 @@ public sealed class NativeWorkspaceAnalyzerTests
 
             public static class Sample
             {
-                public static int Run(NativePool<int> pool)
+                public static int Run(NativeConcurrentPool<int> pool)
                 {
                     using NativeWorkspace<int> workspace =
                         pool.CreateWorkspace(8);
@@ -193,7 +193,7 @@ public sealed class NativeWorkspaceAnalyzerTests
                     CancellationToken token,
                     bool condition)
                 {
-                    using NativePool<float> pool = new(
+                    using NativeConcurrentPool<float> pool = new(
                         preLease: 51_200,
                         returnMemoryOnDispose:
                             NativeMemoryReturn.ToNativeMemory);
@@ -279,7 +279,7 @@ public sealed class NativeWorkspaceAnalyzerTests
 
             public static class Sample
             {
-                public static void Run(NativePool<int> pool)
+                public static void Run(NativeConcurrentPool<int> pool)
                 {
                     NativeWorkspace<int> workspace =
                         pool.CreateWorkspace(8);
@@ -302,7 +302,7 @@ public sealed class NativeWorkspaceAnalyzerTests
             public static class Sample
             {
                 public static void Run(
-                    NativePool<int> pool,
+                    NativeConcurrentPool<int> pool,
                     bool dispose)
                 {
                     NativeWorkspace<int> workspace =
@@ -327,7 +327,7 @@ public sealed class NativeWorkspaceAnalyzerTests
 
             public static class Sample
             {
-                public static void Run(NativePool<int> pool)
+                public static void Run(NativeConcurrentPool<int> pool)
                 {
                     NativeWorkspace<int> workspace =
                         pool.CreateWorkspace(8);
@@ -354,12 +354,12 @@ public sealed class NativeWorkspaceAnalyzerTests
             public static class Sample
             {
                 public static NativeWorkspace<int> Return(
-                    NativePool<int> pool)
+                    NativeConcurrentPool<int> pool)
                 {
                     return pool.CreateWorkspace(8);
                 }
 
-                public static void Discard(NativePool<int> pool)
+                public static void Discard(NativeConcurrentPool<int> pool)
                 {
                     _ = pool.CreateWorkspace(8);
                     Drop(pool.CreateWorkspace(8));
@@ -436,7 +436,7 @@ public sealed class NativeWorkspaceAnalyzerTests
 
             public static class Sample
             {
-                public static void Run(NativePool<int> pool)
+                public static void Run(NativeConcurrentPool<int> pool)
                 {
                     NativeWorkspace<int> workspace =
                         pool.CreateWorkspace(8);
@@ -465,14 +465,14 @@ public sealed class NativeWorkspaceAnalyzerTests
             public static class Sample
             {
                 public static NativeWorkspace<int> Return(
-                    NativePool<int> pool)
+                    NativeConcurrentPool<int> pool)
                 {
                     NativeWorkspace<int> workspace =
                         pool.CreateWorkspace(8);
                     return workspace;
                 }
 
-                public static void Store(NativePool<int> pool)
+                public static void Store(NativeConcurrentPool<int> pool)
                 {
                     NativeWorkspace<int> workspace =
                         pool.CreateWorkspace(8);
@@ -498,7 +498,7 @@ public sealed class NativeWorkspaceAnalyzerTests
 
             public static class Sample
             {
-                public static async Task Run(NativePool<int> pool)
+                public static async Task Run(NativeConcurrentPool<int> pool)
                 {
                     NativeWorkspace<int> workspace =
                         pool.CreateWorkspace(8);

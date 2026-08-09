@@ -3,12 +3,12 @@ using System.Runtime.InteropServices;
 
 namespace Supprocom.NativeAllocationManagement;
 
-/// <summary>Adds one persistent typed workspace to a native pool.</summary>
+/// <summary>Adds one workspace to a synchronized typed owner.</summary>
 public static class NativeWorkspacePoolExtensions
 {
     /// <summary>Reserves one fixed-capacity workspace for repeated bounded work.</summary>
     public static NativeWorkspace<T> CreateWorkspace<T>(
-        this NativePool<T> pool,
+        this NativeConcurrentPool<T> pool,
         int capacity)
         where T : unmanaged
     {
@@ -144,7 +144,7 @@ internal sealed class NativeWorkspaceState<T>
         try
         {
             NativeMemoryTestHooks.CheckManagedPublicationBoundary(
-                "NativePool.CreateWorkspace",
+                "NativeConcurrentPool.CreateWorkspace",
                 ordinal: 1,
                 "NativeWorkspaceState ownership");
             initialization.Allocation.SetBuilderLength(0);

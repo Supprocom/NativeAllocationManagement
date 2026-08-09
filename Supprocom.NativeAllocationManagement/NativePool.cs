@@ -1,142 +1,120 @@
 namespace Supprocom.NativeAllocationManagement;
 
-/// <summary>Owns reusable native slabs for one element type.</summary>
-/// <typeparam name="T">The value or reference type stored in each lease.</typeparam>
+/// <summary>Owns reusable native slabs for one unmanaged element type.</summary>
+/// <typeparam name="T">The unmanaged value type in each slab.</typeparam>
 public sealed class NativePool<T> : IDisposable
+    where T : unmanaged
 {
-    private readonly NativeOwnerKernel _kernel;
-
-    internal NativeOwnerKernel KernelForTransfer => _kernel;
+    private readonly NativePoolKernel<T> _kernel;
 
     internal NativeOwnerLifecycle CurrentLifecycle => _kernel.Lifecycle;
 
-    internal int CurrentAllocationRecordCountForTest => _kernel.CurrentAllocationRecordCountForTest();
+    internal int CurrentAllocationRecordCountForTest =>
+        _kernel.LiveLeaseCount;
 
-    internal int CurrentInitializationCountForTest =>
-        _kernel.CurrentInitializationCountForTest();
+    internal int CurrentInitializationCountForTest => 0;
 
-    internal int CurrentGenerationActiveOperationsForTest =>
-        _kernel.CurrentGenerationActiveOperationsForTest();
+    internal int CurrentGenerationActiveOperationsForTest => 0;
 
-    internal int CurrentReferenceRootCountForTest => _kernel.CurrentReferenceRootCountForTest();
+    internal int CurrentReferenceRootCountForTest => 0;
 
-    internal int QuarantinedSegmentCountForTest => _kernel.QuarantinedSegmentCountForTest();
+    internal int QuarantinedSegmentCountForTest => 0;
 
-    internal int QuarantinedGenerationCountForTest => _kernel.QuarantinedGenerationCountForTest();
+    internal int QuarantinedGenerationCountForTest => 0;
 
-    internal int RetiredGenerationCountForTest => _kernel.RetiredGenerationCountForTest();
+    internal int RetiredGenerationCountForTest => 0;
 
-    internal int QuarantineCapacityForTest => _kernel.QuarantineCapacityForTest();
+    internal int QuarantineCapacityForTest => 0;
 
-    internal (int Slabs, int AvailableSlabs, int Bumps, int OwnerSegments) CurrentBankCapacitiesForTest =>
-        _kernel.CurrentBankCapacitiesForTest();
+    internal (int Slabs, int AvailableSlabs, int Bumps, int OwnerSegments)
+        CurrentBankCapacitiesForTest
+    {
+        get
+        {
+            NativeOwnerStatistics statistics = _kernel.GetStatistics();
+            return (
+                statistics.SegmentCount,
+                statistics.AvailableSegmentCount,
+                0,
+                0);
+        }
+    }
 
-    internal long CurrentScopeEpochForTest => _kernel.CurrentScopeEpochForTest();
+    internal long CurrentScopeEpochForTest => 0;
 
-    internal long GenerationCounterForTest => _kernel.GenerationCounterForTest();
+    internal long GenerationCounterForTest => 0;
 
-    internal long[] CurrentSegmentOrdinalsForTest => _kernel.CurrentSegmentOrdinalsForTest();
+    internal long[] CurrentSegmentOrdinalsForTest => [];
 
-    internal void SetScopeEpochForTest(long value) => _kernel.SetScopeEpochForTest(value);
+    internal void SetScopeEpochForTest(long value) =>
+        throw new NotSupportedException(
+            "NativePool does not have scoped generations.");
 
-    internal void SetGenerationCounterForTest(long value) => _kernel.SetGenerationCounterForTest(value);
+    internal void SetGenerationCounterForTest(long value) =>
+        throw new NotSupportedException(
+            "NativePool does not have generation counters.");
 
-    /// <summary>Reads the current logical and physical state of this owner.</summary>
-    public NativeOwnerStatistics GetStatistics() => _kernel.GetStatistics();
-
-    /// <summary>Creates a typed pool, active immediately unless declaration leasing is disabled.</summary>
-    /// <param name="preLease">Optional number of typed elements reserved immediately or on activation.</param>
-    /// <param name="returnMemoryOnDispose">The physical cleanup policy used by <see cref="Dispose"/>.</param>
-    /// <param name="doNotLeaseOnDeclaration">When true, defer the first generation until <see cref="LeaseFromMemory"/>.</param>
+    /// <summary>Creates one active typed slab pool.</summary>
+    /// <param name="preLease">The typed element capacity to reserve.</param>
+    /// <param name="returnMemoryOnDispose">The final storage cleanup policy.</param>
     public NativePool(
         int preLease = 0,
-        NativeMemoryReturn returnMemoryOnDispose = NativeMemoryReturn.ToGarbageCollector,
-        bool doNotLeaseOnDeclaration = false)
+        NativeMemoryReturn returnMemoryOnDispose =
+            NativeMemoryReturn.ToGarbageCollector)
         : this(
             preLease,
             preAllocateBytes: 0,
-            returnMemoryOnDispose: returnMemoryOnDispose,
-            doNotLeaseOnDeclaration: doNotLeaseOnDeclaration)
+            returnMemoryOnDispose)
     {
     }
 
-    /// <summary>Creates a typed pool with independent typed and raw byte reservations.</summary>
-    /// <param name="preLease">Number of typed elements reserved immediately or on activation.</param>
-    /// <param name="preAllocateBytes">Exact raw bytes reserved immediately or on activation.</param>
-    /// <param name="returnMemoryOnDispose">The physical cleanup policy used by <see cref="Dispose"/>.</param>
-    /// <param name="doNotLeaseOnDeclaration">When true, defer the first generation until <see cref="LeaseFromMemory"/>.</param>
+    /// <summary>Creates one active pool with typed and raw reservations.</summary>
+    /// <param name="preLease">The typed element capacity to reserve.</param>
+    /// <param name="preAllocateBytes">The exact raw byte capacity to reserve.</param>
+    /// <param name="returnMemoryOnDispose">The final storage cleanup policy.</param>
     public NativePool(
         int preLease,
         nuint preAllocateBytes,
-        NativeMemoryReturn returnMemoryOnDispose = NativeMemoryReturn.ToGarbageCollector,
-        bool doNotLeaseOnDeclaration = false)
+        NativeMemoryReturn returnMemoryOnDispose =
+            NativeMemoryReturn.ToGarbageCollector)
     {
-        NativeMemoryReturnValidation.Validate(returnMemoryOnDispose, nameof(returnMemoryOnDispose));
-        _kernel = NativeOwnerKernel.CreatePool(
+        NativeMemoryReturnValidation.Validate(
+            returnMemoryOnDispose,
+            nameof(returnMemoryOnDispose));
+        _kernel = new NativePoolKernel<T>(
             preLease,
             preAllocateBytes,
-            NativeTypeLayout.StorageSize<T>(),
-            $"NativePool<{typeof(T).FullName ?? typeof(T).Name}>",
-            returnMemoryOnDispose,
-            NativeTypeLayout.ContainsReferences<T>(),
-            doNotLeaseOnDeclaration);
+            returnMemoryOnDispose);
     }
 
-    /// <summary>Rents a range after one initializer writes all logical elements.</summary>
+    /// <summary>Reads the current typed slab state.</summary>
+    public NativeOwnerStatistics GetStatistics() =>
+        _kernel.GetStatistics();
+
+    /// <summary>Initializes and publishes one pooled slab lease.</summary>
     public Pooled<T> Rent(
         int length,
-        NativeLeaseInitializer<T> initializer)
+        NativeLeaseInitializer<T> initializer) =>
+        _kernel.Rent(length, initializer);
+
+    /// <summary>Frees all idle slabs.</summary>
+    public nuint TrimRetainedMemory() =>
+        _kernel.TrimRetainedMemory();
+
+    /// <summary>Frees idle slabs until the byte budget is met.</summary>
+    public nuint TrimRetainedMemoryByBytes(nuint bytesToRelease) =>
+        _kernel.TrimRetainedMemory(bytesToRelease);
+
+    /// <summary>Frees idle slabs for one typed request budget.</summary>
+    public nuint TrimRetainedMemoryByLeaseSize(int leaseLength = 1)
     {
-        NativePoolLease lease = _kernel.RentInitialized(
-            length,
-            scoped: false,
-            initializer);
-        return new Pooled<T>(_kernel, lease);
+        ArgumentOutOfRangeException.ThrowIfNegative(leaseLength);
+        nuint bytes = checked(
+            (nuint)(uint)leaseLength
+            * (nuint)System.Runtime.CompilerServices.Unsafe.SizeOf<T>());
+        return _kernel.TrimRetainedMemory(bytes);
     }
 
-    /// <summary>Initializes a scoped range before NAM publishes its readable lease.</summary>
-    public Pooled<T> LeaseScoped(
-        int length,
-        NativeLeaseInitializer<T> initializer)
-    {
-        NativePoolLease lease = _kernel.RentInitialized(
-            length,
-            scoped: true,
-            initializer);
-        return new Pooled<T>(_kernel, lease);
-    }
-
-    /// <summary>Ends the current memory generation and frees its native storage immediately.</summary>
-    public void ReturnMemoryToNativeMemory() => _kernel.ReturnMemoryToNativeMemory();
-
-    /// <summary>Ends the current memory generation and detaches its storage for finalizable cleanup.</summary>
-    public void ReturnMemoryToGarbageCollector() => _kernel.ReturnMemoryToGarbageCollector();
-
-    /// <summary>Invalidates all current leases and reuses retained slabs in a new generation.</summary>
-    public void ReleaseLeasesToNativeMemory() => _kernel.ReleaseLeasesToNativeMemory();
-
-    /// <summary>Invalidates all current leases while allowing already entered operations to drain.</summary>
-    public void ReleaseLeasesToGarbageCollector() => _kernel.ReleaseLeasesToGarbageCollector();
-
-    /// <summary>Publishes the first generation or the generation reserved by a memory return.</summary>
-    public void LeaseFromMemory() => _kernel.LeaseFromMemory();
-
-    /// <summary>Recycles the complete analyzer-proven dead scoped pending set.</summary>
-    public void RecycleScoped() => _kernel.RecycleScoped();
-
-    /// <summary>Releases all eligible idle slabs and reports actual physical bytes freed.</summary>
-    public nuint TrimRetainedMemory() => _kernel.TrimRetainedMemory();
-
-    /// <summary>Releases whole idle slabs until the requested physical byte budget is met.</summary>
-    public nuint TrimRetainedMemoryByBytes(nuint bytesToRelease) => _kernel.TrimRetainedMemoryByBytes(bytesToRelease);
-
-    /// <summary>Trims by the exact physical footprint requested by a typed lease shape.</summary>
-    public nuint TrimRetainedMemoryByLeaseSize(int leaseLength = 1) =>
-        _kernel.TrimRetainedMemoryByLeaseSize(
-            leaseLength,
-            NativeTypeLayout.StorageSize<T>(),
-            NativeTypeLayout.Alignment<T>());
-
-    /// <summary>Permanently closes the owner and applies its configured memory policy.</summary>
+    /// <summary>Closes the pool after all leases return.</summary>
     public void Dispose() => _kernel.Dispose();
 }

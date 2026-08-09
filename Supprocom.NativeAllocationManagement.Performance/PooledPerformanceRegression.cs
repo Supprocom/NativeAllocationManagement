@@ -608,6 +608,7 @@ internal static class PooledPerformanceRegression
         private readonly CountdownEvent _done;
         private readonly Thread[] _threads;
         private int _prepared;
+        private int _measurementCompleted;
         private int _ownersDisposed;
 
         internal BoundaryExecution(
@@ -715,6 +716,8 @@ internal static class PooledPerformanceRegression
                 thread.Join();
             }
 
+            Volatile.Write(ref _measurementCompleted, 1);
+
             ThrowWorkerFailure();
             long checksum = 0;
             foreach (BoundaryWorker worker in _workers)
@@ -734,7 +737,9 @@ internal static class PooledPerformanceRegression
             foreach (BoundaryWorker worker in _workers)
             {
                 (long workerFresh, long workerRetained) =
-                    worker.ReadNativeStatistics();
+                    worker.ReadNativeStatistics(
+                        Volatile.Read(
+                            ref _measurementCompleted) != 0);
                 fresh = checked(fresh + workerFresh);
                 retained = checked(retained + workerRetained);
             }
@@ -770,27 +775,27 @@ internal static class PooledPerformanceRegression
         {
             BoundaryWorker worker = _workers[index];
             bool readySignaled = false;
+            bool doneSignaled = false;
             try
             {
                 if (_implementation
                     == PooledRegressionImplementation.Pooled)
                 {
                     worker.InitializePooledOwners();
-                    using NativeWorkspace<ulong> opaque =
-                        worker.CreateOpaqueWorkspace();
-                    using NativeWorkspace<ushort> transparent =
-                        worker.CreateTransparentWorkspace();
-                    worker.WarmupChecksum = worker.RunPersistent(
-                        _options.WarmupIterations,
-                        in opaque,
-                        in transparent);
+                    worker.WarmupChecksum = worker.RunPooled(
+                        _options.WarmupIterations);
+                    worker.CaptureNativeStatistics(
+                        measurementCompleted: false);
                     _ready.Signal();
                     readySignaled = true;
                     _start.Wait();
-                    worker.MeasuredChecksum = worker.RunPersistent(
-                        _options.Iterations,
-                        in opaque,
-                        in transparent);
+                    worker.MeasuredChecksum = worker.RunPooled(
+                        _options.Iterations);
+                    worker.CaptureNativeStatistics(
+                        measurementCompleted: true);
+                    _done.Signal();
+                    doneSignaled = true;
+                    worker.Dispose();
                     return;
                 }
 
@@ -813,7 +818,10 @@ internal static class PooledPerformanceRegression
                     _ready.Signal();
                 }
 
-                _done.Signal();
+                if (!doneSignaled)
+                {
+                    _done.Signal();
+                }
             }
         }
 
@@ -843,12 +851,14 @@ internal static class PooledPerformanceRegression
         private NativePool<ushort>? _transparentPool;
         private readonly OpaqueInitializer _opaqueInitializer;
         private readonly TransparentInitializer _transparentInitializer;
-        private readonly NativeLeaseFunc<ulong, long> _opaqueConsumer;
-        private readonly NativeLeaseFunc<ushort, long> _transparentConsumer;
-        private readonly NativeSpanReader<ulong, long>
-            _opaqueSpanConsumer;
-        private readonly NativeSpanReader<ushort, long>
-            _transparentSpanConsumer;
+        private readonly NativeLeasePairAction<ulong, ushort>
+            _pooledBatchAction;
+        private int _pooledIterations;
+        private long _pooledChecksum;
+        private long _freshSegmentsBefore;
+        private long _retainedBytesBefore;
+        private long _freshSegmentsAfter;
+        private long _retainedBytesAfter;
 
         internal BoundaryWorker(
             PooledRegressionImplementation implementation,
@@ -864,10 +874,7 @@ internal static class PooledPerformanceRegression
                 workload.OpaqueSource);
             _transparentInitializer = new TransparentInitializer(
                 workload.TransparentSource);
-            _opaqueConsumer = ConsumeOpaqueView;
-            _transparentConsumer = ConsumeTransparentView;
-            _opaqueSpanConsumer = ConsumeOpaque;
-            _transparentSpanConsumer = ConsumeTransparent;
+            _pooledBatchAction = RunPooledBatch;
             ExpectedChecksum = workload.ComputeExpectedChecksum(
                 start,
                 end);
@@ -895,33 +902,77 @@ internal static class PooledPerformanceRegression
             return checksum;
         }
 
-        internal long RunPersistent(
-            int iterations,
-            scoped in NativeWorkspace<ulong> opaque,
-            scoped in NativeWorkspace<ushort> transparent)
+        internal long RunPooled(int iterations)
         {
-            long checksum = 0;
-            for (int iteration = 0;
-                iteration < iterations;
-                iteration++)
+            Pooled<ulong> opaque = _opaquePool!.Rent(
+                _workload.MaximumOpaqueLength,
+                static writer => writer.Fill(default));
+            try
             {
-                checksum = unchecked(
-                    checksum + RunPersistentOnce(
-                        in opaque,
-                        in transparent));
+                Pooled<ushort> transparent = _transparentPool!.Rent(
+                    _workload.MaximumTransparentLength,
+                    static writer => writer.Fill(default));
+                try
+                {
+                    _pooledIterations = iterations;
+                    _pooledChecksum = 0;
+                    NativeLeaseOperations.Access(
+                        opaque,
+                        transparent,
+                        _pooledBatchAction);
+                    return _pooledChecksum;
+                }
+                finally
+                {
+                    transparent.Dispose();
+                }
             }
-
-            return checksum;
+            finally
+            {
+                opaque.Dispose();
+            }
         }
 
-        internal NativeWorkspace<ulong> CreateOpaqueWorkspace() =>
-            _opaquePool!.CreateWorkspace(
-                _workload.MaximumOpaqueLength);
+        private void RunPooledBatch(
+            scoped NativeLeaseView<ulong> opaque,
+            scoped NativeLeaseView<ushort> transparent)
+        {
+            Span<ulong> opaqueValues = opaque.AsSpan();
+            Span<ushort> transparentValues = transparent.AsSpan();
+            long checksum = 0;
+            for (int iteration = 0;
+                iteration < _pooledIterations;
+                iteration++)
+            {
+                for (int index = _start; index < _end; index++)
+                {
+                    BoundaryShape shape = _workload.Shapes[index];
+                    if (shape.OpaquePlanes != 0)
+                    {
+                        int length = checked(
+                            shape.OpaquePlanes
+                            * _workload.OpaqueSource.Length);
+                        checksum = unchecked(
+                            checksum + _opaqueInitializer.Process(
+                                opaqueValues[..length],
+                                shape.OpaquePlanes));
+                    }
 
-        internal NativeWorkspace<ushort>
-            CreateTransparentWorkspace() =>
-                _transparentPool!.CreateWorkspace(
-                    _workload.MaximumTransparentLength);
+                    if (shape.TransparentPlanes != 0)
+                    {
+                        int length = checked(
+                            shape.TransparentPlanes
+                            * _workload.TransparentSource.Length);
+                        checksum = unchecked(
+                            checksum + _transparentInitializer.Process(
+                                transparentValues[..length],
+                                shape.TransparentPlanes));
+                    }
+                }
+            }
+
+            _pooledChecksum = checksum;
+        }
 
         internal void VerifyExact(IncrementalHash hash)
         {
@@ -986,32 +1037,50 @@ internal static class PooledPerformanceRegression
             }
         }
 
-        internal (long FreshSegments, long RetainedBytes)
-            ReadNativeStatistics()
+        internal void CaptureNativeStatistics(
+            bool measurementCompleted)
         {
             if (_opaquePool is null
                 || _transparentPool is null)
             {
-                return (0, 0);
+                return;
             }
 
             NativeOwnerStatistics opaque =
                 _opaquePool.GetStatistics();
             NativeOwnerStatistics transparent =
                 _transparentPool.GetStatistics();
-            return (
-                checked(
-                    opaque.FreshSegmentAllocationCount
-                    + transparent.FreshSegmentAllocationCount),
-                checked(
-                    opaque.RetainedBytes
-                    + transparent.RetainedBytes));
+            long fresh = checked(
+                opaque.FreshSegmentAllocationCount
+                + transparent.FreshSegmentAllocationCount);
+            long retained = checked(
+                opaque.RetainedBytes
+                + transparent.RetainedBytes);
+            if (measurementCompleted)
+            {
+                _freshSegmentsAfter = fresh;
+                _retainedBytesAfter = retained;
+                return;
+            }
+
+            _freshSegmentsBefore = fresh;
+            _retainedBytesBefore = retained;
+        }
+
+        internal (long FreshSegments, long RetainedBytes)
+            ReadNativeStatistics(bool measurementCompleted)
+        {
+            return measurementCompleted
+                ? (_freshSegmentsAfter, _retainedBytesAfter)
+                : (_freshSegmentsBefore, _retainedBytesBefore);
         }
 
         public void Dispose()
         {
             _opaquePool?.Dispose();
             _transparentPool?.Dispose();
+            _opaquePool = null;
+            _transparentPool = null;
         }
 
         private long RunArrayPoolOnce()
@@ -1076,44 +1145,6 @@ internal static class PooledPerformanceRegression
                             transparent,
                             clearArray: false);
                     }
-                }
-            }
-
-            return checksum;
-        }
-
-        private long RunPersistentOnce(
-            scoped in NativeWorkspace<ulong> opaque,
-            scoped in NativeWorkspace<ushort> transparent)
-        {
-            long checksum = 0;
-            for (int index = _start; index < _end; index++)
-            {
-                BoundaryShape shape = _workload.Shapes[index];
-                if (shape.OpaquePlanes != 0)
-                {
-                    _opaqueInitializer.PlaneCount =
-                        shape.OpaquePlanes;
-                    checksum = unchecked(
-                        checksum + opaque.Process(
-                        checked(
-                            shape.OpaquePlanes
-                            * _workload.OpaqueSource.Length),
-                        _opaqueInitializer.SpanAction,
-                        _opaqueSpanConsumer));
-                }
-
-                if (shape.TransparentPlanes != 0)
-                {
-                    _transparentInitializer.PlaneCount =
-                        shape.TransparentPlanes;
-                    checksum = unchecked(
-                        checksum + transparent.Process(
-                            checked(
-                                shape.TransparentPlanes
-                                * _workload.TransparentSource.Length),
-                            _transparentInitializer.SpanAction,
-                            _transparentSpanConsumer));
                 }
             }
 
@@ -1248,14 +1279,6 @@ internal static class PooledPerformanceRegression
                 lease.Dispose();
             }
         }
-
-        private static long ConsumeOpaqueView(
-            scoped NativeLeaseView<ulong> view) =>
-            ConsumeOpaque(view.AsSpan());
-
-        private static long ConsumeTransparentView(
-            scoped NativeLeaseView<ushort> view) =>
-            ConsumeTransparent(view.AsSpan());
 
         private NativePool<ulong> CreateOpaquePool() =>
             new(
@@ -1486,21 +1509,16 @@ internal static class PooledPerformanceRegression
     private sealed class OpaqueInitializer
     {
         private readonly ulong[] _source;
-        private readonly NativeSpanInitializer<ulong> _spanAction;
 
         internal OpaqueInitializer(ulong[] source)
         {
             _source = source;
             Action = Initialize;
-            _spanAction = InitializeSpan;
         }
 
         internal int PlaneCount { get; set; }
 
         internal NativeLeaseInitializer<ulong> Action { get; }
-
-        internal NativeSpanInitializer<ulong> SpanAction =>
-            _spanAction;
 
         private void Initialize(
             scoped NativeLeaseWriter<ulong> writer)
@@ -1511,28 +1529,28 @@ internal static class PooledPerformanceRegression
             }
         }
 
-        private void InitializeSpan(scoped Span<ulong> destination) =>
-            CopyPlanes(_source, destination, PlaneCount);
+        internal long Process(
+            scoped Span<ulong> destination,
+            int planeCount)
+        {
+            CopyPlanes(_source, destination, planeCount);
+            return ConsumeOpaque(destination);
+        }
     }
 
     private sealed class TransparentInitializer
     {
         private readonly ushort[] _source;
-        private readonly NativeSpanInitializer<ushort> _spanAction;
 
         internal TransparentInitializer(ushort[] source)
         {
             _source = source;
             Action = Initialize;
-            _spanAction = InitializeSpan;
         }
 
         internal int PlaneCount { get; set; }
 
         internal NativeLeaseInitializer<ushort> Action { get; }
-
-        internal NativeSpanInitializer<ushort> SpanAction =>
-            _spanAction;
 
         private void Initialize(
             scoped NativeLeaseWriter<ushort> writer)
@@ -1543,8 +1561,13 @@ internal static class PooledPerformanceRegression
             }
         }
 
-        private void InitializeSpan(scoped Span<ushort> destination) =>
-            CopyPlanes(_source, destination, PlaneCount);
+        internal long Process(
+            scoped Span<ushort> destination,
+            int planeCount)
+        {
+            CopyPlanes(_source, destination, planeCount);
+            return ConsumeTransparent(destination);
+        }
     }
 
     private static void CopyPlanes<T>(

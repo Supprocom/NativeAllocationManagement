@@ -1,11 +1,11 @@
 namespace Supprocom.NativeAllocationManagement;
 
-/// <summary>Adds transferable unmanaged leases to typed native pools.</summary>
+/// <summary>Adds transferable leases to synchronized typed owners.</summary>
 public static class NativeTransferPoolExtensions
 {
     /// <summary>Rents an initialized unmanaged range for destructive ownership transfer.</summary>
     public static NativeTransfer<T> RentTransferable<T>(
-        this NativePool<T> pool,
+        this NativeConcurrentPool<T> pool,
         int length,
         NativeLeaseInitializer<T> initializer)
         where T : unmanaged
@@ -19,7 +19,7 @@ public static class NativeTransferPoolExtensions
         return NativeTransfer<T>.Create(
             kernel,
             lease,
-            "NativePool.RentTransferable");
+            "NativeConcurrentPool.RentTransferable");
     }
 }
 

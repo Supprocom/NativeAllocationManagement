@@ -18,6 +18,78 @@ public sealed class PackageSmokeTests
     }
 
     [Fact]
+    public async Task PackageFastPoolRunsWithOneBoundedTokenCheck()
+    {
+        PackageEvidence package = await GetPackageAsync();
+        WriteEvidence(package);
+        string consumerRoot = CreateConsumerRoot();
+        try
+        {
+            WriteConsumerProject(
+                consumerRoot,
+                package,
+                excludeAnalyzer: false,
+                suppressDiagnostics: false,
+                executable: true);
+            File.WriteAllText(
+                Path.Combine(consumerRoot, "Program.cs"),
+                """
+                using Supprocom.NativeAllocationManagement;
+
+                public static class Consumer
+                {
+                    public static int Main()
+                    {
+                        using NativePool<int> pool = new(
+                            preLease: 4,
+                            returnMemoryOnDispose:
+                                NativeMemoryReturn.ToNativeMemory);
+                        Pooled<int> lease = pool.Rent(
+                            4,
+                            static writer => writer.Fill(3));
+                        try
+                        {
+                            return lease.Read(static values =>
+                                values[0]
+                                + values[1]
+                                + values[2]
+                                + values[3]) == 12
+                                    ? 0
+                                    : 7;
+                        }
+                        finally
+                        {
+                            lease.Dispose();
+                        }
+                    }
+                }
+                """);
+
+            string project = Path.Combine(
+                consumerRoot,
+                "Consumer.csproj");
+            CommandResult restore = await RunDotnetAsync(
+                $"restore \"{project}\" --nologo --force --no-cache --packages \"{Path.Combine(consumerRoot, ".packages")}\" --source \"{package.SourceDirectory}\"",
+                consumerRoot);
+            Assert.True(restore.ExitCode == 0, restore.Output);
+
+            CommandResult build = await RunDotnetAsync(
+                $"build \"{project}\" --no-restore --nologo",
+                consumerRoot);
+            Assert.True(build.ExitCode == 0, build.Output);
+
+            CommandResult run = await RunDotnetAsync(
+                $"run \"{project}\" --no-build --no-restore --nologo",
+                consumerRoot);
+            Assert.True(run.ExitCode == 0, run.Output);
+        }
+        finally
+        {
+            DeleteConsumerRoot(consumerRoot);
+        }
+    }
+
+    [Fact]
     public async Task PackageReferenceDeliversRuntimeAndAnalyzerWithoutProjectReferences()
     {
         PackageEvidence package = await GetPackageAsync();
@@ -35,10 +107,10 @@ public sealed class PackageSmokeTests
                 {
                     public static void Run()
                     {
-                        using NativePool<int> pool = new(doNotLeaseOnDeclaration: true);
+                        using NativeConcurrentPool<int> pool = new(doNotLeaseOnDeclaration: true);
                         pool.LeaseFromMemory();
                         {
-                            Pooled<int> values = pool.Rent(1, static writer => writer.Fill(default!));
+                            ConcurrentPooled<int> values = pool.Rent(1, static writer => writer.Fill(default!));
                             values[0] = 7;
                             values.Dispose();
                         }
@@ -55,9 +127,9 @@ public sealed class PackageSmokeTests
                         using NativeConcurrentArena arena = new(doNotLeaseOnDeclaration: true);
                         arena.LeaseFromMemory();
                         {
-                            using Pooled<int> faces = pool.Rent(1, static writer => writer.Fill(default!));
-                            using Pooled<int> vertices = pool.Rent(1, static writer => writer.Fill(default!));
-                            using Pooled<int> indices = pool.Rent(1, static writer => writer.Fill(default!));
+                            using ConcurrentPooled<int> faces = pool.Rent(1, static writer => writer.Fill(default!));
+                            using ConcurrentPooled<int> vertices = pool.Rent(1, static writer => writer.Fill(default!));
+                            using ConcurrentPooled<int> indices = pool.Rent(1, static writer => writer.Fill(default!));
                             ConcurrentArenaLease<int> slices = arena.Scratch<int>(1, static writer => writer.Fill(default!));
                             ConcurrentArenaLease<byte> upload = arena.Scratch<byte>(1, static writer => writer.Fill(default!));
                             NativeLeaseOperations.Access(
@@ -137,7 +209,7 @@ public sealed class PackageSmokeTests
                 {
                     public static int Main()
                     {
-                        using NativePool<uint> pool = new(preLease: 4);
+                        using NativeConcurrentPool<uint> pool = new(preLease: 4);
                         using NativeBuilder<uint> builder =
                             pool.CreateBuilder(preLease: 2);
                         builder.Append(11);
@@ -191,7 +263,7 @@ public sealed class PackageSmokeTests
                 {
                     private NativeTransfer<uint>? _transfer;
 
-                    public void Build(NativePool<uint> pool)
+                    public void Build(NativeConcurrentPool<uint> pool)
                     {
                         using NativeBuilder<uint> builder =
                             pool.CreateBuilder(preLease: 2);
@@ -204,7 +276,7 @@ public sealed class PackageSmokeTests
                 {
                     public static int Main()
                     {
-                        using NativePool<uint> pool = new(preLease: 4);
+                        using NativeConcurrentPool<uint> pool = new(preLease: 4);
                         using NativeBuilder<uint> builder =
                             pool.CreateBuilder(preLease: 2);
                         builder.Append(11);
@@ -269,14 +341,14 @@ public sealed class PackageSmokeTests
                     public static int Main()
                     {
                         bool valid = true;
-                        NativePool<string> pool = new(preLease: 2);
-                        Pooled<string> first = pool.Rent(2, static writer => writer.Fill(default!));
+                        NativeConcurrentPool<string> pool = new(preLease: 2);
+                        ConcurrentPooled<string> first = pool.Rent(2, static writer => writer.Fill(default!));
                         first[0] = "first";
                         first[1] = "second";
                         valid &= first[0] == "first" && first[1] == "second";
 
                         first.Dispose();
-                        Pooled<string> reused = pool.Rent(2, static writer => writer.Fill(default!));
+                        ConcurrentPooled<string> reused = pool.Rent(2, static writer => writer.Fill(default!));
                         valid &= reused[0] is null && reused[1] is null;
 
                         reused.Dispose();
@@ -653,7 +725,7 @@ public sealed class PackageSmokeTests
                 {
                     public static void Run()
                     {
-                        NativePool<int> pool = new(doNotLeaseOnDeclaration: true);
+                        NativeConcurrentPool<int> pool = new(doNotLeaseOnDeclaration: true);
                         _ = pool.Rent(1, static writer => writer.Fill(default!));
                         pool.Dispose();
 
@@ -782,8 +854,8 @@ public sealed class PackageSmokeTests
                 {
                     public static void Run()
                     {
-                        NativePool<int> pool = new();
-                        Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!));
+                        NativeConcurrentPool<int> pool = new();
+                        ConcurrentPooled<int> value = pool.Rent(1, static writer => writer.Fill(default!));
                         _ = value.TrimRetainedMemory();
                         pool.ReturnToNativeMemory();
                     }
@@ -826,9 +898,9 @@ public sealed class PackageSmokeTests
                 {
                     public static void AbandonNestedLease()
                     {
-                        NativePool<int> pool = new();
+                        NativeConcurrentPool<int> pool = new();
                         {
-                            Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!));
+                            ConcurrentPooled<int> value = pool.Rent(1, static writer => writer.Fill(default!));
                         }
 
                         pool.Dispose();
@@ -836,9 +908,9 @@ public sealed class PackageSmokeTests
 
                     public static void AbandonNestedLeaseBeforeOwnerDispose()
                     {
-                        NativePool<int> pool = new();
+                        NativeConcurrentPool<int> pool = new();
                         {
-                            Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!));
+                            ConcurrentPooled<int> value = pool.Rent(1, static writer => writer.Fill(default!));
                         }
 
                         pool.Dispose();
@@ -885,8 +957,8 @@ public sealed class PackageSmokeTests
                 {
                     public static void Run()
                     {
-                        NativePool<int> pool = new();
-                        Pooled<int> stale = pool.Rent(1, static writer => writer.Fill(default!));
+                        NativeConcurrentPool<int> pool = new();
+                        ConcurrentPooled<int> stale = pool.Rent(1, static writer => writer.Fill(default!));
                         pool.ReturnMemoryToNativeMemory();
                         _ = stale.Length;
                     }
@@ -928,8 +1000,8 @@ public sealed class PackageSmokeTests
                 {
                     public static void Run()
                     {
-                        using NativePool<int> pool = new();
-                        using Pooled<int> values = pool.Rent(1, static writer => writer.Fill(default!));
+                        using NativeConcurrentPool<int> pool = new();
+                        using ConcurrentPooled<int> values = pool.Rent(1, static writer => writer.Fill(default!));
                         values[0] = 7;
                     }
                 }
@@ -974,8 +1046,8 @@ public sealed class PackageSmokeTests
                 {
                     public static void Run()
                     {
-                        NativePool<int> pool = new();
-                        Pooled<int> values = pool.Rent(1, static writer => writer.Fill(default!));
+                        NativeConcurrentPool<int> pool = new();
+                        ConcurrentPooled<int> values = pool.Rent(1, static writer => writer.Fill(default!));
                         pool.ReturnMemoryToGarbageCollector();
                         pool.Dispose();
                     }
@@ -1030,8 +1102,8 @@ public sealed class PackageSmokeTests
                 {
                     public static void Run()
                     {
-                        NativePool<int> pool = new();
-                        Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!));
+                        NativeConcurrentPool<int> pool = new();
+                        ConcurrentPooled<int> value = pool.Rent(1, static writer => writer.Fill(default!));
                         pool.ReturnMemoryToNativeMemory();
                         pool.Dispose();
                     }
@@ -1132,8 +1204,8 @@ public sealed class PackageSmokeTests
                 {
                     public static int Main()
                     {
-                        NativePool<int> deferredPool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-                        Pooled<int> borrowed = deferredPool.Rent(1, static writer => writer.Fill(default!));
+                        NativeConcurrentPool<int> deferredPool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+                        ConcurrentPooled<int> borrowed = deferredPool.Rent(1, static writer => writer.Fill(default!));
                         bool callbackCompleted = false;
                         borrowed.Access(span =>
                         {
@@ -1157,7 +1229,7 @@ public sealed class PackageSmokeTests
                         }
 
                         deferredPool.LeaseFromMemory();
-                        Pooled<int> current = deferredPool.Rent(1, static writer => writer.Fill(default!));
+                        ConcurrentPooled<int> current = deferredPool.Rent(1, static writer => writer.Fill(default!));
                         if (current[0] != 0)
                         {
                             return 14;
@@ -1166,8 +1238,8 @@ public sealed class PackageSmokeTests
                         current.Dispose();
                         deferredPool.Dispose();
 
-                        NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-                        Pooled<int> stale = pool.Rent(1, static writer => writer.Fill(default!));
+                        NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+                        ConcurrentPooled<int> stale = pool.Rent(1, static writer => writer.Fill(default!));
                         pool.ReturnMemoryToNativeMemory();
                         try
                         {
@@ -1180,8 +1252,8 @@ public sealed class PackageSmokeTests
                             stale.Dispose();
                         }
 
-                        NativePool<int> guardedPool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-                        Pooled<int> guarded = guardedPool.Rent(1, static writer => writer.Fill(default!));
+                        NativeConcurrentPool<int> guardedPool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+                        ConcurrentPooled<int> guarded = guardedPool.Rent(1, static writer => writer.Fill(default!));
                         try
                         {
                             guarded.Access(_ => guardedPool.ReturnMemoryToNativeMemory());
@@ -1233,8 +1305,8 @@ public sealed class PackageSmokeTests
                 {
                     public static int Main()
                     {
-                        NativePool<int> strictPool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-                        Pooled<int> strictBorrow = strictPool.Rent(1, static writer => writer.Fill(default!));
+                        NativeConcurrentPool<int> strictPool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+                        ConcurrentPooled<int> strictBorrow = strictPool.Rent(1, static writer => writer.Fill(default!));
                         bool strictRejected = false;
                         strictBorrow.Access(span =>
                         {
@@ -1260,15 +1332,15 @@ public sealed class PackageSmokeTests
                         strictPool.ReturnMemoryToNativeMemory();
                         strictPool.Dispose();
 
-                        NativePool<int> gcPool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-                        Pooled<int> detachedBorrow = gcPool.Rent(1, static writer => writer.Fill(default!));
+                        NativeConcurrentPool<int> gcPool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+                        ConcurrentPooled<int> detachedBorrow = gcPool.Rent(1, static writer => writer.Fill(default!));
                         bool detachedOperationWasValid = false;
                         detachedBorrow.Access(span =>
                         {
                             gcPool.ReleaseLeasesToGarbageCollector();
                             gcPool.ReturnMemoryToGarbageCollector();
                             gcPool.LeaseFromMemory();
-                            Pooled<int> freshInsideCallback = gcPool.Rent(1, static writer => writer.Fill(default!));
+                            ConcurrentPooled<int> freshInsideCallback = gcPool.Rent(1, static writer => writer.Fill(default!));
                             bool freshWasZeroed = freshInsideCallback[0] == 0;
                             freshInsideCallback.Dispose();
                             gcPool.ReturnMemoryToNativeMemory();

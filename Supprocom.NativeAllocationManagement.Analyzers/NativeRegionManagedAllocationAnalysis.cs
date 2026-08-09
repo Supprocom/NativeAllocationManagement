@@ -50,6 +50,9 @@ internal sealed class NativeRegionManagedAllocationAnalysis
             symbols.ConcurrentArena,
             symbols.ConcurrentArenaLease);
         AddCanonicalAllocations(symbols.Pool, symbols.Pooled);
+        AddCanonicalAllocations(
+            symbols.ConcurrentPool,
+            symbols.ConcurrentPooled);
     }
 
     internal void Register(CompilationStartAnalysisContext context)

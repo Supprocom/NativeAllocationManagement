@@ -167,12 +167,12 @@ internal static class NativeBuilderBenchmark
         NativeBuilderExactOutput expected = BuildManagedOutput(options);
         string exactHash = ComputeExactHash(expected);
         long expectedChecksum = Consume(expected);
-        NativePool<uint>? pool = null;
+        NativeConcurrentPool<uint>? pool = null;
         bool exactParity;
         if (implementation
             == NativeBuilderBenchmarkImplementation.NativeBuilder)
         {
-            pool = new NativePool<uint>(
+            pool = new NativeConcurrentPool<uint>(
                 preLease: options.PreLease,
                 returnMemoryOnDispose:
                     NativeMemoryReturn.ToNativeMemory);
@@ -285,7 +285,7 @@ internal static class NativeBuilderBenchmark
                 - statisticsBefore.FreshSegmentAllocationCount,
             measured.Checksum,
             exactHash,
-            GetInformationalVersion(typeof(NativePool<>).Assembly),
+            GetInformationalVersion(typeof(NativeConcurrentPool<>).Assembly),
             GetInformationalVersion(typeof(NativeBuilderBenchmark).Assembly),
             Environment.GetEnvironmentVariable(
                 "DOTNET_TieredCompilation") ?? "unset",
@@ -317,7 +317,7 @@ internal static class NativeBuilderBenchmark
     }
 
     internal static NativeBuilderExactOutput BuildNativeOutput(
-        NativePool<uint> pool,
+        NativeConcurrentPool<uint> pool,
         NativeBuilderBenchmarkOptions options)
     {
         NativeBuilderVoxelPacket packet = CreateNativePacket(
@@ -386,7 +386,7 @@ internal static class NativeBuilderBenchmark
 
     private static async Task<NativeBuilderBatchResult>
         RunNativeBatchAsync(
-            NativePool<uint> pool,
+            NativeConcurrentPool<uint> pool,
             NativeBuilderBenchmarkOptions options,
             int iterations)
     {
@@ -457,7 +457,7 @@ internal static class NativeBuilderBenchmark
         new(BuildManagedOutput(options));
 
     private static NativeBuilderVoxelPacket CreateNativePacket(
-        NativePool<uint> pool,
+        NativeConcurrentPool<uint> pool,
         NativeBuilderBenchmarkOptions options)
     {
         using NativeBuilder<uint> opaque = pool.CreateBuilder(
@@ -742,7 +742,7 @@ internal static class NativeBuilderBenchmark
     }
 
     private static NativeBuilderPhaseEvidence MeasureNativePhases(
-        NativePool<uint> pool,
+        NativeConcurrentPool<uint> pool,
         NativeBuilderBenchmarkOptions options)
     {
         long totalStart = Stopwatch.GetTimestamp();

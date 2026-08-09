@@ -729,7 +729,7 @@ internal static class NativeBuilderWriteRegression
         private readonly int _workerIndex;
         private readonly int _recordCount;
         private readonly int _wordCount;
-        private readonly NativePool<uint> _pool;
+        private readonly NativeConcurrentPool<uint> _pool;
 
         internal BuilderWriteWorker(
             int workerIndex,
@@ -738,7 +738,7 @@ internal static class NativeBuilderWriteRegression
             _workerIndex = workerIndex;
             _recordCount = recordCount;
             _wordCount = checked(recordCount * WordsPerRecord);
-            _pool = new NativePool<uint>(
+            _pool = new NativeConcurrentPool<uint>(
                 preLease: _wordCount,
                 returnMemoryOnDispose:
                     NativeMemoryReturn.ToNativeMemory);

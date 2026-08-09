@@ -6,7 +6,7 @@ namespace Supprocom.NativeAllocationManagement.Tests;
 public sealed class PublicSurfaceTests
 {
     [Fact]
-    public void PublicSurfaceUsesTheGenerationLifecycleVocabularyOnly()
+    public void PublicSurfaceSeparatesFastAndSynchronizedOwners()
     {
         Assembly assembly = typeof(NativePool<int>).Assembly;
         Assert.Null(typeof(NativeArena).GetMethod("Lease"));
@@ -17,10 +17,14 @@ public sealed class PublicSurfaceTests
         Assert.Null(typeof(NativePool<int>).GetMethod("ReturnToGarbageCollector"));
         Assert.Null(typeof(NativePool<int>).GetMethod("ReleaseLeases"));
 
-        Assert.NotNull(typeof(NativePool<int>).GetMethod("ReturnMemoryToNativeMemory"));
-        Assert.NotNull(typeof(NativePool<int>).GetMethod("ReturnMemoryToGarbageCollector"));
-        Assert.NotNull(typeof(NativePool<int>).GetMethod("ReleaseLeasesToNativeMemory"));
-        Assert.NotNull(typeof(NativePool<int>).GetMethod("ReleaseLeasesToGarbageCollector"));
+        Assert.Null(typeof(NativePool<int>).GetMethod("ReturnMemoryToNativeMemory"));
+        Assert.Null(typeof(NativePool<int>).GetMethod("ReturnMemoryToGarbageCollector"));
+        Assert.Null(typeof(NativePool<int>).GetMethod("ReleaseLeasesToNativeMemory"));
+        Assert.Null(typeof(NativePool<int>).GetMethod("ReleaseLeasesToGarbageCollector"));
+        Assert.NotNull(typeof(NativeConcurrentPool<int>).GetMethod("ReturnMemoryToNativeMemory"));
+        Assert.NotNull(typeof(NativeConcurrentPool<int>).GetMethod("ReturnMemoryToGarbageCollector"));
+        Assert.NotNull(typeof(NativeConcurrentPool<int>).GetMethod("ReleaseLeasesToNativeMemory"));
+        Assert.NotNull(typeof(NativeConcurrentPool<int>).GetMethod("ReleaseLeasesToGarbageCollector"));
         Assert.NotNull(typeof(NativeArena).GetMethod("Scratch"));
         Assert.NotNull(typeof(NativeArena).GetMethod("ScratchScoped"));
         Assert.NotNull(typeof(NativeRegion).GetMethod("Lease"));
@@ -46,7 +50,8 @@ public sealed class PublicSurfaceTests
             assembly.GetTypes(),
             type => type.Name.Contains("Mesh", StringComparison.OrdinalIgnoreCase));
         Assert.NotNull(typeof(NativeArena).GetMethod("RecycleScoped"));
-        Assert.NotNull(typeof(NativePool<int>).GetMethod("RecycleScoped"));
+        Assert.Null(typeof(NativePool<int>).GetMethod("RecycleScoped"));
+        Assert.NotNull(typeof(NativeConcurrentPool<int>).GetMethod("RecycleScoped"));
         Assert.Null(typeof(NativeRegion).GetMethod("RecycleScoped"));
         Assert.Null(typeof(ArenaLease<int>).GetMethod("Dispose"));
         Assert.Null(typeof(Pooled<int>).GetMethod("TrimRetainedMemory"));
@@ -72,7 +77,7 @@ public sealed class PublicSurfaceTests
         Assert.Equal(2, poolConstructors.Length);
         ConstructorInfo? typedPoolConstructor =
             typeof(NativePool<int>).GetConstructor(
-                [typeof(int), typeof(NativeMemoryReturn), typeof(bool)]);
+                [typeof(int), typeof(NativeMemoryReturn)]);
         Assert.NotNull(typedPoolConstructor);
         Assert.Equal(
             "preLease",
@@ -82,8 +87,7 @@ public sealed class PublicSurfaceTests
                 [
                     typeof(int),
                     typeof(nuint),
-                    typeof(NativeMemoryReturn),
-                    typeof(bool)
+                    typeof(NativeMemoryReturn)
                 ]);
         Assert.NotNull(combinedPoolConstructor);
         ParameterInfo[] combinedParameters =
@@ -93,13 +97,21 @@ public sealed class PublicSurfaceTests
         Assert.Contains(
             combinedParameters,
             parameter => parameter.Name == "returnMemoryOnDispose");
-        Assert.Contains(
+        Assert.DoesNotContain(
             combinedParameters,
             parameter => parameter.Name == "doNotLeaseOnDeclaration");
         Assert.DoesNotContain(
             poolConstructors.SelectMany(
                 constructor => constructor.GetParameters()),
             parameter => parameter.Name == "initialCapacity");
+        ConstructorInfo[] concurrentPoolConstructors =
+            typeof(NativeConcurrentPool<int>).GetConstructors();
+        Assert.Equal(2, concurrentPoolConstructors.Length);
+        Assert.All(
+            concurrentPoolConstructors,
+            constructor => Assert.Contains(
+                constructor.GetParameters(),
+                parameter => parameter.Name == "doNotLeaseOnDeclaration"));
         MethodInfo[] builderFactories =
             typeof(NativeBuilderOwnerExtensions).GetMethods()
                 .Where(method => method.Name == "CreateBuilder")

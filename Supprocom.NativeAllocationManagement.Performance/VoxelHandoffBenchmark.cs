@@ -150,11 +150,11 @@ internal static class VoxelHandoffBenchmark
             SHA256.HashData(exactOutput));
         long perItemChecksum = ConsumeUpload(exactOutput);
         bool exactParity;
-        NativePool<uint>? pool = null;
+        NativeConcurrentPool<uint>? pool = null;
         TransferInitializer? initializer = null;
         if (implementation == VoxelHandoffImplementation.Native)
         {
-            pool = new NativePool<uint>(
+            pool = new NativeConcurrentPool<uint>(
                 options.WordCount,
                 NativeMemoryReturn.ToNativeMemory);
             initializer = new TransferInitializer(source);
@@ -241,7 +241,7 @@ internal static class VoxelHandoffBenchmark
                 - statisticsBefore.FreshSegmentAllocationCount,
             measured.Checksum,
             exactHash,
-            GetInformationalVersion(typeof(NativePool<>).Assembly),
+            GetInformationalVersion(typeof(NativeConcurrentPool<>).Assembly),
             GetInformationalVersion(typeof(VoxelHandoffBenchmark).Assembly),
             Environment.GetEnvironmentVariable("DOTNET_TieredCompilation")
                 ?? "unset",
@@ -315,7 +315,7 @@ internal static class VoxelHandoffBenchmark
         byte[] expected)
     {
         ArgumentNullException.ThrowIfNull(expected);
-        using NativePool<uint> pool = new(
+        using NativeConcurrentPool<uint> pool = new(
             source.Count,
             NativeMemoryReturn.ToNativeMemory);
         TransferInitializer initializer = new(source);
@@ -374,7 +374,7 @@ internal static class VoxelHandoffBenchmark
     }
 
     private static async Task<BatchResult> RunNativeBatchAsync(
-        NativePool<uint> pool,
+        NativeConcurrentPool<uint> pool,
         TransferInitializer initializer,
         int wordCount,
         int iterations)

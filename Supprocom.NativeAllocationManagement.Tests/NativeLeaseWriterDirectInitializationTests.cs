@@ -5,8 +5,8 @@ public sealed class NativeLeaseWriterDirectInitializationTests
     [Fact]
     public void DirectCallbackPublishesOnlyAfterTheCompleteSpanReturns()
     {
-        using NativePool<int> pool = new();
-        using Pooled<int> lease = pool.Rent(
+        using NativeConcurrentPool<int> pool = new();
+        using ConcurrentPooled<int> lease = pool.Rent(
             8,
             writer =>
             {
@@ -105,17 +105,4 @@ public sealed class NativeLeaseWriterDirectInitializationTests
         Assert.Equal(0, transfer.Length);
     }
 
-    [Fact]
-    public void DirectCallbackRejectsStorageWithManagedReferences()
-    {
-        using NativePool<string> pool = new();
-
-        Assert.Throws<NotSupportedException>(
-            () => pool.Rent(
-                2,
-                writer => writer.InitializeRemaining(
-                    static values => values.Fill("value"))));
-        Assert.Equal(0, pool.CurrentAllocationRecordCountForTest);
-        Assert.Equal(0, pool.CurrentReferenceRootCountForTest);
-    }
 }

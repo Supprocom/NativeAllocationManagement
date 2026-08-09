@@ -133,7 +133,7 @@ public delegate void NativeLeaseSourceOctupleSpanInitializer<
     where TEighth : unmanaged;
 
 /// <summary>Provides bounded multi-buffer operations without managed mirror copies.</summary>
-public static class NativeLeaseOperations
+public static partial class NativeLeaseOperations
 {
     /// <summary>
     /// Initializes four scoped arena ranges from one readable pooled source.
@@ -161,6 +161,7 @@ public static class NativeLeaseOperations
         out ConcurrentArenaLease<TSecond> second,
         out ConcurrentArenaLease<TThird> third,
         out ConcurrentArenaLease<TFourth> fourth)
+        where TSource : unmanaged
     {
         ArgumentNullException.ThrowIfNull(arena);
         ArgumentNullException.ThrowIfNull(initializer);
@@ -169,12 +170,12 @@ public static class NativeLeaseOperations
         third = default;
         fourth = default;
 
-        NativeOperationToken sourceToken =
-            source.EnterForComposite(nameof(InitializeScoped));
+        PooledBorrow<TSource> sourceToken =
+            source.EnterBorrow(nameof(InitializeScoped));
         try
         {
             InitializeScopedCore(
-                sourceToken.GetView<TSource>(),
+                sourceToken.View,
                 arena,
                 firstLength,
                 secondLength,
@@ -847,51 +848,19 @@ public static class NativeLeaseOperations
         scoped Pooled<TFirst> first,
         scoped Pooled<TSecond> second,
         NativeLeasePairAction<TFirst, TSecond> action)
+        where TFirst : unmanaged
+        where TSecond : unmanaged
     {
         ArgumentNullException.ThrowIfNull(action);
-        NativeOwnerKernel firstKernel = first.KernelForComposite;
-        NativeOwnerKernel secondKernel = second.KernelForComposite;
-        if (ReferenceEquals(firstKernel, secondKernel)
-            && first.GenerationForComposite == second.GenerationForComposite
-            && ReferenceEquals(
-                first.GenerationStateForComposite,
-                second.GenerationStateForComposite))
-        {
-            NativeCompositeAllocationBuffer allocations = default;
-            allocations[0] = first.AllocationStateForComposite;
-            allocations[1] = second.AllocationStateForComposite;
-            Span<long> allocationIds = stackalloc long[2]
-            {
-                first.AllocationIdForComposite,
-                second.AllocationIdForComposite
-            };
-            NativeCompositeOperationToken token = firstKernel.EnterCompositeOperation(
-                first.GenerationStateForComposite,
-                allocations,
-                first.GenerationForComposite,
-                allocationIds,
-                nameof(Access));
-            try
-            {
-                action(token.GetView<TFirst>(0), token.GetView<TSecond>(1));
-            }
-            finally
-            {
-                token.Dispose();
-            }
-
-            return;
-        }
-
-        NativeOperationToken firstToken =
-            first.EnterForComposite(nameof(Access));
+        PooledBorrow<TFirst> firstToken =
+            first.EnterBorrow(nameof(Access));
         try
         {
-            NativeOperationToken secondToken =
-                second.EnterForComposite(nameof(Access));
+            PooledBorrow<TSecond> secondToken =
+                second.EnterBorrow(nameof(Access));
             try
             {
-                action(firstToken.GetView<TFirst>(), secondToken.GetView<TSecond>());
+                action(firstToken.View, secondToken.View);
             }
             finally
             {
@@ -978,69 +947,27 @@ public static class NativeLeaseOperations
         scoped Pooled<TSecond> second,
         scoped Pooled<TThird> third,
         NativeLeaseTripleAction<TFirst, TSecond, TThird> action)
+        where TFirst : unmanaged
+        where TSecond : unmanaged
+        where TThird : unmanaged
     {
         ArgumentNullException.ThrowIfNull(action);
-        NativeOwnerKernel firstKernel = first.KernelForComposite;
-        NativeOwnerKernel secondKernel = second.KernelForComposite;
-        NativeOwnerKernel thirdKernel = third.KernelForComposite;
-        if (ReferenceEquals(firstKernel, secondKernel)
-            && ReferenceEquals(firstKernel, thirdKernel)
-            && first.GenerationForComposite == second.GenerationForComposite
-            && first.GenerationForComposite == third.GenerationForComposite
-            && ReferenceEquals(
-                first.GenerationStateForComposite,
-                second.GenerationStateForComposite)
-            && ReferenceEquals(
-                first.GenerationStateForComposite,
-                third.GenerationStateForComposite))
-        {
-            NativeCompositeAllocationBuffer allocations = default;
-            allocations[0] = first.AllocationStateForComposite;
-            allocations[1] = second.AllocationStateForComposite;
-            allocations[2] = third.AllocationStateForComposite;
-            Span<long> allocationIds = stackalloc long[3]
-            {
-                first.AllocationIdForComposite,
-                second.AllocationIdForComposite,
-                third.AllocationIdForComposite
-            };
-            NativeCompositeOperationToken token = firstKernel.EnterCompositeOperation(
-                first.GenerationStateForComposite,
-                allocations,
-                first.GenerationForComposite,
-                allocationIds,
-                nameof(Access));
-            try
-            {
-                action(
-                    token.GetView<TFirst>(0),
-                    token.GetView<TSecond>(1),
-                    token.GetView<TThird>(2));
-            }
-            finally
-            {
-                token.Dispose();
-            }
-
-            return;
-        }
-
-        NativeOperationToken firstToken =
-            first.EnterForComposite(nameof(Access));
+        PooledBorrow<TFirst> firstToken =
+            first.EnterBorrow(nameof(Access));
         try
         {
-            NativeOperationToken secondToken =
-                second.EnterForComposite(nameof(Access));
+            PooledBorrow<TSecond> secondToken =
+                second.EnterBorrow(nameof(Access));
             try
             {
-                NativeOperationToken thirdToken =
-                    third.EnterForComposite(nameof(Access));
+                PooledBorrow<TThird> thirdToken =
+                    third.EnterBorrow(nameof(Access));
                 try
                 {
                     action(
-                        firstToken.GetView<TFirst>(),
-                        secondToken.GetView<TSecond>(),
-                        thirdToken.GetView<TThird>());
+                        firstToken.View,
+                        secondToken.View,
+                        thirdToken.View);
                 }
                 finally
                 {
@@ -1299,17 +1226,18 @@ public static class NativeLeaseOperations
         scoped Pooled<TPooled> pooled,
         scoped ConcurrentArenaLease<TArena> arena,
         NativeLeasePooledArenaAction<TPooled, TArena> action)
+        where TPooled : unmanaged
     {
         ArgumentNullException.ThrowIfNull(action);
-        NativeOperationToken pooledToken =
-            pooled.EnterForComposite(nameof(Access));
+        PooledBorrow<TPooled> pooledToken =
+            pooled.EnterBorrow(nameof(Access));
         try
         {
             NativeOperationToken arenaToken =
                 arena.EnterForComposite(nameof(Access));
             try
             {
-                action(pooledToken.GetView<TPooled>(), arenaToken.GetView<TArena>());
+                action(pooledToken.View, arenaToken.GetView<TArena>());
             }
             finally
             {
@@ -1331,10 +1259,11 @@ public static class NativeLeaseOperations
             TPooled,
             TFirst,
             TSecond> action)
+        where TPooled : unmanaged
     {
         ArgumentNullException.ThrowIfNull(action);
-        NativeOperationToken pooledToken =
-            pooled.EnterForComposite(nameof(Access));
+        PooledBorrow<TPooled> pooledToken =
+            pooled.EnterBorrow(nameof(Access));
         try
         {
             NativeOwnerKernel firstKernel = first.KernelForComposite;
@@ -1364,7 +1293,7 @@ public static class NativeLeaseOperations
                 try
                 {
                     action(
-                        pooledToken.GetView<TPooled>(),
+                        pooledToken.View,
                         arenaToken.GetView<TFirst>(0),
                         arenaToken.GetView<TSecond>(1));
                 }
@@ -1385,7 +1314,7 @@ public static class NativeLeaseOperations
                 try
                 {
                     action(
-                        pooledToken.GetView<TPooled>(),
+                        pooledToken.View,
                         firstToken.GetView<TFirst>(),
                         secondToken.GetView<TSecond>());
                 }
@@ -1952,6 +1881,7 @@ public static class NativeLeaseOperations
             TSecond,
             TThird,
             TFourth> action)
+        where TPooled : unmanaged
     {
         ArgumentNullException.ThrowIfNull(action);
         NativeOwnerKernel firstKernel = first.KernelForComposite;
@@ -1973,8 +1903,8 @@ public static class NativeLeaseOperations
             && ReferenceEquals(
                 first.GenerationStateForComposite,
                 fourth.GenerationStateForComposite);
-        NativeOperationToken pooledToken =
-            pooled.EnterForComposite(nameof(Access));
+        PooledBorrow<TPooled> pooledToken =
+            pooled.EnterBorrow(nameof(Access));
         try
         {
             if (compositeArenaEntry)
@@ -2001,7 +1931,7 @@ public static class NativeLeaseOperations
                 try
                 {
                     action(
-                        pooledToken.GetView<TPooled>(),
+                        pooledToken.View,
                         arenaToken.GetView<TFirst>(0),
                         arenaToken.GetView<TSecond>(1),
                         arenaToken.GetView<TThird>(2),
@@ -2032,7 +1962,7 @@ public static class NativeLeaseOperations
                         try
                         {
                             action(
-                                pooledToken.GetView<TPooled>(),
+                                pooledToken.View,
                                 firstToken.GetView<TFirst>(),
                                 secondToken.GetView<TSecond>(),
                                 thirdToken.GetView<TThird>(),
@@ -2071,18 +2001,21 @@ public static class NativeLeaseOperations
         scoped Pooled<TThird> third,
         scoped ConcurrentArenaLease<TFourth> fourth,
         NativeLeaseQuadrupleAction<TFirst, TSecond, TThird, TFourth> action)
+        where TFirst : unmanaged
+        where TSecond : unmanaged
+        where TThird : unmanaged
     {
         ArgumentNullException.ThrowIfNull(action);
-        NativeOperationToken firstToken =
-            first.EnterForComposite(nameof(Access));
+        PooledBorrow<TFirst> firstToken =
+            first.EnterBorrow(nameof(Access));
         try
         {
-            NativeOperationToken secondToken =
-                second.EnterForComposite(nameof(Access));
+            PooledBorrow<TSecond> secondToken =
+                second.EnterBorrow(nameof(Access));
             try
             {
-                NativeOperationToken thirdToken =
-                    third.EnterForComposite(nameof(Access));
+                PooledBorrow<TThird> thirdToken =
+                    third.EnterBorrow(nameof(Access));
                 try
                 {
                     NativeOperationToken fourthToken =
@@ -2090,9 +2023,9 @@ public static class NativeLeaseOperations
                     try
                     {
                         action(
-                            firstToken.GetView<TFirst>(),
-                            secondToken.GetView<TSecond>(),
-                            thirdToken.GetView<TThird>(),
+                            firstToken.View,
+                            secondToken.View,
+                            thirdToken.View,
                             fourthToken.GetView<TFourth>());
                     }
                     finally
@@ -2131,6 +2064,9 @@ public static class NativeLeaseOperations
         scoped ConcurrentArenaLease<TFourth> fourth,
         scoped ConcurrentArenaLease<TFifth> fifth,
         NativeLeaseQuintupleAction<TFirst, TSecond, TThird, TFourth, TFifth> action)
+        where TFirst : unmanaged
+        where TSecond : unmanaged
+        where TThird : unmanaged
     {
         ArgumentNullException.ThrowIfNull(action);
         NativeOwnerKernel fourthKernel = fourth.KernelForComposite;
@@ -2140,16 +2076,16 @@ public static class NativeLeaseOperations
             && ReferenceEquals(
                 fourth.GenerationStateForComposite,
                 fifth.GenerationStateForComposite);
-        NativeOperationToken firstToken =
-            first.EnterForComposite(nameof(Access));
+        PooledBorrow<TFirst> firstToken =
+            first.EnterBorrow(nameof(Access));
         try
         {
-            NativeOperationToken secondToken =
-                second.EnterForComposite(nameof(Access));
+            PooledBorrow<TSecond> secondToken =
+                second.EnterBorrow(nameof(Access));
             try
             {
-                NativeOperationToken thirdToken =
-                    third.EnterForComposite(nameof(Access));
+                PooledBorrow<TThird> thirdToken =
+                    third.EnterBorrow(nameof(Access));
                 try
                 {
                     if (compositeArenaEntry)
@@ -2171,9 +2107,9 @@ public static class NativeLeaseOperations
                         try
                         {
                             action(
-                                firstToken.GetView<TFirst>(),
-                                secondToken.GetView<TSecond>(),
-                                thirdToken.GetView<TThird>(),
+                                firstToken.View,
+                                secondToken.View,
+                                thirdToken.View,
                                 arenaToken.GetView<TFourth>(0),
                                 arenaToken.GetView<TFifth>(1));
                         }
@@ -2194,9 +2130,9 @@ public static class NativeLeaseOperations
                         try
                         {
                             action(
-                                firstToken.GetView<TFirst>(),
-                                secondToken.GetView<TSecond>(),
-                                thirdToken.GetView<TThird>(),
+                                firstToken.View,
+                                secondToken.View,
+                                thirdToken.View,
                                 fourthToken.GetView<TFourth>(),
                                 fifthToken.GetView<TFifth>());
                         }

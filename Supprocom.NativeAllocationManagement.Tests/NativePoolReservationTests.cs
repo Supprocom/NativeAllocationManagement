@@ -11,13 +11,13 @@ public sealed class NativePoolReservationTests
         System.Reflection.ConstructorInfo typed = Assert.Single(
             poolType.GetConstructors(),
             constructor =>
-                constructor.GetParameters().Length == 3);
+                constructor.GetParameters().Length == 2);
         Assert.Equal("preLease", typed.GetParameters()[0].Name);
 
         System.Reflection.ConstructorInfo combined = Assert.Single(
             poolType.GetConstructors(),
             constructor =>
-                constructor.GetParameters().Length == 4);
+                constructor.GetParameters().Length == 3);
         Assert.Equal("preLease", combined.GetParameters()[0].Name);
         Assert.Equal(
             "preAllocateBytes",
@@ -117,27 +117,6 @@ public sealed class NativePoolReservationTests
         Assert.Equal(
             reserved.FreshSegmentAllocationCount,
             pool.GetStatistics().FreshSegmentAllocationCount);
-    }
-
-    [Fact]
-    public void DelayedActivationCreatesBothReservationsOnce()
-    {
-        using NativePool<long> pool = new(
-            preLease: 4,
-            preAllocateBytes: 18,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory,
-            doNotLeaseOnDeclaration: true);
-
-        NativeOwnerStatistics unleased = pool.GetStatistics();
-        Assert.Equal(0, unleased.RetainedBytes);
-        Assert.Equal(0, unleased.FreshSegmentAllocationCount);
-
-        pool.LeaseFromMemory();
-
-        NativeOwnerStatistics active = pool.GetStatistics();
-        Assert.Equal(50, active.RetainedBytes);
-        Assert.Equal(2, active.SegmentCount);
-        Assert.Equal(2, active.FreshSegmentAllocationCount);
     }
 
     [Fact]

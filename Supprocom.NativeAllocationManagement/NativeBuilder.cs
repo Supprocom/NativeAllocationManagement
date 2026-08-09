@@ -3,11 +3,11 @@ namespace Supprocom.NativeAllocationManagement;
 /// <summary>Adds growable unmanaged builders to native owners.</summary>
 public static class NativeBuilderOwnerExtensions
 {
-    /// <summary>Creates one single-writer builder from a typed native pool.</summary>
-    /// <param name="pool">The typed owner that supplies native storage.</param>
+    /// <summary>Creates one builder from a synchronized typed owner.</summary>
+    /// <param name="pool">The synchronized owner that supplies storage.</param>
     /// <param name="preLease">The initial reservation in elements of <typeparamref name="T"/>.</param>
     public static NativeBuilder<T> CreateBuilder<T>(
-        this NativePool<T> pool,
+        this NativeConcurrentPool<T> pool,
         int preLease = 0)
         where T : unmanaged
     {
@@ -19,7 +19,7 @@ public static class NativeBuilderOwnerExtensions
         session.BeginPool(preLease);
         return PublishBuilder(
             session,
-            "NativePool.CreateBuilder");
+            "NativeConcurrentPool.CreateBuilder");
     }
 
     /// <summary>Creates one single-writer builder from a heterogeneous arena.</summary>
@@ -664,7 +664,7 @@ internal sealed class NativeBuilderSession<T>
     internal void BeginPool(int preLease) =>
         Attach(
             _kernel.BeginPoolBuilder(preLease),
-            "NativePool.CreateBuilder");
+            "NativeConcurrentPool.CreateBuilder");
 
     internal void BeginArena(int preLease) =>
         Attach(

@@ -126,11 +126,11 @@ public sealed class PersistentFieldPoolAnalyzerTests
 
             public sealed class Worker : IDisposable
             {
-                private readonly NativePool<int> _pool = new(preLease: 16);
+                private readonly NativeConcurrentPool<int> _pool = new(preLease: 16);
 
                 public void Run()
                 {
-                    Pooled<int> lease = _pool.Rent(
+                    ConcurrentPooled<int> lease = _pool.Rent(
                         8,
                         static writer => writer.Fill(default));
                     _pool.ReleaseLeasesToNativeMemory();
@@ -139,7 +139,7 @@ public sealed class PersistentFieldPoolAnalyzerTests
                     _pool.Dispose();
                     for (int index = 0; index < 2; index++)
                     {
-                        using Pooled<int> invalid = _pool.Rent(
+                        using ConcurrentPooled<int> invalid = _pool.Rent(
                             1,
                             static writer => writer.Fill(default));
                     }

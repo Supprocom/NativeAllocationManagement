@@ -1531,14 +1531,14 @@ internal static class ConcurrentArenaBenchmark
 
     private sealed class NativePoolWorkload : NativeMapWorkload
     {
-        private readonly NativePool<float> _pool;
+        private readonly NativeConcurrentPool<float> _pool;
 
         internal NativePoolWorkload(
             ConcurrentArenaBenchmarkOptions options,
             PersistentMapWorkers? workers = null)
             : base(options, workers)
         {
-            _pool = new NativePool<float>(
+            _pool = new NativeConcurrentPool<float>(
                 options.ValuesPerMap,
                 NativeMemoryReturn.ToNativeMemory);
         }

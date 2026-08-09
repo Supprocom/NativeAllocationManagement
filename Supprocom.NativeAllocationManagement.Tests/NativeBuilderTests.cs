@@ -11,7 +11,7 @@ public sealed class NativeBuilderTests
     [Fact]
     public void PoolBuilderGrowsAndPublishesExactLogicalLength()
     {
-        using NativePool<int> pool = new(
+        using NativeConcurrentPool<int> pool = new(
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         using NativeBuilder<int> builder =
             pool.CreateBuilder(preLease: 1);
@@ -40,7 +40,7 @@ public sealed class NativeBuilderTests
     [Fact]
     public void RangeAppendWritesDirectlyIntoTheInitializedPrefix()
     {
-        using NativePool<uint> pool = new(
+        using NativeConcurrentPool<uint> pool = new(
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         using NativeBuilder<uint> builder =
             pool.CreateBuilder(preLease: 2);
@@ -59,7 +59,7 @@ public sealed class NativeBuilderTests
     [Fact]
     public void BoundedWriteCommitsZeroElements()
     {
-        using NativePool<int> pool = new(
+        using NativeConcurrentPool<int> pool = new(
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         using NativeBuilder<int> builder =
             pool.CreateBuilder(preLease: 4);
@@ -77,7 +77,7 @@ public sealed class NativeBuilderTests
     [Fact]
     public void BoundedWritePublishesOnlyTheCommittedPrefix()
     {
-        using NativePool<int> pool = new(
+        using NativeConcurrentPool<int> pool = new(
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         using NativeBuilder<int> builder =
             pool.CreateBuilder(preLease: 2);
@@ -108,7 +108,7 @@ public sealed class NativeBuilderTests
     [Fact]
     public void BoundedWriteGrowsOnceAndCommitsTheFullRange()
     {
-        using NativePool<int> pool = new(
+        using NativeConcurrentPool<int> pool = new(
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         using NativeBuilder<int> builder =
             pool.CreateBuilder(preLease: 1);
@@ -140,7 +140,7 @@ public sealed class NativeBuilderTests
     public void InvalidCommitCountAbortsTheCompleteBuilder(
         int committedCount)
     {
-        using NativePool<int> pool = new(
+        using NativeConcurrentPool<int> pool = new(
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         NativeBuilder<int> builder =
             pool.CreateBuilder(preLease: 2);
@@ -159,7 +159,7 @@ public sealed class NativeBuilderTests
     [Fact]
     public void MissingCommitAbortsTheCompleteBuilder()
     {
-        using NativePool<int> pool = new(
+        using NativeConcurrentPool<int> pool = new(
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         NativeBuilder<int> builder =
             pool.CreateBuilder(preLease: 2);
@@ -178,7 +178,7 @@ public sealed class NativeBuilderTests
     [Fact]
     public void DoubleCommitAbortsTheCompleteBuilder()
     {
-        using NativePool<int> pool = new(
+        using NativeConcurrentPool<int> pool = new(
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         NativeBuilder<int> builder =
             pool.CreateBuilder(preLease: 2);
@@ -200,7 +200,7 @@ public sealed class NativeBuilderTests
     [Fact]
     public void CallbackFailureAbortsTheCompleteBuilder()
     {
-        using NativePool<int> pool = new(
+        using NativeConcurrentPool<int> pool = new(
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         NativeBuilder<int> builder =
             pool.CreateBuilder(preLease: 2);
@@ -221,7 +221,7 @@ public sealed class NativeBuilderTests
     [Fact]
     public void CallbackCancellationAbortsTheCompleteBuilder()
     {
-        using NativePool<int> pool = new(
+        using NativeConcurrentPool<int> pool = new(
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         NativeBuilder<int> builder =
             pool.CreateBuilder(preLease: 2);
@@ -248,7 +248,7 @@ public sealed class NativeBuilderTests
         NativeMemoryTestHooks.Reset();
         try
         {
-            using NativePool<int> pool = new(
+            using NativeConcurrentPool<int> pool = new(
                 returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
             NativeBuilder<int> builder =
                 pool.CreateBuilder(preLease: 1);
@@ -280,7 +280,7 @@ public sealed class NativeBuilderTests
     [Fact]
     public void ExclusiveBorrowPassesThroughNestedHelpers()
     {
-        using NativePool<int> pool = new(
+        using NativeConcurrentPool<int> pool = new(
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         using NativeBuilder<int> builder =
             pool.CreateBuilder(preLease: 2);
@@ -299,7 +299,7 @@ public sealed class NativeBuilderTests
     [Fact]
     public void BorrowCallbackFailureReturnsStorageExactlyOnce()
     {
-        using NativePool<int> pool = new(
+        using NativeConcurrentPool<int> pool = new(
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         NativeBuilder<int> builder =
             pool.CreateBuilder(preLease: 2);
@@ -319,7 +319,7 @@ public sealed class NativeBuilderTests
     [Fact]
     public void BorrowCallbackCancellationReturnsStorageExactlyOnce()
     {
-        using NativePool<int> pool = new(
+        using NativeConcurrentPool<int> pool = new(
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         NativeBuilder<int> builder =
             pool.CreateBuilder(preLease: 2);
@@ -345,7 +345,7 @@ public sealed class NativeBuilderTests
     [Fact]
     public void OwnerUseDuringBorrowFailsClosed()
     {
-        using NativePool<int> pool = new(
+        using NativeConcurrentPool<int> pool = new(
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         NativeBuilder<int> builder =
             pool.CreateBuilder(preLease: 2);
@@ -366,7 +366,7 @@ public sealed class NativeBuilderTests
     [Fact]
     public async Task ConcurrentBorrowIsRejected()
     {
-        using NativePool<int> pool = new(
+        using NativeConcurrentPool<int> pool = new(
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         using NativeBuilder<int> builder =
             pool.CreateBuilder(preLease: 2);
@@ -402,7 +402,7 @@ public sealed class NativeBuilderTests
     [Fact]
     public void BorrowAuthorityExpiresAfterTheCallback()
     {
-        using NativePool<int> pool = new(
+        using NativeConcurrentPool<int> pool = new(
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         using NativeBuilder<int> builder =
             pool.CreateBuilder(preLease: 2);
@@ -444,7 +444,7 @@ public sealed class NativeBuilderTests
     public void GeometricGrowthCreatesNoManagedIntermediateArray()
     {
         Type? resolvedKernelType =
-            typeof(NativePool<int>).Assembly.GetType(
+            typeof(NativeConcurrentPool<int>).Assembly.GetType(
                 "Supprocom.NativeAllocationManagement.NativeOwnerKernel");
         Assert.NotNull(resolvedKernelType);
         Type kernelType = resolvedKernelType;
@@ -492,7 +492,7 @@ public sealed class NativeBuilderTests
     [Fact]
     public void EmptyBuilderCompletesAsAnEmptyTransfer()
     {
-        using NativePool<long> pool = new(
+        using NativeConcurrentPool<long> pool = new(
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         using NativeBuilder<long> builder = pool.CreateBuilder();
 
@@ -506,7 +506,7 @@ public sealed class NativeBuilderTests
     [Fact]
     public void CompletionInvalidatesEveryBuilderOperation()
     {
-        using NativePool<int> pool = new(
+        using NativeConcurrentPool<int> pool = new(
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         NativeBuilder<int> builder = pool.CreateBuilder();
         builder.Append(17);
@@ -526,7 +526,7 @@ public sealed class NativeBuilderTests
     [Fact]
     public void DisposalReturnsBuilderStorageOnlyOnce()
     {
-        using NativePool<int> pool = new(
+        using NativeConcurrentPool<int> pool = new(
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         NativeBuilder<int> builder =
             pool.CreateBuilder(preLease: 4);
@@ -546,7 +546,7 @@ public sealed class NativeBuilderTests
         NativeMemoryTestHooks.Reset();
         try
         {
-            using NativePool<int> pool = new(
+            using NativeConcurrentPool<int> pool = new(
                 returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
             NativeBuilder<int> builder =
                 pool.CreateBuilder(preLease: 1);
@@ -570,7 +570,7 @@ public sealed class NativeBuilderTests
     [Fact]
     public void AppendCancellationReleasesBuilderStorage()
     {
-        using NativePool<int> pool = new(
+        using NativeConcurrentPool<int> pool = new(
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         NativeBuilder<int> builder =
             pool.CreateBuilder(preLease: 4);
@@ -588,7 +588,7 @@ public sealed class NativeBuilderTests
     [Fact]
     public void CompletionCancellationReleasesBuilderStorage()
     {
-        using NativePool<int> pool = new(
+        using NativeConcurrentPool<int> pool = new(
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         NativeBuilder<int> builder =
             pool.CreateBuilder(preLease: 4);
@@ -657,7 +657,7 @@ public sealed class NativeBuilderTests
     [Fact]
     public void StrictOwnerDisposalRejectsALiveBuilder()
     {
-        NativePool<int> pool = new(
+        NativeConcurrentPool<int> pool = new(
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         using NativeBuilder<int> builder = pool.CreateBuilder();
         builder.Append(23);
@@ -677,7 +677,7 @@ public sealed class NativeBuilderTests
     [Fact]
     public void DeferredOwnerDisposalAlsoRejectsALiveBuilder()
     {
-        NativePool<int> pool = new(
+        NativeConcurrentPool<int> pool = new(
             returnMemoryOnDispose:
                 NativeMemoryReturn.ToGarbageCollector);
         using NativeBuilder<int> builder =
@@ -699,7 +699,7 @@ public sealed class NativeBuilderTests
     [Fact]
     public void AbandonedBuilderFinalizerReturnsItsAllocation()
     {
-        using NativePool<int> pool = new(
+        using NativeConcurrentPool<int> pool = new(
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         WeakReference abandoned = CreateAbandonedBuilder(pool);
 
@@ -720,7 +720,7 @@ public sealed class NativeBuilderTests
     public async Task ConcurrentBuilderOperationsFailClosed()
     {
         NativeMemoryTestHooks.Reset();
-        using NativePool<int> pool = new(
+        using NativeConcurrentPool<int> pool = new(
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         using NativeBuilder<int> builder = pool.CreateBuilder();
         using ManualResetEventSlim appendEntered = new(false);
@@ -767,7 +767,7 @@ public sealed class NativeBuilderTests
     [Fact]
     public async Task ConcurrentCompletionAndDisposalReturnStorageOnce()
     {
-        using NativePool<int> pool = new(
+        using NativeConcurrentPool<int> pool = new(
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
 
         for (int attempt = 0; attempt < 64; attempt++)
@@ -844,7 +844,7 @@ public sealed class NativeBuilderTests
         int boundary)
     {
         NativeMemoryTestHooks.Reset();
-        NativePool<int> pool = new(
+        NativeConcurrentPool<int> pool = new(
             preLease: 8,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         try
@@ -857,7 +857,7 @@ public sealed class NativeBuilderTests
                 () => pool.CreateBuilder(preLease: 4));
 
             Assert.Contains(
-                "NativePool.CreateBuilder",
+                "NativeConcurrentPool.CreateBuilder",
                 exception.Message);
             Assert.Equal(
                 0,
@@ -963,7 +963,7 @@ public sealed class NativeBuilderTests
         NativeMemoryTestHooks.Reset();
         try
         {
-            using NativePool<int> pool = new(
+            using NativeConcurrentPool<int> pool = new(
                 returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
             using (NativeBuilder<int> first =
                 pool.CreateBuilder(preLease: 1))
@@ -1003,7 +1003,7 @@ public sealed class NativeBuilderTests
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static WeakReference CreateAbandonedBuilder(
-        NativePool<int> pool)
+        NativeConcurrentPool<int> pool)
     {
         NativeBuilder<int> builder =
             pool.CreateBuilder(preLease: 8);

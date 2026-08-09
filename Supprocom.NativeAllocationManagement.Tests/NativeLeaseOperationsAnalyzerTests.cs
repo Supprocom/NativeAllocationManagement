@@ -16,11 +16,11 @@ public sealed class NativeLeaseOperationsAnalyzerTests
             {
                 public static void Run()
                 {
-                    using NativePool<int> pool = new();
+                    using NativeConcurrentPool<int> pool = new();
                     using NativeArena arena = new();
-                    using Pooled<int> faces = pool.Rent(1, static writer => writer.Fill(default!));
-                    using Pooled<int> vertices = pool.Rent(1, static writer => writer.Fill(default!));
-                    using Pooled<int> indices = pool.Rent(1, static writer => writer.Fill(default!));
+                    using ConcurrentPooled<int> faces = pool.Rent(1, static writer => writer.Fill(default!));
+                    using ConcurrentPooled<int> vertices = pool.Rent(1, static writer => writer.Fill(default!));
+                    using ConcurrentPooled<int> indices = pool.Rent(1, static writer => writer.Fill(default!));
                     ArenaLease<int> slices = arena.Scratch<int>(1, static writer => writer.Fill(default!));
                     ArenaLease<byte> upload = arena.Scratch<byte>(1, static writer => writer.Fill(default!));
                     NativeLeaseOperations.Access(
@@ -51,11 +51,11 @@ public sealed class NativeLeaseOperationsAnalyzerTests
             {
                 public static void Run()
                 {
-                    NativePool<int> pool = new();
+                    NativeConcurrentPool<int> pool = new();
                     NativeArena arena = new();
-                    Pooled<int> faces = pool.Rent(1, static writer => writer.Fill(default!));
-                    Pooled<int> vertices = pool.Rent(1, static writer => writer.Fill(default!));
-                    Pooled<int> indices = pool.Rent(1, static writer => writer.Fill(default!));
+                    ConcurrentPooled<int> faces = pool.Rent(1, static writer => writer.Fill(default!));
+                    ConcurrentPooled<int> vertices = pool.Rent(1, static writer => writer.Fill(default!));
+                    ConcurrentPooled<int> indices = pool.Rent(1, static writer => writer.Fill(default!));
                     ArenaLease<int> slices = arena.Scratch<int>(1, static writer => writer.Fill(default!));
                     ArenaLease<byte> upload = arena.Scratch<byte>(1, static writer => writer.Fill(default!));
                     NativeLeaseOperations.Access(
@@ -84,10 +84,10 @@ public sealed class NativeLeaseOperationsAnalyzerTests
             {
                 public static void Run(bool condition)
                 {
-                    using NativePool<int> pool = new();
+                    using NativeConcurrentPool<int> pool = new();
                     {
-                        scoped Pooled<int> faces = pool.LeaseScoped(1, static writer => writer.Fill(default!));
-                        scoped Pooled<int> vertices = pool.LeaseScoped(1, static writer => writer.Fill(default!));
+                        scoped ConcurrentPooled<int> faces = pool.LeaseScoped(1, static writer => writer.Fill(default!));
+                        scoped ConcurrentPooled<int> vertices = pool.LeaseScoped(1, static writer => writer.Fill(default!));
                         NativeLeaseOperations.Access(faces, vertices, static (_, _) => { });
                         if (condition)
                         {
@@ -107,8 +107,8 @@ public sealed class NativeLeaseOperationsAnalyzerTests
             {
                 public static void Run()
                 {
-                    using NativePool<int> pool = new();
-                    scoped Pooled<int> value = pool.LeaseScoped(1, static writer => writer.Fill(default!));
+                    using NativeConcurrentPool<int> pool = new();
+                    scoped ConcurrentPooled<int> value = pool.LeaseScoped(1, static writer => writer.Fill(default!));
                     pool.RecycleScoped();
                     _ = value.Length;
                 }
@@ -128,13 +128,13 @@ public sealed class NativeLeaseOperationsAnalyzerTests
             {
                 public static void Run()
                 {
-                    using NativePool<int> pool = new();
-                    using Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!));
+                    using NativeConcurrentPool<int> pool = new();
+                    using ConcurrentPooled<int> value = pool.Rent(1, static writer => writer.Fill(default!));
                     Retain(value);
                     NativeLeaseOperations.Access(value, value, static (_, _) => { });
                 }
 
-                private static void Retain(Pooled<int> value) { }
+                private static void Retain(ConcurrentPooled<int> value) { }
             }
             """);
 
@@ -153,10 +153,10 @@ public sealed class NativeLeaseOperationsAnalyzerTests
             {
                 public static void Run(bool condition)
                 {
-                    using NativePool<int> first = new();
-                    using NativePool<int> second = new();
-                    scoped Pooled<int> left = first.LeaseScoped(1, static writer => writer.Fill(default!));
-                    scoped Pooled<int> right = second.LeaseScoped(1, static writer => writer.Fill(default!));
+                    using NativeConcurrentPool<int> first = new();
+                    using NativeConcurrentPool<int> second = new();
+                    scoped ConcurrentPooled<int> left = first.LeaseScoped(1, static writer => writer.Fill(default!));
+                    scoped ConcurrentPooled<int> right = second.LeaseScoped(1, static writer => writer.Fill(default!));
                     NativeLeaseOperations.Access(left, right, static (_, _) => { });
                     if (condition)
                     {
@@ -176,11 +176,11 @@ public sealed class NativeLeaseOperationsAnalyzerTests
             {
                 public static void Run(bool condition)
                 {
-                    using NativePool<int> pool = new();
-                    scoped Pooled<int> value = pool.LeaseScoped(1, static writer => writer.Fill(default!));
+                    using NativeConcurrentPool<int> pool = new();
+                    scoped ConcurrentPooled<int> value = pool.LeaseScoped(1, static writer => writer.Fill(default!));
                     try
                     {
-                        scoped Pooled<int> value = pool.LeaseScoped(1, static writer => writer.Fill(default!));
+                        scoped ConcurrentPooled<int> value = pool.LeaseScoped(1, static writer => writer.Fill(default!));
                         NativeLeaseOperations.Access(value, value, static (_, _) => { });
                         if (condition)
                         {
@@ -213,10 +213,10 @@ public sealed class NativeLeaseOperationsAnalyzerTests
             {
                 public static void Run(bool condition)
                 {
-                    using NativePool<int> first = new();
-                    using NativePool<int> second = new();
-                    scoped Pooled<int> left = first.LeaseScoped(1, static writer => writer.Fill(default!));
-                    scoped Pooled<int> right = second.LeaseScoped(1, static writer => writer.Fill(default!));
+                    using NativeConcurrentPool<int> first = new();
+                    using NativeConcurrentPool<int> second = new();
+                    scoped ConcurrentPooled<int> left = first.LeaseScoped(1, static writer => writer.Fill(default!));
+                    scoped ConcurrentPooled<int> right = second.LeaseScoped(1, static writer => writer.Fill(default!));
                     first.RecycleScoped();
                     NativeLeaseOperations.Access(left, right, static (_, _) => { });
                     second.RecycleScoped();
@@ -237,8 +237,8 @@ public sealed class NativeLeaseOperationsAnalyzerTests
             {
                 public static void ReturnBeforeRecycle(bool condition)
                 {
-                    using NativePool<int> pool = new();
-                    scoped Pooled<int> value = pool.LeaseScoped(1, static writer => writer.Fill(default!));
+                    using NativeConcurrentPool<int> pool = new();
+                    scoped ConcurrentPooled<int> value = pool.LeaseScoped(1, static writer => writer.Fill(default!));
                     if (condition)
                     {
                         return;
@@ -249,8 +249,8 @@ public sealed class NativeLeaseOperationsAnalyzerTests
 
                 public static void ThrowBeforeRecycle(bool condition)
                 {
-                    using NativePool<int> pool = new();
-                    scoped Pooled<int> value = pool.LeaseScoped(1, static writer => writer.Fill(default!));
+                    using NativeConcurrentPool<int> pool = new();
+                    scoped ConcurrentPooled<int> value = pool.LeaseScoped(1, static writer => writer.Fill(default!));
                     if (condition)
                     {
                         throw new System.InvalidOperationException();
@@ -261,10 +261,10 @@ public sealed class NativeLeaseOperationsAnalyzerTests
 
                 public static void ContinueBeforeRecycle()
                 {
-                    using NativePool<int> pool = new();
+                    using NativeConcurrentPool<int> pool = new();
                     for (int index = 0; index != 2; index++)
                     {
-                        scoped Pooled<int> value = pool.LeaseScoped(1, static writer => writer.Fill(default!));
+                        scoped ConcurrentPooled<int> value = pool.LeaseScoped(1, static writer => writer.Fill(default!));
                         if (index == 0)
                         {
                             continue;
@@ -276,18 +276,18 @@ public sealed class NativeLeaseOperationsAnalyzerTests
 
                 public static void BreakBeforeRecycle()
                 {
-                    using NativePool<int> pool = new();
+                    using NativeConcurrentPool<int> pool = new();
                     while (true)
                     {
-                        scoped Pooled<int> value = pool.LeaseScoped(1, static writer => writer.Fill(default!));
+                        scoped ConcurrentPooled<int> value = pool.LeaseScoped(1, static writer => writer.Fill(default!));
                         break;
                     }
                 }
 
                 public static void GotoBeforeRecycle()
                 {
-                    using NativePool<int> pool = new();
-                    scoped Pooled<int> value = pool.LeaseScoped(1, static writer => writer.Fill(default!));
+                    using NativeConcurrentPool<int> pool = new();
+                    scoped ConcurrentPooled<int> value = pool.LeaseScoped(1, static writer => writer.Fill(default!));
                     goto Exit;
                     pool.RecycleScoped();
                 Exit:
@@ -310,18 +310,18 @@ public sealed class NativeLeaseOperationsAnalyzerTests
             {
                 public static void OuterRoot()
                 {
-                    using NativePool<int> pool = new();
-                    scoped Pooled<int> outer = pool.LeaseScoped(1, static writer => writer.Fill(default!));
+                    using NativeConcurrentPool<int> pool = new();
+                    scoped ConcurrentPooled<int> outer = pool.LeaseScoped(1, static writer => writer.Fill(default!));
                     {
-                        scoped Pooled<int> inner = pool.LeaseScoped(1, static writer => writer.Fill(default!));
+                        scoped ConcurrentPooled<int> inner = pool.LeaseScoped(1, static writer => writer.Fill(default!));
                         pool.RecycleScoped();
                     }
                 }
 
                 public static void AmbiguousAcquisition(bool condition)
                 {
-                    using NativePool<int> pool = new();
-                    scoped Pooled<int> value = condition
+                    using NativeConcurrentPool<int> pool = new();
+                    scoped ConcurrentPooled<int> value = condition
                         ? pool.LeaseScoped(1, static writer => writer.Fill(default!))
                         : pool.LeaseScoped(2, static writer => writer.Fill(default!));
                     if (condition)
@@ -346,12 +346,12 @@ public sealed class NativeLeaseOperationsAnalyzerTests
             {
                 public static void Run()
                 {
-                    using NativePool<int> pool = new();
-                    scoped Pooled<int> outer = pool.LeaseScoped(1, static writer => writer.Fill(default!));
+                    using NativeConcurrentPool<int> pool = new();
+                    scoped ConcurrentPooled<int> outer = pool.LeaseScoped(1, static writer => writer.Fill(default!));
                     try
                     {
                         {
-                            scoped Pooled<int> inner = pool.LeaseScoped(1, static writer => writer.Fill(default!));
+                            scoped ConcurrentPooled<int> inner = pool.LeaseScoped(1, static writer => writer.Fill(default!));
                         }
                     }
                     finally
@@ -382,10 +382,10 @@ public sealed class NativeLeaseOperationsAnalyzerTests
             {
                 public static void Run(bool condition)
                 {
-                    using NativePool<int> pool = new();
+                    using NativeConcurrentPool<int> pool = new();
                     try
                     {
-                        scoped Pooled<int> value = pool.LeaseScoped(1, static writer => writer.Fill(default!));
+                        scoped ConcurrentPooled<int> value = pool.LeaseScoped(1, static writer => writer.Fill(default!));
                     }
                     finally
                     {
@@ -413,8 +413,8 @@ public sealed class NativeLeaseOperationsAnalyzerTests
         [
             "if (condition) { return; }",
             "if (condition) { throw new System.InvalidOperationException(); }",
-            "while (condition) { scoped Pooled<int> inner = pool.LeaseScoped(1, static writer => writer.Fill(default!)); break; }",
-            "while (condition) { scoped Pooled<int> inner = pool.LeaseScoped(1, static writer => writer.Fill(default!)); continue; }",
+            "while (condition) { scoped ConcurrentPooled<int> inner = pool.LeaseScoped(1, static writer => writer.Fill(default!)); break; }",
+            "while (condition) { scoped ConcurrentPooled<int> inner = pool.LeaseScoped(1, static writer => writer.Fill(default!)); continue; }",
             "if (condition) { goto Exit; }"
         ];
 
@@ -428,8 +428,8 @@ public sealed class NativeLeaseOperationsAnalyzerTests
                 {
                     public static void Run(bool condition)
                     {
-                        using NativePool<int> pool = new();
-                        scoped Pooled<int> value = pool.LeaseScoped(1, static writer => writer.Fill(default!));
+                        using NativeConcurrentPool<int> pool = new();
+                        scoped ConcurrentPooled<int> value = pool.LeaseScoped(1, static writer => writer.Fill(default!));
                         {{body}}
                         pool.RecycleScoped();
                     Exit:
@@ -459,10 +459,10 @@ public sealed class NativeLeaseOperationsAnalyzerTests
             {
                 public static void Run(bool condition)
                 {
-                    using NativePool<int> pool = new();
+                    using NativeConcurrentPool<int> pool = new();
                     try
                     {
-                        scoped Pooled<int> value = pool.LeaseScoped(1, static writer => writer.Fill(default!));
+                        scoped ConcurrentPooled<int> value = pool.LeaseScoped(1, static writer => writer.Fill(default!));
                         try
                         {
                             if (condition)
@@ -506,10 +506,10 @@ public sealed class NativeLeaseOperationsAnalyzerTests
             {
                 public static void CatchFilter(bool condition)
                 {
-                    using NativePool<int> pool = new();
+                    using NativeConcurrentPool<int> pool = new();
                     try
                     {
-                        scoped Pooled<int> value = pool.LeaseScoped(1, static writer => writer.Fill(default!));
+                        scoped ConcurrentPooled<int> value = pool.LeaseScoped(1, static writer => writer.Fill(default!));
                         if (condition)
                         {
                             throw new System.InvalidOperationException();
@@ -536,10 +536,10 @@ public sealed class NativeLeaseOperationsAnalyzerTests
             {
                 public static void Nested(bool condition)
                 {
-                    using NativePool<int> pool = new();
+                    using NativeConcurrentPool<int> pool = new();
                     try
                     {
-                        scoped Pooled<int> value = pool.LeaseScoped(1, static writer => writer.Fill(default!));
+                        scoped ConcurrentPooled<int> value = pool.LeaseScoped(1, static writer => writer.Fill(default!));
                         try
                         {
                             if (condition)
@@ -573,10 +573,10 @@ public sealed class NativeLeaseOperationsAnalyzerTests
             {
                 public static void CatchFilter(bool condition)
                 {
-                    using NativePool<int> pool = new();
+                    using NativeConcurrentPool<int> pool = new();
                     try
                     {
-                        scoped Pooled<int> value = pool.LeaseScoped(1, static writer => writer.Fill(default!));
+                        scoped ConcurrentPooled<int> value = pool.LeaseScoped(1, static writer => writer.Fill(default!));
                         throw new System.InvalidOperationException();
                     }
                     catch (System.InvalidOperationException) when (condition)
@@ -599,10 +599,10 @@ public sealed class NativeLeaseOperationsAnalyzerTests
             {
                 public static void NestedFinally(bool condition)
                 {
-                    using NativePool<int> pool = new();
+                    using NativeConcurrentPool<int> pool = new();
                     try
                     {
-                        scoped Pooled<int> value = pool.LeaseScoped(1, static writer => writer.Fill(default!));
+                        scoped ConcurrentPooled<int> value = pool.LeaseScoped(1, static writer => writer.Fill(default!));
                     }
                     finally
                     {
@@ -637,10 +637,10 @@ public sealed class NativeLeaseOperationsAnalyzerTests
             {
                 public static void Run(bool condition)
                 {
-                    using NativePool<int> pool = new();
+                    using NativeConcurrentPool<int> pool = new();
                     try
                     {
-                        scoped Pooled<int> value = pool.LeaseScoped(1, static writer => writer.Fill(default!));
+                        scoped ConcurrentPooled<int> value = pool.LeaseScoped(1, static writer => writer.Fill(default!));
                     }
                     finally
                     {
@@ -678,7 +678,7 @@ public sealed class NativeLeaseOperationsAnalyzerTests
             {
                 public static void Run(bool condition)
                 {
-                    using NativePool<int> pool = new();
+                    using NativeConcurrentPool<int> pool = new();
                     try
                     {
                     }
@@ -711,8 +711,8 @@ public sealed class NativeLeaseOperationsAnalyzerTests
             {
                 public static void Run(bool condition)
                 {
-                    using NativePool<int> pool = new();
-                    scoped Pooled<int> value = pool.LeaseScoped(1, static writer => writer.Fill(default!));
+                    using NativeConcurrentPool<int> pool = new();
+                    scoped ConcurrentPooled<int> value = pool.LeaseScoped(1, static writer => writer.Fill(default!));
                     try
                     {
                     }
@@ -745,7 +745,7 @@ public sealed class NativeLeaseOperationsAnalyzerTests
             {
                 public static void Run()
                 {
-                    using NativePool<int> pool = new(doNotLeaseOnDeclaration: true);
+                    using NativeConcurrentPool<int> pool = new(doNotLeaseOnDeclaration: true);
                     try
                     {
                     }

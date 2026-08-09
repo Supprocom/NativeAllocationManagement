@@ -10,7 +10,7 @@ public sealed class NativeWorkspaceTests
         NativeMemoryTestHooks.Reset();
         try
         {
-            using NativePool<int> pool = new(
+            using NativeConcurrentPool<int> pool = new(
                 preLease: 256,
                 returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
             using NativeWorkspace<int> workspace =
@@ -59,7 +59,7 @@ public sealed class NativeWorkspaceTests
     [Fact]
     public void FailedAndCanceledInitializationPublishNothingAndPermitReuse()
     {
-        using NativePool<int> pool = new(
+        using NativeConcurrentPool<int> pool = new(
             preLease: 16,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         using NativeWorkspace<int> workspace =
@@ -122,7 +122,7 @@ public sealed class NativeWorkspaceTests
     [Fact]
     public void EmptyRangeIsPublishedAndReadable()
     {
-        using NativePool<int> pool = new(
+        using NativeConcurrentPool<int> pool = new(
             preLease: 1,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         using NativeWorkspace<int> workspace =
@@ -141,7 +141,7 @@ public sealed class NativeWorkspaceTests
     [Fact]
     public void AccessFailureKeepsThePublishedRangeActive()
     {
-        using NativePool<int> pool = new(
+        using NativeConcurrentPool<int> pool = new(
             preLease: 4,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         using NativeWorkspace<int> workspace =
@@ -170,7 +170,7 @@ public sealed class NativeWorkspaceTests
     [Fact]
     public void OwnerShutdownRejectsALiveWorkspace()
     {
-        NativePool<int> pool = new(
+        NativeConcurrentPool<int> pool = new(
             preLease: 4,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         using NativeWorkspace<int> workspace =
@@ -191,38 +191,10 @@ public sealed class NativeWorkspaceTests
     }
 
     [Fact]
-    public void OwnerGenerationTransitionsRejectALiveWorkspace()
-    {
-        NativePool<int> pool = new(
-            preLease: 8,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        using NativeWorkspace<int> workspace =
-            pool.CreateWorkspace(8);
-
-        Assert.Throws<NativeAllocationInUseException>(
-            pool.ReturnMemoryToNativeMemory);
-        Assert.Throws<NativeAllocationInUseException>(
-            pool.ReturnMemoryToGarbageCollector);
-        Assert.Throws<NativeAllocationInUseException>(
-            pool.ReleaseLeasesToNativeMemory);
-        Assert.Throws<NativeAllocationInUseException>(
-            pool.ReleaseLeasesToGarbageCollector);
-
-        Assert.Equal(
-            248,
-            workspace.Process(
-                8,
-                static values => values.Fill(31),
-                static values => Sum(values)));
-        workspace.Dispose();
-        pool.Dispose();
-    }
-
-    [Fact]
     public void WorkspacePublicationFailureRollsBackOwnership()
     {
         NativeMemoryTestHooks.Reset();
-        NativePool<int> pool = new(
+        NativeConcurrentPool<int> pool = new(
             preLease: 8,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         try
@@ -234,7 +206,7 @@ public sealed class NativeWorkspaceTests
                 () => pool.CreateWorkspace(4));
 
             Assert.Contains(
-                "NativePool.CreateWorkspace",
+                "NativeConcurrentPool.CreateWorkspace",
                 exception.Message);
             Assert.Equal(
                 0,
@@ -277,7 +249,7 @@ public sealed class NativeWorkspaceTests
     [Fact]
     public void RuntimeStateRejectsCrossThreadOperations()
     {
-        using NativePool<int> pool = new(
+        using NativeConcurrentPool<int> pool = new(
             preLease: 8,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         using NativeWorkspace<int> workspace =
@@ -320,7 +292,7 @@ public sealed class NativeWorkspaceTests
     [Fact]
     public void ProcessUsesOneBoundedPublishedRangeAndResetsIt()
     {
-        using NativePool<int> pool = new(
+        using NativeConcurrentPool<int> pool = new(
             preLease: 8,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         using NativeWorkspace<int> workspace =
@@ -344,7 +316,7 @@ public sealed class NativeWorkspaceTests
     [Fact]
     public void ProcessRequiresResetAfterPublishedInitialization()
     {
-        using NativePool<int> pool = new(
+        using NativeConcurrentPool<int> pool = new(
             preLease: 8,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         using NativeWorkspace<int> workspace =
@@ -386,7 +358,7 @@ public sealed class NativeWorkspaceTests
     [Fact]
     public void ProcessFailureAndCancellationResetForReuse()
     {
-        using NativePool<int> pool = new(
+        using NativeConcurrentPool<int> pool = new(
             preLease: 8,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         using NativeWorkspace<int> workspace =
@@ -436,7 +408,7 @@ public sealed class NativeWorkspaceTests
     [Fact]
     public void ExplicitStateProcessForwardsStateWithoutPublishingTheRange()
     {
-        using NativePool<int> pool = new(
+        using NativeConcurrentPool<int> pool = new(
             preLease: 8,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         using NativeWorkspace<int> workspace =
@@ -468,7 +440,7 @@ public sealed class NativeWorkspaceTests
     [Fact]
     public void ExplicitStateProcessFailureAndCancellationPermitReuse()
     {
-        using NativePool<int> pool = new(
+        using NativeConcurrentPool<int> pool = new(
             preLease: 8,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         using NativeWorkspace<int> workspace =
@@ -532,7 +504,7 @@ public sealed class NativeWorkspaceTests
     [Fact]
     public void ExplicitStateProcessRejectsDisposedWorkspace()
     {
-        using NativePool<int> pool = new(
+        using NativeConcurrentPool<int> pool = new(
             preLease: 8,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         NativeWorkspace<int> workspace = pool.CreateWorkspace(8);
@@ -558,7 +530,7 @@ public sealed class NativeWorkspaceTests
     [Fact]
     public void ProcessKeepsWorkspaceStateAliveThroughBothCallbacks()
     {
-        NativePool<int> pool = new(
+        NativeConcurrentPool<int> pool = new(
             preLease: 8,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
 
@@ -574,7 +546,7 @@ public sealed class NativeWorkspaceTests
     [Fact]
     public void ExplicitStateProcessKeepsWorkspaceStateAliveThroughCallback()
     {
-        NativePool<int> pool = new(
+        NativeConcurrentPool<int> pool = new(
             preLease: 8,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
 
@@ -590,7 +562,7 @@ public sealed class NativeWorkspaceTests
     [Fact]
     public void AbandonedWorkspaceFinalizerReturnsItsRecord()
     {
-        using NativePool<int> pool = new(
+        using NativeConcurrentPool<int> pool = new(
             preLease: 8,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         WeakReference abandoned =
@@ -613,7 +585,7 @@ public sealed class NativeWorkspaceTests
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static WeakReference ProcessWithForcedCollections(
-        NativePool<int> pool)
+        NativeConcurrentPool<int> pool)
     {
         NativeWorkspace<int> workspace =
             pool.CreateWorkspace(8);
@@ -652,7 +624,7 @@ public sealed class NativeWorkspaceTests
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static WeakReference ProcessWithStateAndForcedCollection(
-        NativePool<int> pool)
+        NativeConcurrentPool<int> pool)
     {
         NativeWorkspace<int> workspace =
             pool.CreateWorkspace(8);
@@ -709,7 +681,7 @@ public sealed class NativeWorkspaceTests
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static WeakReference CreateAbandonedWorkspace(
-        NativePool<int> pool)
+        NativeConcurrentPool<int> pool)
     {
         NativeWorkspace<int> workspace =
             pool.CreateWorkspace(8);
@@ -735,7 +707,7 @@ public sealed class NativeWorkspaceTests
         int Addend);
 
     private sealed record ProcessLifetimeState(
-        NativePool<int> Pool,
+        NativeConcurrentPool<int> Pool,
         WeakReference WorkspaceState,
         int Value);
 }

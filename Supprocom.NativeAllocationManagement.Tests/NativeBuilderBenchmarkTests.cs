@@ -11,7 +11,7 @@ public sealed class NativeBuilderBenchmarkTests
         NativeBuilderBenchmarkOptions options = CreateOptions();
         NativeBuilderExactOutput managed =
             NativeBuilderBenchmark.BuildManagedOutput(options);
-        using NativePool<uint> pool = new(
+        using NativeConcurrentPool<uint> pool = new(
             preLease: options.PreLease,
             returnMemoryOnDispose:
                 NativeMemoryReturn.ToNativeMemory);
@@ -72,7 +72,7 @@ public sealed class NativeBuilderBenchmarkTests
         };
         NativeBuilderExactOutput managed =
             NativeBuilderBenchmark.BuildManagedOutput(options);
-        using NativePool<uint> pool = new(
+        using NativeConcurrentPool<uint> pool = new(
             preLease: options.PreLease,
             returnMemoryOnDispose:
                 NativeMemoryReturn.ToNativeMemory);

@@ -94,12 +94,16 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
             Region = runtimeAssembly.GetTypeByMetadataName(
                 Namespace + "NativeRegion");
+            ConcurrentPool = runtimeAssembly.GetTypeByMetadataName(
+                Namespace + "NativeConcurrentPool`1");
             Arena = runtimeAssembly.GetTypeByMetadataName(
                 Namespace + "NativeArena");
             ConcurrentArena = runtimeAssembly.GetTypeByMetadataName(
                 Namespace + "NativeConcurrentArena");
             Pooled = runtimeAssembly.GetTypeByMetadataName(
                 Namespace + "Pooled`1");
+            ConcurrentPooled = runtimeAssembly.GetTypeByMetadataName(
+                Namespace + "ConcurrentPooled`1");
             Local = runtimeAssembly.GetTypeByMetadataName(
                 Namespace + "Local`1");
             ArenaLease = runtimeAssembly.GetTypeByMetadataName(
@@ -120,11 +124,15 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
         internal INamedTypeSymbol? Region { get; }
 
+        internal INamedTypeSymbol? ConcurrentPool { get; }
+
         internal INamedTypeSymbol? Arena { get; }
 
         internal INamedTypeSymbol? ConcurrentArena { get; }
 
         internal INamedTypeSymbol? Pooled { get; }
+
+        internal INamedTypeSymbol? ConcurrentPooled { get; }
 
         internal INamedTypeSymbol? Local { get; }
 
@@ -142,10 +150,12 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
         internal bool IsAvailable =>
             Pool is not null
+            && ConcurrentPool is not null
             && Region is not null
             && Arena is not null
             && ConcurrentArena is not null
             && Pooled is not null
+            && ConcurrentPooled is not null
             && Local is not null
             && ArenaLease is not null
             && ConcurrentArenaLease is not null
@@ -174,6 +184,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         {
             return IsOwnerType(type)
                 || Is(type, Pooled)
+                || Is(type, ConcurrentPooled)
                 || Is(type, Local)
                 || Is(type, ArenaLease)
                 || Is(type, ConcurrentArenaLease)
@@ -185,6 +196,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         private bool IsOwnerType(ITypeSymbol? type)
         {
             return Is(type, Pool)
+                || Is(type, ConcurrentPool)
                 || Is(type, Region)
                 || Is(type, Arena)
                 || Is(type, ConcurrentArena);
@@ -6660,7 +6672,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
         private bool IsNativePool(ITypeSymbol? type)
         {
-            return NativeSymbols.Is(type, _symbols.Pool);
+            return NativeSymbols.Is(type, _symbols.Pool)
+                || NativeSymbols.Is(type, _symbols.ConcurrentPool);
         }
 
         private bool IsNativeRegion(ITypeSymbol? type)
@@ -6676,7 +6689,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
         private bool IsNativePooled(ITypeSymbol? type)
         {
-            return NativeSymbols.Is(type, _symbols.Pooled);
+            return NativeSymbols.Is(type, _symbols.Pooled)
+                || NativeSymbols.Is(type, _symbols.ConcurrentPooled);
         }
 
         private bool IsNativeLocal(ITypeSymbol? type)

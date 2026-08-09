@@ -8,7 +8,7 @@ public sealed class OwnerWideLifecycleTests
     public async Task PoolStrictReturnRejectsRetiredOperationsAndThenReleasesEveryGeneration()
     {
         NativeMemoryTestHooks.Reset();
-        NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         BusyGenerationSet busy = StartBusyPoolGenerations(pool, 2);
         long generationBeforeReturn = pool.GenerationCounterForTest;
 
@@ -16,7 +16,7 @@ public sealed class OwnerWideLifecycleTests
         {
             WaitForEntry(busy);
             {
-                Pooled<int> current = pool.Rent(1, static writer => writer.Fill(default!));
+                ConcurrentPooled<int> current = pool.Rent(1, static writer => writer.Fill(default!));
                 current[0] = 7;
 
                 NativeAllocationInUseException rejection =
@@ -87,7 +87,7 @@ public sealed class OwnerWideLifecycleTests
     public async Task PoolStrictDisposeUsesOwnerWideAdmissionAndReleasesRetiredStorage()
     {
         NativeMemoryTestHooks.Reset();
-        NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         BusyGenerationSet busy = StartBusyPoolGenerations(pool, 2);
         long generationBeforeDispose = pool.GenerationCounterForTest;
 
@@ -149,7 +149,7 @@ public sealed class OwnerWideLifecycleTests
     public async Task PoolGarbageCollectorReturnDetachesRetiredGenerationsAndNeverReusesTheirSegments()
     {
         NativeMemoryTestHooks.Reset();
-        NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         BusyGenerationSet busy = StartBusyPoolGenerations(pool, 2);
 
         try
@@ -157,7 +157,7 @@ public sealed class OwnerWideLifecycleTests
             WaitForEntry(busy);
             long freeBeforeDrain = 0;
             {
-                Pooled<int> current = pool.Rent(1, static writer => writer.Fill(default!));
+                ConcurrentPooled<int> current = pool.Rent(1, static writer => writer.Fill(default!));
                 current[0] = 8;
                 long freeBeforeReturn = NativeMemoryTestHooks.Snapshot().FreeCount;
 
@@ -165,7 +165,7 @@ public sealed class OwnerWideLifecycleTests
                 Assert.Equal(NativeOwnerLifecycle.Returned, pool.CurrentLifecycle);
                 Assert.Equal(freeBeforeReturn, NativeMemoryTestHooks.Snapshot().FreeCount);
                 pool.LeaseFromMemory();
-                Pooled<int> fresh = pool.Rent(1, static writer => writer.Fill(default!));
+                ConcurrentPooled<int> fresh = pool.Rent(1, static writer => writer.Fill(default!));
                 Assert.Equal([4L], pool.CurrentSegmentOrdinalsForTest);
                 Assert.Equal(0, fresh[0]);
                 long freeBeforeStrictReturn = NativeMemoryTestHooks.Snapshot().FreeCount;
@@ -237,11 +237,11 @@ public sealed class OwnerWideLifecycleTests
     public async Task PoolMultipleDetachedGenerationsDoNotBlockFreshTransitions()
     {
         NativeMemoryTestHooks.Reset();
-        NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         List<NativeGenerationOwner> retainedOwners = [];
         NativeMemoryTestHooks.SetOperationEnteredWithGenerationOwner((operation, owner) =>
         {
-            if (operation == nameof(Pooled<int>.Access))
+            if (operation == nameof(ConcurrentPooled<int>.Access))
             {
                 retainedOwners.Add(owner);
             }
@@ -359,11 +359,11 @@ public sealed class OwnerWideLifecycleTests
     public async Task DetachedPoolDrainFailureRemainsFinalizableAndOutsideAllocatorOwnership()
     {
         NativeMemoryTestHooks.Reset();
-        NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         NativeGenerationOwner? retainedOwner = null;
         NativeMemoryTestHooks.SetOperationEnteredWithGenerationOwner((operation, owner) =>
         {
-            if (operation == nameof(Pooled<int>.Access))
+            if (operation == nameof(ConcurrentPooled<int>.Access))
             {
                 retainedOwner = owner;
             }
@@ -465,7 +465,7 @@ public sealed class OwnerWideLifecycleTests
         foreach (NativeMemoryReturn policy in Enum.GetValues<NativeMemoryReturn>())
         {
             NativeMemoryTestHooks.Reset();
-            NativePool<int> pool = new(returnMemoryOnDispose: policy);
+            NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: policy);
             BusyGenerationSet busy = StartBusyPoolGenerations(pool, 2);
 
             try
@@ -533,7 +533,7 @@ public sealed class OwnerWideLifecycleTests
         foreach (NativeMemoryReturn policy in Enum.GetValues<NativeMemoryReturn>())
         {
             NativeMemoryTestHooks.Reset();
-            NativePool<int> pool = new(returnMemoryOnDispose: policy);
+            NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: policy);
             BusyGenerationSet busy = StartBusyPoolGenerations(pool, 1);
 
             try
@@ -630,7 +630,7 @@ public sealed class OwnerWideLifecycleTests
     public async Task PoolDetachedQuarantineIsNotFreedAgainByNativePolicyDispose()
     {
         NativeMemoryTestHooks.Reset();
-        NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         BusyGenerationSet busy = StartBusyPoolGenerations(pool, 1);
 
         try
@@ -649,7 +649,7 @@ public sealed class OwnerWideLifecycleTests
 
             pool.LeaseFromMemory();
             {
-                Pooled<int> fresh = pool.Rent(1, static writer => writer.Fill(default!));
+                ConcurrentPooled<int> fresh = pool.Rent(1, static writer => writer.Fill(default!));
                 Assert.Equal([2L], pool.CurrentSegmentOrdinalsForTest);
                 fresh.Dispose();
                 long freeBeforeDispose = NativeMemoryTestHooks.Snapshot().FreeCount;
@@ -703,7 +703,7 @@ public sealed class OwnerWideLifecycleTests
         }
     }
 
-    private static BusyGenerationSet StartBusyPoolGenerations(NativePool<int> pool, int count)
+    private static BusyGenerationSet StartBusyPoolGenerations(NativeConcurrentPool<int> pool, int count)
     {
         ManualResetEventSlim[] allows = new ManualResetEventSlim[count];
         ManualResetEventSlim[] entered = new ManualResetEventSlim[count];
@@ -789,7 +789,7 @@ public sealed class OwnerWideLifecycleTests
     }
 
     private static Exception? HoldBusyPoolLease(
-        NativePool<int> pool,
+        NativeConcurrentPool<int> pool,
         int length,
         int value,
         ManualResetEventSlim allow,
@@ -797,7 +797,7 @@ public sealed class OwnerWideLifecycleTests
     {
         try
         {
-            Pooled<int> lease = pool.Rent(length, static writer => writer.Fill(default!));
+            ConcurrentPooled<int> lease = pool.Rent(length, static writer => writer.Fill(default!));
             lease[0] = value;
             lease.Access(_ =>
             {

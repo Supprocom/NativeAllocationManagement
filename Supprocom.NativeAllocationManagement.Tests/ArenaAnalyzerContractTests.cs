@@ -161,13 +161,13 @@ public sealed class ArenaAnalyzerContractTests
             {
                 public static void Run(int count)
                 {
-                    NativePool<int> pool = new();
+                    NativeConcurrentPool<int> pool = new();
                     for (int index = 0; index < count; index++)
                     {
                         try
                         {
-                            { scoped Pooled<int> first = pool.LeaseScoped(2, static writer => writer.Fill(default!)); first[0] = index; }
-                            { scoped Pooled<int> second = pool.LeaseScoped(2, static writer => writer.Fill(default!)); second[0] = index + 1; }
+                            { scoped ConcurrentPooled<int> first = pool.LeaseScoped(2, static writer => writer.Fill(default!)); first[0] = index; }
+                            { scoped ConcurrentPooled<int> second = pool.LeaseScoped(2, static writer => writer.Fill(default!)); second[0] = index + 1; }
                         }
                         finally
                         {
@@ -248,8 +248,8 @@ public sealed class ArenaAnalyzerContractTests
             {
                 public static void Run()
                 {
-                    NativePool<int> pool = new();
-                    { scoped Pooled<int> pooled = pool.LeaseScoped(2, static writer => writer.Fill(default!)); pooled[0] = 1; }
+                    NativeConcurrentPool<int> pool = new();
+                    { scoped ConcurrentPooled<int> pooled = pool.LeaseScoped(2, static writer => writer.Fill(default!)); pooled[0] = 1; }
                     pool.RecycleScoped();
                     pool.Dispose();
                 }
@@ -264,8 +264,8 @@ public sealed class ArenaAnalyzerContractTests
             {
                 public static void Run()
                 {
-                    NativePool<int> pool = new();
-                    Pooled<int> value = pool.LeaseScoped(1, static writer => writer.Fill(default!));
+                    NativeConcurrentPool<int> pool = new();
+                    ConcurrentPooled<int> value = pool.LeaseScoped(1, static writer => writer.Fill(default!));
                     value.Dispose();
                     pool.Dispose();
                 }
@@ -375,8 +375,8 @@ public sealed class ArenaAnalyzerContractTests
             {
                 public static void Run()
                 {
-                    NativePool<int> pool = new();
-                    Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!));
+                    NativeConcurrentPool<int> pool = new();
+                    ConcurrentPooled<int> value = pool.Rent(1, static writer => writer.Fill(default!));
                     value.Access(_ => pool.Dispose());
                 }
             }
