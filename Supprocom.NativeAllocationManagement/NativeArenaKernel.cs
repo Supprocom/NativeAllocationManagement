@@ -268,14 +268,14 @@ internal sealed unsafe class NativeArenaKernel
     {
         ArenaSegmentHeader* originalSegment = lane.Current;
         byte* originalCursor = lane.Cursor;
+        nuint originalUsedBytes = lane.UsedBytes;
         if (byteLength == 0)
         {
             return new ArenaReservation(
                 scoped,
                 originalSegment,
                 originalCursor,
-                originalSegment,
-                originalSegment == null ? 0 : originalSegment->Used,
+                originalUsedBytes,
                 (IntPtr)originalCursor);
         }
 
@@ -295,18 +295,17 @@ internal sealed unsafe class NativeArenaKernel
                 originalCursor);
         }
 
-        ArenaSegmentHeader* selected = lane.Current;
-        nuint selectedOriginalUsed = selected->Used;
         byte* end = (byte*)checked(aligned + byteLength);
+        nuint usedBytes = checked(
+            originalUsedBytes
+            + checked((nuint)(end - originalCursor)));
         lane.Cursor = end;
-        selected->Used = checked(
-            (nuint)(end - GetDataStart(selected)));
+        lane.UsedBytes = usedBytes;
         return new ArenaReservation(
             scoped,
             originalSegment,
             originalCursor,
-            selected,
-            selectedOriginalUsed,
+            originalUsedBytes,
             (IntPtr)aligned);
     }
 
@@ -319,6 +318,7 @@ internal sealed unsafe class NativeArenaKernel
         ArenaSegmentHeader* originalSegment,
         byte* originalCursor)
     {
+        nuint originalUsedBytes = lane.UsedBytes;
         ArenaSegmentHeader* selected = lane.Current == null
             ? lane.First
             : lane.Current->Next;
@@ -333,22 +333,21 @@ internal sealed unsafe class NativeArenaKernel
                 scoped ? "scoped allocation growth" : "allocation growth");
         }
 
-        lane.Current = selected;
         byte* start = GetDataStart(selected);
-        lane.Cursor = start;
-        lane.End = start + selected->Capacity;
-        nuint selectedOriginalUsed = selected->Used;
         nuint aligned = AlignUp((nuint)start, alignment);
         byte* end = (byte*)checked(aligned + byteLength);
+        nuint usedBytes = checked(
+            originalUsedBytes
+            + checked((nuint)(end - start)));
+        lane.Current = selected;
         lane.Cursor = end;
-        selected->Used = checked(
-            (nuint)(end - start));
+        lane.End = start + selected->Capacity;
+        lane.UsedBytes = usedBytes;
         return new ArenaReservation(
             scoped,
             originalSegment,
             originalCursor,
-            selected,
-            selectedOriginalUsed,
+            originalUsedBytes,
             (IntPtr)aligned);
     }
 
@@ -497,11 +496,7 @@ internal sealed unsafe class NativeArenaKernel
     {
         ref ArenaLane lane = ref (
             reservation.Scoped ? ref _scoped : ref _ordinary);
-        if (reservation.SelectedSegment != null)
-        {
-            reservation.SelectedSegment->Used =
-                reservation.SelectedOriginalUsed;
-        }
+        lane.UsedBytes = reservation.OriginalUsedBytes;
         if (reservation.OriginalSegment == null)
         {
             ResetLane(ref lane);
@@ -599,13 +594,6 @@ internal sealed unsafe class NativeArenaKernel
 
     private static void ResetLane(ref ArenaLane lane)
     {
-        ArenaSegmentHeader* segment = lane.First;
-        while (segment != null)
-        {
-            segment->Used = 0;
-            segment = segment->Next;
-        }
-
         lane.Current = lane.First;
         lane.Cursor = lane.First == null
             ? null
@@ -613,32 +601,26 @@ internal sealed unsafe class NativeArenaKernel
         lane.End = lane.First == null
             ? null
             : lane.Cursor + lane.First->Capacity;
+        lane.UsedBytes = 0;
     }
 
-    private static long CountUsedBytes(ArenaLane lane)
-    {
-        long bytes = 0;
-        ArenaSegmentHeader* segment = lane.First;
-        while (segment != null)
-        {
-            bytes = checked(bytes + checked((long)segment->Used));
-            segment = segment->Next;
-        }
-
-        return bytes;
-    }
+    private static long CountUsedBytes(ArenaLane lane) =>
+        checked((long)lane.UsedBytes);
 
     private static int CountUnusedSegments(ArenaLane lane)
     {
         int count = 0;
-        ArenaSegmentHeader* segment = lane.First;
+        ArenaSegmentHeader* segment = lane.Current;
+        if (segment != null
+            && lane.Cursor == GetDataStart(segment))
+        {
+            count++;
+        }
+
+        segment = segment == null ? null : segment->Next;
         while (segment != null)
         {
-            if (segment->Used == 0)
-            {
-                count++;
-            }
-
+            count++;
             segment = segment->Next;
         }
 
@@ -839,6 +821,7 @@ internal sealed unsafe class NativeArenaKernel
         internal ArenaSegmentHeader* Current;
         internal byte* Cursor;
         internal byte* End;
+        internal nuint UsedBytes;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -846,7 +829,6 @@ internal sealed unsafe class NativeArenaKernel
     {
         internal ArenaSegmentHeader* Next;
         internal nuint Capacity;
-        internal nuint Used;
         internal nuint AllocationBytes;
         internal long MetricsEpoch;
         internal int Detached;
@@ -858,15 +840,13 @@ internal sealed unsafe class NativeArenaKernel
             bool scoped,
             ArenaSegmentHeader* originalSegment,
             byte* originalCursor,
-            ArenaSegmentHeader* selectedSegment,
-            nuint selectedOriginalUsed,
+            nuint originalUsedBytes,
             IntPtr pointer)
         {
             Scoped = scoped;
             OriginalSegment = originalSegment;
             OriginalCursor = originalCursor;
-            SelectedSegment = selectedSegment;
-            SelectedOriginalUsed = selectedOriginalUsed;
+            OriginalUsedBytes = originalUsedBytes;
             Pointer = pointer;
         }
 
@@ -876,9 +856,7 @@ internal sealed unsafe class NativeArenaKernel
 
         internal byte* OriginalCursor { get; }
 
-        internal ArenaSegmentHeader* SelectedSegment { get; }
-
-        internal nuint SelectedOriginalUsed { get; }
+        internal nuint OriginalUsedBytes { get; }
 
         internal IntPtr Pointer { get; }
     }

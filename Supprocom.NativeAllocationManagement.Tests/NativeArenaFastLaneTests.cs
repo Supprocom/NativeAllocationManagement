@@ -122,6 +122,87 @@ public sealed class NativeArenaFastLaneTests
     }
 
     [Fact]
+    public void StatisticsTrackLaneBytesAcrossSegmentReuse()
+    {
+        NativeMemoryTestHooks.Reset();
+        using NativeArena arena = new(
+            preAllocateBytes: 128,
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        _ = arena.Scratch<byte>(
+            128,
+            static writer => writer.Fill(3));
+        _ = arena.Scratch<long>(
+            16,
+            static writer => writer.Fill(5));
+        NativeOwnerStatistics populated = arena.GetStatistics();
+
+        Assert.Equal(256, populated.RequestedBytes);
+        Assert.Equal(2, populated.SegmentCount);
+        Assert.Equal(0, populated.AvailableSegmentCount);
+
+        arena.Reset();
+        NativeOwnerStatistics reset = arena.GetStatistics();
+
+        Assert.Equal(0, reset.RequestedBytes);
+        Assert.Equal(reset.SegmentCount, reset.AvailableSegmentCount);
+
+        _ = arena.Scratch<byte>(
+            128,
+            static writer => writer.Fill(7));
+        _ = arena.Scratch<long>(
+            16,
+            static writer => writer.Fill(11));
+        NativeOwnerStatistics reused = arena.GetStatistics();
+
+        Assert.Equal(256, reused.RequestedBytes);
+        Assert.Equal(
+            populated.FreshSegmentAllocationCount,
+            reused.FreshSegmentAllocationCount);
+    }
+
+    [Fact]
+    public void FailedGrowthRestoresLaneBytesAndRetainsTheSegment()
+    {
+        NativeMemoryTestHooks.Reset();
+        using NativeArena arena = new(
+            preAllocateBytes: 128,
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        _ = arena.Scratch<byte>(
+            128,
+            static writer => writer.Fill(3));
+        NativeOwnerStatistics before = arena.GetStatistics();
+
+        Assert.Throws<InvalidOperationException>(
+            () => arena.Scratch<byte>(
+                8_192,
+                static writer =>
+                {
+                    writer.Write(9);
+                    throw new InvalidOperationException(
+                        "Expected initializer failure.");
+                }));
+
+        NativeOwnerStatistics failed = arena.GetStatistics();
+        Assert.Equal(before.RequestedBytes, failed.RequestedBytes);
+        Assert.Equal(before.SegmentCount + 1, failed.SegmentCount);
+        Assert.Equal(
+            before.FreshSegmentAllocationCount + 1,
+            failed.FreshSegmentAllocationCount);
+        Assert.Equal(1, failed.AvailableSegmentCount);
+
+        ArenaLease<byte> replacement = arena.Scratch<byte>(
+            8_192,
+            static writer => writer.Fill(13));
+        NativeOwnerStatistics replaced = arena.GetStatistics();
+
+        Assert.Equal(8_320, replaced.RequestedBytes);
+        Assert.Equal(
+            failed.FreshSegmentAllocationCount,
+            replaced.FreshSegmentAllocationCount);
+        Assert.Equal(13, replacement.Read(static view => view[0]));
+    }
+
+    [Fact]
     public void EmptyFailedInitializerDoesNotCorruptArena()
     {
         using NativeArena arena = new(
