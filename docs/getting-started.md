@@ -1,13 +1,17 @@
 # Getting started
 
 `Supprocom.NativeAllocationManagement` combines a native-memory runtime with a
-bundled Roslyn analyzer. The runtime checks owner state, generation identity,
-allocation identity, and the active-operation gate whenever storage is touched. The
-analyzer proves lexical ownership, generation transitions, bounded callbacks, and
-scoped-recycling completion in the consuming source.
+bundled Roslyn analyzer. Each allocator uses only the state checks that its contract
+needs. The analyzer checks ownership, bounded callbacks, destructive moves, and
+scoped-recycling completion in consuming source.
 
-The package targets .NET 10 and supports unmanaged values, reference values, and value
-types that contain references through the same generic owner and handle model.
+The package targets .NET 10. The fast `NativePool<T>`, `NativeRegion`, and
+`NativeArena` allocators accept unmanaged values. `NativeBuilder<T>`,
+`NativeWorkspace<T>`, and `NativeTransfer<T>` also require unmanaged values.
+
+`NativeConcurrentPool<T>` and `NativeConcurrentArena` retain the synchronized
+generation model for concurrent ownership. Their ordinary leases can store managed
+references through a separate root-aware path. Transferable leases remain unmanaged.
 
 Install version `0.2.0` with the .NET CLI:
 
@@ -77,8 +81,7 @@ static void WriteWords(
 }
 ```
 
-`preLease` reserves builder capacity in units of `T`. Use the owner
-`preAllocateBytes` parameter to reserve raw bytes.
+`preLease` reserves builder capacity in units of `T`.
 
 `Append(T)` writes one value directly. `Append(ReadOnlySpan<T>)` copies one batch directly
 into the unused native range.
@@ -98,11 +101,8 @@ box, or capture the builder owner.
 The owner rejects all operations while its borrow is active. The runtime also rejects a
 stale borrow after callback completion.
 
-Growth reserves a geometric native allocation. It copies only the initialized native
-prefix and returns the prior pool slab for reuse.
-
-An arena cannot reclaim an earlier bump range during growth. The arena lifecycle reclaims
-that range with its containing segment.
+Growth resizes the native block geometrically. It preserves only the initialized native
+prefix and releases the old block.
 
 `Complete` changes the current allocation from unpublished initialization to active
 transfer ownership. It does not copy elements into another final buffer.
@@ -190,7 +190,7 @@ using Supprocom.NativeAllocationManagement;
 
 Channel<NativeTransfer<uint>> channel =
     Channel.CreateBounded<NativeTransfer<uint>>(1);
-using NativePool<uint> pool = new(preLease: 256);
+using NativeConcurrentPool<uint> pool = new(preLease: 256);
 
 NativeTransfer<uint>? source = pool.RentTransferable(
     256,
@@ -252,16 +252,16 @@ transfer, and the receiver must still dispose its transfer object.
 An entered receiver callback blocks strict owner disposal. Retry owner disposal after
 the callback exits.
 
-`NativeArena.ScratchTransferable<T>` supports the same move contract for heterogeneous
-arena storage. A transfer can use external storage that the arena accepted through
-`ReserveExternalMemory`.
+`NativeConcurrentArena.ScratchTransferable<T>` supports the same move contract for
+heterogeneous concurrent storage. A transfer can use external storage that the
+concurrent arena accepted through `ReserveExternalMemory`.
 
 The same arena accepts concurrent `ScratchTransferable<T>` calls. The arena reserves a
 disjoint range before each initializer runs. The callback writes directly into its range
 without holding the arena lock. Failure returns only that range.
 
 ```csharp
-using NativeArena arena = new(
+using NativeConcurrentArena arena = new(
     preAllocateBytes: 24u * 25_600u * sizeof(float));
 
 Parallel.For(0, 24, index =>
@@ -321,9 +321,9 @@ inside an `Access` or `Read` callback. Use `ref` only in the package move operat
 
 ## Typed pool leases
 
-`NativePool<T>` owns reusable typed slabs. `Rent` returns a generation-bound
-`Pooled<T>` value, and the using declarations below return the lease and then dispose
-the owner in the normal C# order.
+`NativePool<T>` owns reusable typed slabs. `Rent` returns a token-bound `Pooled<T>`
+value. The using declarations below return the slab and then dispose the owner in the
+normal C# order.
 
 ```csharp
 using Supprocom.NativeAllocationManagement;
@@ -366,10 +366,12 @@ Only complete `T` values fit in the raw reservation. NAM retains any final parti
 element bytes until trimming or owner cleanup.
 
 `Access` and `Read` pass a scoped `NativeLeaseView<T>` only for the synchronous
-callback. Indexing, `Clear`, `Fill`, `CopyFrom`, and `CopyTo` use the same runtime
-operation gate. `Pooled<T>.Dispose()` clears one logical lease before returning its slab
-to the idle bank. A zero-length lease has generation and allocation identity even though
-it owns no native bytes.
+callback. Each bounded operation validates the owner and lease token once. The span
+performs element bounds checks inside the callback.
+
+`Pooled<T>.Dispose()` validates the token and returns the slab to its capacity class.
+The next rent must initialize all logical elements before NAM publishes the slab. A
+zero-length lease still has a slab token and exactly-once return authority.
 
 ## Borrow a local pool in a helper
 
@@ -445,8 +447,8 @@ public sealed class Worker : IDisposable
 }
 ```
 
-The field stays in its active generation when it first appears inside a loop. Each lease
-must still end on every branch, early return, and exception path.
+The field stays active for the complete worker lifetime. Each lease must still end on
+every branch, early return, and exception path.
 
 A return, field store, capture, or async suspension of `Pooled<T>` remains invalid. An
 owner return, release, or disposal also invalidates later field operations.
@@ -520,8 +522,12 @@ using (NativeRegion region = new(
     preAllocateBytes: 4_096,
     returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory))
 {
-    Local<int> identifiers = region.Lease<int>(64);
-    Local<double> weights = region.Lease<double>(64);
+    Local<int> identifiers = region.Lease<int>(
+        64,
+        static writer => writer.Fill(0));
+    Local<double> weights = region.Lease<double>(
+        64,
+        static writer => writer.Fill(0.0));
 
     identifiers.Access(static view =>
     {
@@ -588,58 +594,55 @@ arena only for a heterogeneous reusable bulk lifetime. The base arena is single-
 and accepts unmanaged values. It uses bump allocation and does not reclaim individual
 ranges. The developer controls scoped recycle, generation reset, trim, and final disposal.
 
-## Delayed activation
+## Concurrent owner generations
+
+`NativeConcurrentPool<T>` and `NativeConcurrentArena` keep the broader synchronized
+generation contract. Use these types only when storage needs concurrent access,
+transferable ownership, managed-reference roots, or explicit memory-return transitions.
 
 Construction normally publishes an active generation. Passing
-`doNotLeaseOnDeclaration: true` makes construction allocation-free and publishes the
-`Unleased` lifecycle instead. The configured reservation remains private until
-`LeaseFromMemory()` succeeds.
+`doNotLeaseOnDeclaration: true` defers that generation. The configured reservation
+remains private until `LeaseFromMemory()` succeeds.
 
 ```csharp
 using Supprocom.NativeAllocationManagement;
 
-using NativePool<byte> pool = new(
+using NativeConcurrentPool<byte> pool = new(
     preLease: 4_096,
     doNotLeaseOnDeclaration: true);
 
 pool.LeaseFromMemory();
-using Pooled<byte> buffer = pool.Rent(
+using ConcurrentPooled<byte> buffer = pool.Rent(
     4_096,
     static writer => writer.Fill(default));
 buffer.Access(view => view.Fill(0x2A));
 ```
 
-The same form applies to an arena and to the required braced region statement.
-`Rent`, `Lease`, `Scratch`, both memory-return operations, both lease-release operations,
-and `RecycleScoped` reject an unleased owner. Disposal before activation is valid,
-terminal, and allocation-free. Activation prepares any initial reservation privately;
-if it fails, the owner remains unleased and no partial generation is published.
+The same form applies to `NativeConcurrentArena`. Acquisition and lifecycle operations
+reject an unleased owner. Disposal before activation is valid and terminal. A failed
+activation does not publish a partial generation.
 
-## Generations and cleanup policies
-
-Memory return ends the current generation and leaves the owner returned. A later
-`LeaseFromMemory()` creates the next pool or arena generation; a region remains terminal
-after a memory return because its lexical owner is one-shot. Lease release is different:
-it invalidates all current pool or arena leases, retains reusable storage, advances the
-generation, and leaves the owner active.
+Memory return ends the current concurrent-owner generation. A later
+`LeaseFromMemory()` creates the next generation. Lease release invalidates current
+leases, retains reusable storage, and leaves the owner active.
 
 ```csharp
 using Supprocom.NativeAllocationManagement;
 
-NativePool<int> pool = new(
+NativeConcurrentPool<int> pool = new(
     preLease: 256,
     returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
 
 try
 {
-    Pooled<int> first = pool.Rent(
+    ConcurrentPooled<int> first = pool.Rent(
         64,
         static writer => writer.Fill(default));
     first.Access(view => view.Fill(1));
     first.Dispose();
 
     pool.ReleaseLeasesToNativeMemory();
-    Pooled<int> second = pool.Rent(
+    ConcurrentPooled<int> second = pool.Rent(
         64,
         static writer => writer.Fill(default));
     second.Access(view => view.Fill(2));
@@ -654,10 +657,9 @@ finally
 }
 ```
 
-`ReturnMemoryToNativeMemory()` frees the current segments synchronously after the
-operation gate succeeds. `ReturnMemoryToGarbageCollector()` detaches the current
-generation to a finalizable owner without forcing collection. The old handles are stale
-as soon as either operation succeeds, and a later generation never revives them.
+`ReturnMemoryToNativeMemory()` frees the current segments after its safety gate
+succeeds. `ReturnMemoryToGarbageCollector()` detaches the current generation for later
+finalization. Old handles become stale when either operation succeeds.
 
 The analyzer uses one liveness query for both policies. A live root, active bounded
 callback, alias, escape, or unknown-retention path produces `NAM1007` error for native
@@ -679,8 +681,9 @@ using NativeArena arena = new();
 while (ShouldContinue())
 {
     {
-        scoped ArenaLease<int> scratch =
-            arena.ScratchScoped<int>(4_096);
+        scoped ArenaLease<int> scratch = arena.ScratchScoped<int>(
+            4_096,
+            static writer => writer.Fill(0));
         Process(scratch);
     }
 
@@ -688,20 +691,21 @@ while (ShouldContinue())
 }
 ```
 
-`LeaseScoped` and `ScratchScoped` must directly initialize a `scoped` local. The
-analyzer reports `NAM1018` for an escape, warning `NAM1019` when an ordinary acquisition
-is unnecessarily placed in a scoped local, and warning `NAM1020` when a pending scoped
-set is not completed on every path. Early return and exception paths put that same
-`RecycleScoped()` call in an ordinary C# `finally`. The operation clears reference
-roots, advances allocation epochs, and rewinds eligible high-water state while retaining
-backing memory. Trimming cannot satisfy a scoped obligation.
+`NativeArena.ScratchScoped` and the concurrent scoped methods must directly initialize
+a `scoped` local. The analyzer reports `NAM1018` for an escape. It reports `NAM1019`
+when an ordinary acquisition uses a scoped local. It reports `NAM1020` when code does
+not recycle a pending scoped set on each path.
+
+Early returns and exceptions require `RecycleScoped()` in a `finally` block. The base
+arena resets its scoped bump lane and advances its scoped epoch. Concurrent owners also
+clear their root-aware scoped state. Trimming cannot complete a scoped obligation.
 
 ## Owner statistics
 
-`NativePool<T>`, `NativeRegion`, and `NativeArena` expose `GetStatistics()` for
-diagnostics and capacity policy. The snapshot reports lifecycle and generation,
-currently requested bytes, retained and retired physical bytes, current and retired
-segment counts, cumulative trimming, and fresh upstream segment allocations.
+`NativePool<T>`, `NativeRegion`, `NativeArena`, and the concurrent owners expose
+`GetStatistics()` for diagnostics and capacity policy. The snapshot reports lifecycle,
+requested bytes, retained bytes, segment counts, trimming, and fresh segment allocations.
+Generation and retired fields apply only when the selected owner uses those concepts.
 
 ```csharp
 using Supprocom.NativeAllocationManagement;
@@ -718,11 +722,9 @@ Console.WriteLine(
     + $"segments={snapshot.SegmentCount}");
 ```
 
-The operation is a truthful point-in-time diagnostic, not a free hot-path counter. It
-takes the owner gate and derives requested and retained totals from the current owner
-state. Capture it before or after measured processing, at a maintenance boundary, or
-after a rare capacity event. Do not call it for every lease or inside an allocation
-benchmark loop.
+The operation is a point-in-time diagnostic, not a free hot-path counter. Some owners
+scan retained storage or take a synchronization gate. Capture it at a maintenance
+boundary. Do not call it for each lease or inside a benchmark loop.
 
 `NativeMemoryDiagnostics.Snapshot()` provides the corresponding process-wide physical
 native counters. It is useful for proving that terminal cleanup returned to a known
@@ -731,15 +733,11 @@ capacity.
 
 ## Trimming and runtime fallback
 
-`TrimRetainedMemory()` releases every idle storage unit. The byte and lease-shape forms
-release whole idle units until their request is met, using the same sizing and alignment
-rules as the real acquisition path. Trimming does not change lifecycle or generation
-identity, and it never invalidates a live handle or discharges scoped storage.
+Pool trimming releases idle slabs. Arena trimming releases unused tail segments. These
+operations do not invalidate a live handle or complete scoped storage. `NativeRegion`
+has no trim operation because its complete segment chain ends with its lexical lifetime.
 
-The runtime repeats the critical stale-handle and active-operation checks even when a
-consumer suppresses analyzer diagnostics or was compiled separately. Strict native
-transitions refuse to free storage beneath an entered operation. Tolerant
-garbage-collector transitions permit an entered old operation to drain while all later
-old-handle operations fail. Structured exceptions report owner kind, generation,
-operation, allocation identity, active-operation count, and observed lifecycle without
-exposing addresses or payloads.
+The runtime repeats the checks required by each allocator contract when analyzer
+diagnostics are unavailable. Pool handles validate owner identity and lease tokens.
+Arena handles validate generation or scoped epoch. Region handles validate owner state
+and owner thread. Bounded callbacks prevent reset, return, or disposal during access.
