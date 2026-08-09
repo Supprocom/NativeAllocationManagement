@@ -193,6 +193,86 @@ public sealed class NativeRegionSimpleTests
     }
 
     [Fact]
+    public void ActiveCallbackRejectsKernelDisposal()
+    {
+        NativeRegionKernel kernel = new(
+            64,
+            NativeMemoryReturn.ToNativeMemory);
+        Local<int> local = kernel.LeaseInitialized<int>(
+            1,
+            FillIntegers);
+
+        local.Access(view =>
+        {
+            Assert.Throws<InvalidOperationException>(kernel.Dispose);
+            Assert.Equal(10, view[0]);
+        });
+
+        kernel.Dispose();
+    }
+
+    [Fact]
+    public void CallbackFailureReleasesTheRegionBorrow()
+    {
+        NativeRegionKernel kernel = new(
+            64,
+            NativeMemoryReturn.ToNativeMemory);
+        Local<int> local = kernel.LeaseInitialized<int>(
+            1,
+            FillIntegers);
+
+        try
+        {
+            local.Access(static _ =>
+                throw new InvalidOperationException(
+                    "The test callback failed."));
+            Assert.Fail("The callback failure was not returned.");
+        }
+        catch (InvalidOperationException)
+        {
+        }
+
+        kernel.Dispose();
+    }
+
+    [Fact]
+    public void AccessKeepsKernelAliveDuringForcedCollection()
+    {
+        Local<int> local = CreateOrphanedLocal(
+            out WeakReference<NativeRegionKernel> weak);
+
+        local.Access(view =>
+        {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            Assert.True(weak.TryGetTarget(out _));
+            Assert.Equal(10, view[0]);
+        });
+
+        Assert.True(weak.TryGetTarget(out NativeRegionKernel? kernel));
+        kernel.Dispose();
+    }
+
+    [Fact]
+    public void ReadKeepsKernelAliveDuringForcedCollection()
+    {
+        Local<int> local = CreateOrphanedLocal(
+            out WeakReference<NativeRegionKernel> weak);
+
+        int value = local.Read(view =>
+        {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            Assert.True(weak.TryGetTarget(out _));
+            return view[0];
+        });
+
+        Assert.Equal(10, value);
+        Assert.True(weak.TryGetTarget(out NativeRegionKernel? kernel));
+        kernel.Dispose();
+    }
+
+    [Fact]
     public void RegionSourceContainsNoGeneralAllocatorBookkeeping()
     {
         string source = File.ReadAllText(
@@ -245,6 +325,19 @@ public sealed class NativeRegionSimpleTests
         {
             writer.Write((byte)(index + 1));
         }
+    }
+
+    private static Local<int> CreateOrphanedLocal(
+        out WeakReference<NativeRegionKernel> weak)
+    {
+        NativeRegionKernel kernel = new(
+            64,
+            NativeMemoryReturn.ToNativeMemory);
+        Local<int> local = kernel.LeaseInitialized<int>(
+            1,
+            FillIntegers);
+        weak = new WeakReference<NativeRegionKernel>(kernel);
+        return local;
     }
 
     private static void FillIntegers(NativeLeaseWriter<int> writer)

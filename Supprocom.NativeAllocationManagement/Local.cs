@@ -33,25 +33,41 @@ public readonly ref struct Local<T>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get
         {
-            ValidateActive("get_Item");
-            ValidateIndex(index, _length);
-            unsafe
+            NativeRegionKernel kernel = GetKernel("get_Item");
+            kernel.ValidateActive("get_Item");
+            try
             {
-                return Unsafe.Add(
-                    ref Unsafe.AsRef<T>((void*)_pointer),
-                    index);
+                ValidateIndex(index, _length);
+                unsafe
+                {
+                    return Unsafe.Add(
+                        ref Unsafe.AsRef<T>((void*)_pointer),
+                        index);
+                }
+            }
+            finally
+            {
+                GC.KeepAlive(kernel);
             }
         }
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         set
         {
-            ValidateActive("set_Item");
-            ValidateIndex(index, _length);
-            unsafe
+            NativeRegionKernel kernel = GetKernel("set_Item");
+            kernel.ValidateActive("set_Item");
+            try
             {
-                Unsafe.Add(
-                    ref Unsafe.AsRef<T>((void*)_pointer),
-                    index) = value;
+                ValidateIndex(index, _length);
+                unsafe
+                {
+                    Unsafe.Add(
+                        ref Unsafe.AsRef<T>((void*)_pointer),
+                        index) = value;
+                }
+            }
+            finally
+            {
+                GC.KeepAlive(kernel);
             }
         }
     }
@@ -59,14 +75,20 @@ public readonly ref struct Local<T>
     /// <summary>Clears the logical range after one Region state check.</summary>
     public void Clear()
     {
-        ValidateActive(nameof(Clear));
-        CreateView().Clear();
+        NativeRegionKernel kernel = EnterBorrow(nameof(Clear));
+        try
+        {
+            CreateView().Clear();
+        }
+        finally
+        {
+            kernel.ExitBorrow();
+        }
     }
 
     /// <summary>Copies an exact source range after one Region state check.</summary>
     public void CopyFrom(scoped ReadOnlySpan<T> source)
     {
-        ValidateActive(nameof(CopyFrom));
         if (source.Length != _length)
         {
             throw new ArgumentException(
@@ -74,13 +96,20 @@ public readonly ref struct Local<T>
                 nameof(source));
         }
 
-        CreateView().CopyFrom(source);
+        NativeRegionKernel kernel = EnterBorrow(nameof(CopyFrom));
+        try
+        {
+            CreateView().CopyFrom(source);
+        }
+        finally
+        {
+            kernel.ExitBorrow();
+        }
     }
 
     /// <summary>Copies the logical range after one Region state check.</summary>
     public void CopyTo(scoped Span<T> destination)
     {
-        ValidateActive(nameof(CopyTo));
         if (destination.Length < _length)
         {
             throw new ArgumentException(
@@ -88,23 +117,45 @@ public readonly ref struct Local<T>
                 nameof(destination));
         }
 
-        CreateView().CopyTo(destination);
+        NativeRegionKernel kernel = EnterBorrow(nameof(CopyTo));
+        try
+        {
+            CreateView().CopyTo(destination);
+        }
+        finally
+        {
+            kernel.ExitBorrow();
+        }
     }
 
     /// <summary>Runs one synchronous bounded write callback.</summary>
     public void Access(NativeLeaseAction<T> action)
     {
         ArgumentNullException.ThrowIfNull(action);
-        ValidateActive(nameof(Access));
-        action(CreateView());
+        NativeRegionKernel kernel = EnterBorrow(nameof(Access));
+        try
+        {
+            action(CreateView());
+        }
+        finally
+        {
+            kernel.ExitBorrow();
+        }
     }
 
     /// <summary>Runs one synchronous bounded read callback.</summary>
     public TResult Read<TResult>(NativeLeaseFunc<T, TResult> action)
     {
         ArgumentNullException.ThrowIfNull(action);
-        ValidateActive(nameof(Read));
-        return action(CreateView());
+        NativeRegionKernel kernel = EnterBorrow(nameof(Read));
+        try
+        {
+            return action(CreateView());
+        }
+        finally
+        {
+            kernel.ExitBorrow();
+        }
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -117,12 +168,23 @@ public readonly ref struct Local<T>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void ValidateActive(string operation)
     {
-        NativeRegionKernel kernel = _kernel
-            ?? throw new NativeAllocationUninitializedException(
-                nameof(Local<T>),
-                operation);
-        kernel.ValidateActive(operation);
+        GetKernel(operation).ValidateActive(operation);
     }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private NativeRegionKernel EnterBorrow(string operation)
+    {
+        NativeRegionKernel kernel = GetKernel(operation);
+        kernel.EnterBorrow(operation);
+        return kernel;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private NativeRegionKernel GetKernel(string operation) =>
+        _kernel
+        ?? throw new NativeAllocationUninitializedException(
+            nameof(Local<T>),
+            operation);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private NativeLeaseView<T> CreateView() =>

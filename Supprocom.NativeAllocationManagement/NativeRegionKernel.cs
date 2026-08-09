@@ -21,6 +21,7 @@ internal sealed unsafe class NativeRegionKernel
     private long _requestedBytes;
     private long _retainedBytes;
     private int _segmentCount;
+    private int _activeBorrowCount;
     private long _freshSegmentAllocationCount;
 
     internal NativeRegionKernel(
@@ -111,6 +112,16 @@ internal sealed unsafe class NativeRegionKernel
         }
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void EnterBorrow(string operation)
+    {
+        ValidateActive(operation);
+        _activeBorrowCount++;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void ExitBorrow() => _activeBorrowCount--;
+
     internal NativeOwnerStatistics GetStatistics()
     {
         ValidateActive(nameof(GetStatistics));
@@ -140,6 +151,11 @@ internal sealed unsafe class NativeRegionKernel
         if (_lifecycle == NativeOwnerLifecycle.Disposed)
         {
             return;
+        }
+
+        if (_activeBorrowCount != 0)
+        {
+            ThrowActiveBorrow();
         }
 
         _lifecycle = NativeOwnerLifecycle.Disposed;
@@ -367,6 +383,11 @@ internal sealed unsafe class NativeRegionKernel
             activeOperationCount: 0,
             allocationId: 0,
             _lifecycle);
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void ThrowActiveBorrow() =>
+        throw new InvalidOperationException(
+            "NativeRegion cannot dispose during a bounded access callback.");
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static nuint CalculateByteLength<T>(int length)
