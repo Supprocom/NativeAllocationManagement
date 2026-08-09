@@ -16,6 +16,7 @@ internal sealed unsafe class NativePoolKernel<T>
     private readonly int _ownerThreadId;
     private readonly int[] _freeHeads;
     private Slab[] _slabs;
+    private uint _nonEmptyFreeClasses;
     private NativeOwnerLifecycle _lifecycle;
     private int _slabCount;
     private int _unusedHead = -1;
@@ -266,10 +267,12 @@ internal sealed unsafe class NativePoolKernel<T>
     private int TakeFree(int length)
     {
         int firstClass = GetSizeClass(length);
-        for (int sizeClass = firstClass;
-            sizeClass < SizeClassCount;
-            sizeClass++)
+        uint eligibleClasses = _nonEmptyFreeClasses
+            & (uint.MaxValue << firstClass);
+        while (eligibleClasses != 0)
         {
+            int sizeClass = BitOperations.TrailingZeroCount(
+                eligibleClasses);
             int previous = -1;
             int current = _freeHeads[sizeClass];
             while (current >= 0)
@@ -281,6 +284,11 @@ internal sealed unsafe class NativePoolKernel<T>
                     if (previous < 0)
                     {
                         _freeHeads[sizeClass] = next;
+                        if (next < 0)
+                        {
+                            _nonEmptyFreeClasses &=
+                                ~(1u << sizeClass);
+                        }
                     }
                     else
                     {
@@ -294,6 +302,8 @@ internal sealed unsafe class NativePoolKernel<T>
                 previous = current;
                 current = next;
             }
+
+            eligibleClasses &= ~(1u << sizeClass);
         }
 
         return -1;
@@ -560,11 +570,13 @@ internal sealed unsafe class NativePoolKernel<T>
         int sizeClass = GetSizeClass(slab.Capacity);
         slab.Next = _freeHeads[sizeClass];
         _freeHeads[sizeClass] = slabIndex;
+        _nonEmptyFreeClasses |= 1u << sizeClass;
     }
 
     private void RebuildFreeListsWithoutFreedSlabs()
     {
         Array.Fill(_freeHeads, -1);
+        _nonEmptyFreeClasses = 0;
         for (int index = 0; index < _slabCount; index++)
         {
             if (_slabs[index].State == SlabState.Free)

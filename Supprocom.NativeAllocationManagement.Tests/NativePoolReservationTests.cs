@@ -120,6 +120,30 @@ public sealed class NativePoolReservationTests
     }
 
     [Fact]
+    public void SameClassSearchSkipsAnUndersizedRawReservation()
+    {
+        using NativePool<int> pool = new(
+            preLease: 8,
+            preAllocateBytes: 20,
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        long freshSegments =
+            pool.GetStatistics().FreshSegmentAllocationCount;
+
+        using Pooled<int> large = pool.Rent(
+            7,
+            static writer => writer.Fill(1));
+        using Pooled<int> exact = pool.Rent(
+            5,
+            static writer => writer.Fill(2));
+
+        Assert.Equal(8, large.Capacity);
+        Assert.Equal(5, exact.Capacity);
+        Assert.Equal(
+            freshSegments,
+            pool.GetStatistics().FreshSegmentAllocationCount);
+    }
+
+    [Fact]
     public void NegativePreLeaseFailsBeforeAllocation()
     {
         Assert.Throws<ArgumentOutOfRangeException>(

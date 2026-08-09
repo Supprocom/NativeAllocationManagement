@@ -100,6 +100,13 @@ internal static class Program
             return await PooledPerformanceRegression.RunCommandAsync(args);
         }
 
+        if (args is ["--pool-size-class-probe"])
+        {
+            Console.WriteLine(JsonSerializer.Serialize(
+                PoolSizeClassProbe.Run()));
+            return 0;
+        }
+
         if (args.Length != 0
             && args[0] is "--native-workspace-state"
                 or "--native-workspace-state-worker"
