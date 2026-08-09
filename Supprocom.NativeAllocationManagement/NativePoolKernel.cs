@@ -20,6 +20,8 @@ internal sealed unsafe class NativePoolKernel<T>
     private NativeOwnerLifecycle _lifecycle;
     private int _slabCount;
     private int _unusedHead = -1;
+    private int _returnedSlabIndex = -1;
+    private int _returnedLogicalLength = -1;
     private int _liveLeaseCount;
     private long _leaseTokenCounter;
     private long _requestedBytes;
@@ -47,7 +49,7 @@ internal sealed unsafe class NativePoolKernel<T>
             {
                 nuint bytes = CalculateByteLength(preLease);
                 int index = AddSlab(preLease, bytes, "typed reservation");
-                PushFree(index);
+                PushFreeList(index);
             }
 
             if (preAllocateBytes != 0)
@@ -61,7 +63,7 @@ internal sealed unsafe class NativePoolKernel<T>
                     capacity,
                     preAllocateBytes,
                     "raw reservation");
-                PushFree(index);
+                PushFreeList(index);
             }
         }
         catch
@@ -179,7 +181,7 @@ internal sealed unsafe class NativePoolKernel<T>
         slab.State = SlabState.Free;
         _liveLeaseCount--;
         _requestedBytes -= checked((long)CalculateByteLength(length));
-        PushFree(slabIndex);
+        CacheReturnedSlab(slabIndex, length);
     }
 
     internal NativeOwnerStatistics GetStatistics()
@@ -264,7 +266,30 @@ internal sealed unsafe class NativePoolKernel<T>
         MarkDetached();
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private int TakeFree(int length)
+    {
+        if (_returnedLogicalLength == length)
+        {
+            int slabIndex = _returnedSlabIndex;
+            _returnedSlabIndex = -1;
+            _returnedLogicalLength = -1;
+            return slabIndex;
+        }
+
+        if (_returnedSlabIndex >= 0)
+        {
+            int slabIndex = _returnedSlabIndex;
+            _returnedSlabIndex = -1;
+            _returnedLogicalLength = -1;
+            PushFreeList(slabIndex);
+        }
+
+        return TakeFreeSlow(length);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private int TakeFreeSlow(int length)
     {
         int firstClass = GetSizeClass(length);
         uint eligibleClasses = _nonEmptyFreeClasses
@@ -435,7 +460,7 @@ internal sealed unsafe class NativePoolKernel<T>
         slab.State = SlabState.Free;
         _liveLeaseCount--;
         _requestedBytes -= checked((long)CalculateByteLength(length));
-        PushFree(slabIndex);
+        CacheReturnedSlab(slabIndex, length);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -564,7 +589,20 @@ internal sealed unsafe class NativePoolKernel<T>
             allocationId: 0,
             _lifecycle);
 
-    private void PushFree(int slabIndex)
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void CacheReturnedSlab(int slabIndex, int logicalLength)
+    {
+        int displaced = _returnedSlabIndex;
+        _returnedSlabIndex = slabIndex;
+        _returnedLogicalLength = logicalLength;
+        _slabs[slabIndex].Next = -1;
+        if (displaced >= 0)
+        {
+            PushFreeList(displaced);
+        }
+    }
+
+    private void PushFreeList(int slabIndex)
     {
         ref Slab slab = ref _slabs[slabIndex];
         int sizeClass = GetSizeClass(slab.Capacity);
@@ -577,11 +615,13 @@ internal sealed unsafe class NativePoolKernel<T>
     {
         Array.Fill(_freeHeads, -1);
         _nonEmptyFreeClasses = 0;
+        _returnedSlabIndex = -1;
+        _returnedLogicalLength = -1;
         for (int index = 0; index < _slabCount; index++)
         {
             if (_slabs[index].State == SlabState.Free)
             {
-                PushFree(index);
+                PushFreeList(index);
             }
         }
     }

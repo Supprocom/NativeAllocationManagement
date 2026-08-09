@@ -317,6 +317,68 @@ public sealed class NativePoolSimpleTests
         Assert.Equal(0, pool.GetStatistics().RetainedBytes);
     }
 
+    [Fact]
+    public void ReturnedSlabCacheDoesNotHideALargerFreeSlab()
+    {
+        using NativePool<int> pool = new(
+            preLease: 8,
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        Pooled<int> large = pool.Rent(
+            8,
+            static writer => writer.Fill(1));
+        Pooled<int> small = pool.Rent(
+            4,
+            static writer => writer.Fill(2));
+        large.Dispose();
+        small.Dispose();
+        long freshSegments =
+            pool.GetStatistics().FreshSegmentAllocationCount;
+
+        Pooled<int> selected = pool.Rent(
+            7,
+            static writer => writer.Fill(3));
+        try
+        {
+            Assert.Equal(8, selected.Capacity);
+            Assert.Equal(
+                freshSegments,
+                pool.GetStatistics().FreshSegmentAllocationCount);
+        }
+        finally
+        {
+            selected.Dispose();
+        }
+    }
+
+    [Fact]
+    public void ReturnedSlabCacheRejoinsClassesForAnotherLength()
+    {
+        using NativePool<int> pool = new(
+            preLease: 8,
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        Pooled<int> first = pool.Rent(
+            8,
+            static writer => writer.Fill(1));
+        first.Dispose();
+        long freshSegments =
+            pool.GetStatistics().FreshSegmentAllocationCount;
+
+        Pooled<int> selected = pool.Rent(
+            7,
+            static writer => writer.Fill(2));
+        try
+        {
+            Assert.Equal(8, selected.Capacity);
+            Assert.Equal(
+                freshSegments,
+                pool.GetStatistics().FreshSegmentAllocationCount);
+        }
+        finally
+        {
+            selected.Dispose();
+        }
+    }
+
     private sealed class MarkerException : Exception;
 
     private static void AssertAccessIsReturned(Pooled<int> lease)
