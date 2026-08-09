@@ -32,14 +32,12 @@ projects.
 `NativeBuilder<T>` owns one unpublished unmanaged sequence. The builder supports one
 writer and remains in one method-local variable.
 
-Create the builder from `NativePool<T>` when output has one known element type. Create it
-from `NativeArena` when the output belongs to a heterogeneous arena lifecycle.
+`NativeBuilder<T>` owns its native block directly. It does not require a pool or arena.
 
 ```csharp
 using Supprocom.NativeAllocationManagement;
 
-using NativePool<uint> pool = new(preLease: 1_024);
-using NativeBuilder<uint> builder = pool.CreateBuilder(
+using NativeBuilder<uint> builder = new(
     preLease: 4_096);
 
 builder.Borrow(EmitPackedWords);
@@ -118,16 +116,14 @@ declaration is a valid no-op after completion.
 Cancellation before or after an append aborts the complete unpublished builder. An
 allocation failure uses the same cleanup path.
 
-Explicit disposal is idempotent. The session returns its current allocation and exits its
-generation protection only once.
+Explicit disposal is idempotent. It frees the unpublished native block only once.
 
-A live builder blocks owner disposal under both return policies. This rule prevents an
-owner transition from invalidating unpublished initialization.
+The builder has no allocator owner. Completion moves its block directly into one transfer.
 
 An abandoned active builder has an emergency finalizer. The finalizer returns storage but
 does not provide prompt reuse.
 
-The analyzer requires direct `CreateBuilder` initialization into one local. It rejects
+The analyzer requires direct constructor initialization into one local. It rejects
 fields, properties, parameters, returns, arguments, aggregates, conversions, and closures.
 
 `NAM1028` rejects ownership copies. `NAM1029` rejects use after completion or disposal.
@@ -407,7 +403,7 @@ static void RunBatch<T>(NativePool<T> pool, int count)
 ```
 
 The analyzer reads the helper source. It permits `Rent`, `RentTransferable`,
-`CreateBuilder`, `GetStatistics`, and a call to another verified helper.
+`GetStatistics`, and a call to another verified helper.
 
 The produced lease, transfer, or builder must end on every path. The helper cannot store,
 return, box, convert, capture, or forward the pool to an unknown call.

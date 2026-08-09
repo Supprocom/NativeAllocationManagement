@@ -29,8 +29,12 @@ public sealed class NativeBuilderWriteRegressionTests
         Assert.True(direct.CancellationCleanupPassed);
         Assert.True(append.ExactlyOnceCleanupPassed);
         Assert.True(direct.ExactlyOnceCleanupPassed);
-        Assert.Equal(0, append.NativeFreshSegmentAllocationDelta);
-        Assert.Equal(0, direct.NativeFreshSegmentAllocationDelta);
+        Assert.Equal(2, append.NativeAllocationCountDelta);
+        Assert.Equal(2, append.NativeFreeCountDelta);
+        Assert.Equal(2, direct.NativeAllocationCountDelta);
+        Assert.Equal(2, direct.NativeFreeCountDelta);
+        Assert.Equal(0, append.NativeRetainedBytesAfter);
+        Assert.Equal(0, direct.NativeRetainedBytesAfter);
         Assert.Equal(256, append.BuilderOperationCallCount);
         Assert.Equal(2, direct.BuilderOperationCallCount);
     }
@@ -59,7 +63,7 @@ public sealed class NativeBuilderWriteRegressionTests
             exactParity: true,
             balancedOrder: true,
             runtimeConfiguration: true,
-            zeroFreshSegments: true,
+            boundedNativeAllocations: true,
             cleanup: true,
             productionShape: true,
             binaryIdentity: true,
@@ -70,7 +74,7 @@ public sealed class NativeBuilderWriteRegressionTests
             exactParity: true,
             balancedOrder: true,
             runtimeConfiguration: true,
-            zeroFreshSegments: true,
+            boundedNativeAllocations: true,
             cleanup: true,
             productionShape: true,
             binaryIdentity: true,
@@ -81,7 +85,7 @@ public sealed class NativeBuilderWriteRegressionTests
             exactParity: true,
             balancedOrder: true,
             runtimeConfiguration: true,
-            zeroFreshSegments: true,
+            boundedNativeAllocations: true,
             cleanup: true,
             productionShape: true,
             binaryIdentity: false,

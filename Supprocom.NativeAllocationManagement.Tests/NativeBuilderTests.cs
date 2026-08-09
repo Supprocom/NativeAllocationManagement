@@ -1,7 +1,6 @@
 using System.Reflection;
 using System.Reflection.Emit;
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 using Supprocom.NativeAllocationManagement;
 
 namespace Supprocom.NativeAllocationManagement.Tests;
@@ -9,12 +8,10 @@ namespace Supprocom.NativeAllocationManagement.Tests;
 public sealed class NativeBuilderTests
 {
     [Fact]
-    public void PoolBuilderGrowsAndPublishesExactLogicalLength()
+    public void DirectBuilderGrowsAndPublishesExactLogicalLength()
     {
-        using NativeConcurrentPool<int> pool = new(
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         using NativeBuilder<int> builder =
-            pool.CreateBuilder(preLease: 1);
+            new NativeBuilder<int>(preLease: 1);
 
         for (int value = 0; value < 100; value++)
         {
@@ -34,16 +31,13 @@ public sealed class NativeBuilderTests
             transfer.Read(static view => view.AsSpan().ToArray()));
 
         transfer.Dispose();
-        Assert.Equal(0, pool.CurrentAllocationRecordCountForTest);
     }
 
     [Fact]
     public void RangeAppendWritesDirectlyIntoTheInitializedPrefix()
     {
-        using NativeConcurrentPool<uint> pool = new(
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         using NativeBuilder<uint> builder =
-            pool.CreateBuilder(preLease: 2);
+            new NativeBuilder<uint>(preLease: 2);
 
         builder.Append([2U, 3U]);
         builder.Append(5U);
@@ -59,10 +53,8 @@ public sealed class NativeBuilderTests
     [Fact]
     public void BoundedWriteCommitsZeroElements()
     {
-        using NativeConcurrentPool<int> pool = new(
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         using NativeBuilder<int> builder =
-            pool.CreateBuilder(preLease: 4);
+            new NativeBuilder<int>(preLease: 4);
 
         builder.Write(
             0,
@@ -71,16 +63,13 @@ public sealed class NativeBuilderTests
 
         Assert.Equal(0, transfer.Length);
         transfer.Dispose();
-        Assert.Equal(0, pool.CurrentAllocationRecordCountForTest);
     }
 
     [Fact]
     public void BoundedWritePublishesOnlyTheCommittedPrefix()
     {
-        using NativeConcurrentPool<int> pool = new(
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         using NativeBuilder<int> builder =
-            pool.CreateBuilder(preLease: 2);
+            new NativeBuilder<int>(preLease: 2);
 
         builder.Append(2);
         builder.Write(
@@ -108,10 +97,8 @@ public sealed class NativeBuilderTests
     [Fact]
     public void BoundedWriteGrowsOnceAndCommitsTheFullRange()
     {
-        using NativeConcurrentPool<int> pool = new(
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         using NativeBuilder<int> builder =
-            pool.CreateBuilder(preLease: 1);
+            new NativeBuilder<int>(preLease: 1);
 
         builder.Write(
             8,
@@ -140,17 +127,16 @@ public sealed class NativeBuilderTests
     public void InvalidCommitCountAbortsTheCompleteBuilder(
         int committedCount)
     {
-        using NativeConcurrentPool<int> pool = new(
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeMetricsScope metrics = new();
         NativeBuilder<int> builder =
-            pool.CreateBuilder(preLease: 2);
+            new NativeBuilder<int>(preLease: 2);
 
         Assert.Throws<ArgumentOutOfRangeException>(
             () => builder.Write(
                 2,
                 writer => writer.Commit(committedCount)));
 
-        Assert.Equal(0, pool.CurrentAllocationRecordCountForTest);
+        metrics.AssertBalanced();
         Assert.Throws<ObjectDisposedException>(
             () => builder.Append(1));
         builder.Dispose();
@@ -159,17 +145,16 @@ public sealed class NativeBuilderTests
     [Fact]
     public void MissingCommitAbortsTheCompleteBuilder()
     {
-        using NativeConcurrentPool<int> pool = new(
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeMetricsScope metrics = new();
         NativeBuilder<int> builder =
-            pool.CreateBuilder(preLease: 2);
+            new NativeBuilder<int>(preLease: 2);
 
         Assert.Throws<InvalidOperationException>(
             () => builder.Write(
                 2,
                 static writer => writer.AsSpan().Fill(17)));
 
-        Assert.Equal(0, pool.CurrentAllocationRecordCountForTest);
+        metrics.AssertBalanced();
         Assert.Throws<ObjectDisposedException>(
             () => builder.Complete());
         builder.Dispose();
@@ -178,10 +163,9 @@ public sealed class NativeBuilderTests
     [Fact]
     public void DoubleCommitAbortsTheCompleteBuilder()
     {
-        using NativeConcurrentPool<int> pool = new(
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeMetricsScope metrics = new();
         NativeBuilder<int> builder =
-            pool.CreateBuilder(preLease: 2);
+            new NativeBuilder<int>(preLease: 2);
 
         Assert.Throws<InvalidOperationException>(
             () => builder.Write(
@@ -193,17 +177,16 @@ public sealed class NativeBuilderTests
                     writer.Commit(1);
                 }));
 
-        Assert.Equal(0, pool.CurrentAllocationRecordCountForTest);
+        metrics.AssertBalanced();
         builder.Dispose();
     }
 
     [Fact]
     public void CallbackFailureAbortsTheCompleteBuilder()
     {
-        using NativeConcurrentPool<int> pool = new(
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeMetricsScope metrics = new();
         NativeBuilder<int> builder =
-            pool.CreateBuilder(preLease: 2);
+            new NativeBuilder<int>(preLease: 2);
 
         Assert.Throws<FormatException>(
             () => builder.Write(
@@ -214,17 +197,16 @@ public sealed class NativeBuilderTests
                     throw new FormatException("Expected test failure.");
                 }));
 
-        Assert.Equal(0, pool.CurrentAllocationRecordCountForTest);
+        metrics.AssertBalanced();
         builder.Dispose();
     }
 
     [Fact]
     public void CallbackCancellationAbortsTheCompleteBuilder()
     {
-        using NativeConcurrentPool<int> pool = new(
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeMetricsScope metrics = new();
         NativeBuilder<int> builder =
-            pool.CreateBuilder(preLease: 2);
+            new NativeBuilder<int>(preLease: 2);
         using CancellationTokenSource cancellation = new();
 
         Assert.Throws<OperationCanceledException>(
@@ -238,7 +220,7 @@ public sealed class NativeBuilderTests
                 },
                 cancellation.Token));
 
-        Assert.Equal(0, pool.CurrentAllocationRecordCountForTest);
+        metrics.AssertBalanced();
         builder.Dispose();
     }
 
@@ -248,10 +230,8 @@ public sealed class NativeBuilderTests
         NativeMemoryTestHooks.Reset();
         try
         {
-            using NativeConcurrentPool<int> pool = new(
-                returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
             NativeBuilder<int> builder =
-                pool.CreateBuilder(preLease: 1);
+                new NativeBuilder<int>(preLease: 1);
             NativeMemoryTestHooks.FailNextAllocation();
 
             Assert.Throws<NativeAllocationFailedException>(
@@ -265,11 +245,12 @@ public sealed class NativeBuilderTests
 
             builder.Dispose();
             builder.Dispose();
-            Assert.Equal(0, pool.CurrentAllocationRecordCountForTest);
-            Assert.Equal(0, pool.CurrentInitializationCountForTest);
+            NativeMemoryTestMetrics metrics =
+                NativeMemoryTestHooks.Snapshot();
             Assert.Equal(
-                0,
-                pool.CurrentGenerationActiveOperationsForTest);
+                metrics.AllocationCount,
+                metrics.FreeCount);
+            Assert.Equal(0, metrics.OutstandingNativeBytes);
         }
         finally
         {
@@ -280,10 +261,8 @@ public sealed class NativeBuilderTests
     [Fact]
     public void ExclusiveBorrowPassesThroughNestedHelpers()
     {
-        using NativeConcurrentPool<int> pool = new(
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         using NativeBuilder<int> builder =
-            pool.CreateBuilder(preLease: 2);
+            new NativeBuilder<int>(preLease: 2);
 
         builder.Borrow(WriteNestedValues);
         builder.Append(11);
@@ -299,30 +278,24 @@ public sealed class NativeBuilderTests
     [Fact]
     public void BorrowCallbackFailureReturnsStorageExactlyOnce()
     {
-        using NativeConcurrentPool<int> pool = new(
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeMetricsScope metrics = new();
         NativeBuilder<int> builder =
-            pool.CreateBuilder(preLease: 2);
+            new NativeBuilder<int>(preLease: 2);
 
         Assert.Throws<FormatException>(
             () => builder.Borrow(WriteThenFail));
 
         builder.Dispose();
         builder.Dispose();
-        Assert.Equal(0, pool.CurrentAllocationRecordCountForTest);
-        Assert.Equal(0, pool.CurrentInitializationCountForTest);
-        Assert.Equal(
-            0,
-            pool.CurrentGenerationActiveOperationsForTest);
+        metrics.AssertBalanced();
     }
 
     [Fact]
     public void BorrowCallbackCancellationReturnsStorageExactlyOnce()
     {
-        using NativeConcurrentPool<int> pool = new(
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeMetricsScope metrics = new();
         NativeBuilder<int> builder =
-            pool.CreateBuilder(preLease: 2);
+            new NativeBuilder<int>(preLease: 2);
         using CancellationTokenSource cancellation = new();
 
         void Cancel(
@@ -336,19 +309,15 @@ public sealed class NativeBuilderTests
             () => builder.Borrow(Cancel, cancellation.Token));
 
         builder.Dispose();
-        Assert.Equal(0, pool.CurrentAllocationRecordCountForTest);
-        Assert.Equal(
-            0,
-            pool.CurrentGenerationActiveOperationsForTest);
+        metrics.AssertBalanced();
     }
 
     [Fact]
     public void OwnerUseDuringBorrowFailsClosed()
     {
-        using NativeConcurrentPool<int> pool = new(
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeMetricsScope metrics = new();
         NativeBuilder<int> builder =
-            pool.CreateBuilder(preLease: 2);
+            new NativeBuilder<int>(preLease: 2);
 
         void UseOwner(
             scoped ref NativeBuilderBorrow<int> borrow)
@@ -359,17 +328,15 @@ public sealed class NativeBuilderTests
 
         Assert.Throws<InvalidOperationException>(
             () => builder.Borrow(UseOwner));
-        Assert.Equal(0, pool.CurrentAllocationRecordCountForTest);
+        metrics.AssertBalanced();
         builder.Dispose();
     }
 
     [Fact]
     public async Task ConcurrentBorrowIsRejected()
     {
-        using NativeConcurrentPool<int> pool = new(
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         using NativeBuilder<int> builder =
-            pool.CreateBuilder(preLease: 2);
+            new NativeBuilder<int>(preLease: 2);
         using ManualResetEventSlim entered = new(false);
         using ManualResetEventSlim release = new(false);
 
@@ -402,10 +369,8 @@ public sealed class NativeBuilderTests
     [Fact]
     public void BorrowAuthorityExpiresAfterTheCallback()
     {
-        using NativeConcurrentPool<int> pool = new(
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         using NativeBuilder<int> builder =
-            pool.CreateBuilder(preLease: 2);
+            new NativeBuilder<int>(preLease: 2);
         int authority = 0;
 
         void RecordAuthority(
@@ -441,21 +406,21 @@ public sealed class NativeBuilderTests
     }
 
     [Fact]
-    public void GeometricGrowthCreatesNoManagedIntermediateArray()
+    public void GeometricReallocationCreatesNoManagedIntermediateArray()
     {
-        Type? resolvedKernelType =
-            typeof(NativeConcurrentPool<int>).Assembly.GetType(
-                "Supprocom.NativeAllocationManagement.NativeOwnerKernel");
-        Assert.NotNull(resolvedKernelType);
-        Type kernelType = resolvedKernelType;
-        MethodInfo growBuilder = Assert.Single(
-            kernelType.GetMethods(
-                BindingFlags.Instance | BindingFlags.NonPublic),
+        Type? resolvedAllocatorType =
+            typeof(NativeBuilder<int>).Assembly.GetType(
+                "Supprocom.NativeAllocationManagement.NativeBlockAllocator");
+        Assert.NotNull(resolvedAllocatorType);
+        Type allocatorType = resolvedAllocatorType;
+        MethodInfo resize = Assert.Single(
+            allocatorType.GetMethods(
+                BindingFlags.Static | BindingFlags.NonPublic),
             static method =>
-                method.Name == "GrowBuilder"
+                method.Name == "Resize"
                 && method.IsGenericMethodDefinition);
 
-        OpCode[] instructions = ReadOpCodes(growBuilder).ToArray();
+        OpCode[] instructions = ReadOpCodes(resize).ToArray();
 
         Assert.NotEmpty(instructions);
         Assert.DoesNotContain(
@@ -465,13 +430,10 @@ public sealed class NativeBuilderTests
     }
 
     [Fact]
-    public void ArenaBuilderGrowsAndPreservesEveryInitializedValue()
+    public void DirectBuilderGrowthPreservesEveryInitializedValue()
     {
-        using NativeConcurrentArena arena = new(
-            preAllocateBytes: 32,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         using NativeBuilder<long> builder =
-            arena.CreateBuilder<long>(preLease: 1);
+            new NativeBuilder<long>(preLease: 1);
 
         for (long value = 0; value < 100; value++)
         {
@@ -492,9 +454,7 @@ public sealed class NativeBuilderTests
     [Fact]
     public void EmptyBuilderCompletesAsAnEmptyTransfer()
     {
-        using NativeConcurrentPool<long> pool = new(
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        using NativeBuilder<long> builder = pool.CreateBuilder();
+        using NativeBuilder<long> builder = new NativeBuilder<long>();
 
         NativeTransfer<long> transfer = builder.Complete();
 
@@ -506,9 +466,7 @@ public sealed class NativeBuilderTests
     [Fact]
     public void CompletionInvalidatesEveryBuilderOperation()
     {
-        using NativeConcurrentPool<int> pool = new(
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        NativeBuilder<int> builder = pool.CreateBuilder();
+        NativeBuilder<int> builder = new NativeBuilder<int>();
         builder.Append(17);
         NativeTransfer<int> transfer = builder.Complete();
 
@@ -526,16 +484,15 @@ public sealed class NativeBuilderTests
     [Fact]
     public void DisposalReturnsBuilderStorageOnlyOnce()
     {
-        using NativeConcurrentPool<int> pool = new(
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeMetricsScope metrics = new();
         NativeBuilder<int> builder =
-            pool.CreateBuilder(preLease: 4);
+            new NativeBuilder<int>(preLease: 4);
         builder.Append([1, 2, 3]);
 
         builder.Dispose();
         builder.Dispose();
 
-        Assert.Equal(0, pool.CurrentAllocationRecordCountForTest);
+        metrics.AssertBalanced();
         Assert.Throws<ObjectDisposedException>(
             () => builder.Append(4));
     }
@@ -546,17 +503,20 @@ public sealed class NativeBuilderTests
         NativeMemoryTestHooks.Reset();
         try
         {
-            using NativeConcurrentPool<int> pool = new(
-                returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
             NativeBuilder<int> builder =
-                pool.CreateBuilder(preLease: 1);
+                new NativeBuilder<int>(preLease: 1);
             builder.Append(1);
             NativeMemoryTestHooks.FailNextAllocation();
 
             Assert.Throws<NativeAllocationFailedException>(
                 () => builder.Append(2));
 
-            Assert.Equal(0, pool.CurrentAllocationRecordCountForTest);
+            NativeMemoryTestMetrics metrics =
+                NativeMemoryTestHooks.Snapshot();
+            Assert.Equal(
+                metrics.AllocationCount,
+                metrics.FreeCount);
+            Assert.Equal(0, metrics.OutstandingNativeBytes);
             Assert.Throws<ObjectDisposedException>(
                 () => builder.Append(3));
             builder.Dispose();
@@ -570,17 +530,16 @@ public sealed class NativeBuilderTests
     [Fact]
     public void AppendCancellationReleasesBuilderStorage()
     {
-        using NativeConcurrentPool<int> pool = new(
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeMetricsScope metrics = new();
         NativeBuilder<int> builder =
-            pool.CreateBuilder(preLease: 4);
+            new NativeBuilder<int>(preLease: 4);
         using CancellationTokenSource cancellation = new();
         cancellation.Cancel();
 
         Assert.Throws<OperationCanceledException>(
             () => builder.Append(1, cancellation.Token));
 
-        Assert.Equal(0, pool.CurrentAllocationRecordCountForTest);
+        metrics.AssertBalanced();
         Assert.Throws<ObjectDisposedException>(
             () => builder.Append(2));
     }
@@ -588,10 +547,9 @@ public sealed class NativeBuilderTests
     [Fact]
     public void CompletionCancellationReleasesBuilderStorage()
     {
-        using NativeConcurrentPool<int> pool = new(
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeMetricsScope metrics = new();
         NativeBuilder<int> builder =
-            pool.CreateBuilder(preLease: 4);
+            new NativeBuilder<int>(preLease: 4);
         builder.Append([1, 2, 3]);
         using CancellationTokenSource cancellation = new();
         cancellation.Cancel();
@@ -599,31 +557,19 @@ public sealed class NativeBuilderTests
         Assert.Throws<OperationCanceledException>(
             () => builder.Complete(cancellation.Token));
 
-        Assert.Equal(0, pool.CurrentAllocationRecordCountForTest);
+        metrics.AssertBalanced();
         Assert.Throws<ObjectDisposedException>(
             () => builder.Append(4));
     }
 
     [Fact]
-    public void ArenaBuilderUsesMappedExternalStorage()
+    public void DirectBuilderOwnsAndReleasesItsNativeBlock()
     {
         NativeMemoryTestHooks.Reset();
         try
         {
-            AlignedTestBuffer buffer = new(4096);
-            NativeConcurrentArena arena = new(
-                returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-            long upstreamAllocations =
-                NativeMemoryTestHooks.Snapshot().AllocationCount;
-            Assert.Equal(
-                (nuint)4096,
-                arena.ReserveExternalMemory(
-                    buffer,
-                    byteOffset: 0,
-                    byteLength: 4096));
-            buffer.Dispose();
             using NativeBuilder<long> builder =
-                arena.CreateBuilder<long>(preLease: 8);
+                new NativeBuilder<long>(preLease: 8);
             builder.Append([2L, 3L, 5L, 7L]);
 
             NativeTransfer<long> transfer = builder.Complete();
@@ -641,12 +587,12 @@ public sealed class NativeBuilderTests
 
                         return total;
                     }));
-            Assert.Equal(
-                upstreamAllocations,
-                NativeMemoryTestHooks.Snapshot().AllocationCount);
             transfer.Dispose();
-            arena.Dispose();
-            Assert.Equal(1, buffer.ReleaseCount);
+            NativeMemoryTestMetrics metrics =
+                NativeMemoryTestHooks.Snapshot();
+            Assert.Equal(1, metrics.AllocationCount);
+            Assert.Equal(1, metrics.FreeCount);
+            Assert.Equal(0, metrics.OutstandingNativeBytes);
         }
         finally
         {
@@ -655,53 +601,23 @@ public sealed class NativeBuilderTests
     }
 
     [Fact]
-    public void StrictOwnerDisposalRejectsALiveBuilder()
+    public void BuilderDoesNotRequireAnAllocatorOwner()
     {
-        NativeConcurrentPool<int> pool = new(
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        using NativeBuilder<int> builder = pool.CreateBuilder();
-        builder.Append(23);
-
-        Assert.Throws<NativeAllocationInUseException>(
-            () => pool.Dispose());
-
-        builder.Append(29);
-        NativeTransfer<int> transfer = builder.Complete();
-        Assert.Equal(
-            new[] { 23, 29 },
-            transfer.Read(static view => view.AsSpan().ToArray()));
-        transfer.Dispose();
-        pool.Dispose();
-    }
-
-    [Fact]
-    public void DeferredOwnerDisposalAlsoRejectsALiveBuilder()
-    {
-        NativeConcurrentPool<int> pool = new(
-            returnMemoryOnDispose:
-                NativeMemoryReturn.ToGarbageCollector);
         using NativeBuilder<int> builder =
-            pool.CreateBuilder(preLease: 4);
-        builder.Append(31);
-
-        Assert.Throws<NativeAllocationInUseException>(
-            () => pool.Dispose());
-
-        builder.Append(37);
+            new NativeBuilder<int>(preLease: 4);
+        builder.Append([31, 37]);
         NativeTransfer<int> transfer = builder.Complete();
         Assert.Equal(
             new[] { 31, 37 },
             transfer.Read(static view => view.AsSpan().ToArray()));
         transfer.Dispose();
-        pool.Dispose();
     }
 
     [Fact]
     public void AbandonedBuilderFinalizerReturnsItsAllocation()
     {
-        using NativeConcurrentPool<int> pool = new(
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        WeakReference abandoned = CreateAbandonedBuilder(pool);
+        NativeMemoryTestHooks.Reset();
+        WeakReference abandoned = CreateAbandonedBuilder();
 
         for (int attempt = 0;
             attempt < 10 && abandoned.IsAlive;
@@ -713,16 +629,17 @@ public sealed class NativeBuilderTests
         }
 
         Assert.False(abandoned.IsAlive);
-        Assert.Equal(0, pool.CurrentAllocationRecordCountForTest);
+        Assert.Equal(
+            0,
+            NativeMemoryTestHooks.Snapshot().OutstandingNativeBytes);
+        NativeMemoryTestHooks.Reset();
     }
 
     [Fact]
     public async Task ConcurrentBuilderOperationsFailClosed()
     {
         NativeMemoryTestHooks.Reset();
-        using NativeConcurrentPool<int> pool = new(
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        using NativeBuilder<int> builder = pool.CreateBuilder();
+        using NativeBuilder<int> builder = new NativeBuilder<int>();
         using ManualResetEventSlim appendEntered = new(false);
         using ManualResetEventSlim releaseAppend = new(false);
         NativeMemoryTestHooks.SetBeforeOperationEntry(
@@ -767,13 +684,12 @@ public sealed class NativeBuilderTests
     [Fact]
     public async Task ConcurrentCompletionAndDisposalReturnStorageOnce()
     {
-        using NativeConcurrentPool<int> pool = new(
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeMetricsScope metrics = new();
 
         for (int attempt = 0; attempt < 64; attempt++)
         {
             NativeBuilder<int> builder =
-                pool.CreateBuilder(preLease: 4);
+                new NativeBuilder<int>(preLease: 4);
             builder.Append([47, 53, 59, 61]);
             using ManualResetEventSlim start = new(false);
             NativeTransfer<int>? transfer = null;
@@ -833,167 +749,63 @@ public sealed class NativeBuilderTests
             }
 
             builder.Dispose();
-            Assert.Equal(0, pool.CurrentAllocationRecordCountForTest);
         }
+
+        metrics.AssertBalanced();
     }
 
-    [Theory]
-    [InlineData(1)]
-    [InlineData(2)]
-    public void PoolBuilderPublicationFailureRollsBackOwnership(
-        int boundary)
+    [Fact]
+    public void ConstructorAllocationFailurePublishesNoOwnership()
     {
         NativeMemoryTestHooks.Reset();
-        NativeConcurrentPool<int> pool = new(
-            preLease: 8,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         try
         {
-            NativeMemoryTestHooks.FailAtManagedPublicationBoundary(
-                boundary);
+            NativeMemoryTestHooks.FailNextAllocation();
 
-            InvalidOperationException exception = Assert.Throws<
-                InvalidOperationException>(
-                () => pool.CreateBuilder(preLease: 4));
+            Assert.Throws<NativeAllocationFailedException>(
+                () => new NativeBuilder<int>(preLease: 4));
 
-            Assert.Contains(
-                "NativeConcurrentPool.CreateBuilder",
-                exception.Message);
-            Assert.Equal(
-                0,
-                pool.CurrentAllocationRecordCountForTest);
-            Assert.Equal(
-                0,
-                pool.CurrentInitializationCountForTest);
-            Assert.Equal(
-                0,
-                pool.CurrentGenerationActiveOperationsForTest);
-
-            Exception? disposalFailure = Record.Exception(
-                pool.Dispose);
-            Assert.Null(disposalFailure);
-            Assert.Equal(
-                NativeOwnerLifecycle.Disposed,
-                pool.CurrentLifecycle);
-            Assert.Equal(
-                0,
-                NativeMemoryTestHooks.Snapshot()
-                    .OutstandingNativeBytes);
+            NativeMemoryTestMetrics metrics =
+                NativeMemoryTestHooks.Snapshot();
+            Assert.Equal(0, metrics.AllocationCount);
+            Assert.Equal(0, metrics.FreeCount);
+            Assert.Equal(0, metrics.OutstandingNativeBytes);
         }
         finally
         {
-            try
-            {
-                if (pool.CurrentLifecycle
-                    != NativeOwnerLifecycle.Disposed)
-                {
-                    pool.Dispose();
-                }
-            }
-            finally
-            {
-                NativeMemoryTestHooks.Reset();
-            }
-        }
-    }
-
-    [Theory]
-    [InlineData(1)]
-    [InlineData(2)]
-    public void ArenaBuilderPublicationFailureRollsBackOwnership(
-        int boundary)
-    {
-        NativeMemoryTestHooks.Reset();
-        NativeConcurrentArena arena = new(
-            preAllocateBytes: 256,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        try
-        {
-            NativeMemoryTestHooks.FailAtManagedPublicationBoundary(
-                boundary);
-
-            InvalidOperationException exception = Assert.Throws<
-                InvalidOperationException>(
-                () => arena.CreateBuilder<int>(preLease: 4));
-
-            Assert.Contains(
-                "NativeConcurrentArena.CreateBuilder",
-                exception.Message);
-            Assert.Equal(
-                0,
-                arena.CurrentAllocationRecordCountForTest);
-            Assert.Equal(
-                0,
-                arena.CurrentInitializationCountForTest);
-            Assert.Equal(
-                0,
-                arena.CurrentGenerationActiveOperationsForTest);
-
-            Exception? disposalFailure = Record.Exception(
-                arena.Dispose);
-            Assert.Null(disposalFailure);
-            Assert.Equal(
-                NativeOwnerLifecycle.Disposed,
-                arena.CurrentLifecycle);
-            Assert.Equal(
-                0,
-                NativeMemoryTestHooks.Snapshot()
-                    .OutstandingNativeBytes);
-        }
-        finally
-        {
-            try
-            {
-                if (arena.CurrentLifecycle
-                    != NativeOwnerLifecycle.Disposed)
-                {
-                    arena.Dispose();
-                }
-            }
-            finally
-            {
-                NativeMemoryTestHooks.Reset();
-            }
+            NativeMemoryTestHooks.Reset();
         }
     }
 
     [Fact]
-    public void ReturnedBuilderSlabIsReusedWithoutFreshGrowth()
+    public void GeometricReallocationReleasesEveryPhysicalBlock()
     {
         NativeMemoryTestHooks.Reset();
         try
         {
-            using NativeConcurrentPool<int> pool = new(
-                returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-            using (NativeBuilder<int> first =
-                pool.CreateBuilder(preLease: 1))
+            using (NativeBuilder<int> builder =
+                new NativeBuilder<int>(preLease: 1))
             {
                 for (int value = 0; value < 100; value++)
                 {
-                    first.Append(value);
+                    builder.Append(value);
                 }
 
-                NativeTransfer<int> transfer = first.Complete();
+                NativeTransfer<int> transfer = builder.Complete();
+                Assert.Equal(
+                    Enumerable.Range(0, 100),
+                    transfer.Read(
+                        static view => view.AsSpan().ToArray()));
                 transfer.Dispose();
             }
 
-            long allocations =
-                NativeMemoryTestHooks.Snapshot().AllocationCount;
-            using (NativeBuilder<int> second =
-                pool.CreateBuilder(preLease: 1))
-            {
-                for (int value = 0; value < 100; value++)
-                {
-                    second.Append(value);
-                }
-
-                NativeTransfer<int> transfer = second.Complete();
-                transfer.Dispose();
-            }
-
+            NativeMemoryTestMetrics metrics =
+                NativeMemoryTestHooks.Snapshot();
+            Assert.True(metrics.AllocationCount > 1);
             Assert.Equal(
-                allocations,
-                NativeMemoryTestHooks.Snapshot().AllocationCount);
+                metrics.AllocationCount,
+                metrics.FreeCount);
+            Assert.Equal(0, metrics.OutstandingNativeBytes);
         }
         finally
         {
@@ -1002,11 +814,10 @@ public sealed class NativeBuilderTests
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static WeakReference CreateAbandonedBuilder(
-        NativeConcurrentPool<int> pool)
+    private static WeakReference CreateAbandonedBuilder()
     {
         NativeBuilder<int> builder =
-            pool.CreateBuilder(preLease: 8);
+            new NativeBuilder<int>(preLease: 8);
         builder.Append([1, 2, 3, 4]);
         return new WeakReference(builder);
     }
@@ -1091,30 +902,23 @@ public sealed class NativeBuilderTests
                 $"Unsupported IL operand type {opCode.OperandType}.")
         };
 
-    private sealed unsafe class AlignedTestBuffer : SafeBuffer
+    private sealed class NativeMetricsScope : IDisposable
     {
-        internal AlignedTestBuffer(nuint byteLength)
-            : base(ownsHandle: true)
+        internal NativeMetricsScope()
         {
-            void* pointer = NativeMemory.AlignedAlloc(
-                byteLength,
-                NativeSegment.Alignment);
-            if (pointer is null)
-            {
-                throw new OutOfMemoryException();
-            }
-
-            SetHandle((nint)pointer);
-            Initialize(checked((ulong)byteLength));
+            NativeMemoryTestHooks.Reset();
         }
 
-        internal int ReleaseCount { get; private set; }
-
-        protected override bool ReleaseHandle()
+        internal void AssertBalanced()
         {
-            NativeMemory.AlignedFree((void*)handle);
-            ReleaseCount++;
-            return true;
+            NativeMemoryTestMetrics metrics =
+                NativeMemoryTestHooks.Snapshot();
+            Assert.Equal(
+                metrics.AllocationCount,
+                metrics.FreeCount);
+            Assert.Equal(0, metrics.OutstandingNativeBytes);
         }
+
+        public void Dispose() => NativeMemoryTestHooks.Reset();
     }
 }

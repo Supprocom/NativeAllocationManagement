@@ -167,17 +167,12 @@ internal static class NativeBuilderBenchmark
         NativeBuilderExactOutput expected = BuildManagedOutput(options);
         string exactHash = ComputeExactHash(expected);
         long expectedChecksum = Consume(expected);
-        NativeConcurrentPool<uint>? pool = null;
         bool exactParity;
         if (implementation
             == NativeBuilderBenchmarkImplementation.NativeBuilder)
         {
-            pool = new NativeConcurrentPool<uint>(
-                preLease: options.PreLease,
-                returnMemoryOnDispose:
-                    NativeMemoryReturn.ToNativeMemory);
             NativeBuilderExactOutput nativeOutput =
-                BuildNativeOutput(pool, options);
+                BuildNativeOutput(options);
             exactParity = OutputsEqual(nativeOutput, expected);
         }
         else
@@ -195,7 +190,6 @@ internal static class NativeBuilderBenchmark
                     options,
                     options.WarmupIterations)
                 : await RunNativeBatchAsync(
-                    pool!,
                     options,
                     options.WarmupIterations);
         warmupClock.Stop();
@@ -215,15 +209,14 @@ internal static class NativeBuilderBenchmark
         using Process process = Process.GetCurrentProcess();
         process.Refresh();
         long workingSetBefore = process.WorkingSet64;
-        NativeOwnerStatistics statisticsBefore =
-            pool?.GetStatistics() ?? default;
+        NativeMemoryTestMetrics statisticsBefore =
+            NativeMemoryTestHooks.Snapshot();
         NativeBuilderBatchResult measured = implementation
             == NativeBuilderBenchmarkImplementation.ManagedList
                 ? await RunManagedBatchAsync(
                     options,
                     options.Iterations)
                 : await RunNativeBatchAsync(
-                    pool!,
                     options,
                     options.Iterations);
         process.Refresh();
@@ -238,18 +231,17 @@ internal static class NativeBuilderBenchmark
                 "The measured native builder output checksum changed.");
         }
 
-        NativeOwnerStatistics statistics =
-            pool?.GetStatistics() ?? default;
+        NativeMemoryTestMetrics statistics =
+            NativeMemoryTestHooks.Snapshot();
         NativeBuilderPhaseEvidence phaseEvidence = implementation
             == NativeBuilderBenchmarkImplementation.ManagedList
                 ? MeasureManagedPhases(options)
-                : MeasureNativePhases(pool!, options);
+                : MeasureNativePhases(options);
         long logicalBytes = checked(
             (long)options.ElementCount
             * sizeof(uint)
             * options.Iterations);
         double elapsedMilliseconds = measured.ElapsedMilliseconds;
-        pool?.Dispose();
         Volatile.Write(ref _sink, measured.Checksum);
         (int opaqueCount, int transparentCount) =
             GetOutputCounts(options.ElementCount);
@@ -279,10 +271,10 @@ internal static class NativeBuilderBenchmark
             workingSetBefore,
             workingSetAfter,
             Math.Max(workingSetBefore, workingSetAfter),
-            statistics.RetainedBytes,
-            statistics.FreshSegmentAllocationCount,
-            statistics.FreshSegmentAllocationCount
-                - statisticsBefore.FreshSegmentAllocationCount,
+            statistics.OutstandingNativeBytes,
+            statistics.AllocationCount,
+            statistics.AllocationCount
+                - statisticsBefore.AllocationCount,
             measured.Checksum,
             exactHash,
             GetInformationalVersion(typeof(NativeConcurrentPool<>).Assembly),
@@ -317,12 +309,9 @@ internal static class NativeBuilderBenchmark
     }
 
     internal static NativeBuilderExactOutput BuildNativeOutput(
-        NativeConcurrentPool<uint> pool,
         NativeBuilderBenchmarkOptions options)
     {
-        NativeBuilderVoxelPacket packet = CreateNativePacket(
-            pool,
-            options);
+        NativeBuilderVoxelPacket packet = CreateNativePacket(options);
         try
         {
             return packet.CopyExactOutput();
@@ -386,7 +375,6 @@ internal static class NativeBuilderBenchmark
 
     private static async Task<NativeBuilderBatchResult>
         RunNativeBatchAsync(
-            NativeConcurrentPool<uint> pool,
             NativeBuilderBenchmarkOptions options,
             int iterations)
     {
@@ -428,7 +416,7 @@ internal static class NativeBuilderBenchmark
                 iteration++)
             {
                 NativeBuilderVoxelPacket? packet =
-                    CreateNativePacket(pool, options);
+                    CreateNativePacket(options);
                 try
                 {
                     await channel.Writer.WriteAsync(packet);
@@ -457,12 +445,11 @@ internal static class NativeBuilderBenchmark
         new(BuildManagedOutput(options));
 
     private static NativeBuilderVoxelPacket CreateNativePacket(
-        NativeConcurrentPool<uint> pool,
         NativeBuilderBenchmarkOptions options)
     {
-        using NativeBuilder<uint> opaque = pool.CreateBuilder(
+        using NativeBuilder<uint> opaque = new(
             preLease: options.PreLease);
-        using NativeBuilder<uint> transparent = pool.CreateBuilder(
+        using NativeBuilder<uint> transparent = new(
             preLease: options.PreLease);
         (int opaqueCount, int transparentCount) =
             GetOutputCounts(options.ElementCount);
@@ -742,14 +729,13 @@ internal static class NativeBuilderBenchmark
     }
 
     private static NativeBuilderPhaseEvidence MeasureNativePhases(
-        NativeConcurrentPool<uint> pool,
         NativeBuilderBenchmarkOptions options)
     {
         long totalStart = Stopwatch.GetTimestamp();
         long phaseStart = Stopwatch.GetTimestamp();
-        using NativeBuilder<uint> opaque = pool.CreateBuilder(
+        using NativeBuilder<uint> opaque = new(
             preLease: options.PreLease);
-        using NativeBuilder<uint> transparent = pool.CreateBuilder(
+        using NativeBuilder<uint> transparent = new(
             preLease: options.PreLease);
         Channel<NativeBuilderVoxelPacket> channel =
             Channel.CreateBounded<NativeBuilderVoxelPacket>(1);

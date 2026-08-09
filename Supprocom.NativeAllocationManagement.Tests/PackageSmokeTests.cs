@@ -209,9 +209,8 @@ public sealed class PackageSmokeTests
                 {
                     public static int Main()
                     {
-                        using NativeConcurrentPool<uint> pool = new(preLease: 4);
                         using NativeBuilder<uint> builder =
-                            pool.CreateBuilder(preLease: 2);
+                            new NativeBuilder<uint>(preLease: 2);
                         builder.Append(11);
                         builder.Append(22);
                         builder.Append(33);
@@ -263,10 +262,10 @@ public sealed class PackageSmokeTests
                 {
                     private NativeTransfer<uint>? _transfer;
 
-                    public void Build(NativeConcurrentPool<uint> pool)
+                    public void Build()
                     {
                         using NativeBuilder<uint> builder =
-                            pool.CreateBuilder(preLease: 2);
+                            new NativeBuilder<uint>(preLease: 2);
                         builder.Append(7);
                         _transfer = builder.Complete();
                     }
@@ -276,9 +275,8 @@ public sealed class PackageSmokeTests
                 {
                     public static int Main()
                     {
-                        using NativeConcurrentPool<uint> pool = new(preLease: 4);
                         using NativeBuilder<uint> builder =
-                            pool.CreateBuilder(preLease: 2);
+                            new NativeBuilder<uint>(preLease: 2);
                         builder.Append(11);
                         NativeTransfer<uint> first = builder.Complete();
                         try

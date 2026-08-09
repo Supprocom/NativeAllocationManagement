@@ -843,6 +843,16 @@ internal static class NativeMemoryTestHooks
         Volatile.Read(ref _beforeOperationEntryWithKernel)?.Invoke(operation, kernel);
     }
 
+    internal static void NotifyBeforeOperationEntry(string operation)
+    {
+        if (Volatile.Read(ref _operationHooksEnabled) == 0)
+        {
+            return;
+        }
+
+        Volatile.Read(ref _beforeOperationEntry)?.Invoke(operation);
+    }
+
     internal static void NotifyOperationEntered(
         string operation,
         NativeOwnerKernel kernel,
@@ -4083,22 +4093,6 @@ internal sealed class NativeOwnerKernel
             reservation.Allocation);
         return EnterBuilderInitialization(
             initialization,
-            "NativeBuilder.Create");
-    }
-
-    internal NativeBuilderInitialization BeginArenaBuilder<T>(
-        int preLease)
-        where T : unmanaged
-    {
-        NativeBumpInitialization reservation =
-            BeginBumpInitialization(
-                preLease,
-                NativeTypeLayout.StorageSize<T>(),
-                NativeTypeLayout.Alignment<T>(),
-                scoped: false,
-                containsReferences: false);
-        return EnterBuilderInitialization(
-            new NativeBuilderInitialization(reservation),
             "NativeBuilder.Create");
     }
 

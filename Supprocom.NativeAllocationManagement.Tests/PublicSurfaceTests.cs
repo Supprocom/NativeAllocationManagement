@@ -112,19 +112,13 @@ public sealed class PublicSurfaceTests
             constructor => Assert.Contains(
                 constructor.GetParameters(),
                 parameter => parameter.Name == "doNotLeaseOnDeclaration"));
-        MethodInfo[] builderFactories =
-            typeof(NativeBuilderOwnerExtensions).GetMethods()
-                .Where(method => method.Name == "CreateBuilder")
-                .ToArray();
-        Assert.Equal(2, builderFactories.Length);
-        Assert.All(
-            builderFactories,
-            method => Assert.Equal(
-                "preLease",
-                method.GetParameters()[1].Name));
+        ConstructorInfo builderConstructor =
+            Assert.Single(typeof(NativeBuilder<int>).GetConstructors());
+        Assert.Equal(
+            "preLease",
+            Assert.Single(builderConstructor.GetParameters()).Name);
         Assert.DoesNotContain(
-            builderFactories.SelectMany(
-                method => method.GetParameters()),
+            builderConstructor.GetParameters(),
             parameter => parameter.Name == "initialCapacity");
         ConstructorInfo arenaConstructor = Assert.Single(typeof(NativeArena).GetConstructors());
         Assert.Contains(arenaConstructor.GetParameters(), parameter => parameter.Name == "returnMemoryOnDispose");

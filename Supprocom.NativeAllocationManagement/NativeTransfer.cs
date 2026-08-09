@@ -37,15 +37,60 @@ public sealed class NativeTransfer<T> : IDisposable
     private const int Retiring = 6;
     private const int Finalized = 7;
 
-    private readonly NativeTransferOwnership _ownership;
+    private readonly NativeOwnerKernel? _kernel;
+    private readonly NativeGeneration? _generationState;
+    private readonly NativeAllocation? _allocationState;
+    private readonly long _generation;
+    private readonly long _allocationId;
+    private readonly NativeBlock _block;
+    private readonly int _length;
+    private readonly int _capacity;
     private int _state;
     private int _operationAdmission;
 
     private NativeTransfer(
-        NativeTransferOwnership ownership,
+        NativeOwnerKernel kernel,
+        NativeGeneration generationState,
+        NativeAllocation allocationState,
+        long generation,
+        long allocationId,
         bool active)
     {
-        _ownership = ownership;
+        _kernel = kernel;
+        _generationState = generationState;
+        _allocationState = allocationState;
+        _generation = generation;
+        _allocationId = allocationId;
+        _block = default;
+        _length = allocationState.Length;
+        _capacity = allocationState.Capacity;
+        _state = active ? Active : Unowned;
+    }
+
+    private NativeTransfer(
+        NativeBlock block,
+        int length,
+        int capacity,
+        bool active)
+    {
+        _block = block;
+        _length = length;
+        _capacity = capacity;
+        _state = active ? Active : Unowned;
+    }
+
+    private NativeTransfer(
+        NativeTransfer<T> source,
+        bool active)
+    {
+        _kernel = source._kernel;
+        _generationState = source._generationState;
+        _allocationState = source._allocationState;
+        _generation = source._generation;
+        _allocationId = source._allocationId;
+        _block = source._block;
+        _length = source._length;
+        _capacity = source._capacity;
         _state = active ? Active : Unowned;
     }
 
@@ -66,7 +111,7 @@ public sealed class NativeTransfer<T> : IDisposable
                 nameof(source),
                 "The transfer source has no ownership.");
         NativeTransfer<T> destination = new(
-            observed._ownership,
+            observed,
             active: false);
         if (!ReferenceEquals(
             Interlocked.CompareExchange(
@@ -90,15 +135,24 @@ public sealed class NativeTransfer<T> : IDisposable
         EnterTransferOperation(nameof(Access));
         try
         {
-            NativeOperationToken token =
-                _ownership.EnterOperation(nameof(Access));
-            try
+            if (_kernel is null)
             {
-                action(token.GetView<T>());
+                action(new NativeLeaseView<T>(
+                    _block.Pointer,
+                    _length));
             }
-            finally
+            else
             {
-                token.Dispose();
+                NativeOperationToken token =
+                    EnterKernelOperation(nameof(Access));
+                try
+                {
+                    action(token.GetView<T>());
+                }
+                finally
+                {
+                    token.Dispose();
+                }
             }
         }
         finally
@@ -115,8 +169,15 @@ public sealed class NativeTransfer<T> : IDisposable
         EnterTransferOperation(nameof(Read));
         try
         {
+            if (_kernel is null)
+            {
+                return action(new NativeLeaseView<T>(
+                    _block.Pointer,
+                    _length));
+            }
+
             NativeOperationToken token =
-                _ownership.EnterOperation(nameof(Read));
+                EnterKernelOperation(nameof(Read));
             try
             {
                 return action(token.GetView<T>());
@@ -157,7 +218,7 @@ public sealed class NativeTransfer<T> : IDisposable
 
         try
         {
-            _ownership.Return("NativeTransfer.Dispose");
+            ReturnStorage("NativeTransfer.Dispose");
             Volatile.Write(ref _state, Disposed);
             GC.SuppressFinalize(this);
         }
@@ -201,42 +262,62 @@ public sealed class NativeTransfer<T> : IDisposable
         long allocationId,
         string operation)
     {
-        NativeTransferOwnership? ownership = null;
         try
         {
-            ownership = new NativeTransferOwnership(
+            return new NativeTransfer<T>(
                 kernel,
                 generationState,
                 allocationState,
                 generation,
-                allocationId);
-            return new NativeTransfer<T>(
-                ownership,
+                allocationId,
                 active: true);
         }
         catch
         {
-            if (ownership is not null)
-            {
-                ownership.Return(operation);
-            }
-            else
-            {
-                kernel.ReturnLease(
-                    generation,
-                    allocationId,
-                    operation);
-            }
-
+            kernel.ReturnLease(
+                generation,
+                allocationId,
+                operation);
             throw;
         }
     }
 
+    internal static NativeTransfer<T> CreateOwnedBlock(
+        NativeBlock block,
+        int length,
+        int capacity) =>
+        new(
+            block,
+            length,
+            capacity,
+            active: true);
+
     private NativeHandleMetadata Validate(string operation)
     {
         EnsureActive(operation);
-        return _ownership.Validate(operation);
+        if (_kernel is null)
+        {
+            return new NativeHandleMetadata(
+                _length,
+                _capacity);
+        }
+
+        return _kernel.ValidateHandle(
+            _generationState!,
+            _allocationState!,
+            _generation,
+            _allocationId,
+            operation);
     }
+
+    private NativeOperationToken EnterKernelOperation(
+        string operation) =>
+        _kernel!.EnterOperation(
+            _generationState!,
+            _allocationState!,
+            _generation,
+            _allocationId,
+            operation);
 
     private void EnterTransferOperation(string operation)
     {
@@ -266,7 +347,7 @@ public sealed class NativeTransfer<T> : IDisposable
         if (remaining == 0
             && Volatile.Read(ref _state) == Retiring)
         {
-            _ownership.ReturnFromFinalizer();
+            ReturnStorageFromFinalizer();
             Volatile.Write(ref _state, Disposed);
         }
     }
@@ -293,13 +374,28 @@ public sealed class NativeTransfer<T> : IDisposable
 
         try
         {
-            _ownership.TransferAuthority(
-                new MovePublication(this, destination),
-                static publication => publication.Publish());
+            MovePublication publication = new(
+                this,
+                destination);
+            if (_kernel is null)
+            {
+                publication.Publish();
+            }
+            else
+            {
+                _kernel.TransferLeaseAuthority(
+                    _generationState!,
+                    _allocationState!,
+                    _generation,
+                    _allocationId,
+                    "NativeTransfer.Move",
+                    publication,
+                    static state => state.Publish());
+            }
         }
         catch
         {
-            _ownership.ReturnFromFinalizer();
+            ReturnStorageFromFinalizer();
             Volatile.Write(ref _state, Disposed);
             GC.SuppressFinalize(this);
             throw;
@@ -313,6 +409,31 @@ public sealed class NativeTransfer<T> : IDisposable
         Volatile.Write(ref destination._state, Active);
         Volatile.Write(ref _state, Moved);
         GC.SuppressFinalize(this);
+    }
+
+    private void ReturnStorage(string operation)
+    {
+        if (_kernel is null)
+        {
+            NativeBlockAllocator.Free(_block);
+            return;
+        }
+
+        _kernel.ReturnLease(
+            _generation,
+            _allocationId,
+            operation);
+    }
+
+    private void ReturnStorageFromFinalizer()
+    {
+        try
+        {
+            ReturnStorage("NativeTransfer.Finalize");
+        }
+        catch
+        {
+        }
     }
 
     private void EnsureActive(string operation)
@@ -357,7 +478,7 @@ public sealed class NativeTransfer<T> : IDisposable
 
         NativeOperationAdmission.Close(
             ref _operationAdmission);
-        _ownership.ReturnFromFinalizer();
+        ReturnStorageFromFinalizer();
     }
 
     /// <summary>Returns storage when a receiver abandons the active transfer.</summary>
@@ -377,125 +498,5 @@ public sealed class NativeTransfer<T> : IDisposable
         NativeTransfer<T> Destination)
     {
         internal void Publish() => Source.PublishMove(Destination);
-    }
-}
-
-internal sealed class NativeTransferOwnership
-{
-    private const int Active = 0;
-    private const int Returning = 1;
-    private const int Returned = 2;
-
-    private readonly NativeOwnerKernel _kernel;
-    private readonly NativeGeneration _generationState;
-    private readonly NativeAllocation _allocationState;
-    private readonly long _generation;
-    private readonly long _allocationId;
-    private int _state;
-
-    internal NativeTransferOwnership(
-        NativeOwnerKernel kernel,
-        NativeGeneration generationState,
-        NativeAllocation allocationState,
-        long generation,
-        long allocationId)
-    {
-        _kernel = kernel;
-        _generationState = generationState;
-        _allocationState = allocationState;
-        _generation = generation;
-        _allocationId = allocationId;
-    }
-
-    internal NativeHandleMetadata Validate(string operation) =>
-        _kernel.ValidateHandle(
-            _generationState,
-            _allocationState,
-            _generation,
-            _allocationId,
-            operation);
-
-    internal NativeOperationToken EnterOperation(string operation) =>
-        _kernel.EnterOperation(
-            _generationState,
-            _allocationState,
-            _generation,
-            _allocationId,
-            operation);
-
-    internal void TransferAuthority<TState>(
-        TState state,
-        Action<TState> publish) =>
-        _kernel.TransferLeaseAuthority(
-            _generationState,
-            _allocationState,
-            _generation,
-            _allocationId,
-            "NativeTransfer.Move",
-            state,
-            publish);
-
-    internal void Return(string operation)
-    {
-        int observed = Interlocked.CompareExchange(
-            ref _state,
-            Returning,
-            Active);
-        if (observed != Active)
-        {
-            throw new InvalidOperationException(
-                "The transferred native storage was already returned.");
-        }
-
-        try
-        {
-            _kernel.ReturnLease(
-                _generation,
-                _allocationId,
-                operation);
-            Volatile.Write(ref _state, Returned);
-            GC.SuppressFinalize(this);
-        }
-        catch
-        {
-            Volatile.Write(ref _state, Active);
-            throw;
-        }
-    }
-
-    internal void ReturnFromFinalizer()
-    {
-        if (Interlocked.CompareExchange(
-            ref _state,
-            Returning,
-            Active) != Active)
-        {
-            return;
-        }
-
-        try
-        {
-            _kernel.ReturnLease(
-                _generation,
-                _allocationId,
-                "NativeTransfer.Finalize");
-            Volatile.Write(ref _state, Returned);
-            GC.SuppressFinalize(this);
-        }
-        catch
-        {
-            Volatile.Write(ref _state, Active);
-        }
-    }
-
-    ~NativeTransferOwnership()
-    {
-        try
-        {
-            ReturnFromFinalizer();
-        }
-        catch
-        {
-        }
     }
 }

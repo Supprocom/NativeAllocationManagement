@@ -1990,7 +1990,13 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
         public override void VisitObjectCreation(IObjectCreationOperation operation)
         {
-            if (IsOwnerType(operation.Type))
+            if (IsNativeBuilder(operation.Type))
+            {
+                RegisterBuilderFactory(
+                    operation,
+                    "NativeBuilder");
+            }
+            else if (IsOwnerType(operation.Type))
             {
                 RegisterOwner(operation);
             }
@@ -2026,9 +2032,11 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 ProcessTransferInvocation(operation);
             }
 
-            if (IsBuilderFactoryInvocation(operation))
+            if (IsBuilderFactoryOperation(operation))
             {
-                RegisterBuilderFactory(operation);
+                RegisterBuilderFactory(
+                    operation,
+                    operation.TargetMethod.Name);
             }
             else if (IsNativeBuilder(
                 operation.TargetMethod.ContainingType))
@@ -2514,7 +2522,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
             if (value is not null
                 && IsNativeBuilder(value.Type)
-                && !IsBuilderFactoryInvocation(value))
+                && !IsBuilderFactoryOperation(value))
             {
                 string destination = operation.Parent is IInvocationOperation invocation
                     ? invocation.TargetMethod.ToDisplayString(
@@ -2589,7 +2597,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 {
                     if (operation.Parent is IInvocationOperation invocation
                         && (IsTransferFactoryInvocation(invocation)
-                            || IsBuilderFactoryInvocation(invocation)
+                            || IsBuilderFactoryOperation(invocation)
                             || IsWorkspaceFactoryInvocation(invocation)
                             || GetLifecycleEffect(invocation.TargetMethod, operation.Parameter)
                                 is not LifecycleEffect.None
@@ -2636,7 +2644,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
             if (value is not null
                 && IsNativeBuilder(value.Type)
-                && !IsBuilderFactoryInvocation(value))
+                && !IsBuilderFactoryOperation(value))
             {
                 if (GetBuilder(value) is TransferState builder)
                 {
@@ -3324,7 +3332,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         }
 
         private void RegisterBuilderFactory(
-            IInvocationOperation operation)
+            IOperation operation,
+            string operationName)
         {
             Target target = FindTarget(operation);
             if (target.Symbol is not ILocalSymbol
@@ -3333,7 +3342,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 Report(
                     NativeAllocationDiagnosticDescriptors.BuilderAcquisitionEscape,
                     operation.Syntax,
-                    operation.TargetMethod.Name);
+                    operationName);
                 return;
             }
 
@@ -3381,7 +3390,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             {
                 if (value is not null
                     && IsNativeBuilder(value.Type)
-                    && !IsBuilderFactoryInvocation(value))
+                    && !IsBuilderFactoryOperation(value))
                 {
                     if (GetBuilder(value) is TransferState discarded)
                     {
@@ -3413,7 +3422,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 return;
             }
 
-            if (IsBuilderFactoryInvocation(value))
+            if (IsBuilderFactoryOperation(value))
             {
                 return;
             }
@@ -4419,12 +4428,9 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 || invocation.TargetMethod.Name == "ScratchTransferable"
                     && IsNativeArena(invocation.TargetMethod.ContainingType));
 
-        private bool IsBuilderFactoryInvocation(IOperation operation) =>
-            operation is IInvocationOperation invocation
-            && invocation.TargetMethod.Name == "CreateBuilder"
-            && invocation.TargetMethod.ContainingType.ToDisplayString()
-                == "Supprocom.NativeAllocationManagement.NativeBuilderOwnerExtensions"
-            && IsNativeBuilder(invocation.Type);
+        private bool IsBuilderFactoryOperation(IOperation operation) =>
+            operation is IObjectCreationOperation creation
+                && IsNativeBuilder(creation.Type);
 
         private bool IsWorkspaceFactoryInvocation(IOperation? operation) =>
             operation is IInvocationOperation invocation
@@ -6074,7 +6080,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             IInvocationOperation invocation)
         {
             if (IsTransferFactoryInvocation(invocation)
-                || IsBuilderFactoryInvocation(invocation))
+                || IsBuilderFactoryOperation(invocation))
             {
                 return true;
             }
@@ -6103,7 +6109,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             return (IsNativePool(argument.Parameter.Type)
                     || IsNativeArena(argument.Parameter.Type))
                 && (IsTransferFactoryInvocation(invocation)
-                    || IsBuilderFactoryInvocation(invocation));
+                    || IsBuilderFactoryOperation(invocation));
         }
 
         private LifecycleEffect AnalyzeLifecycleSummary(IMethodSymbol method, IParameterSymbol parameter)

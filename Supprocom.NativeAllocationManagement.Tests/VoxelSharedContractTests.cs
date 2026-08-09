@@ -1732,7 +1732,7 @@ public sealed class VoxelSharedContractTests
             guide,
             StringComparison.Ordinal);
         Assert.Contains(
-            "NativeBuilder<uint> builder = pool.CreateBuilder(",
+            "NativeBuilder<uint> builder = new(",
             guide,
             StringComparison.Ordinal);
         Assert.Contains(

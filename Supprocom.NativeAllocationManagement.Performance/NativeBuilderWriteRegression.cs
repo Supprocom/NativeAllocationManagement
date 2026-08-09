@@ -40,7 +40,11 @@ internal static class NativeBuilderWriteRegression
             return evidence.ExactParity
                 && evidence.CancellationCleanupPassed
                 && evidence.ExactlyOnceCleanupPassed
-                && evidence.NativeFreshSegmentAllocationDelta == 0
+                && evidence.NativeAllocationCountDelta
+                    == evidence.WorkerCount
+                && evidence.NativeFreeCountDelta
+                    == evidence.WorkerCount
+                && evidence.NativeRetainedBytesAfter == 0
                 && evidence.TieredCompilationDisabled
                 && evidence.TieredPgoDisabled
                     ? 0
@@ -148,9 +152,9 @@ internal static class NativeBuilderWriteRegression
             && pair.RepeatedAppend.TieredPgoDisabled
             && pair.BoundedWrite.TieredCompilationDisabled
             && pair.BoundedWrite.TieredPgoDisabled);
-        bool zeroFreshSegments = pairs.All(static pair =>
-            pair.RepeatedAppend.NativeFreshSegmentAllocationDelta == 0
-            && pair.BoundedWrite.NativeFreshSegmentAllocationDelta == 0);
+        bool boundedNativeAllocations = pairs.All(static pair =>
+            HasExpectedNativeOperations(pair.RepeatedAppend)
+            && HasExpectedNativeOperations(pair.BoundedWrite));
         bool cleanup = pairs.All(static pair =>
             pair.RepeatedAppend.CancellationCleanupPassed
             && pair.RepeatedAppend.ExactlyOnceCleanupPassed
@@ -163,7 +167,7 @@ internal static class NativeBuilderWriteRegression
             parity,
             balanced,
             runtimeConfiguration,
-            zeroFreshSegments,
+            boundedNativeAllocations,
             cleanup,
             productionShape,
             binaryIdentity,
@@ -198,7 +202,7 @@ internal static class NativeBuilderWriteRegression
             parity,
             balanced,
             runtimeConfiguration,
-            zeroFreshSegments,
+            boundedNativeAllocations,
             cleanup,
             productionShape,
             binaryIdentity,
@@ -212,8 +216,9 @@ internal static class NativeBuilderWriteRegression
         NativeBuilderWriteOptions options)
     {
         ValidateOptions(options);
+        NativeMemoryTestHooks.Reset();
         Stopwatch setupClock = Stopwatch.StartNew();
-        using BuilderWriteExecution execution = new(options);
+        BuilderWriteExecution execution = new(options);
         setupClock.Stop();
 
         Stopwatch verificationClock = Stopwatch.StartNew();
@@ -231,7 +236,8 @@ internal static class NativeBuilderWriteRegression
         bool cancellationCleanup = execution.ProbeCancellation();
         bool exactlyOnceCleanup = execution.ProbeExactlyOnceCleanup();
 
-        long freshBefore = execution.FreshSegmentAllocationCount;
+        long allocationsBefore = execution.NativeAllocationCount;
+        long freesBefore = execution.NativeFreeCount;
         long retainedBefore = execution.RetainedBytes;
         long allocatedBefore = GC.GetTotalAllocatedBytes(
             precise: true);
@@ -249,7 +255,8 @@ internal static class NativeBuilderWriteRegression
         process.Refresh();
         long workingSetAfter = process.WorkingSet64;
         long peakWorkingSet = process.PeakWorkingSet64;
-        long freshAfter = execution.FreshSegmentAllocationCount;
+        long allocationsAfter = execution.NativeAllocationCount;
+        long freesAfter = execution.NativeFreeCount;
         long retainedAfter = execution.RetainedBytes;
         exactParity &= measuredChecksum == expectedChecksum;
         long records = checked(
@@ -281,7 +288,8 @@ internal static class NativeBuilderWriteRegression
             workingSetAfter,
             peakWorkingSet,
             GC.GetGCMemoryInfo().HeapSizeBytes,
-            freshAfter - freshBefore,
+            allocationsAfter - allocationsBefore,
+            freesAfter - freesBefore,
             retainedBefore,
             retainedAfter,
             outputHash,
@@ -311,7 +319,7 @@ internal static class NativeBuilderWriteRegression
         bool exactParity,
         bool balancedOrder,
         bool runtimeConfiguration,
-        bool zeroFreshSegments,
+        bool boundedNativeAllocations,
         bool cleanup,
         bool productionShape,
         bool binaryIdentity,
@@ -321,13 +329,20 @@ internal static class NativeBuilderWriteRegression
         exactParity
         && balancedOrder
         && runtimeConfiguration
-        && zeroFreshSegments
+        && boundedNativeAllocations
         && cleanup
         && productionShape
         && binaryIdentity
         && meanSpeedup >= RequiredSpeedup
         && aggregateSpeedup >= RequiredSpeedup
         && confidenceLower95 > 1d;
+
+    private static bool HasExpectedNativeOperations(
+        NativeBuilderWriteWorkerEvidence evidence) =>
+        evidence.NativeAllocationCountDelta == evidence.WorkerCount
+        && evidence.NativeFreeCountDelta == evidence.WorkerCount
+        && evidence.NativeRetainedBytesBefore == 0
+        && evidence.NativeRetainedBytesAfter == 0;
 
     private static async Task<NativeBuilderWriteWorkerEvidence>
         RunIsolatedWorkerAsync(
@@ -645,7 +660,7 @@ internal static class NativeBuilderWriteRegression
             Convert.ToHexString(hash.ComputeHash(stream)));
     }
 
-    private sealed class BuilderWriteExecution : IDisposable
+    private sealed class BuilderWriteExecution
     {
         private readonly BuilderWriteWorker[] _workers;
         private readonly long[] _checksums;
@@ -666,13 +681,14 @@ internal static class NativeBuilderWriteRegression
             };
         }
 
-        internal long FreshSegmentAllocationCount =>
-            _workers.Sum(static worker =>
-                worker.Statistics.FreshSegmentAllocationCount);
+        internal long NativeAllocationCount =>
+            NativeMemoryTestHooks.Snapshot().AllocationCount;
+
+        internal long NativeFreeCount =>
+            NativeMemoryTestHooks.Snapshot().FreeCount;
 
         internal long RetainedBytes =>
-            _workers.Sum(static worker =>
-                worker.Statistics.RetainedBytes);
+            NativeMemoryTestHooks.Snapshot().OutstandingNativeBytes;
 
         internal string ComputeExactHash(
             NativeBuilderWriteImplementation implementation)
@@ -715,21 +731,13 @@ internal static class NativeBuilderWriteRegression
         internal bool ProbeExactlyOnceCleanup() =>
             _workers[0].ProbeExactlyOnceCleanup();
 
-        public void Dispose()
-        {
-            foreach (BuilderWriteWorker worker in _workers)
-            {
-                worker.Dispose();
-            }
-        }
     }
 
-    private sealed class BuilderWriteWorker : IDisposable
+    private sealed class BuilderWriteWorker
     {
         private readonly int _workerIndex;
         private readonly int _recordCount;
         private readonly int _wordCount;
-        private readonly NativeConcurrentPool<uint> _pool;
 
         internal BuilderWriteWorker(
             int workerIndex,
@@ -738,14 +746,7 @@ internal static class NativeBuilderWriteRegression
             _workerIndex = workerIndex;
             _recordCount = recordCount;
             _wordCount = checked(recordCount * WordsPerRecord);
-            _pool = new NativeConcurrentPool<uint>(
-                preLease: _wordCount,
-                returnMemoryOnDispose:
-                    NativeMemoryReturn.ToNativeMemory);
         }
-
-        internal NativeOwnerStatistics Statistics =>
-            _pool.GetStatistics();
 
         internal uint[] BuildCopy(
             NativeBuilderWriteImplementation implementation)
@@ -780,7 +781,7 @@ internal static class NativeBuilderWriteRegression
         internal bool ProbeCancellation()
         {
             using CancellationTokenSource cancellation = new();
-            NativeBuilder<uint> builder = _pool.CreateBuilder(
+            NativeBuilder<uint> builder = new(
                 preLease: 2);
             bool canceled = false;
             try
@@ -809,13 +810,14 @@ internal static class NativeBuilderWriteRegression
             }
 
             return canceled
-                && _pool.GetStatistics().RequestedBytes == 0;
+                && NativeMemoryTestHooks.Snapshot()
+                    .OutstandingNativeBytes == 0;
         }
 
         internal bool ProbeExactlyOnceCleanup()
         {
             using NativeBuilder<uint> builder =
-                _pool.CreateBuilder(preLease: 2);
+                new(preLease: 2);
             builder.Borrow(
                 static (scoped ref NativeBuilderBorrow<uint> borrow) =>
                 {
@@ -840,16 +842,15 @@ internal static class NativeBuilderWriteRegression
             }
 
             return secondDisposeFailed
-                && _pool.GetStatistics().RequestedBytes == 0;
+                && NativeMemoryTestHooks.Snapshot()
+                    .OutstandingNativeBytes == 0;
         }
-
-        public void Dispose() => _pool.Dispose();
 
         private NativeTransfer<uint> Build(
             NativeBuilderWriteImplementation implementation)
         {
             using NativeBuilder<uint> builder =
-                _pool.CreateBuilder(preLease: _wordCount);
+                new(preLease: _wordCount);
             if (implementation
                 == NativeBuilderWriteImplementation.RepeatedAppend)
             {
@@ -935,7 +936,8 @@ internal sealed record NativeBuilderWriteWorkerEvidence(
     long WorkingSetAfterBytes,
     long PeakWorkingSetBytes,
     long ManagedHeapBytes,
-    long NativeFreshSegmentAllocationDelta,
+    long NativeAllocationCountDelta,
+    long NativeFreeCountDelta,
     long NativeRetainedBytesBefore,
     long NativeRetainedBytesAfter,
     string OutputSha256,
@@ -979,7 +981,7 @@ internal sealed record NativeBuilderWriteReport(
     bool ExactParity,
     bool BalancedOrder,
     bool RuntimeConfigurationPassed,
-    bool ZeroFreshSegmentsPassed,
+    bool BoundedNativeAllocationsPassed,
     bool CleanupPassed,
     bool ProductionShapePassed,
     bool BinaryIdentityPassed,

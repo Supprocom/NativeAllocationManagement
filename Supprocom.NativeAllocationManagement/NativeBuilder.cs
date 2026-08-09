@@ -1,78 +1,5 @@
 namespace Supprocom.NativeAllocationManagement;
 
-/// <summary>Adds growable unmanaged builders to native owners.</summary>
-public static class NativeBuilderOwnerExtensions
-{
-    /// <summary>Creates one builder from a synchronized typed owner.</summary>
-    /// <param name="pool">The synchronized owner that supplies storage.</param>
-    /// <param name="preLease">The initial reservation in elements of <typeparamref name="T"/>.</param>
-    public static NativeBuilder<T> CreateBuilder<T>(
-        this NativeConcurrentPool<T> pool,
-        int preLease = 0)
-        where T : unmanaged
-    {
-        ArgumentNullException.ThrowIfNull(pool);
-        ArgumentOutOfRangeException.ThrowIfNegative(
-            preLease);
-        NativeBuilderSession<T> session = new(
-            pool.KernelForTransfer);
-        session.BeginPool(preLease);
-        return PublishBuilder(
-            session,
-            "NativeConcurrentPool.CreateBuilder");
-    }
-
-    /// <summary>Creates one single-writer builder from a heterogeneous arena.</summary>
-    /// <param name="arena">The heterogeneous owner that supplies native storage.</param>
-    /// <param name="preLease">The initial reservation in elements of <typeparamref name="T"/>.</param>
-    public static NativeBuilder<T> CreateBuilder<T>(
-        this NativeConcurrentArena arena,
-        int preLease = 0)
-        where T : unmanaged
-    {
-        ArgumentNullException.ThrowIfNull(arena);
-        ArgumentOutOfRangeException.ThrowIfNegative(
-            preLease);
-        NativeBuilderSession<T> session = new(
-            arena.KernelForInitialization);
-        session.BeginArena(preLease);
-        return PublishBuilder(
-            session,
-            "NativeConcurrentArena.CreateBuilder");
-    }
-
-    private static NativeBuilder<T> PublishBuilder<T>(
-        NativeBuilderSession<T> session,
-        string operation)
-        where T : unmanaged
-    {
-        try
-        {
-            NativeMemoryTestHooks.CheckManagedPublicationBoundary(
-                operation,
-                ordinal: 2,
-                "NativeBuilder");
-            return new NativeBuilder<T>(session);
-        }
-        catch (Exception failure)
-        {
-            try
-            {
-                session.Abort();
-            }
-            catch (Exception cleanupFailure)
-            {
-                throw new AggregateException(
-                    "Native builder creation failed and cleanup also failed.",
-                    failure,
-                    cleanupFailure);
-            }
-
-            throw;
-        }
-    }
-}
-
 /// <summary>Builds one growable unmanaged sequence directly in native storage.</summary>
 /// <typeparam name="T">The unmanaged element type.</typeparam>
 public sealed class NativeBuilder<T> : IDisposable
@@ -85,18 +12,24 @@ public sealed class NativeBuilder<T> : IDisposable
     private const int Disposed = 4;
     private const int Finalized = 5;
 
-    private readonly NativeBuilderSession<T> _session;
     private int _state;
     private int _writerGate;
-    private int _operationAdmission;
     private int _borrowEpoch;
     private int _activeBorrowAuthority;
     private int _count;
+    private int _capacity;
+    private NativeBlock _block;
 
-    internal NativeBuilder(
-        NativeBuilderSession<T> session)
+    /// <summary>Creates one direct native builder with an optional element reservation.</summary>
+    /// <param name="preLease">The initial reservation in elements of <typeparamref name="T"/>.</param>
+    public NativeBuilder(int preLease = 0)
     {
-        _session = session;
+        ArgumentOutOfRangeException.ThrowIfNegative(preLease);
+        _block = NativeBlockAllocator.Allocate<T>(
+            preLease,
+            nameof(NativeBuilder<T>),
+            "NativeBuilder.Constructor");
+        _capacity = preLease;
     }
 
     /// <summary>Gets the initialized element count.</summary>
@@ -118,7 +51,7 @@ public sealed class NativeBuilder<T> : IDisposable
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
-            _session.Append(value, _count);
+            AppendDirect(value, _count);
             _count++;
             cancellationToken.ThrowIfCancellationRequested();
         }
@@ -144,7 +77,7 @@ public sealed class NativeBuilder<T> : IDisposable
         {
             cancellationToken.ThrowIfCancellationRequested();
             int required = checked(_count + source.Length);
-            _session.Append(source, _count, required);
+            AppendDirect(source, _count, required);
             _count = required;
             cancellationToken.ThrowIfCancellationRequested();
         }
@@ -242,7 +175,7 @@ public sealed class NativeBuilder<T> : IDisposable
         {
             cancellationToken.ThrowIfCancellationRequested();
             NativeTransfer<T> transfer =
-                _session.Complete(_count);
+                CompleteDirect(_count);
             Volatile.Write(ref _state, Completed);
             GC.SuppressFinalize(this);
             return transfer;
@@ -252,7 +185,7 @@ public sealed class NativeBuilder<T> : IDisposable
             Exception? cleanupFailure = null;
             try
             {
-                _session.Abort();
+                ReleaseBlock();
             }
             catch (Exception exception)
             {
@@ -292,7 +225,7 @@ public sealed class NativeBuilder<T> : IDisposable
             Disposing);
         try
         {
-            _session.Abort();
+            ReleaseBlock();
             Volatile.Write(ref _state, Disposed);
             GC.SuppressFinalize(this);
         }
@@ -316,9 +249,8 @@ public sealed class NativeBuilder<T> : IDisposable
         EnterOperation(operation);
         try
         {
-            _session.Validate(operation);
             return readCapacity
-                ? _session.Capacity
+                ? _capacity
                 : _count;
         }
         catch (Exception failure)
@@ -338,9 +270,8 @@ public sealed class NativeBuilder<T> : IDisposable
         bool readCapacity)
     {
         ValidateBorrowAuthority(authority);
-        _session.Validate("NativeBuilder.Borrow");
         return readCapacity
-            ? _session.Capacity
+            ? _capacity
             : _count;
     }
 
@@ -353,7 +284,7 @@ public sealed class NativeBuilder<T> : IDisposable
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
-            _session.Append(value, _count);
+            AppendDirect(value, _count);
             _count++;
             cancellationToken.ThrowIfCancellationRequested();
         }
@@ -374,7 +305,7 @@ public sealed class NativeBuilder<T> : IDisposable
         {
             cancellationToken.ThrowIfCancellationRequested();
             int required = checked(_count + source.Length);
-            _session.Append(source, _count, required);
+            AppendDirect(source, _count, required);
             _count = required;
             cancellationToken.ThrowIfCancellationRequested();
         }
@@ -417,7 +348,7 @@ public sealed class NativeBuilder<T> : IDisposable
         cancellationToken.ThrowIfCancellationRequested();
         int required = checked(
             _count + maximumAdditionalCount);
-        Span<T> values = _session.PrepareWrite(
+        Span<T> values = PrepareWriteDirect(
             _count,
             required,
             maximumAdditionalCount);
@@ -434,9 +365,6 @@ public sealed class NativeBuilder<T> : IDisposable
                 "The bounded builder write did not commit an initialized prefix.");
         }
 
-        _session.CommitWrite(
-            _count,
-            committedCount);
         _count = checked(_count + committedCount);
     }
 
@@ -479,23 +407,17 @@ public sealed class NativeBuilder<T> : IDisposable
 
         try
         {
-            _session.NotifyBeforeOperation(operation);
-            if (!NativeOperationAdmission.TryEnter(
-                ref _operationAdmission))
+            if (NativeMemoryTestHooks.OperationHooksEnabled)
             {
-                ThrowInactive(
-                    operation,
-                    Volatile.Read(ref _state));
+                NativeMemoryTestHooks.NotifyBeforeOperationEntry(
+                    "NativeBuilder." + operation);
             }
-
             int state = Volatile.Read(ref _state);
             if (state == Active)
             {
                 return;
             }
 
-            NativeOperationAdmission.Exit(
-                ref _operationAdmission);
             ThrowInactive(operation, state);
         }
         catch
@@ -507,8 +429,6 @@ public sealed class NativeBuilder<T> : IDisposable
 
     private void ExitOperation()
     {
-        NativeOperationAdmission.Exit(
-            ref _operationAdmission);
         Volatile.Write(ref _writerGate, 0);
     }
 
@@ -536,20 +456,6 @@ public sealed class NativeBuilder<T> : IDisposable
             ThrowInactive(operation, observed);
         }
 
-        int activeOperations =
-            NativeOperationAdmission.Close(
-                ref _operationAdmission);
-        if (activeOperations == 0)
-        {
-            return;
-        }
-
-        NativeOperationAdmission.Open(
-            ref _operationAdmission);
-        Volatile.Write(ref _state, Active);
-        Volatile.Write(ref _writerGate, 0);
-        throw new InvalidOperationException(
-            $"NativeBuilder.{operation} found an active builder operation.");
     }
 
     private void FailOperation(Exception failure)
@@ -562,11 +468,9 @@ public sealed class NativeBuilder<T> : IDisposable
             return;
         }
 
-        NativeOperationAdmission.Close(
-            ref _operationAdmission);
         try
         {
-            _session.Abort();
+            ReleaseBlock();
             Volatile.Write(ref _state, Disposed);
             GC.SuppressFinalize(this);
         }
@@ -621,9 +525,80 @@ public sealed class NativeBuilder<T> : IDisposable
             return;
         }
 
-        NativeOperationAdmission.Close(
-            ref _operationAdmission);
-        _session.Abort();
+        ReleaseBlock();
+    }
+
+    private unsafe void AppendDirect(T value, int index)
+    {
+        int required = checked(index + 1);
+        EnsureCapacity(required);
+        new Span<T>((void*)_block.Pointer, _capacity)[index] = value;
+    }
+
+    private unsafe void AppendDirect(
+        scoped ReadOnlySpan<T> source,
+        int start,
+        int required)
+    {
+        EnsureCapacity(required);
+        source.CopyTo(
+            new Span<T>((void*)_block.Pointer, _capacity)
+                .Slice(start, source.Length));
+    }
+
+    private unsafe Span<T> PrepareWriteDirect(
+        int start,
+        int required,
+        int maximumAdditionalCount)
+    {
+        EnsureCapacity(required);
+        return new Span<T>((void*)_block.Pointer, _capacity)
+            .Slice(start, maximumAdditionalCount);
+    }
+
+    private NativeTransfer<T> CompleteDirect(int length)
+    {
+        NativeBlock block = _block;
+        NativeTransfer<T> transfer =
+            NativeTransfer<T>.CreateOwnedBlock(
+                block,
+                length,
+                _capacity);
+        _block = default;
+        _capacity = 0;
+        return transfer;
+    }
+
+    private void EnsureCapacity(int required)
+    {
+        if (required <= _capacity)
+        {
+            return;
+        }
+
+        int next = _capacity == 0 ? 4 : _capacity;
+        while (next < required)
+        {
+            next = next > int.MaxValue / 2
+                ? required
+                : checked(next * 2);
+        }
+
+        NativeBlock replacement = NativeBlockAllocator.Resize<T>(
+            _block,
+            next,
+            nameof(NativeBuilder<T>),
+            "NativeBuilder.Grow");
+        _block = replacement;
+        _capacity = next;
+    }
+
+    private void ReleaseBlock()
+    {
+        NativeBlock block = _block;
+        _block = default;
+        _capacity = 0;
+        NativeBlockAllocator.Free(block);
     }
 
     /// <summary>Returns storage when an application abandons an active builder.</summary>
@@ -635,258 +610,6 @@ public sealed class NativeBuilder<T> : IDisposable
         }
         catch
         {
-        }
-    }
-}
-
-internal sealed class NativeBuilderSession<T>
-    where T : unmanaged
-{
-    private const int Uninitialized = -1;
-    private const int Active = 0;
-    private const int Completing = 1;
-    private const int Completed = 2;
-    private const int Releasing = 3;
-    private const int Released = 4;
-
-    private readonly NativeOwnerKernel _kernel;
-    private NativeGeneration? _generation;
-    private NativeBuilderInitialization _initialization;
-    private int _state = Uninitialized;
-    private int _generationExited;
-
-    internal NativeBuilderSession(
-        NativeOwnerKernel kernel)
-    {
-        _kernel = kernel;
-    }
-
-    internal void BeginPool(int preLease) =>
-        Attach(
-            _kernel.BeginPoolBuilder(preLease),
-            "NativeConcurrentPool.CreateBuilder");
-
-    internal void BeginArena(int preLease) =>
-        Attach(
-            _kernel.BeginArenaBuilder<T>(preLease),
-            "NativeConcurrentArena.CreateBuilder");
-
-    internal int Capacity =>
-        _initialization.Allocation.Capacity;
-
-    internal void NotifyBeforeOperation(string operation) =>
-        NativeMemoryTestHooks.NotifyBeforeOperationEntry(
-            "NativeBuilder." + operation,
-            _kernel);
-
-    internal void Validate(string operation)
-    {
-        EnsureActive();
-        _kernel.ValidateBuilderAccess(
-            _initialization,
-            "NativeBuilder." + operation);
-    }
-
-    internal void Append(T value, int index)
-    {
-        int required = checked(index + 1);
-        EnsureCapacity(required, index);
-        Validate(nameof(NativeBuilder<T>.Append));
-        _initialization.Allocation.SetValue(index, value);
-        _initialization.Allocation.InitializedLength = required;
-    }
-
-    internal void Append(
-        scoped ReadOnlySpan<T> source,
-        int start,
-        int required)
-    {
-        EnsureCapacity(required, start);
-        Validate(nameof(NativeBuilder<T>.Append));
-        source.CopyTo(
-            _initialization.Allocation.AsSpan<T>()
-                .Slice(start, source.Length));
-        _initialization.Allocation.InitializedLength = required;
-    }
-
-    internal Span<T> PrepareWrite(
-        int start,
-        int required,
-        int maximumAdditionalCount)
-    {
-        EnsureCapacity(required, start);
-        Validate(nameof(NativeBuilder<T>.Write));
-        return _initialization.Allocation
-            .AsSpan<T>()
-            .Slice(start, maximumAdditionalCount);
-    }
-
-    internal void CommitWrite(
-        int start,
-        int committedCount)
-    {
-        Validate(nameof(NativeBuilder<T>.Write));
-        _initialization.Allocation.InitializedLength =
-            checked(start + committedCount);
-    }
-
-    internal NativeTransfer<T> Complete(int length)
-    {
-        if (Interlocked.CompareExchange(
-            ref _state,
-            Completing,
-            Active) != Active)
-        {
-            throw new InvalidOperationException(
-                "The native builder session is not active.");
-        }
-
-        try
-        {
-            _kernel.ValidateBuilderAccess(
-                _initialization,
-                "NativeBuilder.Complete");
-            NativeBuilderCompletion completion =
-                _kernel.CompleteBuilder(
-                    _initialization,
-                    length);
-            NativeTransfer<T> transfer = completion.IsBump
-                ? NativeTransfer<T>.Create(
-                    _kernel,
-                    new NativeRegionAllocation(
-                        completion.Allocation.Id,
-                        completion.Allocation),
-                    "NativeBuilder.Complete")
-                : NativeTransfer<T>.Create(
-                    _kernel,
-                    new NativePoolLease(
-                        completion.Allocation.Id,
-                        completion.Allocation),
-                    "NativeBuilder.Complete");
-            Volatile.Write(ref _state, Completed);
-            ExitGenerationOnce();
-            return transfer;
-        }
-        catch
-        {
-            try
-            {
-                _kernel.AbortBuilderInitialization(
-                    _initialization);
-            }
-            finally
-            {
-                Volatile.Write(ref _state, Released);
-                ExitGenerationOnce();
-            }
-
-            throw;
-        }
-    }
-
-    internal void Abort()
-    {
-        if (Interlocked.CompareExchange(
-            ref _state,
-            Releasing,
-            Active) != Active)
-        {
-            return;
-        }
-
-        try
-        {
-            _kernel.AbortBuilderInitialization(
-                _initialization);
-        }
-        finally
-        {
-            Volatile.Write(ref _state, Released);
-            ExitGenerationOnce();
-        }
-    }
-
-    private void EnsureCapacity(
-        int required,
-        int initializedLength)
-    {
-        EnsureActive();
-        int capacity = Capacity;
-        if (required <= capacity)
-        {
-            return;
-        }
-
-        int next = capacity == 0 ? 4 : capacity;
-        while (next < required)
-        {
-            next = next > int.MaxValue / 2
-                ? required
-                : checked(next * 2);
-        }
-
-        _initialization = _kernel.GrowBuilder<T>(
-            _initialization,
-            next,
-            initializedLength);
-    }
-
-    private void EnsureActive()
-    {
-        if (Volatile.Read(ref _state) != Active)
-        {
-            throw new InvalidOperationException(
-                "The native builder session is not active.");
-        }
-    }
-
-    private void Attach(
-        NativeBuilderInitialization initialization,
-        string operation)
-    {
-        try
-        {
-            NativeMemoryTestHooks.CheckManagedPublicationBoundary(
-                operation,
-                ordinal: 1,
-                "NativeBuilderSession ownership");
-            _initialization = initialization;
-            _generation = initialization.Generation;
-            Volatile.Write(ref _state, Active);
-        }
-        catch (Exception failure)
-        {
-            try
-            {
-                _kernel.AbortUnpublishedBuilderInitialization(
-                    initialization);
-            }
-            catch (Exception cleanupFailure)
-            {
-                throw new AggregateException(
-                    "Native builder session publication failed and cleanup also failed.",
-                    failure,
-                    cleanupFailure);
-            }
-            finally
-            {
-                Volatile.Write(ref _state, Released);
-            }
-
-            throw;
-        }
-    }
-
-    private void ExitGenerationOnce()
-    {
-        NativeGeneration generation = _generation
-            ?? throw new InvalidOperationException(
-                "The native builder session has no generation ownership.");
-        if (Interlocked.Exchange(
-            ref _generationExited,
-            1) == 0)
-        {
-            _kernel.ExitBuilderGeneration(generation);
         }
     }
 }

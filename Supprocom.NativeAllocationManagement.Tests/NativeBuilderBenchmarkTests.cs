@@ -11,14 +11,8 @@ public sealed class NativeBuilderBenchmarkTests
         NativeBuilderBenchmarkOptions options = CreateOptions();
         NativeBuilderExactOutput managed =
             NativeBuilderBenchmark.BuildManagedOutput(options);
-        using NativeConcurrentPool<uint> pool = new(
-            preLease: options.PreLease,
-            returnMemoryOnDispose:
-                NativeMemoryReturn.ToNativeMemory);
         NativeBuilderExactOutput native =
-            NativeBuilderBenchmark.BuildNativeOutput(
-            pool,
-            options);
+            NativeBuilderBenchmark.BuildNativeOutput(options);
 
         Assert.Equal(
             options.ElementCount,
@@ -51,8 +45,8 @@ public sealed class NativeBuilderBenchmarkTests
         Assert.True(
             native.ManagedAllocatedBytes
                 < managed.ManagedAllocatedBytes);
-        Assert.Equal(0, native.NativeFreshSegmentAllocationDelta);
-        Assert.True(native.NativeRetainedBytes > 0);
+        Assert.True(native.NativeFreshSegmentAllocationDelta > 0);
+        Assert.Equal(0, native.NativeRetainedBytes);
         Assert.Equal(
             options.ElementCount,
             native.OpaqueElementCount
@@ -72,12 +66,8 @@ public sealed class NativeBuilderBenchmarkTests
         };
         NativeBuilderExactOutput managed =
             NativeBuilderBenchmark.BuildManagedOutput(options);
-        using NativeConcurrentPool<uint> pool = new(
-            preLease: options.PreLease,
-            returnMemoryOnDispose:
-                NativeMemoryReturn.ToNativeMemory);
         NativeBuilderExactOutput native =
-            NativeBuilderBenchmark.BuildNativeOutput(pool, options);
+            NativeBuilderBenchmark.BuildNativeOutput(options);
 
         Assert.Equal(3, managed.Opaque.Length);
         Assert.Empty(managed.Transparent);

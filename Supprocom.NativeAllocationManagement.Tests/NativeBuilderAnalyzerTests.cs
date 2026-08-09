@@ -19,7 +19,7 @@ public sealed class NativeBuilderAnalyzerTests
                 {
                     using NativeConcurrentPool<int> pool = new();
                     using NativeBuilder<int> builder =
-                        pool.CreateBuilder(preLease: 1);
+                        new NativeBuilder<int>(preLease: 1);
                     builder.Append(11);
                     builder.Append(new int[] { 13, 17 });
                     NativeTransfer<int> transfer = builder.Complete();
@@ -45,7 +45,7 @@ public sealed class NativeBuilderAnalyzerTests
                 public static void Run(NativeConcurrentPool<int> pool)
                 {
                     using NativeBuilder<int> builder =
-                        pool.CreateBuilder(preLease: 4);
+                        new NativeBuilder<int>(preLease: 4);
                     builder.Write(
                         4,
                         static writer =>
@@ -77,7 +77,7 @@ public sealed class NativeBuilderAnalyzerTests
                 public static void Run(NativeConcurrentPool<int> pool)
                 {
                     using NativeBuilder<int> builder =
-                        pool.CreateBuilder(preLease: 2);
+                        new NativeBuilder<int>(preLease: 2);
                     builder.Write(2, WriteValues);
                     NativeTransfer<int> transfer = builder.Complete();
                     transfer.Dispose();
@@ -107,7 +107,7 @@ public sealed class NativeBuilderAnalyzerTests
                 public static void Run(NativeConcurrentPool<uint> pool)
                 {
                     using NativeBuilder<uint> builder =
-                        pool.CreateBuilder(preLease: 4);
+                        new NativeBuilder<int>(preLease: 4);
                     builder.Borrow(Emit);
                     NativeTransfer<uint> transfer = builder.Complete();
                     transfer.Dispose();
@@ -151,7 +151,7 @@ public sealed class NativeBuilderAnalyzerTests
             {
                 public static void Run(NativeConcurrentPool<int> pool)
                 {
-                    using NativeBuilder<int> builder = pool.CreateBuilder();
+                    using NativeBuilder<int> builder = new NativeBuilder<int>();
                     builder.Write(
                         2,
                         static writer =>
@@ -183,7 +183,7 @@ public sealed class NativeBuilderAnalyzerTests
             {
                 public static void Run(NativeConcurrentPool<int> pool)
                 {
-                    using NativeBuilder<int> builder = pool.CreateBuilder();
+                    using NativeBuilder<int> builder = new NativeBuilder<int>();
                     builder.Write(
                         1,
                         static writer =>
@@ -210,7 +210,7 @@ public sealed class NativeBuilderAnalyzerTests
             {
                 public static void Run(NativeConcurrentPool<int> pool)
                 {
-                    using NativeBuilder<int> builder = pool.CreateBuilder();
+                    using NativeBuilder<int> builder = new NativeBuilder<int>();
                     builder.Write(
                         1,
                         static writer => Commit(writer));
@@ -239,7 +239,7 @@ public sealed class NativeBuilderAnalyzerTests
                 {
                     NativeBuilderWriteAction<int> action =
                         static writer => writer.Commit(0);
-                    using NativeBuilder<int> builder = pool.CreateBuilder();
+                    using NativeBuilder<int> builder = new NativeBuilder<int>();
                     builder.Write(0, action);
                     NativeTransfer<int> transfer = builder.Complete();
                     transfer.Dispose();
@@ -266,7 +266,7 @@ public sealed class NativeBuilderAnalyzerTests
                 {
                     NativeBuilderWriteAction<int> indirect =
                         static writer => writer.Commit(0);
-                    using NativeBuilder<int> builder = pool.CreateBuilder();
+                    using NativeBuilder<int> builder = new NativeBuilder<int>();
                     builder.Write(
                         1,
                         Identity(
@@ -340,7 +340,7 @@ public sealed class NativeBuilderAnalyzerTests
                 {
                     NativeBuilderWriteAction<int> action =
                         static writer => writer.Commit(0);
-                    using NativeBuilder<int> builder = pool.CreateBuilder();
+                    using NativeBuilder<int> builder = new NativeBuilder<int>();
                     builder.Borrow(
                         (scoped ref NativeBuilderBorrow<int> borrow) =>
                             borrow.Write(0, action));
@@ -387,7 +387,7 @@ public sealed class NativeBuilderAnalyzerTests
             {
                 public static void Run(NativeConcurrentPool<int> pool)
                 {
-                    using NativeBuilder<int> builder = pool.CreateBuilder();
+                    using NativeBuilder<int> builder = new NativeBuilder<int>();
                     NativeBuilderBorrow<int> escaped = default;
                     builder.Borrow(
                         (scoped ref NativeBuilderBorrow<int> borrow) =>
@@ -433,7 +433,7 @@ public sealed class NativeBuilderAnalyzerTests
             {
                 public static void Run(NativeConcurrentPool<int> pool)
                 {
-                    using NativeBuilder<int> builder = pool.CreateBuilder();
+                    using NativeBuilder<int> builder = new NativeBuilder<int>();
                     builder.Borrow(
                         (scoped ref NativeBuilderBorrow<int> borrow) =>
                         {
@@ -459,7 +459,7 @@ public sealed class NativeBuilderAnalyzerTests
             {
                 public static void Run(NativeConcurrentPool<int> pool)
                 {
-                    using NativeBuilder<int> builder = pool.CreateBuilder();
+                    using NativeBuilder<int> builder = new NativeBuilder<int>();
                     builder.Borrow(
                         (scoped ref NativeBuilderBorrow<int> borrow) =>
                         {
@@ -490,7 +490,7 @@ public sealed class NativeBuilderAnalyzerTests
                     NativeBuilderBorrowAction<int> action =
                         static (scoped ref NativeBuilderBorrow<int> borrow) =>
                             borrow.Append(1);
-                    using NativeBuilder<int> builder = pool.CreateBuilder();
+                    using NativeBuilder<int> builder = new NativeBuilder<int>();
                     builder.Borrow(action);
                     builder.Dispose();
                 }
@@ -517,7 +517,7 @@ public sealed class NativeBuilderAnalyzerTests
                     NativeBuilderBorrowAction<int> indirect =
                         static (scoped ref NativeBuilderBorrow<int> borrow) =>
                             borrow.Append(0);
-                    using NativeBuilder<int> builder = pool.CreateBuilder();
+                    using NativeBuilder<int> builder = new NativeBuilder<int>();
                     builder.Borrow(
                         Identity(
                             (scoped ref NativeBuilderBorrow<int> borrow) =>
@@ -587,7 +587,7 @@ public sealed class NativeBuilderAnalyzerTests
             {
                 public static void Run(NativeConcurrentPool<int> pool)
                 {
-                    using NativeBuilder<int> builder = pool.CreateBuilder();
+                    using NativeBuilder<int> builder = new();
                     builder.Write(
                         1,
                         new NativeBuilderWriteAction<int>(
@@ -626,7 +626,7 @@ public sealed class NativeBuilderAnalyzerTests
             {
                 public static void Run(NativeConcurrentPool<int> pool)
                 {
-                    NativeBuilder<int> builder = pool.CreateBuilder();
+                    NativeBuilder<int> builder = new NativeBuilder<int>();
                     builder.Append(19);
                     builder.Dispose();
                 }
@@ -648,7 +648,7 @@ public sealed class NativeBuilderAnalyzerTests
                 public static NativeTransfer<int> Build(
                     NativeConcurrentPool<int> pool)
                 {
-                    using NativeBuilder<int> builder = pool.CreateBuilder();
+                    using NativeBuilder<int> builder = new NativeBuilder<int>();
                     builder.Append(23);
                     return builder.Complete();
                 }
@@ -669,7 +669,7 @@ public sealed class NativeBuilderAnalyzerTests
             {
                 public static void Run(NativeConcurrentPool<int> pool)
                 {
-                    using NativeBuilder<int> builder = pool.CreateBuilder();
+                    using NativeBuilder<int> builder = new NativeBuilder<int>();
                     builder.Append(29);
                     Consume(builder.Complete());
                 }
@@ -698,7 +698,7 @@ public sealed class NativeBuilderAnalyzerTests
 
                 public void Build(NativeConcurrentPool<int> pool)
                 {
-                    using NativeBuilder<int> builder = pool.CreateBuilder();
+                    using NativeBuilder<int> builder = new NativeBuilder<int>();
                     builder.Append(31);
                     _transfer = builder.Complete();
                 }
@@ -723,7 +723,7 @@ public sealed class NativeBuilderAnalyzerTests
 
                 public void Build(NativeConcurrentPool<int> pool)
                 {
-                    using NativeBuilder<int> builder = pool.CreateBuilder();
+                    using NativeBuilder<int> builder = new NativeBuilder<int>();
                     builder.Append(31);
                     _transfer = builder.Complete();
                 }
@@ -746,7 +746,7 @@ public sealed class NativeBuilderAnalyzerTests
 
                 public void Build(NativeConcurrentPool<int> pool)
                 {
-                    using NativeBuilder<int> builder = pool.CreateBuilder();
+                    using NativeBuilder<int> builder = new NativeBuilder<int>();
                     builder.Append(31);
                     Transfer = builder.Complete();
                 }
@@ -771,7 +771,7 @@ public sealed class NativeBuilderAnalyzerTests
 
                 public void Build(NativeConcurrentPool<int> pool)
                 {
-                    using NativeBuilder<int> builder = pool.CreateBuilder();
+                    using NativeBuilder<int> builder = new NativeBuilder<int>();
                     builder.Append(31);
                     _transfer = builder.Complete();
                 }
@@ -800,7 +800,7 @@ public sealed class NativeBuilderAnalyzerTests
             {
                 public static void Run(NativeConcurrentPool<int> pool)
                 {
-                    NativeBuilder<int> builder = pool.CreateBuilder();
+                    NativeBuilder<int> builder = new NativeBuilder<int>();
                     NativeBuilder<int> alias = builder;
                     alias.Dispose();
                 }
@@ -821,7 +821,7 @@ public sealed class NativeBuilderAnalyzerTests
             {
                 public static void Run(NativeConcurrentPool<int> pool)
                 {
-                    NativeBuilder<int> builder = pool.CreateBuilder();
+                    NativeBuilder<int> builder = new NativeBuilder<int>();
                     Drop(builder);
                 }
 
@@ -851,7 +851,7 @@ public sealed class NativeBuilderAnalyzerTests
             {
                 public static void Run(NativeConcurrentPool<int> pool)
                 {
-                    NativeBuilder<int> builder = pool.CreateBuilder();
+                    NativeBuilder<int> builder = new NativeBuilder<int>();
                     {{destinationType}} erased = builder;
                     _ = erased;
                     builder.Dispose();
@@ -876,8 +876,8 @@ public sealed class NativeBuilderAnalyzerTests
 
                 public void Run(NativeConcurrentPool<int> pool)
                 {
-                    _field = pool.CreateBuilder();
-                    Property = pool.CreateBuilder();
+                    _field = new NativeBuilder<int>();
+                    Property = new NativeBuilder<int>();
                 }
             }
             """);
@@ -898,13 +898,13 @@ public sealed class NativeBuilderAnalyzerTests
             {
                 public static NativeBuilder<int> Return(NativeConcurrentPool<int> pool)
                 {
-                    return pool.CreateBuilder();
+                    return new NativeBuilder<int>();
                 }
 
                 public static void Discard(NativeConcurrentPool<int> pool)
                 {
-                    _ = pool.CreateBuilder();
-                    _ = (pool.CreateBuilder(), 1);
+                    _ = new NativeBuilder<int>();
+                    _ = (new NativeBuilder<int>(), 1);
                 }
             }
             """);
@@ -926,7 +926,7 @@ public sealed class NativeBuilderAnalyzerTests
             {
                 public static void Run(NativeConcurrentPool<int> pool)
                 {
-                    NativeBuilder<int> builder = pool.CreateBuilder();
+                    NativeBuilder<int> builder = new NativeBuilder<int>();
                     Action append = () => builder.Append(37);
                     append();
                     builder.Dispose();
@@ -948,7 +948,7 @@ public sealed class NativeBuilderAnalyzerTests
             {
                 public static void Run(NativeConcurrentPool<int> pool)
                 {
-                    NativeBuilder<int> builder = pool.CreateBuilder();
+                    NativeBuilder<int> builder = new NativeBuilder<int>();
                     NativeTransfer<int> transfer = builder.Complete();
                     builder.Append(41);
                     transfer.Dispose();
@@ -970,7 +970,7 @@ public sealed class NativeBuilderAnalyzerTests
             {
                 public static void Run(NativeConcurrentPool<int> pool)
                 {
-                    NativeBuilder<int> builder = pool.CreateBuilder();
+                    NativeBuilder<int> builder = new NativeBuilder<int>();
                     NativeTransfer<int> first = builder.Complete();
                     NativeTransfer<int> second = builder.Complete();
                     first.Dispose();
@@ -993,7 +993,7 @@ public sealed class NativeBuilderAnalyzerTests
             {
                 public static void Run(NativeConcurrentPool<int> pool)
                 {
-                    NativeBuilder<int> builder = pool.CreateBuilder();
+                    NativeBuilder<int> builder = new NativeBuilder<int>();
                     builder.Dispose();
                     _ = builder.Count;
                 }
@@ -1014,7 +1014,7 @@ public sealed class NativeBuilderAnalyzerTests
             {
                 public static void Run(NativeConcurrentPool<int> pool, bool dispose)
                 {
-                    NativeBuilder<int> builder = pool.CreateBuilder();
+                    NativeBuilder<int> builder = new NativeBuilder<int>();
                     if (dispose)
                     {
                         builder.Dispose();
@@ -1042,7 +1042,7 @@ public sealed class NativeBuilderAnalyzerTests
             {
                 public static void Run(NativeConcurrentPool<int> pool)
                 {
-                    NativeBuilder<int> builder = pool.CreateBuilder();
+                    NativeBuilder<int> builder = new NativeBuilder<int>();
                     builder.Append(43);
                     {{completion}}
                 }
@@ -1063,8 +1063,8 @@ public sealed class NativeBuilderAnalyzerTests
             {
                 public static void Run(NativeConcurrentPool<int> pool)
                 {
-                    NativeBuilder<int> builder = pool.CreateBuilder();
-                    builder = pool.CreateBuilder();
+                    NativeBuilder<int> builder = new NativeBuilder<int>();
+                    builder = new NativeBuilder<int>();
                     builder.Dispose();
                 }
             }
@@ -1086,7 +1086,7 @@ public sealed class NativeBuilderAnalyzerTests
                     NativeConcurrentPool<int> pool,
                     bool first)
                 {
-                    NativeBuilder<int> builder = pool.CreateBuilder();
+                    NativeBuilder<int> builder = new NativeBuilder<int>();
                     NativeBuilder<int> alias = first
                         ? builder
                         : builder;
@@ -1113,7 +1113,7 @@ public sealed class NativeBuilderAnalyzerTests
                 {
                     Channel<NativeTransfer<int>> channel =
                         Channel.CreateBounded<NativeTransfer<int>>(1);
-                    using NativeBuilder<int> builder = pool.CreateBuilder();
+                    using NativeBuilder<int> builder = new NativeBuilder<int>();
                     builder.Append(47);
                     await channel.Writer.WriteAsync(builder.Complete());
                     NativeTransfer<int> transfer =
@@ -1141,7 +1141,7 @@ public sealed class NativeBuilderAnalyzerTests
                 {
                     Channel<NativeTransfer<int>> channel =
                         Channel.CreateUnbounded<NativeTransfer<int>>();
-                    NativeBuilder<int> builder = pool.CreateBuilder();
+                    NativeBuilder<int> builder = new NativeBuilder<int>();
                     builder.Append(53);
                     await channel.Writer.WriteAsync(builder.Complete());
                 }
@@ -1216,9 +1216,9 @@ public sealed class NativeBuilderAnalyzerTests
                     Channel<ChunkRender> channel =
                         Channel.CreateBounded<ChunkRender>(1);
                     using NativeBuilder<uint> opaque =
-                        pool.CreateBuilder(preLease: 4);
+                        new NativeBuilder<int>(preLease: 4);
                     using NativeBuilder<uint> transparent =
-                        pool.CreateBuilder(preLease: 4);
+                        new NativeBuilder<int>(preLease: 4);
                     opaque.Append(new uint[] { 1, 2, 3, 4 });
                     transparent.Append(new uint[] { 5, 6 });
                     await channel.Writer.WriteAsync(new ChunkRender(
