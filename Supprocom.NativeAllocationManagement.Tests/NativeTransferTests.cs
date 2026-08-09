@@ -410,7 +410,7 @@ public sealed class NativeTransferTests
     {
         NativeMemoryTestHooks.Reset();
         AlignedTestBuffer buffer = new(4096);
-        NativeArena arena = new(
+        NativeConcurrentArena arena = new(
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         long upstreamAllocations =
             NativeMemoryTestHooks.Snapshot().AllocationCount;

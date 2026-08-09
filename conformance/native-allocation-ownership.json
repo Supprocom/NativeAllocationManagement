@@ -424,52 +424,52 @@
     "name": "arena-balanced-release-generation",
     "compilerRejected": false,
     "expectedDiagnostics": [],
-    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run(int iterations) { NativeArena arena = new(); for (int index = 0; index < iterations; index++) { { ArenaLease<int> value = arena.Scratch<int>(1, static writer => writer.Fill(default!)); } arena.ReleaseLeasesToNativeMemory(); } arena.Dispose(); } }"
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run(int iterations) { NativeConcurrentArena arena = new(); for (int index = 0; index < iterations; index++) { { ConcurrentArenaLease<int> value = arena.Scratch<int>(1, static writer => writer.Fill(default!)); } arena.ReleaseLeasesToNativeMemory(); } arena.Dispose(); } }"
   },
   {
     "name": "arena-native-release-live-root-error",
     "compilerRejected": false,
     "expectedDiagnostics": [
-      { "id": "NAM1007", "count": 1, "severity": "Error", "facts": [{ "line": 2, "column": 171, "provenance": "arena -> value" }] }
+      { "id": "NAM1007", "count": 1, "severity": "Error", "facts": [{ "line": 2, "column": 191, "provenance": "arena -> value" }] }
     ],
-    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativeArena arena = new(); ArenaLease<int> value = arena.Scratch<int>(1, static writer => writer.Fill(default!)); arena.ReleaseLeasesToNativeMemory(); arena.Dispose(); } }"
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativeConcurrentArena arena = new(); ConcurrentArenaLease<int> value = arena.Scratch<int>(1, static writer => writer.Fill(default!)); arena.ReleaseLeasesToNativeMemory(); arena.Dispose(); } }"
   },
   {
     "name": "arena-garbage-release-live-root-warning",
     "compilerRejected": false,
     "expectedDiagnostics": [
-      { "id": "NAM1017", "count": 1, "severity": "Warning", "facts": [{ "line": 2, "column": 171, "provenance": "arena -> value" }] }
+      { "id": "NAM1017", "count": 1, "severity": "Warning", "facts": [{ "line": 2, "column": 191, "provenance": "arena -> value" }] }
     ],
-    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativeArena arena = new(); ArenaLease<int> value = arena.Scratch<int>(1, static writer => writer.Fill(default!)); arena.ReleaseLeasesToGarbageCollector(); arena.Dispose(); } }"
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativeConcurrentArena arena = new(); ConcurrentArenaLease<int> value = arena.Scratch<int>(1, static writer => writer.Fill(default!)); arena.ReleaseLeasesToGarbageCollector(); arena.Dispose(); } }"
   },
   {
     "name": "arena-native-release-active-borrow-error",
     "compilerRejected": false,
     "expectedDiagnostics": [
-      { "id": "NAM1007", "count": 1, "severity": "Error", "facts": [{ "line": 2, "column": 189, "provenance": "arena -> value -> scoped callback" }] }
+      { "id": "NAM1007", "count": 1, "severity": "Error", "facts": [{ "line": 2, "column": 209, "provenance": "arena -> value -> scoped callback" }] }
     ],
-    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativeArena arena = new(); ArenaLease<int> value = arena.Scratch<int>(1, static writer => writer.Fill(default!)); value.Access(_ => arena.ReleaseLeasesToNativeMemory()); arena.Dispose(); } }"
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativeConcurrentArena arena = new(); ConcurrentArenaLease<int> value = arena.Scratch<int>(1, static writer => writer.Fill(default!)); value.Access(_ => arena.ReleaseLeasesToNativeMemory()); arena.Dispose(); } }"
   },
   {
     "name": "arena-garbage-release-active-borrow-warning",
     "compilerRejected": false,
     "expectedDiagnostics": [
-      { "id": "NAM1017", "count": 1, "severity": "Warning", "facts": [{ "line": 2, "column": 189, "provenance": "arena -> value -> scoped callback" }] }
+      { "id": "NAM1017", "count": 1, "severity": "Warning", "facts": [{ "line": 2, "column": 209, "provenance": "arena -> value -> scoped callback" }] }
     ],
-    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativeArena arena = new(); ArenaLease<int> value = arena.Scratch<int>(1, static writer => writer.Fill(default!)); value.Access(_ => arena.ReleaseLeasesToGarbageCollector()); arena.Dispose(); } }"
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativeConcurrentArena arena = new(); ConcurrentArenaLease<int> value = arena.Scratch<int>(1, static writer => writer.Fill(default!)); value.Access(_ => arena.ReleaseLeasesToGarbageCollector()); arena.Dispose(); } }"
   },
   {
     "name": "arena-scoped-recycle-complete",
     "compilerRejected": false,
     "expectedDiagnostics": [],
-    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativeArena arena = new(); { scoped ArenaLease<int> value = arena.ScratchScoped<int>(1, static writer => writer.Fill(default!)); value[0] = 1; } arena.RecycleScoped(); arena.Dispose(); } }"
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativeConcurrentArena arena = new(); { scoped ConcurrentArenaLease<int> value = arena.ScratchScoped<int>(1, static writer => writer.Fill(default!)); value[0] = 1; } arena.RecycleScoped(); arena.Dispose(); } }"
   },
   {
     "name": "arena-scoped-recycle-missing",
     "compilerRejected": false,
     "expectedDiagnostics": [
-      { "id": "NAM1020", "count": 1, "severity": "Warning", "facts": [{ "line": 2, "column": 83, "provenance": "arena" }] }
+      { "id": "NAM1020", "count": 1, "severity": "Warning", "facts": [{ "line": 2, "column": 93, "provenance": "arena" }] }
     ],
-    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { using NativeArena arena = new(); { scoped ArenaLease<int> value = arena.ScratchScoped<int>(1, static writer => writer.Fill(default!)); value[0] = 1; } } }"
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { using NativeConcurrentArena arena = new(); { scoped ConcurrentArenaLease<int> value = arena.ScratchScoped<int>(1, static writer => writer.Fill(default!)); value[0] = 1; } } }"
   }
 ]

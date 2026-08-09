@@ -5,7 +5,7 @@ public sealed class NativeArenaTransferBatchTests
     [Fact]
     public void MoveInvalidatesOldAliasesAndReturnsOneCompactSlot()
     {
-        using NativeArena arena = new(
+        using NativeConcurrentArena arena = new(
             preAllocateBytes: 128,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         NativeArenaTransferBatch<int> batch =
@@ -39,7 +39,7 @@ public sealed class NativeArenaTransferBatchTests
     [Fact]
     public void FailedInitializerReturnsOnlyItsSlot()
     {
-        using NativeArena arena = new(
+        using NativeConcurrentArena arena = new(
             preAllocateBytes: 128,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         NativeArenaTransferBatch<int> batch =
@@ -63,7 +63,7 @@ public sealed class NativeArenaTransferBatchTests
     [Fact]
     public void PreparedPublicationKeepsTheSlotInitializingUntilRelease()
     {
-        NativeArena arena = new(
+        NativeConcurrentArena arena = new(
             preAllocateBytes: 128,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         NativeArenaTransferBatch<int> batch =
@@ -88,7 +88,7 @@ public sealed class NativeArenaTransferBatchTests
     [Fact]
     public void AbortedPreparedPublicationReturnsOnlyItsSlot()
     {
-        using NativeArena arena = new(
+        using NativeConcurrentArena arena = new(
             preAllocateBytes: 128,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         NativeArenaTransferBatch<int> batch =
@@ -111,7 +111,7 @@ public sealed class NativeArenaTransferBatchTests
     [Fact]
     public async Task ReturnRejectsAnActiveCallbackWithoutReusingStorage()
     {
-        using NativeArena arena = new(
+        using NativeConcurrentArena arena = new(
             preAllocateBytes: 128,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         NativeArenaTransferBatch<int> batch =
@@ -149,7 +149,7 @@ public sealed class NativeArenaTransferBatchTests
     [Fact]
     public async Task OwnerDisposalRejectsAnActiveBatchCallback()
     {
-        NativeArena arena = new(
+        NativeConcurrentArena arena = new(
             preAllocateBytes: 128,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         NativeArenaTransferBatch<int> batch =
@@ -199,7 +199,7 @@ public sealed class NativeArenaTransferBatchTests
     [Fact]
     public void OwnerDisposalRejectsAnActiveBatchInitialization()
     {
-        NativeArena arena = new(
+        NativeConcurrentArena arena = new(
             preAllocateBytes: 128,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         NativeArenaTransferBatch<int> batch =
@@ -219,7 +219,7 @@ public sealed class NativeArenaTransferBatchTests
     [Fact]
     public async Task OrdinaryScratchUsesItsLaneDuringBatchInitialization()
     {
-        using NativeArena arena = new(
+        using NativeConcurrentArena arena = new(
             preAllocateBytes: 4_096,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         NativeArenaTransferBatch<int> batch =
@@ -252,7 +252,7 @@ public sealed class NativeArenaTransferBatchTests
         });
 
         Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
-        ArenaLease<int> local = arena.Scratch<int>(
+        ConcurrentArenaLease<int> local = arena.Scratch<int>(
             8,
             static writer => writer.Fill(71));
         Assert.Equal(71, local.Read(static view => view[7]));
@@ -268,7 +268,7 @@ public sealed class NativeArenaTransferBatchTests
     [Fact]
     public async Task DeferredResetKeepsBatchStorageUntilCallbackExit()
     {
-        using NativeArena arena = new(
+        using NativeConcurrentArena arena = new(
             preAllocateBytes: 128,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         NativeArenaTransferBatch<int> batch =
@@ -299,7 +299,7 @@ public sealed class NativeArenaTransferBatchTests
             () => lease.Read(static view => view[0]));
         lease.Dispose();
 
-        ArenaLease<int> next = arena.Scratch<int>(
+        ConcurrentArenaLease<int> next = arena.Scratch<int>(
             8,
             static writer => writer.Fill(59));
         Assert.Equal(59, next.Read(static view => view[7]));
@@ -308,7 +308,7 @@ public sealed class NativeArenaTransferBatchTests
     [Fact]
     public void GenerationResetInvalidatesBatchHandlesAndMetadata()
     {
-        using NativeArena arena = new(
+        using NativeConcurrentArena arena = new(
             preAllocateBytes: 128,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         NativeArenaTransferBatch<int> batch =
@@ -337,7 +337,7 @@ public sealed class NativeArenaTransferBatchTests
     {
         const int slotCount = 24;
         const int length = 256;
-        using NativeArena arena = new(
+        using NativeConcurrentArena arena = new(
             preAllocateBytes: slotCount * length * sizeof(long),
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         NativeArenaTransferBatch<long> batch =

@@ -467,7 +467,7 @@ public sealed class NativeBuilderTests
     [Fact]
     public void ArenaBuilderGrowsAndPreservesEveryInitializedValue()
     {
-        using NativeArena arena = new(
+        using NativeConcurrentArena arena = new(
             preAllocateBytes: 32,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         using NativeBuilder<long> builder =
@@ -611,7 +611,7 @@ public sealed class NativeBuilderTests
         try
         {
             AlignedTestBuffer buffer = new(4096);
-            NativeArena arena = new(
+            NativeConcurrentArena arena = new(
                 returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
             long upstreamAllocations =
                 NativeMemoryTestHooks.Snapshot().AllocationCount;
@@ -904,7 +904,7 @@ public sealed class NativeBuilderTests
         int boundary)
     {
         NativeMemoryTestHooks.Reset();
-        NativeArena arena = new(
+        NativeConcurrentArena arena = new(
             preAllocateBytes: 256,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         try
@@ -917,7 +917,7 @@ public sealed class NativeBuilderTests
                 () => arena.CreateBuilder<int>(preLease: 4));
 
             Assert.Contains(
-                "NativeArena.CreateBuilder",
+                "NativeConcurrentArena.CreateBuilder",
                 exception.Message);
             Assert.Equal(
                 0,

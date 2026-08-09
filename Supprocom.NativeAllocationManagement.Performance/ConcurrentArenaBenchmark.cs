@@ -411,7 +411,7 @@ internal static class ConcurrentArenaBenchmark
                 - statisticsBefore.FreshSegmentAllocations,
             checksum,
             expectedHash,
-            GetInformationalVersion(typeof(NativeArena).Assembly),
+            GetInformationalVersion(typeof(NativeConcurrentArena).Assembly),
             GetInformationalVersion(typeof(ConcurrentArenaBenchmark).Assembly),
             Environment.GetEnvironmentVariable(
                 "DOTNET_TieredCompilation") ?? "unset",
@@ -574,7 +574,7 @@ internal static class ConcurrentArenaBenchmark
                     - statisticsBefore.FreshSegmentAllocations,
                 checksum,
                 _expectedHash,
-                GetInformationalVersion(typeof(NativeArena).Assembly),
+                GetInformationalVersion(typeof(NativeConcurrentArena).Assembly),
                 GetInformationalVersion(
                     typeof(ConcurrentArenaBenchmark).Assembly),
                 Environment.GetEnvironmentVariable(
@@ -1569,14 +1569,14 @@ internal static class ConcurrentArenaBenchmark
 
     private sealed class GeneralArenaWorkload : NativeMapWorkload
     {
-        private readonly NativeArena _arena;
+        private readonly NativeConcurrentArena _arena;
 
         internal GeneralArenaWorkload(
             ConcurrentArenaBenchmarkOptions options,
             PersistentMapWorkers? workers = null)
             : base(options, workers)
         {
-            _arena = new NativeArena(
+            _arena = new NativeConcurrentArena(
                 checked(
                     (nuint)options.MapCount
                     * (nuint)options.ValuesPerMap
@@ -1610,7 +1610,7 @@ internal static class ConcurrentArenaBenchmark
 
     private sealed class SingleArenaWorkload : MapWorkload
     {
-        private readonly NativeArena _arena;
+        private readonly NativeConcurrentArena _arena;
         private readonly NativeArenaTransferBatch<float> _batch;
         private readonly NativeArenaTransferBatchPublication<float>[]
             _publications;
@@ -1625,7 +1625,7 @@ internal static class ConcurrentArenaBenchmark
             PersistentMapWorkers? workers = null)
             : base(options, workers)
         {
-            _arena = new NativeArena(
+            _arena = new NativeConcurrentArena(
                 checked(
                     (nuint)options.MapCount
                     * (nuint)options.ValuesPerMap
@@ -1762,7 +1762,7 @@ internal static class ConcurrentArenaBenchmark
 
     private sealed class ShardedArenaWorkload : NativeMapWorkload
     {
-        private readonly NativeArena[] _arenas;
+        private readonly NativeConcurrentArena[] _arenas;
 
         internal ShardedArenaWorkload(
             ConcurrentArenaBenchmarkOptions options,
@@ -1770,7 +1770,7 @@ internal static class ConcurrentArenaBenchmark
             : base(options, workers)
         {
             _arenas = Enumerable.Range(0, options.WorkerCount)
-                .Select(workerIndex => new NativeArena(
+                .Select(workerIndex => new NativeConcurrentArena(
                     checked(
                         (nuint)GetWorkerMapCount(options, workerIndex)
                         * (nuint)options.ValuesPerMap
@@ -1791,7 +1791,7 @@ internal static class ConcurrentArenaBenchmark
         {
             long retainedBytes = 0;
             long freshAllocations = 0;
-            foreach (NativeArena arena in _arenas)
+            foreach (NativeConcurrentArena arena in _arenas)
             {
                 NativeOwnerStatistics statistics = arena.GetStatistics();
                 retainedBytes = checked(
@@ -1808,7 +1808,7 @@ internal static class ConcurrentArenaBenchmark
         {
             DisposeWorkers();
             DisposeSlots();
-            foreach (NativeArena arena in _arenas)
+            foreach (NativeConcurrentArena arena in _arenas)
             {
                 arena.Dispose();
             }

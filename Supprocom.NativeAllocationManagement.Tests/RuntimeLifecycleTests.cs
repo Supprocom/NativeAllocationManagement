@@ -479,7 +479,7 @@ public sealed class RuntimeLifecycleTests
     {
         NativeMemoryTestHooks.Reset();
         NativePool<int> pool = new(preLease: 8, doNotLeaseOnDeclaration: true);
-        NativeArena arena = new(preAllocateBytes: 64, doNotLeaseOnDeclaration: true);
+        NativeConcurrentArena arena = new(preAllocateBytes: 64, doNotLeaseOnDeclaration: true);
         NativeMemoryTestMetrics before = NativeMemoryTestHooks.Snapshot();
 
         pool.Dispose();

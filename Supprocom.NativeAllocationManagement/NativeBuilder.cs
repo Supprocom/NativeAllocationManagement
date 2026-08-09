@@ -26,7 +26,7 @@ public static class NativeBuilderOwnerExtensions
     /// <param name="arena">The heterogeneous owner that supplies native storage.</param>
     /// <param name="preLease">The initial reservation in elements of <typeparamref name="T"/>.</param>
     public static NativeBuilder<T> CreateBuilder<T>(
-        this NativeArena arena,
+        this NativeConcurrentArena arena,
         int preLease = 0)
         where T : unmanaged
     {
@@ -38,7 +38,7 @@ public static class NativeBuilderOwnerExtensions
         session.BeginArena(preLease);
         return PublishBuilder(
             session,
-            "NativeArena.CreateBuilder");
+            "NativeConcurrentArena.CreateBuilder");
     }
 
     private static NativeBuilder<T> PublishBuilder<T>(
@@ -669,7 +669,7 @@ internal sealed class NativeBuilderSession<T>
     internal void BeginArena(int preLease) =>
         Attach(
             _kernel.BeginArenaBuilder<T>(preLease),
-            "NativeArena.CreateBuilder");
+            "NativeConcurrentArena.CreateBuilder");
 
     internal int Capacity =>
         _initialization.Allocation.Capacity;

@@ -46,6 +46,9 @@ internal sealed class NativeRegionManagedAllocationAnalysis
                 : null;
         AddCanonicalAllocations(symbols.Region, symbols.Local);
         AddCanonicalAllocations(symbols.Arena, symbols.ArenaLease);
+        AddCanonicalAllocations(
+            symbols.ConcurrentArena,
+            symbols.ConcurrentArenaLease);
         AddCanonicalAllocations(symbols.Pool, symbols.Pooled);
     }
 

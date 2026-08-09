@@ -146,7 +146,7 @@ public static class NativeLeaseOperations
         TThird,
         TFourth>(
         scoped Pooled<TSource> source,
-        NativeArena arena,
+        NativeConcurrentArena arena,
         int firstLength,
         int secondLength,
         int thirdLength,
@@ -157,10 +157,10 @@ public static class NativeLeaseOperations
             TSecond,
             TThird,
             TFourth> initializer,
-        out ArenaLease<TFirst> first,
-        out ArenaLease<TSecond> second,
-        out ArenaLease<TThird> third,
-        out ArenaLease<TFourth> fourth)
+        out ConcurrentArenaLease<TFirst> first,
+        out ConcurrentArenaLease<TSecond> second,
+        out ConcurrentArenaLease<TThird> third,
+        out ConcurrentArenaLease<TFourth> fourth)
     {
         ArgumentNullException.ThrowIfNull(arena);
         ArgumentNullException.ThrowIfNull(initializer);
@@ -202,8 +202,8 @@ public static class NativeLeaseOperations
         TSecond,
         TThird,
         TFourth>(
-        scoped ArenaLease<TSource> source,
-        NativeArena arena,
+        scoped ConcurrentArenaLease<TSource> source,
+        NativeConcurrentArena arena,
         int firstLength,
         int secondLength,
         int thirdLength,
@@ -214,10 +214,10 @@ public static class NativeLeaseOperations
             TSecond,
             TThird,
             TFourth> initializer,
-        out ArenaLease<TFirst> first,
-        out ArenaLease<TSecond> second,
-        out ArenaLease<TThird> third,
-        out ArenaLease<TFourth> fourth)
+        out ConcurrentArenaLease<TFirst> first,
+        out ConcurrentArenaLease<TSecond> second,
+        out ConcurrentArenaLease<TThird> third,
+        out ConcurrentArenaLease<TFourth> fourth)
     {
         ArgumentNullException.ThrowIfNull(arena);
         ArgumentNullException.ThrowIfNull(initializer);
@@ -286,7 +286,7 @@ public static class NativeLeaseOperations
         TThird,
         TFourth>(
         scoped NativeLeaseView<TSource> source,
-        NativeArena arena,
+        NativeConcurrentArena arena,
         int firstLength,
         int secondLength,
         int thirdLength,
@@ -297,10 +297,10 @@ public static class NativeLeaseOperations
             TSecond,
             TThird,
             TFourth> initializer,
-        out ArenaLease<TFirst> first,
-        out ArenaLease<TSecond> second,
-        out ArenaLease<TThird> third,
-        out ArenaLease<TFourth> fourth,
+        out ConcurrentArenaLease<TFirst> first,
+        out ConcurrentArenaLease<TSecond> second,
+        out ConcurrentArenaLease<TThird> third,
+        out ConcurrentArenaLease<TFourth> fourth,
         NativeGeneration? sourceGeneration = null,
         NativeAllocation? sourceAllocation = null,
         long sourceGenerationNumber = 0,
@@ -363,16 +363,16 @@ public static class NativeLeaseOperations
             arenaKernel.CompleteBumpInitializationGroup(
                 ref reservations,
                 usesSingleInitializationAdmission);
-            first = new ArenaLease<TFirst>(
+            first = new ConcurrentArenaLease<TFirst>(
                 arenaKernel,
                 reservations[0].Lease);
-            second = new ArenaLease<TSecond>(
+            second = new ConcurrentArenaLease<TSecond>(
                 arenaKernel,
                 reservations[1].Lease);
-            third = new ArenaLease<TThird>(
+            third = new ConcurrentArenaLease<TThird>(
                 arenaKernel,
                 reservations[2].Lease);
-            fourth = new ArenaLease<TFourth>(
+            fourth = new ConcurrentArenaLease<TFourth>(
                 arenaKernel,
                 reservations[3].Lease);
         }
@@ -400,8 +400,8 @@ public static class NativeLeaseOperations
         TSecond,
         TThird,
         TFourth>(
-        scoped ArenaLease<TSource> source,
-        NativeArena arena,
+        scoped ConcurrentArenaLease<TSource> source,
+        NativeConcurrentArena arena,
         int firstLength,
         int secondLength,
         int thirdLength,
@@ -412,10 +412,10 @@ public static class NativeLeaseOperations
             TSecond,
             TThird,
             TFourth> initializer,
-        out ArenaLease<TFirst> first,
-        out ArenaLease<TSecond> second,
-        out ArenaLease<TThird> third,
-        out ArenaLease<TFourth> fourth)
+        out ConcurrentArenaLease<TFirst> first,
+        out ConcurrentArenaLease<TSecond> second,
+        out ConcurrentArenaLease<TThird> third,
+        out ConcurrentArenaLease<TFourth> fourth)
         where TFirst : unmanaged
         where TSecond : unmanaged
         where TThird : unmanaged
@@ -488,7 +488,7 @@ public static class NativeLeaseOperations
         TThird,
         TFourth>(
         scoped NativeLeaseView<TSource> source,
-        NativeArena arena,
+        NativeConcurrentArena arena,
         int firstLength,
         int secondLength,
         int thirdLength,
@@ -499,10 +499,10 @@ public static class NativeLeaseOperations
             TSecond,
             TThird,
             TFourth> initializer,
-        out ArenaLease<TFirst> first,
-        out ArenaLease<TSecond> second,
-        out ArenaLease<TThird> third,
-        out ArenaLease<TFourth> fourth,
+        out ConcurrentArenaLease<TFirst> first,
+        out ConcurrentArenaLease<TSecond> second,
+        out ConcurrentArenaLease<TThird> third,
+        out ConcurrentArenaLease<TFourth> fourth,
         NativeGeneration? sourceGeneration = null,
         NativeAllocation? sourceAllocation = null,
         long sourceGenerationNumber = 0,
@@ -548,16 +548,16 @@ public static class NativeLeaseOperations
             arenaKernel.CompleteUnmanagedBumpInitializationGroup(
                 ref reservations,
                 usesSingleInitializationAdmission);
-            first = new ArenaLease<TFirst>(
+            first = new ConcurrentArenaLease<TFirst>(
                 arenaKernel,
                 reservations[0].Lease);
-            second = new ArenaLease<TSecond>(
+            second = new ConcurrentArenaLease<TSecond>(
                 arenaKernel,
                 reservations[1].Lease);
-            third = new ArenaLease<TThird>(
+            third = new ConcurrentArenaLease<TThird>(
                 arenaKernel,
                 reservations[2].Lease);
-            fourth = new ArenaLease<TFourth>(
+            fourth = new ConcurrentArenaLease<TFourth>(
                 arenaKernel,
                 reservations[3].Lease);
         }
@@ -581,8 +581,8 @@ public static class NativeLeaseOperations
         TSixth,
         TSeventh,
         TEighth>(
-        scoped ArenaLease<TSource> source,
-        NativeArena arena,
+        scoped ConcurrentArenaLease<TSource> source,
+        NativeConcurrentArena arena,
         int firstLength,
         int secondLength,
         int thirdLength,
@@ -601,14 +601,14 @@ public static class NativeLeaseOperations
             TSixth,
             TSeventh,
             TEighth> initializer,
-        out ArenaLease<TFirst> first,
-        out ArenaLease<TSecond> second,
-        out ArenaLease<TThird> third,
-        out ArenaLease<TFourth> fourth,
-        out ArenaLease<TFifth> fifth,
-        out ArenaLease<TSixth> sixth,
-        out ArenaLease<TSeventh> seventh,
-        out ArenaLease<TEighth> eighth)
+        out ConcurrentArenaLease<TFirst> first,
+        out ConcurrentArenaLease<TSecond> second,
+        out ConcurrentArenaLease<TThird> third,
+        out ConcurrentArenaLease<TFourth> fourth,
+        out ConcurrentArenaLease<TFifth> fifth,
+        out ConcurrentArenaLease<TSixth> sixth,
+        out ConcurrentArenaLease<TSeventh> seventh,
+        out ConcurrentArenaLease<TEighth> eighth)
         where TFirst : unmanaged
         where TSecond : unmanaged
         where TThird : unmanaged
@@ -709,7 +709,7 @@ public static class NativeLeaseOperations
         TSeventh,
         TEighth>(
         scoped NativeLeaseView<TSource> source,
-        NativeArena arena,
+        NativeConcurrentArena arena,
         int firstLength,
         int secondLength,
         int thirdLength,
@@ -728,14 +728,14 @@ public static class NativeLeaseOperations
             TSixth,
             TSeventh,
             TEighth> initializer,
-        out ArenaLease<TFirst> first,
-        out ArenaLease<TSecond> second,
-        out ArenaLease<TThird> third,
-        out ArenaLease<TFourth> fourth,
-        out ArenaLease<TFifth> fifth,
-        out ArenaLease<TSixth> sixth,
-        out ArenaLease<TSeventh> seventh,
-        out ArenaLease<TEighth> eighth,
+        out ConcurrentArenaLease<TFirst> first,
+        out ConcurrentArenaLease<TSecond> second,
+        out ConcurrentArenaLease<TThird> third,
+        out ConcurrentArenaLease<TFourth> fourth,
+        out ConcurrentArenaLease<TFifth> fifth,
+        out ConcurrentArenaLease<TSixth> sixth,
+        out ConcurrentArenaLease<TSeventh> seventh,
+        out ConcurrentArenaLease<TEighth> eighth,
         NativeGeneration? sourceGeneration = null,
         NativeAllocation? sourceAllocation = null,
         long sourceGenerationNumber = 0,
@@ -805,28 +805,28 @@ public static class NativeLeaseOperations
             arenaKernel.CompleteUnmanagedBumpInitializationOctet(
                 ref reservations,
                 usesSingleInitializationAdmission);
-            first = new ArenaLease<TFirst>(
+            first = new ConcurrentArenaLease<TFirst>(
                 arenaKernel,
                 reservations[0].Lease);
-            second = new ArenaLease<TSecond>(
+            second = new ConcurrentArenaLease<TSecond>(
                 arenaKernel,
                 reservations[1].Lease);
-            third = new ArenaLease<TThird>(
+            third = new ConcurrentArenaLease<TThird>(
                 arenaKernel,
                 reservations[2].Lease);
-            fourth = new ArenaLease<TFourth>(
+            fourth = new ConcurrentArenaLease<TFourth>(
                 arenaKernel,
                 reservations[3].Lease);
-            fifth = new ArenaLease<TFifth>(
+            fifth = new ConcurrentArenaLease<TFifth>(
                 arenaKernel,
                 reservations[4].Lease);
-            sixth = new ArenaLease<TSixth>(
+            sixth = new ConcurrentArenaLease<TSixth>(
                 arenaKernel,
                 reservations[5].Lease);
-            seventh = new ArenaLease<TSeventh>(
+            seventh = new ConcurrentArenaLease<TSeventh>(
                 arenaKernel,
                 reservations[6].Lease);
-            eighth = new ArenaLease<TEighth>(
+            eighth = new ConcurrentArenaLease<TEighth>(
                 arenaKernel,
                 reservations[7].Lease);
         }
@@ -909,8 +909,8 @@ public static class NativeLeaseOperations
     /// failure-atomic composite admission.
     /// </summary>
     public static void Access<TFirst, TSecond>(
-        scoped ArenaLease<TFirst> first,
-        scoped ArenaLease<TSecond> second,
+        scoped ConcurrentArenaLease<TFirst> first,
+        scoped ConcurrentArenaLease<TSecond> second,
         NativeLeasePairAction<TFirst, TSecond> action)
     {
         ArgumentNullException.ThrowIfNull(action);
@@ -1063,9 +1063,9 @@ public static class NativeLeaseOperations
     /// failure-atomic composite admission.
     /// </summary>
     public static void Access<TFirst, TSecond, TThird>(
-        scoped ArenaLease<TFirst> first,
-        scoped ArenaLease<TSecond> second,
-        scoped ArenaLease<TThird> third,
+        scoped ConcurrentArenaLease<TFirst> first,
+        scoped ConcurrentArenaLease<TSecond> second,
+        scoped ConcurrentArenaLease<TThird> third,
         NativeLeaseTripleAction<TFirst, TSecond, TThird> action)
     {
         ArgumentNullException.ThrowIfNull(action);
@@ -1166,10 +1166,10 @@ public static class NativeLeaseOperations
 
     /// <summary>Enters four arena leases for one bounded callback.</summary>
     public static void Access<TFirst, TSecond, TThird, TFourth>(
-        scoped ArenaLease<TFirst> first,
-        scoped ArenaLease<TSecond> second,
-        scoped ArenaLease<TThird> third,
-        scoped ArenaLease<TFourth> fourth,
+        scoped ConcurrentArenaLease<TFirst> first,
+        scoped ConcurrentArenaLease<TSecond> second,
+        scoped ConcurrentArenaLease<TThird> third,
+        scoped ConcurrentArenaLease<TFourth> fourth,
         NativeLeaseQuadrupleAction<
             TFirst,
             TSecond,
@@ -1297,7 +1297,7 @@ public static class NativeLeaseOperations
     /// </summary>
     public static void Access<TPooled, TArena>(
         scoped Pooled<TPooled> pooled,
-        scoped ArenaLease<TArena> arena,
+        scoped ConcurrentArenaLease<TArena> arena,
         NativeLeasePooledArenaAction<TPooled, TArena> action)
     {
         ArgumentNullException.ThrowIfNull(action);
@@ -1325,8 +1325,8 @@ public static class NativeLeaseOperations
     /// <summary>Enters one pooled lease and two same-owner arena leases.</summary>
     public static void Access<TPooled, TFirst, TSecond>(
         scoped Pooled<TPooled> pooled,
-        scoped ArenaLease<TFirst> first,
-        scoped ArenaLease<TSecond> second,
+        scoped ConcurrentArenaLease<TFirst> first,
+        scoped ConcurrentArenaLease<TSecond> second,
         NativeLeasePooledArenaPairAction<
             TPooled,
             TFirst,
@@ -1410,11 +1410,11 @@ public static class NativeLeaseOperations
     /// failure-atomic composite admission.
     /// </summary>
     public static void Access<TFirst, TSecond, TThird, TFourth, TFifth>(
-        scoped ArenaLease<TFirst> first,
-        scoped ArenaLease<TSecond> second,
-        scoped ArenaLease<TThird> third,
-        scoped ArenaLease<TFourth> fourth,
-        scoped ArenaLease<TFifth> fifth,
+        scoped ConcurrentArenaLease<TFirst> first,
+        scoped ConcurrentArenaLease<TSecond> second,
+        scoped ConcurrentArenaLease<TThird> third,
+        scoped ConcurrentArenaLease<TFourth> fourth,
+        scoped ConcurrentArenaLease<TFifth> fifth,
         NativeLeaseQuintupleAction<TFirst, TSecond, TThird, TFourth, TFifth> action)
     {
         ArgumentNullException.ThrowIfNull(action);
@@ -1563,13 +1563,13 @@ public static class NativeLeaseOperations
         TFifth,
         TSixth,
         TSeventh>(
-        scoped ArenaLease<TFirst> first,
-        scoped ArenaLease<TSecond> second,
-        scoped ArenaLease<TThird> third,
-        scoped ArenaLease<TFourth> fourth,
-        scoped ArenaLease<TFifth> fifth,
-        scoped ArenaLease<TSixth> sixth,
-        scoped ArenaLease<TSeventh> seventh,
+        scoped ConcurrentArenaLease<TFirst> first,
+        scoped ConcurrentArenaLease<TSecond> second,
+        scoped ConcurrentArenaLease<TThird> third,
+        scoped ConcurrentArenaLease<TFourth> fourth,
+        scoped ConcurrentArenaLease<TFifth> fifth,
+        scoped ConcurrentArenaLease<TSixth> sixth,
+        scoped ConcurrentArenaLease<TSeventh> seventh,
         NativeLeaseSeptupleAction<
             TFirst,
             TSecond,
@@ -1761,14 +1761,14 @@ public static class NativeLeaseOperations
         TSixth,
         TSeventh,
         TEighth>(
-        scoped ArenaLease<TFirst> first,
-        scoped ArenaLease<TSecond> second,
-        scoped ArenaLease<TThird> third,
-        scoped ArenaLease<TFourth> fourth,
-        scoped ArenaLease<TFifth> fifth,
-        scoped ArenaLease<TSixth> sixth,
-        scoped ArenaLease<TSeventh> seventh,
-        scoped ArenaLease<TEighth> eighth,
+        scoped ConcurrentArenaLease<TFirst> first,
+        scoped ConcurrentArenaLease<TSecond> second,
+        scoped ConcurrentArenaLease<TThird> third,
+        scoped ConcurrentArenaLease<TFourth> fourth,
+        scoped ConcurrentArenaLease<TFifth> fifth,
+        scoped ConcurrentArenaLease<TSixth> sixth,
+        scoped ConcurrentArenaLease<TSeventh> seventh,
+        scoped ConcurrentArenaLease<TEighth> eighth,
         NativeLeaseOctupleAction<
             TFirst,
             TSecond,
@@ -1942,10 +1942,10 @@ public static class NativeLeaseOperations
     /// </summary>
     public static void Access<TPooled, TFirst, TSecond, TThird, TFourth>(
         scoped Pooled<TPooled> pooled,
-        scoped ArenaLease<TFirst> first,
-        scoped ArenaLease<TSecond> second,
-        scoped ArenaLease<TThird> third,
-        scoped ArenaLease<TFourth> fourth,
+        scoped ConcurrentArenaLease<TFirst> first,
+        scoped ConcurrentArenaLease<TSecond> second,
+        scoped ConcurrentArenaLease<TThird> third,
+        scoped ConcurrentArenaLease<TFourth> fourth,
         NativeLeaseQuintupleAction<
             TPooled,
             TFirst,
@@ -2069,7 +2069,7 @@ public static class NativeLeaseOperations
         scoped Pooled<TFirst> first,
         scoped Pooled<TSecond> second,
         scoped Pooled<TThird> third,
-        scoped ArenaLease<TFourth> fourth,
+        scoped ConcurrentArenaLease<TFourth> fourth,
         NativeLeaseQuadrupleAction<TFirst, TSecond, TThird, TFourth> action)
     {
         ArgumentNullException.ThrowIfNull(action);
@@ -2128,8 +2128,8 @@ public static class NativeLeaseOperations
         scoped Pooled<TFirst> first,
         scoped Pooled<TSecond> second,
         scoped Pooled<TThird> third,
-        scoped ArenaLease<TFourth> fourth,
-        scoped ArenaLease<TFifth> fifth,
+        scoped ConcurrentArenaLease<TFourth> fourth,
+        scoped ConcurrentArenaLease<TFifth> fifth,
         NativeLeaseQuintupleAction<TFirst, TSecond, TThird, TFourth, TFifth> action)
     {
         ArgumentNullException.ThrowIfNull(action);

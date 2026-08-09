@@ -42,7 +42,7 @@ public sealed class MechanismRegressionTests
     {
         NativeMemoryTestHooks.Reset();
         NativePool<ReferenceCell> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        NativeArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         try
         {
             Pooled<ReferenceCell> pooled = pool.Rent(1, static writer => writer.Fill(default!));
@@ -50,12 +50,12 @@ public sealed class MechanismRegressionTests
             Assert.Equal(new ReferenceCell("pool", 7), pooled[0]);
             pooled.Dispose();
 
-            ArenaLease<ReferenceCell> arenaLease = arena.Scratch<ReferenceCell>(1, static writer => writer.Fill(default!));
+            ConcurrentArenaLease<ReferenceCell> arenaLease = arena.Scratch<ReferenceCell>(1, static writer => writer.Fill(default!));
             arenaLease[0] = new ReferenceCell("arena", 9);
             Assert.Equal(new ReferenceCell("arena", 9), arenaLease[0]);
             arena.ReleaseLeasesToNativeMemory();
             Assert.Equal(0, arena.CurrentReferenceRootCountForTest);
-            ArenaLease<ReferenceCell> freshArenaLease = arena.Scratch<ReferenceCell>(1, static writer => writer.Fill(default!));
+            ConcurrentArenaLease<ReferenceCell> freshArenaLease = arena.Scratch<ReferenceCell>(1, static writer => writer.Fill(default!));
             Assert.Equal(default, freshArenaLease[0]);
 
         }
@@ -71,7 +71,7 @@ public sealed class MechanismRegressionTests
     {
         NativeMemoryTestHooks.Reset();
         NativePool<string> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        NativeArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         try
         {
             scoped Pooled<string> pooled = pool.LeaseScoped(1, static writer => writer.Fill(default!));
@@ -82,11 +82,11 @@ public sealed class MechanismRegressionTests
             Assert.Null(pooledReuse[0]);
             pooledReuse.Dispose();
 
-            scoped ArenaLease<string> scratch = arena.ScratchScoped<string>(1, static writer => writer.Fill(default!));
+            scoped ConcurrentArenaLease<string> scratch = arena.ScratchScoped<string>(1, static writer => writer.Fill(default!));
             scratch[0] = "arena scoped";
             arena.RecycleScoped();
             Assert.Equal(0, arena.CurrentReferenceRootCountForTest);
-            ArenaLease<string> scratchReuse = arena.Scratch<string>(1, static writer => writer.Fill(default!));
+            ConcurrentArenaLease<string> scratchReuse = arena.Scratch<string>(1, static writer => writer.Fill(default!));
             Assert.Null(scratchReuse[0]);
         }
         finally
@@ -508,12 +508,12 @@ public sealed class MechanismRegressionTests
     public async Task RetiredArenaRejoinRestoresPhysicalOrderAndTheScopedTraversalFrontier()
     {
         NativeMemoryTestHooks.Reset();
-        NativeArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         ManualResetEventSlim entered = new();
         ManualResetEventSlim allowCallback = new();
         NativeMemoryTestHooks.SetOperationEntered(operation =>
         {
-            if (operation == nameof(ArenaLease<byte>.Access))
+            if (operation == nameof(ConcurrentArenaLease<byte>.Access))
             {
                 entered.Set();
             }
@@ -523,7 +523,7 @@ public sealed class MechanismRegressionTests
         {
             Task worker = Task.Run(() =>
             {
-                ArenaLease<byte> first = arena.Scratch<byte>(4_096, static writer => writer.Fill(default!));
+                ConcurrentArenaLease<byte> first = arena.Scratch<byte>(4_096, static writer => writer.Fill(default!));
                 first.Access(_ => allowCallback.Wait(TimeSpan.FromSeconds(10)));
             });
 
@@ -535,7 +535,7 @@ public sealed class MechanismRegressionTests
             await worker;
 
             Assert.Equal([1L, 2L, 3L], arena.CurrentSegmentOrdinalsForTest);
-            ArenaLease<byte> scoped = arena.ScratchScoped<byte>(1, static writer => writer.Fill(default!));
+            ConcurrentArenaLease<byte> scoped = arena.ScratchScoped<byte>(1, static writer => writer.Fill(default!));
             Assert.Equal(3, arena.CurrentBumpTraversalForTest.SegmentCount);
             arena.RecycleScoped();
         }
@@ -912,7 +912,7 @@ public sealed class MechanismRegressionTests
     {
         const int generationCount = 6;
         NativeMemoryTestHooks.Reset();
-        NativeArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         ManualResetEventSlim[] allows = new ManualResetEventSlim[generationCount];
         ManualResetEventSlim[] entered = new ManualResetEventSlim[generationCount];
         Task<Exception?>[] workers = new Task<Exception?>[generationCount];
@@ -955,7 +955,7 @@ public sealed class MechanismRegressionTests
             }
 
             Assert.Equal([1L, 2L, 3L, 4L, 5L, 6L], arena.CurrentSegmentOrdinalsForTest);
-            ArenaLease<int> fresh = arena.Scratch<int>(1, static writer => writer.Fill(default!));
+            ConcurrentArenaLease<int> fresh = arena.Scratch<int>(1, static writer => writer.Fill(default!));
             Assert.Equal([1L, 2L, 3L, 4L, 5L, 6L], arena.CurrentSegmentOrdinalsForTest);
             fresh[0] = 99;
             Assert.Equal(capacities, arena.CurrentBankCapacitiesForTest);
@@ -991,7 +991,7 @@ public sealed class MechanismRegressionTests
     {
         const int generationCount = 6;
         NativeMemoryTestHooks.Reset();
-        NativeArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         ManualResetEventSlim[] allows = new ManualResetEventSlim[generationCount];
         ManualResetEventSlim[] entered = new ManualResetEventSlim[generationCount];
         Task<Exception?>[] workers = new Task<Exception?>[generationCount];
@@ -1033,7 +1033,7 @@ public sealed class MechanismRegressionTests
                 Assert.Equal(quarantineCapacity, arena.QuarantineCapacityForTest);
             }
 
-            ArenaLease<int> fresh = arena.Scratch<int>(1, static writer => writer.Fill(default!));
+            ConcurrentArenaLease<int> fresh = arena.Scratch<int>(1, static writer => writer.Fill(default!));
             Assert.Equal([7L], arena.CurrentSegmentOrdinalsForTest);
             fresh[0] = 99;
             Assert.Equal(capacities, arena.CurrentBankCapacitiesForTest);
@@ -1090,11 +1090,11 @@ public sealed class MechanismRegressionTests
     public void TrimLeaseSizingIncludesAlignmentAndGeometricArenaGrowth()
     {
         NativeMemoryTestHooks.Reset();
-        NativeArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         try
         {
-            ArenaLease<byte> first = arena.Scratch<byte>(4_096, static writer => writer.Fill(default!));
-            ArenaLease<byte> second = arena.Scratch<byte>(4_096, static writer => writer.Fill(default!));
+            ConcurrentArenaLease<byte> first = arena.Scratch<byte>(4_096, static writer => writer.Fill(default!));
+            ConcurrentArenaLease<byte> second = arena.Scratch<byte>(4_096, static writer => writer.Fill(default!));
             Assert.Equal(2, arena.CurrentBumpTraversalForTest.SegmentCount);
             Assert.True(NativeMemoryTestHooks.Snapshot().OutstandingNativeBytes >= 12_288);
             arena.ReleaseLeasesToNativeMemory();
@@ -1114,7 +1114,7 @@ public sealed class MechanismRegressionTests
     public void ArenaTraversalAdvancesFromTheCurrentSegmentInsteadOfRescanningTheBank()
     {
         NativeMemoryTestHooks.Reset();
-        NativeArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         try
         {
             for (int index = 0; index < 128; index++)
@@ -1154,7 +1154,7 @@ public sealed class MechanismRegressionTests
         returnedPool.Dispose();
         Assert.Throws<NativeAllocationDisposedException>(() => returnedPool.TrimRetainedMemory());
 
-        NativeArena arena = new();
+        NativeConcurrentArena arena = new();
         arena.ReturnMemoryToNativeMemory();
         Assert.Equal((nuint)0, arena.TrimRetainedMemory());
         Assert.Equal((nuint)0, arena.TrimRetainedMemoryByBytes(1));
@@ -1205,7 +1205,7 @@ public sealed class MechanismRegressionTests
     }
 
     private static Exception? HoldBusyArenaLease(
-        NativeArena arena,
+        NativeConcurrentArena arena,
         int length,
         int value,
         ManualResetEventSlim allowCallback,
@@ -1213,7 +1213,7 @@ public sealed class MechanismRegressionTests
     {
         try
         {
-            ArenaLease<int> lease = arena.Scratch<int>(length, static writer => writer.Fill(default!));
+            ConcurrentArenaLease<int> lease = arena.Scratch<int>(length, static writer => writer.Fill(default!));
             lease[0] = value;
             lease.Access(_ =>
             {

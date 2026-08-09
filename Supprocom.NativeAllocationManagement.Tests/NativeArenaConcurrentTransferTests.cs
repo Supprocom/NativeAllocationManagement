@@ -11,7 +11,7 @@ public sealed class NativeArenaConcurrentTransferTests
     {
         const int workerCount = 24;
         const int length = 256;
-        using NativeArena arena = new(
+        using NativeConcurrentArena arena = new(
             preAllocateBytes: workerCount * length * sizeof(int),
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         Channel<NativeTransfer<int>> channel =
@@ -67,7 +67,7 @@ public sealed class NativeArenaConcurrentTransferTests
         const int workerCount = 24;
         const int length = 1_024;
         NativeMemoryTestHooks.Reset();
-        NativeArena arena = new(
+        NativeConcurrentArena arena = new(
             preAllocateBytes: workerCount * length * sizeof(float),
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         CountdownEvent entered = new(workerCount);
@@ -164,7 +164,7 @@ public sealed class NativeArenaConcurrentTransferTests
             .ToArray();
         int totalLength = lengths.Sum();
         NativeMemoryTestHooks.Reset();
-        using NativeArena arena = new(
+        using NativeConcurrentArena arena = new(
             preAllocateBytes: checked(
                 (nuint)(totalLength * sizeof(long))),
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
@@ -259,7 +259,7 @@ public sealed class NativeArenaConcurrentTransferTests
         const int workerCount = 8;
         const int length = 512;
         NativeMemoryTestHooks.Reset();
-        NativeArena arena = new(
+        NativeConcurrentArena arena = new(
             preAllocateBytes: workerCount * length * sizeof(int),
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         CountdownEvent entered = new(workerCount);
@@ -371,7 +371,7 @@ public sealed class NativeArenaConcurrentTransferTests
     public async Task OwnerShutdownRejectsActiveConcurrentInitialization(
         NativeMemoryReturn policy)
     {
-        NativeArena arena = new(
+        NativeConcurrentArena arena = new(
             preAllocateBytes: 4_096,
             returnMemoryOnDispose: policy);
         ManualResetEventSlim entered = new();
@@ -422,7 +422,7 @@ public sealed class NativeArenaConcurrentTransferTests
     [Fact]
     public async Task ConcurrentReservationRejectsARegularActiveInitializer()
     {
-        using NativeArena arena = new(
+        using NativeConcurrentArena arena = new(
             preAllocateBytes: 4_096,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         ManualResetEventSlim entered = new();
@@ -471,7 +471,7 @@ public sealed class NativeArenaConcurrentTransferTests
         NativeMemoryTestHooks.Reset();
         AlignedTestBuffer buffer = new(
             workerCount * length * sizeof(long));
-        NativeArena arena = new(
+        NativeConcurrentArena arena = new(
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         long allocationCount =
             NativeMemoryTestHooks.Snapshot().AllocationCount;
@@ -525,14 +525,14 @@ public sealed class NativeArenaConcurrentTransferTests
         NativeMemoryTestHooks.Reset();
         try
         {
-            using NativeArena arena = new(
+            using NativeConcurrentArena arena = new(
                 preAllocateBytes: 1_024,
                 returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
             NativeTransfer<int> first =
                 arena.ScratchTransferable<int>(
                     64,
                     static writer => writer.Fill(17));
-            ArenaLease<long> anchor = arena.Scratch<long>(
+            ConcurrentArenaLease<long> anchor = arena.Scratch<long>(
                 32,
                 static writer => writer.Fill(29));
             long allocationCount =
@@ -564,7 +564,7 @@ public sealed class NativeArenaConcurrentTransferTests
     [Fact]
     public void EmptyTransferPublishesAndReturnsExactlyOnce()
     {
-        using NativeArena arena = new(
+        using NativeConcurrentArena arena = new(
             preAllocateBytes: 64,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         NativeTransfer<int> transfer =
@@ -582,7 +582,7 @@ public sealed class NativeArenaConcurrentTransferTests
     [Fact]
     public void GenerationResetInvalidatesEveryPublishedReservation()
     {
-        using NativeArena arena = new(
+        using NativeConcurrentArena arena = new(
             preAllocateBytes: 512,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         NativeTransfer<int> first = arena.ScratchTransferable<int>(

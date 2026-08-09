@@ -83,7 +83,7 @@ public sealed class LifecycleConformanceTests
 
         if (testCase.Owner == "arena")
         {
-            NativeArena arena = new((nuint)testCase.InitialReservation, returnPolicy, testCase.DelayedActivation);
+            NativeConcurrentArena arena = new((nuint)testCase.InitialReservation, returnPolicy, testCase.DelayedActivation);
             states.Add(arena.CurrentLifecycle);
             if (testCase.ReturnKind == "disposeBeforeActivation")
             {
@@ -139,7 +139,7 @@ public sealed class LifecycleConformanceTests
         }
     }
 
-    private static void ExecuteReturn(NativeArena arena, string returnKind)
+    private static void ExecuteReturn(NativeConcurrentArena arena, string returnKind)
     {
         switch (returnKind)
         {

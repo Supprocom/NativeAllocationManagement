@@ -49,14 +49,14 @@ public sealed class OwnerWideLifecycleTests
     public async Task ArenaStrictReturnRejectsRetiredOperationsAndThenReleasesEveryGeneration()
     {
         NativeMemoryTestHooks.Reset();
-        NativeArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         BusyGenerationSet busy = StartBusyArenaGenerations(arena, 2);
 
         try
         {
             WaitForEntry(busy);
             {
-                ArenaLease<int> current = arena.Scratch<int>(1, static writer => writer.Fill(default!));
+                ConcurrentArenaLease<int> current = arena.Scratch<int>(1, static writer => writer.Fill(default!));
                 current[0] = 7;
 
                 NativeAllocationInUseException rejection =
@@ -119,7 +119,7 @@ public sealed class OwnerWideLifecycleTests
     public async Task ArenaStrictDisposeUsesOwnerWideAdmissionAndReleasesRetiredStorage()
     {
         NativeMemoryTestHooks.Reset();
-        NativeArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         BusyGenerationSet busy = StartBusyArenaGenerations(arena, 2);
 
         try
@@ -193,7 +193,7 @@ public sealed class OwnerWideLifecycleTests
     public async Task ArenaGarbageCollectorReturnDetachesRetiredGenerationsAndNeverReusesTheirSegments()
     {
         NativeMemoryTestHooks.Reset();
-        NativeArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         BusyGenerationSet busy = StartBusyArenaGenerations(arena, 2);
 
         try
@@ -201,7 +201,7 @@ public sealed class OwnerWideLifecycleTests
             WaitForEntry(busy);
             long freeBeforeDrain = 0;
             {
-                ArenaLease<int> current = arena.Scratch<int>(1, static writer => writer.Fill(default!));
+                ConcurrentArenaLease<int> current = arena.Scratch<int>(1, static writer => writer.Fill(default!));
                 current[0] = 8;
                 long freeBeforeReturn = NativeMemoryTestHooks.Snapshot().FreeCount;
 
@@ -209,7 +209,7 @@ public sealed class OwnerWideLifecycleTests
                 Assert.Equal(NativeOwnerLifecycle.Returned, arena.CurrentLifecycle);
                 Assert.Equal(freeBeforeReturn, NativeMemoryTestHooks.Snapshot().FreeCount);
                 arena.LeaseFromMemory();
-                ArenaLease<int> fresh = arena.Scratch<int>(1, static writer => writer.Fill(default!));
+                ConcurrentArenaLease<int> fresh = arena.Scratch<int>(1, static writer => writer.Fill(default!));
                 Assert.Equal([4L], arena.CurrentSegmentOrdinalsForTest);
                 Assert.Equal(0, fresh[0]);
                 long freeBeforeStrictReturn = NativeMemoryTestHooks.Snapshot().FreeCount;
@@ -298,11 +298,11 @@ public sealed class OwnerWideLifecycleTests
     public async Task ArenaMultipleDetachedGenerationsDoNotBlockFreshTransitions()
     {
         NativeMemoryTestHooks.Reset();
-        NativeArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         List<NativeGenerationOwner> retainedOwners = [];
         NativeMemoryTestHooks.SetOperationEnteredWithGenerationOwner((operation, owner) =>
         {
-            if (operation == nameof(ArenaLease<int>.Access))
+            if (operation == nameof(ConcurrentArenaLease<int>.Access))
             {
                 retainedOwners.Add(owner);
             }
@@ -411,11 +411,11 @@ public sealed class OwnerWideLifecycleTests
     public async Task DetachedArenaDrainFailureRemainsFinalizableAndOutsideAllocatorOwnership()
     {
         NativeMemoryTestHooks.Reset();
-        NativeArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         NativeGenerationOwner? retainedOwner = null;
         NativeMemoryTestHooks.SetOperationEnteredWithGenerationOwner((operation, owner) =>
         {
-            if (operation == nameof(ArenaLease<int>.Access))
+            if (operation == nameof(ConcurrentArenaLease<int>.Access))
             {
                 retainedOwner = owner;
             }
@@ -499,7 +499,7 @@ public sealed class OwnerWideLifecycleTests
         foreach (NativeMemoryReturn policy in Enum.GetValues<NativeMemoryReturn>())
         {
             NativeMemoryTestHooks.Reset();
-            NativeArena arena = new(returnMemoryOnDispose: policy);
+            NativeConcurrentArena arena = new(returnMemoryOnDispose: policy);
             BusyGenerationSet busy = StartBusyArenaGenerations(arena, 2);
 
             try
@@ -582,7 +582,7 @@ public sealed class OwnerWideLifecycleTests
         foreach (NativeMemoryReturn policy in Enum.GetValues<NativeMemoryReturn>())
         {
             NativeMemoryTestHooks.Reset();
-            NativeArena arena = new(returnMemoryOnDispose: policy);
+            NativeConcurrentArena arena = new(returnMemoryOnDispose: policy);
             BusyGenerationSet busy = StartBusyArenaGenerations(arena, 1);
 
             try
@@ -669,7 +669,7 @@ public sealed class OwnerWideLifecycleTests
     public async Task ArenaDetachedQuarantineIsNotFreedAgainByNativePolicyDispose()
     {
         NativeMemoryTestHooks.Reset();
-        NativeArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         BusyGenerationSet busy = StartBusyArenaGenerations(arena, 1);
 
         try
@@ -688,7 +688,7 @@ public sealed class OwnerWideLifecycleTests
 
             arena.LeaseFromMemory();
             {
-                ArenaLease<int> fresh = arena.Scratch<int>(1, static writer => writer.Fill(default!));
+                ConcurrentArenaLease<int> fresh = arena.Scratch<int>(1, static writer => writer.Fill(default!));
                 Assert.Equal([2L], arena.CurrentSegmentOrdinalsForTest);
                 Assert.Equal(0, fresh[0]);
                 arena.Dispose();
@@ -726,7 +726,7 @@ public sealed class OwnerWideLifecycleTests
         return new BusyGenerationSet(allows, entered, workers);
     }
 
-    private static BusyGenerationSet StartBusyArenaGenerations(NativeArena arena, int count)
+    private static BusyGenerationSet StartBusyArenaGenerations(NativeConcurrentArena arena, int count)
     {
         ManualResetEventSlim[] allows = new ManualResetEventSlim[count];
         ManualResetEventSlim[] entered = new ManualResetEventSlim[count];
@@ -813,7 +813,7 @@ public sealed class OwnerWideLifecycleTests
     }
 
     private static Exception? HoldBusyArenaLease(
-        NativeArena arena,
+        NativeConcurrentArena arena,
         int length,
         int value,
         ManualResetEventSlim allow,
@@ -821,7 +821,7 @@ public sealed class OwnerWideLifecycleTests
     {
         try
         {
-            ArenaLease<int> lease = arena.Scratch<int>(length, static writer => writer.Fill(default!));
+            ConcurrentArenaLease<int> lease = arena.Scratch<int>(length, static writer => writer.Fill(default!));
             lease[0] = value;
             lease.Access(_ =>
             {

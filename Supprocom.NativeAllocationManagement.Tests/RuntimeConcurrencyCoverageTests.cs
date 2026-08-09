@@ -173,12 +173,12 @@ public sealed class RuntimeConcurrencyCoverageTests
                     pool.Dispose();
                 }
 
-                NativeArena arena = new(4096, policy);
+                NativeConcurrentArena arena = new(4096, policy);
                 entered = new ManualResetEventSlim();
                 release = new ManualResetEventSlim();
                 NativeMemoryTestHooks.SetOperationEntered(operation =>
                 {
-                    if (operation == nameof(ArenaLease<int>.Access))
+                    if (operation == nameof(ConcurrentArenaLease<int>.Access))
                     {
                         entered.Set();
                         release.Wait(TimeSpan.FromSeconds(10));
@@ -189,7 +189,7 @@ public sealed class RuntimeConcurrencyCoverageTests
                 {
                     Task worker = Task.Run(() =>
                     {
-                        ArenaLease<int> lease = arena.Scratch<int>(4, static writer => writer.Fill(default!));
+                        ConcurrentArenaLease<int> lease = arena.Scratch<int>(4, static writer => writer.Fill(default!));
                         lease.Access(static span => span[0] = 2);
                     });
 
@@ -455,7 +455,7 @@ public sealed class RuntimeConcurrencyCoverageTests
         string operation,
         bool returnMemory)
     {
-        NativeArena arena = new(returnMemoryOnDispose: policy);
+        NativeConcurrentArena arena = new(returnMemoryOnDispose: policy);
         ManualResetEventSlim entered = new();
         ManualResetEventSlim release = new();
         NativeMemoryTestHooks.SetOperationEntered(name =>
@@ -471,7 +471,7 @@ public sealed class RuntimeConcurrencyCoverageTests
         {
             Task worker = Task.Run(() =>
             {
-                ArenaLease<int> lease = arena.Scratch<int>(2, static writer => writer.Fill(default!));
+                ConcurrentArenaLease<int> lease = arena.Scratch<int>(2, static writer => writer.Fill(default!));
                 ExecuteArenaOperation(lease, operation);
             });
 
@@ -537,7 +537,7 @@ public sealed class RuntimeConcurrencyCoverageTests
         string operation,
         bool returnMemory)
     {
-        NativeArena arena = new(returnMemoryOnDispose: policy);
+        NativeConcurrentArena arena = new(returnMemoryOnDispose: policy);
         ManualResetEventSlim beforeEntry = new();
         ManualResetEventSlim release = new();
         NativeMemoryTestHooks.SetBeforeOperationEntry(name =>
@@ -596,7 +596,7 @@ public sealed class RuntimeConcurrencyCoverageTests
         }
     }
 
-    private static void ExecuteArenaOperation(ArenaLease<int> lease, string operation)
+    private static void ExecuteArenaOperation(ConcurrentArenaLease<int> lease, string operation)
     {
         switch (operation)
         {
@@ -645,7 +645,7 @@ public sealed class RuntimeConcurrencyCoverageTests
         _ => pool.TrimRetainedMemoryByLeaseSize(1)
     };
 
-    private static nuint TrimArena(NativeArena arena, int trimKind) => trimKind switch
+    private static nuint TrimArena(NativeConcurrentArena arena, int trimKind) => trimKind switch
     {
         0 => arena.TrimRetainedMemory(),
         1 => arena.TrimRetainedMemoryByBytes(1),

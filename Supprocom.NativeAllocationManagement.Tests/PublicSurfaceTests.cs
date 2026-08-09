@@ -116,6 +116,13 @@ public sealed class PublicSurfaceTests
             parameter => parameter.Name == "initialCapacity");
         ConstructorInfo arenaConstructor = Assert.Single(typeof(NativeArena).GetConstructors());
         Assert.Contains(arenaConstructor.GetParameters(), parameter => parameter.Name == "returnMemoryOnDispose");
-        Assert.Contains(arenaConstructor.GetParameters(), parameter => parameter.Name == "doNotLeaseOnDeclaration");
+        Assert.DoesNotContain(
+            arenaConstructor.GetParameters(),
+            parameter => parameter.Name == "doNotLeaseOnDeclaration");
+        ConstructorInfo concurrentArenaConstructor = Assert.Single(
+            typeof(NativeConcurrentArena).GetConstructors());
+        Assert.Contains(
+            concurrentArenaConstructor.GetParameters(),
+            parameter => parameter.Name == "doNotLeaseOnDeclaration");
     }
 }

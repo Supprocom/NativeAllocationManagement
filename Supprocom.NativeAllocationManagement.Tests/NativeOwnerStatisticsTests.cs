@@ -53,7 +53,7 @@ public sealed class NativeOwnerStatisticsTests
             bytes.Access(static view => view.Fill(0x2A));
         }
 
-        arena.ReleaseLeasesToNativeMemory();
+        arena.Reset();
         NativeOwnerStatistics released = arena.GetStatistics();
         Assert.Equal(NativeOwnerLifecycle.Active, released.Lifecycle);
         Assert.True(released.Generation > generation);
@@ -63,41 +63,34 @@ public sealed class NativeOwnerStatisticsTests
     }
 
     [Fact]
-    public void ArenaDiagnosticSnapshotTracksScopedRecycleState()
+    public void ArenaStatisticsTrackScopedRecycleState()
     {
         using NativeArena arena = new(
             preAllocateBytes: 4_096,
             returnMemoryOnDispose:
                 NativeMemoryReturn.ToNativeMemory);
-        NativeOwnerDiagnosticSnapshot initial =
-            arena.CaptureDiagnosticSnapshot();
+        NativeOwnerStatistics initial = arena.GetStatistics();
         {
             ArenaLease<byte> bytes =
                 arena.ScratchScoped<byte>(
                     128,
                     static writer =>
                         writer.Fill(default!));
-            NativeOwnerDiagnosticSnapshot active =
-                arena.CaptureDiagnosticSnapshot();
+            NativeOwnerStatistics active = arena.GetStatistics();
 
             Assert.Equal(NativeOwnerLifecycle.Active, active.Lifecycle);
             Assert.Equal(initial.Generation, active.Generation);
-            Assert.Equal(1, active.ActiveRecords);
-            Assert.Equal(1, active.ScopedRecords);
-            Assert.Equal(0, active.ReferenceRoots);
-            Assert.True(active.RetainedSegmentCount >= 1);
+            Assert.Equal(128, active.RequestedBytes);
+            Assert.True(active.SegmentCount >= 1);
             bytes.Access(static view => view.Fill(0x2A));
         }
 
         arena.RecycleScoped();
-        NativeOwnerDiagnosticSnapshot recycled =
-            arena.CaptureDiagnosticSnapshot();
+        NativeOwnerStatistics recycled = arena.GetStatistics();
 
-        Assert.Equal(0, recycled.ActiveRecords);
-        Assert.Equal(0, recycled.ScopedRecords);
-        Assert.Equal(0, recycled.ReferenceRoots);
+        Assert.Equal(initial.Generation, recycled.Generation);
+        Assert.Equal(0, recycled.RequestedBytes);
         Assert.True(recycled.AvailableSegmentCount >= 1);
-        Assert.False(recycled.CurrentGenerationQuarantined);
     }
 
     [Fact]

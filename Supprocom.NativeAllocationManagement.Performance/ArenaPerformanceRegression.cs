@@ -140,7 +140,7 @@ internal static class ArenaPerformanceRegression
             reservation,
             NativeMemoryReturn.ToNativeMemory);
         WarmArena(arena);
-        arena.ReleaseLeasesToNativeMemory();
+        arena.Reset();
         NativeOwnerStatistics beforeStatistics =
             arena.GetStatistics();
         int gen0Before = GC.CollectionCount(0);
@@ -182,7 +182,7 @@ internal static class ArenaPerformanceRegression
             }
         }
 
-        arena.ReleaseLeasesToNativeMemory();
+        arena.Reset();
         long elapsedTicks = Stopwatch.GetTimestamp() - start;
         long managedAllocated =
             GC.GetAllocatedBytesForCurrentThread()

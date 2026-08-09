@@ -96,12 +96,16 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 Namespace + "NativeRegion");
             Arena = runtimeAssembly.GetTypeByMetadataName(
                 Namespace + "NativeArena");
+            ConcurrentArena = runtimeAssembly.GetTypeByMetadataName(
+                Namespace + "NativeConcurrentArena");
             Pooled = runtimeAssembly.GetTypeByMetadataName(
                 Namespace + "Pooled`1");
             Local = runtimeAssembly.GetTypeByMetadataName(
                 Namespace + "Local`1");
             ArenaLease = runtimeAssembly.GetTypeByMetadataName(
                 Namespace + "ArenaLease`1");
+            ConcurrentArenaLease = runtimeAssembly.GetTypeByMetadataName(
+                Namespace + "ConcurrentArenaLease`1");
             Transfer = runtimeAssembly.GetTypeByMetadataName(
                 Namespace + "NativeTransfer`1");
             Builder = runtimeAssembly.GetTypeByMetadataName(
@@ -118,11 +122,15 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
         internal INamedTypeSymbol? Arena { get; }
 
+        internal INamedTypeSymbol? ConcurrentArena { get; }
+
         internal INamedTypeSymbol? Pooled { get; }
 
         internal INamedTypeSymbol? Local { get; }
 
         internal INamedTypeSymbol? ArenaLease { get; }
+
+        internal INamedTypeSymbol? ConcurrentArenaLease { get; }
 
         internal INamedTypeSymbol? Transfer { get; }
 
@@ -136,9 +144,11 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             Pool is not null
             && Region is not null
             && Arena is not null
+            && ConcurrentArena is not null
             && Pooled is not null
             && Local is not null
             && ArenaLease is not null
+            && ConcurrentArenaLease is not null
             && Transfer is not null
             && Builder is not null
             && Workspace is not null
@@ -166,6 +176,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 || Is(type, Pooled)
                 || Is(type, Local)
                 || Is(type, ArenaLease)
+                || Is(type, ConcurrentArenaLease)
                 || Is(type, Transfer)
                 || Is(type, Builder)
                 || Is(type, Workspace);
@@ -175,7 +186,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         {
             return Is(type, Pool)
                 || Is(type, Region)
-                || Is(type, Arena);
+                || Is(type, Arena)
+                || Is(type, ConcurrentArena);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -4863,10 +4875,12 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             }
 
             if (name is "ReturnMemoryToNativeMemory" or "ReturnMemoryToGarbageCollector"
-                or "ReleaseLeasesToNativeMemory" or "ReleaseLeasesToGarbageCollector")
+                or "ReleaseLeasesToNativeMemory" or "ReleaseLeasesToGarbageCollector"
+                or "Reset")
             {
                 bool isMemoryReturn = name.StartsWith("ReturnMemory", StringComparison.Ordinal);
-                bool isNative = name.EndsWith("ToNativeMemory", StringComparison.Ordinal);
+                bool isNative = name == "Reset"
+                    || name.EndsWith("ToNativeMemory", StringComparison.Ordinal);
                 if (isMemoryReturn && owner.IsUsing && !owner.IsRegion)
                 {
                     Report(NativeAllocationDiagnosticDescriptors.ScopedLifecycle, syntax, owner.DisplayName, name);
@@ -5096,7 +5110,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             SyntaxNode syntax,
             IEnumerable<GenerationReturnLiveness> findings)
         {
-            DiagnosticDescriptor descriptor = operation is "ReturnMemoryToNativeMemory" or "ReleaseLeasesToNativeMemory" or "RecycleScoped" or "Dispose"
+            DiagnosticDescriptor descriptor = operation is "ReturnMemoryToNativeMemory" or "ReleaseLeasesToNativeMemory" or "Reset" or "RecycleScoped" or "Dispose"
                 ? NativeAllocationDiagnosticDescriptors.GenerationReturnLiveValue
                 : NativeAllocationDiagnosticDescriptors.DeferredReturnLiveValue;
 
@@ -5117,13 +5131,13 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         {
             return kind switch
             {
-                GenerationLivenessKind.RootReference when operation is "ReturnMemoryToNativeMemory" or "ReleaseLeasesToNativeMemory" or "RecycleScoped" or "Dispose"
+            GenerationLivenessKind.RootReference when operation is "ReturnMemoryToNativeMemory" or "ReleaseLeasesToNativeMemory" or "Reset" or "RecycleScoped" or "Dispose"
                     => operation == "Dispose"
                         ? "The root/reference would become stale when owner disposal ends the generation; end it before disposing the owner."
                         : "The root/reference would become stale at the generation boundary; end it before deterministic native return.",
                 GenerationLivenessKind.RootReference
                     => "The root/reference becomes stale immediately; it does not retain detached native storage.",
-                GenerationLivenessKind.ActiveBorrow when operation is "ReturnMemoryToNativeMemory" or "ReleaseLeasesToNativeMemory" or "RecycleScoped"
+            GenerationLivenessKind.ActiveBorrow when operation is "ReturnMemoryToNativeMemory" or "ReleaseLeasesToNativeMemory" or "Reset" or "RecycleScoped"
                     => "An entered bounded operation still holds the generation; end the callback before deterministic native return.",
                 GenerationLivenessKind.ActiveBorrow when operation == "Dispose"
                     => "An entered bounded operation still holds the generation; end the callback before disposing the owner.",
@@ -6210,7 +6224,9 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             {
                 "ReturnMemoryToNativeMemory" => LifecycleEffect.ReturnMemoryToNativeMemory,
                 "ReturnMemoryToGarbageCollector" => LifecycleEffect.ReturnMemoryToGarbageCollector,
-                "ReleaseLeasesToNativeMemory" => LifecycleEffect.ReleaseLeasesToNativeMemory,
+                "ReleaseLeasesToNativeMemory" =>
+                    LifecycleEffect.ReleaseLeasesToNativeMemory,
+                "Reset" => LifecycleEffect.Reset,
                 "ReleaseLeasesToGarbageCollector" => LifecycleEffect.ReleaseLeasesToGarbageCollector,
                 "LeaseFromMemory" => LifecycleEffect.LeaseFromMemory,
                 "RecycleScoped" => LifecycleEffect.RecycleScoped,
@@ -6225,7 +6241,9 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             {
                 LifecycleEffect.ReturnMemoryToNativeMemory => "ReturnMemoryToNativeMemory",
                 LifecycleEffect.ReturnMemoryToGarbageCollector => "ReturnMemoryToGarbageCollector",
-                LifecycleEffect.ReleaseLeasesToNativeMemory => "ReleaseLeasesToNativeMemory",
+                LifecycleEffect.ReleaseLeasesToNativeMemory =>
+                    "ReleaseLeasesToNativeMemory",
+                LifecycleEffect.Reset => "Reset",
                 LifecycleEffect.ReleaseLeasesToGarbageCollector => "ReleaseLeasesToGarbageCollector",
                 LifecycleEffect.LeaseFromMemory => "LeaseFromMemory",
                 LifecycleEffect.RecycleScoped => "RecycleScoped",
@@ -6240,6 +6258,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             ReturnMemoryToNativeMemory,
             ReturnMemoryToGarbageCollector,
             ReleaseLeasesToNativeMemory,
+            Reset,
             ReleaseLeasesToGarbageCollector,
             LeaseFromMemory,
             RecycleScoped,
@@ -6651,7 +6670,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
         private bool IsNativeArena(ITypeSymbol? type)
         {
-            return NativeSymbols.Is(type, _symbols.Arena);
+            return NativeSymbols.Is(type, _symbols.Arena)
+                || NativeSymbols.Is(type, _symbols.ConcurrentArena);
         }
 
         private bool IsNativePooled(ITypeSymbol? type)
@@ -6666,7 +6686,10 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
         private bool IsNativeArenaLease(ITypeSymbol? type)
         {
-            return NativeSymbols.Is(type, _symbols.ArenaLease);
+            return NativeSymbols.Is(type, _symbols.ArenaLease)
+                || NativeSymbols.Is(
+                    type,
+                    _symbols.ConcurrentArenaLease);
         }
 
         private bool IsUsingSyntax(SyntaxNode syntax, ISymbol? symbol)

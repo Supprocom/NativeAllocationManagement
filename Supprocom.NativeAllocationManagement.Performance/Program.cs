@@ -624,7 +624,7 @@ internal static class Program
                 callback.Run(coordinates);
                 callback.Run(voxels);
                 callback.Run(upload);
-                arena.ReleaseLeasesToNativeMemory();
+                arena.Reset();
             }
         }
         finally
@@ -641,14 +641,14 @@ internal static class Program
             ArenaLease<byte> firstSpike = arena.Scratch<byte>(3 * 1024 * 1024, static writer => writer.Fill(default!));
             _ = firstSpike.Length;
             callback.SampleResources();
-            arena.ReleaseLeasesToNativeMemory();
+            arena.Reset();
             nuint trimmedByBytes = arena.TrimRetainedMemoryByBytes(1);
 
             ArenaLease<byte> secondSpike = arena.Scratch<byte>(5 * 1024 * 1024, static writer => writer.Fill(default!));
             _ = secondSpike.Length;
             callback.SampleResources();
-            arena.ReleaseLeasesToNativeMemory();
-            nuint trimmedByLeaseShape = arena.TrimRetainedMemoryByLeaseSize<byte>(1);
+            arena.Reset();
+            nuint trimmedByLeaseShape = arena.TrimRetainedMemoryByBytes(1);
             callback.RecordTrimmedBytes(checked(trimmedByBytes + trimmedByLeaseShape));
         }
         finally
@@ -662,12 +662,12 @@ internal static class Program
     {
         const int warmupIterations = 10_000;
         const int measuredIterations = 1_000_000;
-        NativeArena arena = new(
+        NativeConcurrentArena arena = new(
             preAllocateBytes: 4_096,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         try
         {
-            ArenaLease<byte> source = arena.Scratch<byte>(
+            ConcurrentArenaLease<byte> source = arena.Scratch<byte>(
                 1,
                 static writer => writer.Fill(1));
             RunScopedRecycleProbeIterations(
@@ -703,8 +703,8 @@ internal static class Program
     }
 
     private static void RunScopedRecycleProbeIterations(
-        NativeArena arena,
-        ArenaLease<byte> source,
+        NativeConcurrentArena arena,
+        ConcurrentArenaLease<byte> source,
         int iterations,
         bool includeAccess)
     {
@@ -750,14 +750,14 @@ internal static class Program
                     seventh[0] = default;
                     eighth[0] = default;
                 },
-                out ArenaLease<byte> first,
-                out ArenaLease<short> second,
-                out ArenaLease<int> third,
-                out ArenaLease<long> fourth,
-                out ArenaLease<float> fifth,
-                out ArenaLease<double> sixth,
-                out ArenaLease<Coordinate> seventh,
-                out ArenaLease<Voxel> eighth);
+                out ConcurrentArenaLease<byte> first,
+                out ConcurrentArenaLease<short> second,
+                out ConcurrentArenaLease<int> third,
+                out ConcurrentArenaLease<long> fourth,
+                out ConcurrentArenaLease<float> fifth,
+                out ConcurrentArenaLease<double> sixth,
+                out ConcurrentArenaLease<Coordinate> seventh,
+                out ConcurrentArenaLease<Voxel> eighth);
             if (includeAccess)
             {
                 NativeLeaseOperations.Access(
@@ -781,11 +781,11 @@ internal static class Program
     {
         const int warmupIterations = 10_000;
         const int measuredIterations = 1_000_000;
-        using NativeArena arena = new(
+        using NativeConcurrentArena arena = new(
             preAllocateBytes: 4_096,
             returnMemoryOnDispose:
                 NativeMemoryReturn.ToNativeMemory);
-        ArenaLease<byte> source = arena.Scratch<byte>(
+        ConcurrentArenaLease<byte> source = arena.Scratch<byte>(
             1,
             static writer => writer.Fill(1));
         RunScopedRecycleProbeIterations(
@@ -843,14 +843,14 @@ internal static class Program
                     seventh[0] = default;
                     eighth[0] = default;
                 },
-                out ArenaLease<byte> first,
-                out ArenaLease<short> second,
-                out ArenaLease<int> third,
-                out ArenaLease<long> fourth,
-                out ArenaLease<float> fifth,
-                out ArenaLease<double> sixth,
-                out ArenaLease<Coordinate> seventh,
-                out ArenaLease<Voxel> eighth);
+                out ConcurrentArenaLease<byte> first,
+                out ConcurrentArenaLease<short> second,
+                out ConcurrentArenaLease<int> third,
+                out ConcurrentArenaLease<long> fourth,
+                out ConcurrentArenaLease<float> fifth,
+                out ConcurrentArenaLease<double> sixth,
+                out ConcurrentArenaLease<Coordinate> seventh,
+                out ConcurrentArenaLease<Voxel> eighth);
             long initialized = Stopwatch.GetTimestamp();
             NativeLeaseOperations.Access(
                 first,
@@ -910,33 +910,33 @@ internal static class Program
     {
         const int warmupIterations = 10_000;
         const int measuredIterations = 1_000_000;
-        using NativeArena arena = new(
+        using NativeConcurrentArena arena = new(
             preAllocateBytes: 4_096,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        ArenaLease<byte> first = arena.Scratch<byte>(
+        ConcurrentArenaLease<byte> first = arena.Scratch<byte>(
             1,
             static writer => writer.Write(1));
-        ArenaLease<short> second = arena.Scratch<short>(
+        ConcurrentArenaLease<short> second = arena.Scratch<short>(
             1,
             static writer => writer.Write(2));
-        ArenaLease<int> third = arena.Scratch<int>(
+        ConcurrentArenaLease<int> third = arena.Scratch<int>(
             1,
             static writer => writer.Write(3));
-        ArenaLease<long> fourth = arena.Scratch<long>(
+        ConcurrentArenaLease<long> fourth = arena.Scratch<long>(
             1,
             static writer => writer.Write(4));
-        ArenaLease<float> fifth = arena.Scratch<float>(
+        ConcurrentArenaLease<float> fifth = arena.Scratch<float>(
             1,
             static writer => writer.Write(5));
-        ArenaLease<double> sixth = arena.Scratch<double>(
+        ConcurrentArenaLease<double> sixth = arena.Scratch<double>(
             1,
             static writer => writer.Write(6));
-        ArenaLease<Coordinate> seventh =
+        ConcurrentArenaLease<Coordinate> seventh =
             arena.Scratch<Coordinate>(
                 1,
                 static writer =>
                     writer.Write(default(Coordinate)));
-        ArenaLease<Voxel> eighth = arena.Scratch<Voxel>(
+        ConcurrentArenaLease<Voxel> eighth = arena.Scratch<Voxel>(
             1,
             static writer => writer.Write(default(Voxel)));
         RunNativeAccessProbeIterations(
@@ -975,14 +975,14 @@ internal static class Program
     }
 
     private static void RunNativeAccessProbeIterations(
-        ArenaLease<byte> first,
-        ArenaLease<short> second,
-        ArenaLease<int> third,
-        ArenaLease<long> fourth,
-        ArenaLease<float> fifth,
-        ArenaLease<double> sixth,
-        ArenaLease<Coordinate> seventh,
-        ArenaLease<Voxel> eighth,
+        ConcurrentArenaLease<byte> first,
+        ConcurrentArenaLease<short> second,
+        ConcurrentArenaLease<int> third,
+        ConcurrentArenaLease<long> fourth,
+        ConcurrentArenaLease<float> fifth,
+        ConcurrentArenaLease<double> sixth,
+        ConcurrentArenaLease<Coordinate> seventh,
+        ConcurrentArenaLease<Voxel> eighth,
         int iterations)
     {
         for (int iteration = 0; iteration < iterations; iteration++)
@@ -1181,6 +1181,7 @@ internal static class Program
         }
 
         internal void Run<T>(Pooled<T> values)
+            where T : unmanaged
         {
             long start = Stopwatch.GetTimestamp();
             if ((Count & 1) == 0)
@@ -1211,7 +1212,24 @@ internal static class Program
             }
         }
 
+        internal void Run<T>(ConcurrentArenaLease<T> values)
+            where T : unmanaged
+        {
+            long start = Stopwatch.GetTimestamp();
+            if ((Count & 1) == 0)
+            {
+                values.Access(view => RunNativeBody(view));
+                CompleteBoundary(start, operation: 1);
+            }
+            else
+            {
+                _ = values.Read<int>(view => RunNativeReadBody(view));
+                CompleteBoundary(start, operation: 2);
+            }
+        }
+
         internal void Run<T>(ArenaLease<T> values)
+            where T : unmanaged
         {
             long start = Stopwatch.GetTimestamp();
             if ((Count & 1) == 0)

@@ -37,7 +37,7 @@ public sealed class NativeLeaseWriterDirectInitializationTests
     [Fact]
     public void FailedDirectCallbackAbortsTheReservation()
     {
-        using NativeArena arena = new(
+        using NativeConcurrentArena arena = new(
             preAllocateBytes: 16 * sizeof(int),
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
 
@@ -66,7 +66,7 @@ public sealed class NativeLeaseWriterDirectInitializationTests
     [Fact]
     public void CanceledDirectCallbackAbortsTheReservation()
     {
-        using NativeArena arena = new(
+        using NativeConcurrentArena arena = new(
             preAllocateBytes: 16 * sizeof(int),
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         CancellationTokenSource cancellation = new();
@@ -90,7 +90,7 @@ public sealed class NativeLeaseWriterDirectInitializationTests
     public void EmptyDirectCallbackPublishesAnEmptyTransfer()
     {
         bool invoked = false;
-        using NativeArena arena = new();
+        using NativeConcurrentArena arena = new();
         using NativeTransfer<int> transfer =
             arena.ScratchTransferable<int>(
                 0,

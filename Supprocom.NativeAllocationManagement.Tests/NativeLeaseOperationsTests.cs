@@ -10,15 +10,15 @@ public sealed class NativeLeaseOperationsTests
         NativeMemoryTestHooks.Reset();
         using NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         using NativePool<int> secondPool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        using NativeArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
 
         Pooled<int> first = pool.Rent(2, static writer => writer.Fill(default!));
         Pooled<int> second = pool.Rent(2, static writer => writer.Fill(default!));
         Pooled<int> third = secondPool.Rent(2, static writer => writer.Fill(default!));
-        ArenaLease<int> arenaFirst = arena.Scratch<int>(2, static writer => writer.Fill(default!));
-        ArenaLease<int> arenaSecond = arena.Scratch<int>(2, static writer => writer.Fill(default!));
-        ArenaLease<long> arenaThird = arena.Scratch<long>(2, static writer => writer.Fill(default!));
-        ArenaLease<byte> arenaFourth = arena.Scratch<byte>(2, static writer => writer.Fill(default!));
+        ConcurrentArenaLease<int> arenaFirst = arena.Scratch<int>(2, static writer => writer.Fill(default!));
+        ConcurrentArenaLease<int> arenaSecond = arena.Scratch<int>(2, static writer => writer.Fill(default!));
+        ConcurrentArenaLease<long> arenaThird = arena.Scratch<long>(2, static writer => writer.Fill(default!));
+        ConcurrentArenaLease<byte> arenaFourth = arena.Scratch<byte>(2, static writer => writer.Fill(default!));
 
         first.Access(value => value[0] = 10);
         NativeLeaseOperations.Access(first, second, (left, right) =>
@@ -153,9 +153,9 @@ public sealed class NativeLeaseOperationsTests
         Assert.Equal(11, tripleFirst[0]);
 
         using NativePool<int> pooledFirstPool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        using NativeArena staleArena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentArena staleArena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         Pooled<int> pooledFirst = pooledFirstPool.Rent(1, static writer => writer.Fill(default!));
-        ArenaLease<int> staleArenaLease = staleArena.Scratch<int>(1, static writer => writer.Fill(default!));
+        ConcurrentArenaLease<int> staleArenaLease = staleArena.Scratch<int>(1, static writer => writer.Fill(default!));
         staleArena.ReturnMemoryToNativeMemory();
         NativeAllocationException? pooledArenaFailure = null;
         try
@@ -171,13 +171,13 @@ public sealed class NativeLeaseOperationsTests
         Assert.Equal(12, pooledFirst[0]);
 
         using NativePool<int> quintuplePool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        using NativeArena goodArena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        using NativeArena lateArena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentArena goodArena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentArena lateArena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         Pooled<int> first = quintuplePool.Rent(1, static writer => writer.Fill(default!));
         Pooled<int> second = quintuplePool.Rent(1, static writer => writer.Fill(default!));
         Pooled<int> third = quintuplePool.Rent(1, static writer => writer.Fill(default!));
-        ArenaLease<int> fourth = goodArena.Scratch<int>(1, static writer => writer.Fill(default!));
-        ArenaLease<int> fifth = lateArena.Scratch<int>(1, static writer => writer.Fill(default!));
+        ConcurrentArenaLease<int> fourth = goodArena.Scratch<int>(1, static writer => writer.Fill(default!));
+        ConcurrentArenaLease<int> fifth = lateArena.Scratch<int>(1, static writer => writer.Fill(default!));
         lateArena.ReturnMemoryToNativeMemory();
         NativeAllocationException? quintupleFailure = null;
         try
@@ -205,14 +205,14 @@ public sealed class NativeLeaseOperationsTests
         NativeMemoryTestHooks.Reset();
         using NativePool<int> firstPool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         using NativePool<int> secondPool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        using NativeArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         Pooled<int> first = firstPool.Rent(1, static writer => writer.Fill(default!));
         Pooled<int> second = firstPool.Rent(1, static writer => writer.Fill(default!));
         Pooled<int> third = secondPool.Rent(1, static writer => writer.Fill(default!));
-        ArenaLease<int> fourth = arena.Scratch<int>(1, static writer => writer.Fill(default!));
-        ArenaLease<int> fifth = arena.Scratch<int>(1, static writer => writer.Fill(default!));
-        ArenaLease<long> sixth = arena.Scratch<long>(1, static writer => writer.Fill(default!));
-        ArenaLease<byte> seventh = arena.Scratch<byte>(1, static writer => writer.Fill(default!));
+        ConcurrentArenaLease<int> fourth = arena.Scratch<int>(1, static writer => writer.Fill(default!));
+        ConcurrentArenaLease<int> fifth = arena.Scratch<int>(1, static writer => writer.Fill(default!));
+        ConcurrentArenaLease<long> sixth = arena.Scratch<long>(1, static writer => writer.Fill(default!));
+        ConcurrentArenaLease<byte> seventh = arena.Scratch<byte>(1, static writer => writer.Fill(default!));
 
         bool tripleThrown = false;
         try
@@ -427,7 +427,7 @@ public sealed class NativeLeaseOperationsTests
         NativeMemoryTestHooks.Reset();
         using NativePool<int> pool = new(
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        using NativeArena arena = new(
+        using NativeConcurrentArena arena = new(
             preAllocateBytes: 4096,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         Pooled<int> source = pool.Rent(
@@ -441,10 +441,10 @@ public sealed class NativeLeaseOperationsTests
             });
 
         {
-            scoped ArenaLease<int> first;
-            scoped ArenaLease<long> second;
-            scoped ArenaLease<byte> third;
-            scoped ArenaLease<string> fourth;
+            scoped ConcurrentArenaLease<int> first;
+            scoped ConcurrentArenaLease<long> second;
+            scoped ConcurrentArenaLease<byte> third;
+            scoped ConcurrentArenaLease<string> fourth;
             NativeLeaseOperations.InitializeScoped(
                 source,
                 arena,
@@ -486,10 +486,10 @@ public sealed class NativeLeaseOperationsTests
     public void UnmanagedSpanGroupInitializationPublishesCompleteRanges()
     {
         NativeMemoryTestHooks.Reset();
-        using NativeArena arena = new(
+        using NativeConcurrentArena arena = new(
             preAllocateBytes: 4096,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        ArenaLease<int> source = arena.Scratch<int>(
+        ConcurrentArenaLease<int> source = arena.Scratch<int>(
             2,
             static writer =>
             {
@@ -525,8 +525,8 @@ public sealed class NativeLeaseOperationsTests
         Assert.Equal(1, arena.CurrentAllocationRecordCountForTest);
 
         static void InitializeAndVerify(
-            scoped ArenaLease<int> source,
-            NativeArena arena,
+            scoped ConcurrentArenaLease<int> source,
+            NativeConcurrentArena arena,
             NativeLeaseSourceQuadSpanInitializer<
                 int,
                 int,
@@ -534,10 +534,10 @@ public sealed class NativeLeaseOperationsTests
                 byte,
                 uint> initializer)
         {
-            scoped ArenaLease<int> first;
-            scoped ArenaLease<long> second;
-            scoped ArenaLease<byte> third;
-            scoped ArenaLease<uint> fourth;
+            scoped ConcurrentArenaLease<int> first;
+            scoped ConcurrentArenaLease<long> second;
+            scoped ConcurrentArenaLease<byte> third;
+            scoped ConcurrentArenaLease<uint> fourth;
             NativeLeaseOperations.InitializeScoped(
                 source,
                 arena,
@@ -565,10 +565,10 @@ public sealed class NativeLeaseOperationsTests
     public void UnmanagedSpanGroupBatchesAnEmptyRange()
     {
         NativeMemoryTestHooks.Reset();
-        using NativeArena arena = new(
+        using NativeConcurrentArena arena = new(
             preAllocateBytes: 4096,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        ArenaLease<int> source = arena.Scratch<int>(
+        ConcurrentArenaLease<int> source = arena.Scratch<int>(
             1,
             static writer => writer.Write(12));
 
@@ -587,10 +587,10 @@ public sealed class NativeLeaseOperationsTests
         bool failed = false;
         try
         {
-            scoped ArenaLease<int> first;
-            scoped ArenaLease<long> second;
-            scoped ArenaLease<uint> third;
-            scoped ArenaLease<byte> empty;
+            scoped ConcurrentArenaLease<int> first;
+            scoped ConcurrentArenaLease<long> second;
+            scoped ConcurrentArenaLease<uint> third;
+            scoped ConcurrentArenaLease<byte> empty;
             NativeLeaseOperations.InitializeScoped(
                 source,
                 arena,
@@ -624,13 +624,13 @@ public sealed class NativeLeaseOperationsTests
         Assert.Equal(1, arena.CurrentAllocationRecordCountForTest);
 
         static void InitializeAndVerify(
-            scoped ArenaLease<int> source,
-            NativeArena arena)
+            scoped ConcurrentArenaLease<int> source,
+            NativeConcurrentArena arena)
         {
-            scoped ArenaLease<int> first;
-            scoped ArenaLease<long> second;
-            scoped ArenaLease<uint> third;
-            scoped ArenaLease<byte> empty;
+            scoped ConcurrentArenaLease<int> first;
+            scoped ConcurrentArenaLease<long> second;
+            scoped ConcurrentArenaLease<uint> third;
+            scoped ConcurrentArenaLease<byte> empty;
             NativeLeaseOperations.InitializeScoped(
                 source,
                 arena,
@@ -662,10 +662,10 @@ public sealed class NativeLeaseOperationsTests
     public void UnmanagedSpanGroupFailureRestoresAllReservations()
     {
         NativeMemoryTestHooks.Reset();
-        using NativeArena arena = new(
+        using NativeConcurrentArena arena = new(
             preAllocateBytes: 4096,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        ArenaLease<int> source = arena.Scratch<int>(
+        ConcurrentArenaLease<int> source = arena.Scratch<int>(
             1,
             static writer => writer.Write(9));
         NativeLeaseSourceQuadSpanInitializer<
@@ -684,10 +684,10 @@ public sealed class NativeLeaseOperationsTests
             };
 
         {
-            scoped ArenaLease<int> first;
-            scoped ArenaLease<long> second;
-            scoped ArenaLease<byte> third;
-            scoped ArenaLease<uint> fourth;
+            scoped ConcurrentArenaLease<int> first;
+            scoped ConcurrentArenaLease<long> second;
+            scoped ConcurrentArenaLease<byte> third;
+            scoped ConcurrentArenaLease<uint> fourth;
             NativeLeaseOperations.InitializeScoped(
                 source,
                 arena,
@@ -713,10 +713,10 @@ public sealed class NativeLeaseOperationsTests
         bool failed = false;
         try
         {
-            scoped ArenaLease<int> first;
-            scoped ArenaLease<long> second;
-            scoped ArenaLease<byte> third;
-            scoped ArenaLease<uint> fourth;
+            scoped ConcurrentArenaLease<int> first;
+            scoped ConcurrentArenaLease<long> second;
+            scoped ConcurrentArenaLease<byte> third;
+            scoped ConcurrentArenaLease<uint> fourth;
             NativeLeaseOperations.InitializeScoped(
                 source,
                 arena,
@@ -737,7 +737,7 @@ public sealed class NativeLeaseOperationsTests
 
         Assert.True(failed);
         Assert.Equal(1, arena.CurrentAllocationRecordCountForTest);
-        ArenaLease<int> next = arena.Scratch<int>(
+        ConcurrentArenaLease<int> next = arena.Scratch<int>(
             1,
             static writer => writer.Write(15));
         Assert.Equal(15, next[0]);
@@ -748,20 +748,20 @@ public sealed class NativeLeaseOperationsTests
     public void SameOwnerSpanGroupRejectsARecycledSourceBeforeReservation()
     {
         NativeMemoryTestHooks.Reset();
-        using NativeArena arena = new(
+        using NativeConcurrentArena arena = new(
             preAllocateBytes: 4096,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        ArenaLease<int> source = arena.ScratchScoped<int>(
+        ConcurrentArenaLease<int> source = arena.ScratchScoped<int>(
             1,
             static writer => writer.Write(9));
         arena.RecycleScoped();
         NativeAllocationException? failure = null;
         try
         {
-            scoped ArenaLease<int> first;
-            scoped ArenaLease<long> second;
-            scoped ArenaLease<byte> third;
-            scoped ArenaLease<uint> fourth;
+            scoped ConcurrentArenaLease<int> first;
+            scoped ConcurrentArenaLease<long> second;
+            scoped ConcurrentArenaLease<byte> third;
+            scoped ConcurrentArenaLease<uint> fourth;
             NativeLeaseOperations.InitializeScoped(
                 source,
                 arena,
@@ -794,10 +794,10 @@ public sealed class NativeLeaseOperationsTests
     public void UnmanagedSpanOctetPublishesAndReusesAllRanges()
     {
         NativeMemoryTestHooks.Reset();
-        using NativeArena arena = new(
+        using NativeConcurrentArena arena = new(
             preAllocateBytes: 4096,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        ArenaLease<int> source = arena.Scratch<int>(
+        ConcurrentArenaLease<int> source = arena.Scratch<int>(
             2,
             static writer =>
             {
@@ -841,8 +841,8 @@ public sealed class NativeLeaseOperationsTests
         Assert.Equal(1, arena.CurrentAllocationRecordCountForTest);
 
         static void InitializeAndVerify(
-            scoped ArenaLease<int> source,
-            NativeArena arena,
+            scoped ConcurrentArenaLease<int> source,
+            NativeConcurrentArena arena,
             NativeLeaseSourceOctupleSpanInitializer<
                 int,
                 int,
@@ -854,14 +854,14 @@ public sealed class NativeLeaseOperationsTests
                 float,
                 double> initializer)
         {
-            scoped ArenaLease<int> first;
-            scoped ArenaLease<long> second;
-            scoped ArenaLease<byte> third;
-            scoped ArenaLease<uint> fourth;
-            scoped ArenaLease<short> fifth;
-            scoped ArenaLease<ushort> sixth;
-            scoped ArenaLease<float> seventh;
-            scoped ArenaLease<double> eighth;
+            scoped ConcurrentArenaLease<int> first;
+            scoped ConcurrentArenaLease<long> second;
+            scoped ConcurrentArenaLease<byte> third;
+            scoped ConcurrentArenaLease<uint> fourth;
+            scoped ConcurrentArenaLease<short> fifth;
+            scoped ConcurrentArenaLease<ushort> sixth;
+            scoped ConcurrentArenaLease<float> seventh;
+            scoped ConcurrentArenaLease<double> eighth;
             NativeLeaseOperations.InitializeScoped(
                 source,
                 arena,
@@ -903,24 +903,24 @@ public sealed class NativeLeaseOperationsTests
     public void UnmanagedSpanOctetFailureRestoresAllReservations()
     {
         NativeMemoryTestHooks.Reset();
-        using NativeArena arena = new(
+        using NativeConcurrentArena arena = new(
             preAllocateBytes: 4096,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        ArenaLease<int> source = arena.Scratch<int>(
+        ConcurrentArenaLease<int> source = arena.Scratch<int>(
             1,
             static writer => writer.Write(21));
 
         bool failed = false;
         try
         {
-            scoped ArenaLease<int> first;
-            scoped ArenaLease<long> second;
-            scoped ArenaLease<byte> third;
-            scoped ArenaLease<uint> fourth;
-            scoped ArenaLease<short> fifth;
-            scoped ArenaLease<ushort> sixth;
-            scoped ArenaLease<float> seventh;
-            scoped ArenaLease<double> eighth;
+            scoped ConcurrentArenaLease<int> first;
+            scoped ConcurrentArenaLease<long> second;
+            scoped ConcurrentArenaLease<byte> third;
+            scoped ConcurrentArenaLease<uint> fourth;
+            scoped ConcurrentArenaLease<short> fifth;
+            scoped ConcurrentArenaLease<ushort> sixth;
+            scoped ConcurrentArenaLease<float> seventh;
+            scoped ConcurrentArenaLease<double> eighth;
             NativeLeaseOperations.InitializeScoped(
                 source,
                 arena,
@@ -962,7 +962,7 @@ public sealed class NativeLeaseOperationsTests
         Assert.True(failed);
         Assert.Equal(1, arena.CurrentAllocationRecordCountForTest);
         Assert.Equal(21, source[0]);
-        ArenaLease<int> next = arena.Scratch<int>(
+        ConcurrentArenaLease<int> next = arena.Scratch<int>(
             1,
             static writer => writer.Write(34));
         Assert.Equal(34, next[0]);
@@ -974,7 +974,7 @@ public sealed class NativeLeaseOperationsTests
         NativeMemoryTestHooks.Reset();
         using NativePool<int> pool = new(
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        using NativeArena arena = new(
+        using NativeConcurrentArena arena = new(
             preAllocateBytes: 4096,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         Pooled<int> source = pool.Rent(
@@ -983,10 +983,10 @@ public sealed class NativeLeaseOperationsTests
         bool failed = false;
         try
         {
-            scoped ArenaLease<int> first;
-            scoped ArenaLease<int> second;
-            scoped ArenaLease<int> third;
-            scoped ArenaLease<string> fourth;
+            scoped ConcurrentArenaLease<int> first;
+            scoped ConcurrentArenaLease<int> second;
+            scoped ConcurrentArenaLease<int> third;
+            scoped ConcurrentArenaLease<string> fourth;
             NativeLeaseOperations.InitializeScoped(
                 source,
                 arena,
@@ -1023,10 +1023,10 @@ public sealed class NativeLeaseOperationsTests
         arena.RecycleScoped();
 
         {
-            scoped ArenaLease<int> first;
-            scoped ArenaLease<int> second;
-            scoped ArenaLease<int> third;
-            scoped ArenaLease<string> fourth;
+            scoped ConcurrentArenaLease<int> first;
+            scoped ConcurrentArenaLease<int> second;
+            scoped ConcurrentArenaLease<int> third;
+            scoped ConcurrentArenaLease<string> fourth;
             NativeLeaseOperations.InitializeScoped(
                 source,
                 arena,
@@ -1061,21 +1061,21 @@ public sealed class NativeLeaseOperationsTests
     public void SameOwnerArenaCompositesUseOneFailureAtomicAdmission()
     {
         NativeMemoryTestHooks.Reset();
-        using NativeArena arena = new(
+        using NativeConcurrentArena arena = new(
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        ArenaLease<int> first = arena.Scratch<int>(
+        ConcurrentArenaLease<int> first = arena.Scratch<int>(
             1,
             static writer => writer.Write(1));
-        ArenaLease<int> second = arena.Scratch<int>(
+        ConcurrentArenaLease<int> second = arena.Scratch<int>(
             1,
             static writer => writer.Write(2));
-        ArenaLease<long> third = arena.Scratch<long>(
+        ConcurrentArenaLease<long> third = arena.Scratch<long>(
             1,
             static writer => writer.Write(3));
-        ArenaLease<short> fourth = arena.Scratch<short>(
+        ConcurrentArenaLease<short> fourth = arena.Scratch<short>(
             1,
             static writer => writer.Write(4));
-        ArenaLease<byte> fifth = arena.Scratch<byte>(
+        ConcurrentArenaLease<byte> fifth = arena.Scratch<byte>(
             1,
             static writer => writer.Write(5));
         int admissions = 0;
@@ -1152,27 +1152,27 @@ public sealed class NativeLeaseOperationsTests
     public void SevenArenaViewsUseOneFailureAtomicAdmission()
     {
         NativeMemoryTestHooks.Reset();
-        using NativeArena arena = new(
+        using NativeConcurrentArena arena = new(
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        ArenaLease<int> first = arena.Scratch<int>(
+        ConcurrentArenaLease<int> first = arena.Scratch<int>(
             1,
             static writer => writer.Write(1));
-        ArenaLease<int> second = arena.Scratch<int>(
+        ConcurrentArenaLease<int> second = arena.Scratch<int>(
             1,
             static writer => writer.Write(2));
-        ArenaLease<int> third = arena.Scratch<int>(
+        ConcurrentArenaLease<int> third = arena.Scratch<int>(
             1,
             static writer => writer.Write(3));
-        ArenaLease<int> fourth = arena.Scratch<int>(
+        ConcurrentArenaLease<int> fourth = arena.Scratch<int>(
             1,
             static writer => writer.Write(4));
-        ArenaLease<int> fifth = arena.Scratch<int>(
+        ConcurrentArenaLease<int> fifth = arena.Scratch<int>(
             1,
             static writer => writer.Write(5));
-        ArenaLease<int> sixth = arena.Scratch<int>(
+        ConcurrentArenaLease<int> sixth = arena.Scratch<int>(
             1,
             static writer => writer.Write(6));
-        ArenaLease<int> seventh = arena.Scratch<int>(
+        ConcurrentArenaLease<int> seventh = arena.Scratch<int>(
             1,
             static writer => writer.Write(7));
         int admissions = 0;
@@ -1240,30 +1240,30 @@ public sealed class NativeLeaseOperationsTests
     public void EightArenaViewsUseOneFailureAtomicAdmission()
     {
         NativeMemoryTestHooks.Reset();
-        using NativeArena arena = new(
+        using NativeConcurrentArena arena = new(
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        ArenaLease<int> first = arena.Scratch<int>(
+        ConcurrentArenaLease<int> first = arena.Scratch<int>(
             1,
             static writer => writer.Write(1));
-        ArenaLease<int> second = arena.Scratch<int>(
+        ConcurrentArenaLease<int> second = arena.Scratch<int>(
             1,
             static writer => writer.Write(2));
-        ArenaLease<int> third = arena.Scratch<int>(
+        ConcurrentArenaLease<int> third = arena.Scratch<int>(
             1,
             static writer => writer.Write(3));
-        ArenaLease<int> fourth = arena.Scratch<int>(
+        ConcurrentArenaLease<int> fourth = arena.Scratch<int>(
             1,
             static writer => writer.Write(4));
-        ArenaLease<int> fifth = arena.Scratch<int>(
+        ConcurrentArenaLease<int> fifth = arena.Scratch<int>(
             1,
             static writer => writer.Write(5));
-        ArenaLease<int> sixth = arena.Scratch<int>(
+        ConcurrentArenaLease<int> sixth = arena.Scratch<int>(
             1,
             static writer => writer.Write(6));
-        ArenaLease<int> seventh = arena.Scratch<int>(
+        ConcurrentArenaLease<int> seventh = arena.Scratch<int>(
             1,
             static writer => writer.Write(7));
-        ArenaLease<int> eighth = arena.Scratch<int>(
+        ConcurrentArenaLease<int> eighth = arena.Scratch<int>(
             1,
             static writer => writer.Write(8));
         int admissions = 0;
@@ -1334,10 +1334,10 @@ public sealed class NativeLeaseOperationsTests
     public void ArenaSourceGroupInitializationKeepsTheSourceAndRollsBackTheTail()
     {
         NativeMemoryTestHooks.Reset();
-        using NativeArena arena = new(
+        using NativeConcurrentArena arena = new(
             preAllocateBytes: 4096,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        ArenaLease<int> source = arena.Scratch<int>(
+        ConcurrentArenaLease<int> source = arena.Scratch<int>(
             2,
             static writer =>
             {
@@ -1348,10 +1348,10 @@ public sealed class NativeLeaseOperationsTests
         bool initializationFailed = false;
         try
         {
-            scoped ArenaLease<int> first;
-            scoped ArenaLease<long> second;
-            scoped ArenaLease<byte> third;
-            scoped ArenaLease<string> fourth;
+            scoped ConcurrentArenaLease<int> first;
+            scoped ConcurrentArenaLease<long> second;
+            scoped ConcurrentArenaLease<byte> third;
+            scoped ConcurrentArenaLease<string> fourth;
             NativeLeaseOperations.InitializeScoped(
                 source,
                 arena,
@@ -1382,10 +1382,10 @@ public sealed class NativeLeaseOperationsTests
         Assert.Equal(18, source.Read(static values => values[0] + values[1]));
 
         {
-            scoped ArenaLease<int> first;
-            scoped ArenaLease<long> second;
-            scoped ArenaLease<byte> third;
-            scoped ArenaLease<string> fourth;
+            scoped ConcurrentArenaLease<int> first;
+            scoped ConcurrentArenaLease<long> second;
+            scoped ConcurrentArenaLease<byte> third;
+            scoped ConcurrentArenaLease<string> fourth;
             NativeLeaseOperations.InitializeScoped(
                 source,
                 arena,

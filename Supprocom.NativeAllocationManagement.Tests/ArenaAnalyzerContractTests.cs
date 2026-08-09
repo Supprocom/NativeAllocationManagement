@@ -16,8 +16,8 @@ public sealed class ArenaAnalyzerContractTests
                 public static void Run()
                 {
                     using NativeArena arena = new();
-                    { ArenaLease<int> values = arena.Scratch<int>(4, static writer => writer.Fill(default!)); values[0] = 1; }
-                    arena.ReleaseLeasesToNativeMemory();
+                    { ArenaLease<int> values = arena.Scratch<int>(4, static writer => writer.Fill(default!)); values.Access(static view => view[0] = 1); }
+                    arena.Reset();
                 }
             }
             """);
@@ -26,32 +26,67 @@ public sealed class ArenaAnalyzerContractTests
     }
 
     [Fact]
-    public async Task ArenaStrictAndTolerantReleaseShareTheSameFindingWithDifferentSeverity()
+    public async Task ArenaResetRejectsALiveLease()
     {
-        const string source = """
+        ImmutableArray<Diagnostic> diagnostics =
+            await AnalyzerContractTests.AnalyzeAsync(
+            """
             using Supprocom.NativeAllocationManagement;
             public static class Sample
             {
                 public static void Run()
                 {
-                    NativeArena arena = new();
+                    using NativeArena arena = new();
                     ArenaLease<int> values = arena.Scratch<int>(1, static writer => writer.Fill(default!));
-                    arena.ReleaseLeasesToNativeMemory();
+                    arena.Reset();
+                    values.Access(static view => view[0] = 1);
                 }
             }
-            """;
+            """);
 
-        ImmutableArray<Diagnostic> strict = await AnalyzerContractTests.AnalyzeAsync(source);
-        ImmutableArray<Diagnostic> tolerant = await AnalyzerContractTests.AnalyzeAsync(
-            source.Replace("ReleaseLeasesToNativeMemory", "ReleaseLeasesToGarbageCollector", StringComparison.Ordinal));
+        Assert.Contains(
+            diagnostics,
+            diagnostic => diagnostic.Id == "NAM1007"
+                && diagnostic.Severity == DiagnosticSeverity.Error);
+    }
 
-        Diagnostic strictFinding = Assert.Single(strict.Where(diagnostic => diagnostic.Id == "NAM1007"));
-        Diagnostic tolerantFinding = Assert.Single(tolerant.Where(diagnostic => diagnostic.Id == "NAM1017"));
-        Assert.Equal(DiagnosticSeverity.Error, strictFinding.Severity);
-        Assert.Equal(DiagnosticSeverity.Warning, tolerantFinding.Severity);
-        Assert.Equal(
-            strictFinding.Properties["NAM.Provenance"],
-            tolerantFinding.Properties["NAM.Provenance"]);
+    [Fact]
+    public async Task ConcurrentArenaTracksItsOwnerAndLease()
+    {
+        ImmutableArray<Diagnostic> valid =
+            await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    using NativeConcurrentArena arena = new();
+                    ConcurrentArenaLease<int> values = arena.Scratch<int>(1, static writer => writer.Write(7));
+                    values.Access(static view => view[0] = 11);
+                }
+            }
+            """);
+        Assert.Empty(AnalyzerContractTests.NativeDiagnostics(valid));
+
+        ImmutableArray<Diagnostic> invalid =
+            await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    using NativeConcurrentArena arena = new();
+                    ConcurrentArenaLease<int> values = arena.Scratch<int>(1, static writer => writer.Write(7));
+                    arena.ReleaseLeasesToNativeMemory();
+                    values.Access(static view => view[0] = 11);
+                }
+            }
+            """);
+        Assert.Contains(
+            invalid,
+            diagnostic => diagnostic.Id == "NAM1007");
     }
 
     [Fact]
@@ -65,7 +100,7 @@ public sealed class ArenaAnalyzerContractTests
                 public static void Run()
                 {
                     NativeArena arena = new();
-                    { scoped ArenaLease<int> values = arena.ScratchScoped<int>(2, static writer => writer.Fill(default!)); values[0] = 1; }
+                    { scoped ArenaLease<int> values = arena.ScratchScoped<int>(2, static writer => writer.Fill(default!)); values.Access(static view => view[0] = 1); }
                     arena.RecycleScoped();
                     arena.Dispose();
                 }
@@ -82,7 +117,7 @@ public sealed class ArenaAnalyzerContractTests
                 public static void Run()
                 {
                     using NativeArena arena = new();
-                    { scoped ArenaLease<int> values = arena.ScratchScoped<int>(2, static writer => writer.Fill(default!)); values[0] = 1; }
+                    { scoped ArenaLease<int> values = arena.ScratchScoped<int>(2, static writer => writer.Fill(default!)); values.Access(static view => view[0] = 1); }
                 }
             }
             """);
@@ -97,6 +132,7 @@ public sealed class ArenaAnalyzerContractTests
                 {
                     NativeArena arena = new();
                     scoped ArenaLease<int> values = arena.Scratch<int>(2, static writer => writer.Fill(default!));
+                    values.Access(static view => view[0] = 1);
                     arena.Dispose();
                 }
             }
@@ -192,9 +228,9 @@ public sealed class ArenaAnalyzerContractTests
             {
                 public static void Run(bool activate)
                 {
-                    NativeArena arena = new(doNotLeaseOnDeclaration: true);
+                    NativeConcurrentArena arena = new(doNotLeaseOnDeclaration: true);
                     if (activate) arena.LeaseFromMemory();
-                    ArenaLease<int> values = arena.Scratch<int>(1, static writer => writer.Fill(default!));
+                    ConcurrentArenaLease<int> values = arena.Scratch<int>(1, static writer => writer.Fill(default!));
                     arena.Dispose();
                 }
             }

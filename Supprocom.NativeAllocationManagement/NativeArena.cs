@@ -1,562 +1,250 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 
 namespace Supprocom.NativeAllocationManagement;
 
-/// <summary>Owns reusable heterogeneous arena generations with one shared segment bank.</summary>
+/// <summary>Owns reusable heterogeneous bump storage for one thread.</summary>
 public sealed class NativeArena : IDisposable
 {
-    private readonly NativeOwnerKernel _kernel;
+    private readonly NativeArenaKernel _kernel;
 
-    internal NativeOwnerKernel KernelForInitialization => _kernel;
-
-    internal NativeOwnerLifecycle CurrentLifecycle => _kernel.Lifecycle;
-
-    internal int CurrentAllocationRecordCountForTest => _kernel.CurrentAllocationRecordCountForTest();
-
-    internal int CurrentInitializationCountForTest =>
-        _kernel.CurrentInitializationCountForTest();
-
-    internal int CurrentGenerationActiveOperationsForTest =>
-        _kernel.CurrentGenerationActiveOperationsForTest();
-
-    internal int CurrentReferenceRootCountForTest => _kernel.CurrentReferenceRootCountForTest();
-
-    internal int CurrentConcurrentReservationCountForTest =>
-        _kernel.CurrentConcurrentReservationCountForTest();
-
-    internal long CurrentFastLaneSlowPathCountForTest =>
-        _kernel.ArenaFastSlowPathCountForTest();
-
-    internal (
-        long SlowPaths,
-        long SlotCreations,
-        int DictionaryRecords) CurrentTransferMetricsForTest =>
-        _kernel.ArenaTransferMetricsForTest();
-
-    internal int QuarantinedSegmentCountForTest => _kernel.QuarantinedSegmentCountForTest();
-
-    internal int QuarantinedGenerationCountForTest => _kernel.QuarantinedGenerationCountForTest();
-
-    internal int RetiredGenerationCountForTest => _kernel.RetiredGenerationCountForTest();
-
-    internal int QuarantineCapacityForTest => _kernel.QuarantineCapacityForTest();
-
-    internal (int Slabs, int AvailableSlabs, int Bumps, int OwnerSegments) CurrentBankCapacitiesForTest =>
-        _kernel.CurrentBankCapacitiesForTest();
-
-    internal (int Ordinary, int Scoped, int SegmentCount) CurrentBumpTraversalForTest => _kernel.CurrentBumpTraversalForTest();
-
-    internal long[] CurrentSegmentOrdinalsForTest => _kernel.CurrentSegmentOrdinalsForTest();
-
-    internal NativeOwnerDiagnosticSnapshot CaptureDiagnosticSnapshot() =>
-        _kernel.GetDiagnosticSnapshot();
-
-    /// <summary>Reads the current logical and physical state of this owner.</summary>
-    public NativeOwnerStatistics GetStatistics() => _kernel.GetStatistics();
-
-    /// <summary>Creates an active arena unless the first generation is explicitly deferred.</summary>
-    /// <param name="preAllocateBytes">Optional initial byte reservation.</param>
-    /// <param name="returnMemoryOnDispose">The physical cleanup policy used by <see cref="Dispose"/>.</param>
-    /// <param name="doNotLeaseOnDeclaration">When true, defer the first generation until <see cref="LeaseFromMemory"/>.</param>
+    /// <summary>Creates one active Arena with an optional raw byte reservation.</summary>
     public NativeArena(
         nuint preAllocateBytes = 0,
-        NativeMemoryReturn returnMemoryOnDispose = NativeMemoryReturn.ToGarbageCollector,
-        bool doNotLeaseOnDeclaration = false)
+        NativeMemoryReturn returnMemoryOnDispose =
+            NativeMemoryReturn.ToGarbageCollector)
     {
-        NativeMemoryReturnValidation.Validate(returnMemoryOnDispose, nameof(returnMemoryOnDispose));
-        _kernel = NativeOwnerKernel.CreateArena(
-            preAllocateBytes,
-            "NativeArena",
+        NativeMemoryReturnValidation.Validate(
             returnMemoryOnDispose,
-            doNotLeaseOnDeclaration);
+            nameof(returnMemoryOnDispose));
+        _kernel = new NativeArenaKernel(
+            preAllocateBytes,
+            returnMemoryOnDispose);
     }
 
-    /// <summary>Initializes an ordinary heterogeneous range before publication.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal NativeOwnerLifecycle CurrentLifecycle =>
+        _kernel.Lifecycle;
+
+    internal int CurrentAllocationRecordCountForTest => 0;
+
+    /// <summary>Gets the current Arena storage statistics.</summary>
+    public NativeOwnerStatistics GetStatistics() =>
+        _kernel.GetStatistics();
+
+    /// <summary>Initializes one generation-bound bump range.</summary>
     public ArenaLease<T> Scratch<T>(
         int length,
         NativeLeaseInitializer<T> initializer)
-    {
-        bool containsReferences =
-            RuntimeHelpers.IsReferenceOrContainsReferences<T>();
-        int elementSize = containsReferences
-            ? IntPtr.Size
-            : Unsafe.SizeOf<T>();
-        nuint alignment = containsReferences
-            ? (nuint)IntPtr.Size
-            : CalculateArenaAlignment(elementSize);
-        if (!containsReferences
-            && _kernel.IsArenaFastThread)
-        {
-            NativeArenaAllocation direct =
-                _kernel.LeaseArenaBumpInitialized(
-                    length,
-                    elementSize,
-                    alignment,
-                    initializer);
-            return new ArenaLease<T>(_kernel, direct);
-        }
+        where T : unmanaged =>
+        _kernel.Scratch(length, scoped: false, initializer);
 
-        NativeRegionAllocation allocation = _kernel.LeaseBumpInitialized(
-            length,
-            elementSize,
-            alignment,
-            scoped: false,
-            containsReferences,
-            initializer);
-        return new ArenaLease<T>(_kernel, allocation);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static nuint CalculateArenaAlignment(int elementSize) =>
-        elementSize >= IntPtr.Size
-            ? (nuint)IntPtr.Size
-            : elementSize >= 4
-                ? 4u
-                : elementSize >= 2
-                    ? 2u
-                    : 1u;
-
-    /// <summary>Concurrently reserves and initializes an unmanaged arena range for destructive ownership transfer.</summary>
-    public NativeTransfer<T> ScratchTransferable<T>(
-        int length,
-        NativeLeaseInitializer<T> initializer)
-        where T : unmanaged
-    {
-        NativeRegionAllocation allocation = _kernel.LeaseConcurrentBumpInitialized(
-            length,
-            NativeTypeLayout.StorageSize<T>(),
-            NativeTypeLayout.Alignment<T>(),
-            initializer);
-        return NativeTransfer<T>.Create(
-            _kernel,
-            allocation,
-            "NativeArena.ScratchTransferable");
-    }
-
-    internal NativeArenaTransferBatch<T> CreateTransferBatch<T>(
-        int count,
-        int length)
-        where T : unmanaged
-    {
-        NativeArenaTransferBatchState state =
-            _kernel.CreateArenaTransferBatch(
-                count,
-                length,
-                NativeTypeLayout.StorageSize<T>(),
-                NativeTypeLayout.Alignment<T>());
-        return new NativeArenaTransferBatch<T>(state);
-    }
-
-    /// <summary>Initializes a scoped heterogeneous range before publication.</summary>
+    /// <summary>Initializes one scoped bump range.</summary>
     public ArenaLease<T> ScratchScoped<T>(
         int length,
         NativeLeaseInitializer<T> initializer)
-    {
-        bool containsReferences =
-            RuntimeHelpers.IsReferenceOrContainsReferences<T>();
-        int elementSize = containsReferences
-            ? IntPtr.Size
-            : Unsafe.SizeOf<T>();
-        nuint alignment = containsReferences
-            ? (nuint)IntPtr.Size
-            : CalculateArenaAlignment(elementSize);
-        if (!containsReferences
-            && _kernel.IsArenaFastThread)
-        {
-            NativeArenaAllocation direct =
-                _kernel.LeaseArenaScopedBumpInitialized(
-                    length,
-                    elementSize,
-                    alignment,
-                    initializer);
-            return new ArenaLease<T>(_kernel, direct);
-        }
+        where T : unmanaged =>
+        _kernel.Scratch(length, scoped: true, initializer);
 
-        NativeRegionAllocation allocation = _kernel.LeaseBumpInitialized(
-            length,
-            elementSize,
-            alignment,
-            scoped: true,
-            containsReferences,
-            initializer);
-        return new ArenaLease<T>(_kernel, allocation);
-    }
+    /// <summary>Invalidates all leases and reuses all retained segments.</summary>
+    public void Reset() => _kernel.Reset();
 
-    /// <summary>Ends the current memory generation and frees native storage immediately.</summary>
-    public void ReturnMemoryToNativeMemory() => _kernel.ReturnMemoryToNativeMemory();
-
-    /// <summary>Ends the current memory generation and detaches its storage for finalizable cleanup.</summary>
-    public void ReturnMemoryToGarbageCollector() => _kernel.ReturnMemoryToGarbageCollector();
-
-    /// <summary>Invalidates all current arena leases and reuses retained segments.</summary>
-    public void ReleaseLeasesToNativeMemory() => _kernel.ReleaseLeasesToNativeMemory();
-
-    /// <summary>Invalidates all current arena leases while entered operations drain.</summary>
-    public void ReleaseLeasesToGarbageCollector() => _kernel.ReleaseLeasesToGarbageCollector();
-
-    /// <summary>Publishes the first generation or the generation reserved by a memory return.</summary>
-    public void LeaseFromMemory() => _kernel.LeaseFromMemory();
-
-    /// <summary>Recycles the complete analyzer-proven dead scoped pending set.</summary>
+    /// <summary>Invalidates scoped leases and reuses scoped segments.</summary>
     public void RecycleScoped() => _kernel.RecycleScoped();
 
-    /// <summary>Adds one exact retained byte segment for later heterogeneous leases.</summary>
-    public nuint ReserveRetainedMemory(nuint byteLength) =>
-        _kernel.ReserveRetainedMemory(byteLength);
+    /// <summary>Frees every idle tail segment.</summary>
+    public nuint TrimRetainedMemory() =>
+        _kernel.TrimRetainedMemory(nuint.MaxValue);
 
-    /// <summary>Adds one aligned external buffer range for heterogeneous leases.</summary>
-    public nuint ReserveExternalMemory(
-        SafeBuffer buffer,
-        nuint byteOffset,
-        nuint byteLength) =>
-        _kernel.ReserveExternalMemory(
-            buffer,
-            byteOffset,
-            byteLength);
+    /// <summary>Frees idle tail segments until the byte budget is met.</summary>
+    public nuint TrimRetainedMemoryByBytes(nuint bytesToRelease) =>
+        _kernel.TrimRetainedMemory(bytesToRelease);
 
-    /// <summary>Releases every eligible idle segment.</summary>
-    public nuint TrimRetainedMemory() => _kernel.TrimRetainedMemory();
-
-    /// <summary>Releases whole idle segments until the requested physical byte budget is met.</summary>
-    public nuint TrimRetainedMemoryByBytes(nuint bytesToRelease) => _kernel.TrimRetainedMemoryByBytes(bytesToRelease);
-
-    /// <summary>Trims by the exact physical footprint requested by a heterogeneous scratch shape.</summary>
-    public nuint TrimRetainedMemoryByLeaseSize<T>(int leaseLength = 1) =>
-        _kernel.TrimRetainedMemoryByLeaseSize(
-            leaseLength,
-            NativeTypeLayout.StorageSize<T>(),
-            NativeTypeLayout.Alignment<T>());
-
-    /// <summary>Permanently closes the arena and applies its configured memory policy.</summary>
+    /// <summary>Closes the Arena and applies its cleanup policy.</summary>
     public void Dispose() => _kernel.Dispose();
 }
 
-/// <summary>A heterogeneous generation-bound arena handle.</summary>
-/// <typeparam name="T">The value or reference type stored by the arena.</typeparam>
+/// <summary>A generation-bound capability for one Arena range.</summary>
+/// <typeparam name="T">The unmanaged element type in the range.</typeparam>
 public readonly ref struct ArenaLease<T>
+    where T : unmanaged
 {
-    private readonly NativeOwnerKernel? _kernel;
-    private readonly long _generation;
-    private readonly NativeGeneration? _generationState;
-    private readonly NativeAllocation? _allocationState;
-    private readonly long _payload;
+    private readonly NativeArenaKernel? _kernel;
+    private readonly IntPtr _pointer;
     private readonly int _length;
-    private readonly int _capacity;
-    private readonly long _scopeEpoch;
+    private readonly ulong _generation;
+    private readonly ulong _scopeEpoch;
+    private readonly bool _scoped;
 
     internal ArenaLease(
-        NativeOwnerKernel kernel,
-        NativeRegionAllocation allocation)
+        NativeArenaKernel kernel,
+        IntPtr pointer,
+        int length,
+        ulong generation,
+        ulong scopeEpoch,
+        bool scoped)
     {
         _kernel = kernel;
-        _generation = allocation.Generation;
-        _generationState = allocation.GenerationState;
-        _allocationState = allocation.AllocationState;
-        _payload = allocation.AllocationId;
-        _length = allocation.Length;
-        _capacity = allocation.Capacity;
-        _scopeEpoch = long.MinValue;
+        _pointer = pointer;
+        _length = length;
+        _generation = generation;
+        _scopeEpoch = scopeEpoch;
+        _scoped = scoped;
     }
 
-    internal ArenaLease(
-        NativeOwnerKernel kernel,
-        NativeArenaAllocation allocation)
-    {
-        _kernel = kernel;
-        _generation = allocation.Generation;
-        _generationState = allocation.GenerationState;
-        _allocationState = null;
-        _payload = allocation.Pointer.ToInt64();
-        _length = allocation.Length;
-        _capacity = allocation.Capacity;
-        _scopeEpoch = allocation.ScopeEpoch;
-    }
+    /// <summary>Gets the immutable logical element count.</summary>
+    public int Length => _length;
 
-    internal NativeOwnerKernel KernelForComposite =>
-        GetKernel("NativeLeaseOperations.Access");
+    /// <summary>Gets the immutable physical element capacity.</summary>
+    public int Capacity => _length;
 
-    internal long GenerationForComposite => _generation;
-
-    internal long AllocationIdForComposite =>
-        GetAllocationState(
-            "NativeLeaseOperations.Access").Id;
-
-    internal NativeGeneration GenerationStateForComposite =>
-        GetGenerationState("NativeLeaseOperations.Access");
-
-    internal NativeAllocation AllocationStateForComposite =>
-        GetAllocationState("NativeLeaseOperations.Access");
-
-    internal NativeOperationToken EnterForComposite(string operation) =>
-        EnterCompositeOperation(operation);
-
-    /// <summary>Gets the logical element count.</summary>
-    public int Length
-    {
-        get
-        {
-            _ = GetMetadata(nameof(Length));
-            return _length;
-        }
-    }
-
-    /// <summary>Gets the physical capacity represented by this handle.</summary>
-    public int Capacity
-    {
-        get
-        {
-            _ = GetMetadata(nameof(Capacity));
-            return _capacity;
-        }
-    }
-
-    /// <summary>Reads or writes one value through the owner operation gate.</summary>
-    public T this[int index]
-    {
-        get
-        {
-            NativeArenaOperationToken token = EnterOperation("get_Item");
-            try
-            {
-                ValidateIndex(index);
-                return token.GetValue<T>(index);
-            }
-            finally
-            {
-                token.Dispose();
-            }
-        }
-        set
-        {
-            NativeArenaOperationToken token = EnterOperation("set_Item");
-            try
-            {
-                ValidateIndex(index);
-                token.SetValue(index, value);
-            }
-            finally
-            {
-                token.Dispose();
-            }
-        }
-    }
-
-    /// <summary>Clears the logical range.</summary>
+    /// <summary>Clears the logical range during one validated borrow.</summary>
     public void Clear()
     {
-        NativeArenaOperationToken token = EnterOperation(nameof(Clear));
+        ArenaBorrow<T> borrow = EnterBorrow(nameof(Clear));
         try
         {
-            token.GetView<T>().Clear();
+            borrow.View.Clear();
         }
         finally
         {
-            token.Dispose();
+            borrow.Dispose();
         }
     }
 
-    /// <summary>Copies exactly the logical range from a source span.</summary>
+    /// <summary>Copies one exact source during one validated borrow.</summary>
     public void CopyFrom(scoped ReadOnlySpan<T> source)
     {
-        NativeArenaOperationToken token = EnterOperation(nameof(CopyFrom));
+        if (source.Length != _length)
+        {
+            ThrowSourceLength();
+        }
+
+        ArenaBorrow<T> borrow = EnterBorrow(nameof(CopyFrom));
         try
         {
-            if (source.Length != _length)
-            {
-                throw new ArgumentException(
-                    "The source length must equal the arena logical length.",
-                    nameof(source));
-            }
-
-            token.GetView<T>().CopyFrom(source);
+            borrow.View.CopyFrom(source);
         }
         finally
         {
-            token.Dispose();
+            borrow.Dispose();
         }
     }
 
-    /// <summary>Copies the logical range into a destination span.</summary>
+    /// <summary>Copies the logical range during one validated borrow.</summary>
     public void CopyTo(scoped Span<T> destination)
     {
-        NativeArenaOperationToken token = EnterOperation(nameof(CopyTo));
+        if (destination.Length < _length)
+        {
+            ThrowDestinationLength();
+        }
+
+        ArenaBorrow<T> borrow = EnterBorrow(nameof(CopyTo));
         try
         {
-            if (destination.Length < _length)
-            {
-                throw new ArgumentException(
-                    "The destination must contain at least the arena logical length.",
-                    nameof(destination));
-            }
-
-            token.GetView<T>().CopyTo(destination);
+            borrow.View.CopyTo(destination);
         }
         finally
         {
-            token.Dispose();
+            borrow.Dispose();
         }
     }
 
-    /// <summary>Runs one synchronous bounded mutation callback.</summary>
+    /// <summary>Runs one bounded write callback.</summary>
     public void Access(NativeLeaseAction<T> action)
     {
         ArgumentNullException.ThrowIfNull(action);
-        NativeOwnerKernel kernel = GetKernel(nameof(Access));
-        if (IsArenaFast
-            && kernel.CanUseArenaFastLocalOperation)
-        {
-            NativeArenaLocalOperationToken localToken =
-                kernel.EnterArenaFastLocalOperation(
-                    CreateArenaAllocation(),
-                    nameof(Access));
-            try
-            {
-                action(new NativeLeaseView<T>(
-                    GetArenaPointer(),
-                    _length));
-            }
-            finally
-            {
-                localToken.Dispose();
-            }
-
-            return;
-        }
-
-        NativeArenaOperationToken token = EnterOperation(nameof(Access));
+        ArenaBorrow<T> borrow = EnterBorrow(nameof(Access));
         try
         {
-            action(token.GetView<T>());
+            action(borrow.View);
         }
         finally
         {
-            token.Dispose();
+            borrow.Dispose();
         }
     }
 
-    /// <summary>Runs one synchronous bounded read callback.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    /// <summary>Runs one bounded read callback.</summary>
     public TResult Read<TResult>(NativeLeaseFunc<T, TResult> action)
     {
         ArgumentNullException.ThrowIfNull(action);
-        NativeOwnerKernel kernel = GetKernel(nameof(Read));
-        if (IsArenaFast
-            && kernel.CanUseArenaFastLocalOperation)
-        {
-            NativeArenaLocalOperationToken localToken =
-                kernel.EnterArenaFastLocalOperation(
-                    CreateArenaAllocation(),
-                    nameof(Read));
-            try
-            {
-                return action(new NativeLeaseView<T>(
-                    GetArenaPointer(),
-                    _length));
-            }
-            finally
-            {
-                localToken.Dispose();
-            }
-        }
-
-        NativeArenaOperationToken token = EnterOperation(nameof(Read));
+        ArenaBorrow<T> borrow = EnterBorrow(nameof(Read));
         try
         {
-            return action(token.GetView<T>());
+            return action(borrow.View);
         }
         finally
         {
-            token.Dispose();
+            borrow.Dispose();
         }
     }
 
-    private void ValidateIndex(int index)
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal ArenaBorrow<T> EnterBorrow(string operation)
     {
-        ArgumentOutOfRangeException.ThrowIfNegative(index);
-        if (index >= _length)
-        {
-            throw new ArgumentOutOfRangeException(nameof(index), index, "The index is outside the logical arena range.");
-        }
+        NativeArenaKernel kernel = GetKernel(operation);
+        IntPtr pointer = kernel.EnterBorrow(
+            _pointer,
+            _length,
+            _generation,
+            _scopeEpoch,
+            _scoped,
+            operation);
+        return new ArenaBorrow<T>(
+            kernel,
+            pointer,
+            _length);
     }
 
-    private NativeOwnerKernel GetKernel(string operation) =>
-        _kernel ?? throw new NativeAllocationUninitializedException(nameof(ArenaLease<T>), operation);
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private NativeArenaKernel GetKernel(string operation)
+    {
+        NativeArenaKernel? kernel = _kernel;
+        if (kernel is null)
+        {
+            ThrowUninitialized(operation);
+        }
 
-    private NativeGeneration GetGenerationState(string operation) =>
-        _generationState
-        ?? throw new NativeAllocationUninitializedException(
+        return kernel;
+    }
+
+    [DoesNotReturn]
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void ThrowUninitialized(string operation) =>
+        throw new NativeAllocationUninitializedException(
             nameof(ArenaLease<T>),
             operation);
 
-    private NativeAllocation GetAllocationState(string operation) =>
-        _allocationState
-        ?? (IsArenaFast
-            ? GetKernel(operation).MaterializeArenaAllocation(
-                CreateArenaAllocation(),
-                CalculateArenaStorageBytes(),
-                operation)
-            : throw new NativeAllocationUninitializedException(
-                nameof(ArenaLease<T>),
-                operation));
+    [DoesNotReturn]
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void ThrowSourceLength() =>
+        throw new ArgumentException(
+            "The source length must equal the arena logical length.",
+            "source");
 
-    private NativeArenaOperationToken EnterOperation(string operation) =>
-        IsArenaFast
-            ? GetKernel(operation).EnterArenaFastOperation(
-                CreateArenaAllocation(),
-                operation)
-            : new NativeArenaOperationToken(
-                GetKernel(operation).EnterOperation(
-                    GetGenerationState(operation),
-                    GetAllocationState(operation),
-                    _generation,
-                    _payload,
-                    operation));
+    [DoesNotReturn]
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void ThrowDestinationLength() =>
+        throw new ArgumentException(
+            "The destination must contain the complete arena range.",
+            "destination");
+}
 
-    private NativeOperationToken EnterCompositeOperation(
-        string operation)
+internal readonly ref struct ArenaBorrow<T>
+    where T : unmanaged
+{
+    private readonly NativeArenaKernel _kernel;
+
+    internal ArenaBorrow(
+        NativeArenaKernel kernel,
+        IntPtr pointer,
+        int length)
     {
-        NativeAllocation allocation =
-            GetAllocationState(operation);
-        return GetKernel(operation).EnterOperation(
-            GetGenerationState(operation),
-            allocation,
-            _generation,
-            allocation.Id,
-            operation);
+        _kernel = kernel;
+        View = new NativeLeaseView<T>(pointer, length);
     }
 
-    private NativeHandleMetadata GetMetadata(string operation) =>
-        IsArenaFast
-            ? GetKernel(operation).ValidateArenaFastHandle(
-                CreateArenaAllocation(),
-                operation)
-            : GetKernel(operation).ValidateHandle(
-                GetGenerationState(operation),
-                GetAllocationState(operation),
-                _generation,
-                _payload,
-                operation);
+    internal NativeLeaseView<T> View { get; }
 
-    private bool IsArenaFast =>
-        _allocationState is null
-        && _generationState is not null;
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private IntPtr GetArenaPointer() => new(_payload);
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private NativeArenaAllocation CreateArenaAllocation() =>
-        new(
-            GetGenerationState("NativeArena.Scratch"),
-            GetArenaPointer(),
-            OriginalCursor: 0,
-            _length,
-            _scopeEpoch);
-
-    private nuint CalculateArenaStorageBytes() =>
-        checked(
-            (nuint)(uint)_length
-            * (nuint)NativeTypeLayout.StorageSize<T>());
+    internal void Dispose() => _kernel.ExitBorrow();
 }

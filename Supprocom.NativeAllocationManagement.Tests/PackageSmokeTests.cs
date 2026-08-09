@@ -52,14 +52,14 @@ public sealed class PackageSmokeTests
                             local[0] = 7;
                         }
 
-                        using NativeArena arena = new(doNotLeaseOnDeclaration: true);
+                        using NativeConcurrentArena arena = new(doNotLeaseOnDeclaration: true);
                         arena.LeaseFromMemory();
                         {
                             using Pooled<int> faces = pool.Rent(1, static writer => writer.Fill(default!));
                             using Pooled<int> vertices = pool.Rent(1, static writer => writer.Fill(default!));
                             using Pooled<int> indices = pool.Rent(1, static writer => writer.Fill(default!));
-                            ArenaLease<int> slices = arena.Scratch<int>(1, static writer => writer.Fill(default!));
-                            ArenaLease<byte> upload = arena.Scratch<byte>(1, static writer => writer.Fill(default!));
+                            ConcurrentArenaLease<int> slices = arena.Scratch<int>(1, static writer => writer.Fill(default!));
+                            ConcurrentArenaLease<byte> upload = arena.Scratch<byte>(1, static writer => writer.Fill(default!));
                             NativeLeaseOperations.Access(
                                 faces,
                                 vertices,
@@ -76,7 +76,7 @@ public sealed class PackageSmokeTests
                                 });
                         }
                         {
-                            ArenaLease<string> labels = arena.Scratch<string>(1, static writer => writer.Fill(default!));
+                            ConcurrentArenaLease<string> labels = arena.Scratch<string>(1, static writer => writer.Fill(default!));
                             labels[0] = "package";
                         }
 
@@ -86,7 +86,7 @@ public sealed class PackageSmokeTests
                         _ = arena.TrimRetainedMemoryByLeaseSize<int>(1);
 
                         {
-                            scoped ArenaLease<int> scopedValues = arena.ScratchScoped<int>(1, static writer => writer.Fill(default!));
+                            scoped ConcurrentArenaLease<int> scopedValues = arena.ScratchScoped<int>(1, static writer => writer.Fill(default!));
                             scopedValues[0] = 9;
                         }
 
@@ -282,16 +282,16 @@ public sealed class PackageSmokeTests
                         reused.Dispose();
                         pool.Dispose();
 
-                        NativeArena arena = new();
+                        NativeConcurrentArena arena = new();
                         {
-                            ArenaLease<ReferenceCell> firstArena = arena.Scratch<ReferenceCell>(1, static writer => writer.Fill(default!));
+                            ConcurrentArenaLease<ReferenceCell> firstArena = arena.Scratch<ReferenceCell>(1, static writer => writer.Fill(default!));
                             firstArena[0] = new ReferenceCell { Text = "arena", Number = 4 };
                             valid &= firstArena[0].Text == "arena" && firstArena[0].Number == 4;
                         }
 
                         arena.ReleaseLeasesToNativeMemory();
                         {
-                            ArenaLease<ReferenceCell> reusedArena = arena.Scratch<ReferenceCell>(1, static writer => writer.Fill(default!));
+                            ConcurrentArenaLease<ReferenceCell> reusedArena = arena.Scratch<ReferenceCell>(1, static writer => writer.Fill(default!));
                             valid &= reusedArena[0].Text is null && reusedArena[0].Number == 0;
                         }
 
@@ -335,9 +335,9 @@ public sealed class PackageSmokeTests
 
                 public static class Consumer
                 {
-                    public static void Run(NativeArena arena)
+                    public static void Run(NativeConcurrentArena arena)
                     {
-                        scoped ArenaLease<int> values = arena.ScratchScoped<int>(1, static writer => writer.Fill(default!));
+                        scoped ConcurrentArenaLease<int> values = arena.ScratchScoped<int>(1, static writer => writer.Fill(default!));
                         values[0] = 1;
                         arena.RecycleScoped();
                     }
@@ -700,7 +700,7 @@ public sealed class PackageSmokeTests
                 {
                     public static void Run()
                     {
-                        using NativeArena arena = new();
+                        using NativeConcurrentArena arena = new();
                         _ = arena.Lease<int>(1);
                     }
                 }
@@ -1075,9 +1075,9 @@ public sealed class PackageSmokeTests
                 {
                     public static void Run()
                     {
-                        using NativeArena arena = new();
+                        using NativeConcurrentArena arena = new();
                         {
-                            scoped ArenaLease<int> values = arena.ScratchScoped<int>(1, static writer => writer.Fill(default!));
+                            scoped ConcurrentArenaLease<int> values = arena.ScratchScoped<int>(1, static writer => writer.Fill(default!));
                             values[0] = 1;
                         }
                     }

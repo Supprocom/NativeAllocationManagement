@@ -204,7 +204,7 @@ internal struct NativeArenaTransferBatchLease<T>
                 state,
                 source._slotIndex,
                 source._authority,
-                "NativeArena.TransferBatch.Move");
+                "NativeConcurrentArena.TransferBatch.Move");
         NativeArenaTransferBatchLease<T> result = new(
             new NativeArenaTransferBatchReservation(
                 state,
@@ -229,7 +229,7 @@ internal struct NativeArenaTransferBatchLease<T>
             state,
             _slotIndex,
             _authority,
-            "NativeArena.TransferBatch.Read");
+            "NativeConcurrentArena.TransferBatch.Read");
         try
         {
             return action(new NativeLeaseView<T>(
@@ -253,7 +253,7 @@ internal struct NativeArenaTransferBatchLease<T>
                 state,
                 _slotIndex,
                 _authority,
-                "NativeArena.TransferBatch.Read");
+                "NativeConcurrentArena.TransferBatch.Read");
         return new NativeArenaTransferBatchRead<T>(
             token,
             _pointer,
