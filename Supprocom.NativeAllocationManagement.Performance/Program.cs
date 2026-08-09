@@ -29,6 +29,44 @@ internal static class Program
         CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;
         CultureInfo.CurrentUICulture = CultureInfo.InvariantCulture;
 
+        if (args is ["--allocator-regression-worker", "--kind", "Region"])
+        {
+            RegionRegressionReport report =
+                AllocatorPerformanceRegression.RunRegion();
+            Console.WriteLine(JsonSerializer.Serialize(report));
+            return report.Passed ? 0 : 3;
+        }
+
+        if (args is ["--allocator-regression-worker", "--kind", "Arena"])
+        {
+            ArenaRegressionReport report =
+                ArenaPerformanceRegression.Run();
+            Console.WriteLine(JsonSerializer.Serialize(report));
+            return report.Passed ? 0 : 3;
+        }
+
+        if (args is ["--allocator-regression-worker", "--kind", "ArenaScoped"])
+        {
+            ArenaScopedRegressionReport report =
+                ArenaScopedPerformanceRegression.Run();
+            Console.WriteLine(JsonSerializer.Serialize(report));
+            return report.Passed ? 0 : 3;
+        }
+
+        if (args is ["--region-phase-comparison"])
+        {
+            NativeRegionPhaseReport report =
+                NativeRegionPhaseBenchmark.Run();
+            Console.WriteLine(JsonSerializer.Serialize(report));
+            return report.ExactOutput ? 0 : 3;
+        }
+
+        if (args is ["--region-jit-probe"])
+        {
+            Console.WriteLine(NativeRegionJitProbe.Run());
+            return 0;
+        }
+
         if (args.Length != 0
             && args[0] is "--voxel-handoff" or "--voxel-handoff-worker")
         {
@@ -49,7 +87,9 @@ internal static class Program
         }
 
         if (args.Length != 0
-            && args[0] is "--concurrent-arena" or "--concurrent-arena-worker")
+            && args[0] is "--concurrent-arena"
+                or "--concurrent-arena-worker"
+                or "--concurrent-arena-session")
         {
             return await ConcurrentArenaBenchmark.RunCommandAsync(args);
         }
@@ -1156,6 +1196,7 @@ internal static class Program
         }
 
         internal void Run<T>(Local<T> values)
+            where T : unmanaged
         {
             long start = Stopwatch.GetTimestamp();
             if ((Count & 1) == 0)

@@ -5,7 +5,7 @@ namespace Supprocom.NativeAllocationManagement.Tests;
 
 public sealed class VoxelHandoffBenchmarkTests
 {
-    [Fact]
+    [VoxelDemonstrationFact]
     public void NativeUploadMatchesListMaterializationAndBlockCopy()
     {
         List<uint> source = VoxelHandoffBenchmark.CreateVoxelWords(
@@ -17,7 +17,7 @@ public sealed class VoxelHandoffBenchmarkTests
         Assert.True(VoxelHandoffBenchmark.VerifyNativeUpload(source, managed));
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public async Task ManagedAndNativeWorkersProduceEquivalentEvidence()
     {
         VoxelHandoffBenchmarkOptions options = new(
@@ -45,7 +45,7 @@ public sealed class VoxelHandoffBenchmarkTests
         Assert.Equal(0, native.NativeFreshSegmentAllocationDelta);
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public async Task PairedBenchmarkRejectsAnOddSampleCount()
     {
         VoxelHandoffBenchmarkOptions options = new(
@@ -59,7 +59,7 @@ public sealed class VoxelHandoffBenchmarkTests
             () => VoxelHandoffBenchmark.RunPairedAsync(options));
     }
 
-    [Fact]
+    [VoxelDemonstrationFact]
     public void PairedBenchmarkBalancesFirstPosition()
     {
         VoxelHandoffImplementation[] order = Enumerable.Range(0, 6)
@@ -71,4 +71,41 @@ public sealed class VoxelHandoffBenchmarkTests
         Assert.Equal(VoxelHandoffImplementation.Managed, order[0]);
         Assert.Equal(VoxelHandoffImplementation.Native, order[1]);
     }
+}
+
+[AttributeUsage(AttributeTargets.Method)]
+internal sealed class VoxelDemonstrationFactAttribute : FactAttribute
+{
+    public VoxelDemonstrationFactAttribute()
+    {
+        if (!VoxelDemonstration.IsEnabled)
+        {
+            Skip = VoxelDemonstration.SkipMessage;
+        }
+    }
+}
+
+[AttributeUsage(AttributeTargets.Method)]
+internal sealed class VoxelDemonstrationTheoryAttribute : TheoryAttribute
+{
+    public VoxelDemonstrationTheoryAttribute()
+    {
+        if (!VoxelDemonstration.IsEnabled)
+        {
+            Skip = VoxelDemonstration.SkipMessage;
+        }
+    }
+}
+
+internal static class VoxelDemonstration
+{
+    internal const string SkipMessage =
+        "Set NAM_RUN_VOXEL_DEMO=1 to run the optional voxel demonstration.";
+
+    internal static bool IsEnabled =>
+        string.Equals(
+            Environment.GetEnvironmentVariable(
+                "NAM_RUN_VOXEL_DEMO"),
+            "1",
+            StringComparison.Ordinal);
 }

@@ -15,11 +15,20 @@
     <ProjectReference Include="..\Supprocom.NativeAllocationManagement.Analyzers\Supprocom.NativeAllocationManagement.Analyzers.csproj" />
     <ProjectReference Include="..\Supprocom.NativeAllocationManagement.Performance\Supprocom.NativeAllocationManagement.Performance.csproj" />
     <ProjectReference Include="..\.Demos\01-VoxelChunkPipeline\SharedContract\SharedContract.csproj" />
-    <ProjectReference Include="..\.Demos\01-VoxelChunkPipeline\SafeCSharp\SafeCSharp.csproj" />
-    <ProjectReference Include="..\.Demos\01-VoxelChunkPipeline\NAM\NAM.csproj" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" PrivateAssets="all" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.13.0" />
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(NAM_RUN_VOXEL_DEMO)' == '1'">
+    <ProjectReference Include="..\.Demos\01-VoxelChunkPipeline\SafeCSharp\SafeCSharp.csproj" />
+    <ProjectReference Include="..\.Demos\01-VoxelChunkPipeline\NAM\NAM.csproj" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(NAM_RUN_VOXEL_DEMO)' != '1'">
+    <Compile Remove="VoxelHandoffBenchmarkTests.cs" />
+    <Compile Remove="VoxelPressureResetTests.cs" />
+    <Compile Remove="VoxelSharedContractTests.cs" />
   </ItemGroup>
 </Project>

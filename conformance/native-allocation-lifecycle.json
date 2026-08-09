@@ -33,25 +33,25 @@
     "result": "Disposed"
   },
   {
-    "name": "region-native-return-no-reservation",
+    "name": "region-native-dispose-no-reservation",
     "owner": "region",
     "initialReservation": 0,
     "returnPolicy": "ToNativeMemory",
-    "returnKind": "native",
+    "returnKind": "none",
     "reLease": false,
     "delayedActivation": false,
-    "states": ["Active", "Returned", "Disposed"],
+    "states": ["Active", "Disposed"],
     "result": "Disposed"
   },
   {
-    "name": "region-gc-return-with-reservation",
+    "name": "region-gc-dispose-with-reservation",
     "owner": "region",
     "initialReservation": 64,
     "returnPolicy": "ToGarbageCollector",
-    "returnKind": "garbageCollector",
+    "returnKind": "none",
     "reLease": false,
     "delayedActivation": false,
-    "states": ["Active", "Returned", "Disposed"],
+    "states": ["Active", "Disposed"],
     "result": "Disposed"
   },
   {
@@ -74,28 +74,6 @@
     "reLease": true,
     "delayedActivation": true,
     "states": ["Unleased", "Active", "Returned", "Active", "Disposed"],
-    "result": "Disposed"
-  },
-  {
-    "name": "region-delayed-native-return-no-reservation",
-    "owner": "region",
-    "initialReservation": 0,
-    "returnPolicy": "ToNativeMemory",
-    "returnKind": "native",
-    "reLease": false,
-    "delayedActivation": true,
-    "states": ["Unleased", "Active", "Returned", "Disposed"],
-    "result": "Disposed"
-  },
-  {
-    "name": "region-delayed-gc-return-with-reservation",
-    "owner": "region",
-    "initialReservation": 64,
-    "returnPolicy": "ToGarbageCollector",
-    "returnKind": "garbageCollector",
-    "reLease": false,
-    "delayedActivation": true,
-    "states": ["Unleased", "Active", "Returned", "Disposed"],
     "result": "Disposed"
   },
   {
@@ -169,17 +147,6 @@
     "owner": "pool",
     "initialReservation": 8,
     "returnPolicy": "ToNativeMemory",
-    "returnKind": "disposeBeforeActivation",
-    "reLease": false,
-    "delayedActivation": true,
-    "states": ["Unleased", "Disposed"],
-    "result": "Disposed"
-  },
-  {
-    "name": "region-delayed-dispose-before-activation",
-    "owner": "region",
-    "initialReservation": 64,
-    "returnPolicy": "ToGarbageCollector",
     "returnKind": "disposeBeforeActivation",
     "reLease": false,
     "delayedActivation": true,

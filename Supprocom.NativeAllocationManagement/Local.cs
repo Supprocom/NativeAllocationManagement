@@ -1,189 +1,143 @@
+using System.Runtime.CompilerServices;
+
 namespace Supprocom.NativeAllocationManagement;
 
-/// <summary>A generation-bound heterogeneous handle owned by a NativeRegion.</summary>
-/// <typeparam name="T">The value or reference type stored by the region.</typeparam>
+/// <summary>A compact unmanaged handle for one active NativeRegion.</summary>
+/// <typeparam name="T">The unmanaged value type in the Region.</typeparam>
 public readonly ref struct Local<T>
+    where T : unmanaged
 {
-    private readonly NativeOwnerKernel? _kernel;
-    private readonly long _generation;
-    private readonly long _allocationId;
-    private readonly NativeGeneration? _generationState;
-    private readonly NativeAllocation? _allocationState;
+    private readonly NativeRegionKernel? _kernel;
+    private readonly IntPtr _pointer;
+    private readonly int _length;
 
     internal Local(
-        NativeOwnerKernel kernel,
-        NativeRegionAllocation allocation)
+        NativeRegionKernel kernel,
+        IntPtr pointer,
+        int length)
     {
         _kernel = kernel;
-        _generation = allocation.Generation;
-        _allocationId = allocation.AllocationId;
-        _generationState = allocation.GenerationState;
-        _allocationState = allocation.AllocationState;
+        _pointer = pointer;
+        _length = length;
     }
 
     /// <summary>Gets the logical element count.</summary>
-    public int Length => GetMetadata(nameof(Length)).Length;
+    public int Length => GetValidatedLength(nameof(Length));
 
     /// <summary>Gets the physical capacity in elements.</summary>
-    public int Capacity => GetMetadata(nameof(Capacity)).Capacity;
+    public int Capacity => GetValidatedLength(nameof(Capacity));
 
-    /// <summary>Reads or writes one value through the owner operation gate.</summary>
+    /// <summary>Reads or writes one value after one Region state check.</summary>
     public T this[int index]
     {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get
         {
-            NativeOperationToken token = EnterIndexedOperation("get_Item", index);
-            try
+            ValidateActive("get_Item");
+            ValidateIndex(index, _length);
+            unsafe
             {
-                return token.GetValue<T>(index);
-            }
-            finally
-            {
-                token.Dispose();
+                return Unsafe.Add(
+                    ref Unsafe.AsRef<T>((void*)_pointer),
+                    index);
             }
         }
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         set
         {
-            NativeOperationToken token = EnterIndexedOperation("set_Item", index);
-            try
+            ValidateActive("set_Item");
+            ValidateIndex(index, _length);
+            unsafe
             {
-                token.SetValue(index, value);
-            }
-            finally
-            {
-                token.Dispose();
+                Unsafe.Add(
+                    ref Unsafe.AsRef<T>((void*)_pointer),
+                    index) = value;
             }
         }
     }
 
-    /// <summary>Zeroes the logical range while holding one native operation token.</summary>
+    /// <summary>Clears the logical range after one Region state check.</summary>
     public void Clear()
     {
-        NativeOperationToken token = EnterOperation(nameof(Clear));
-        try
-        {
-            token.GetView<T>().Clear();
-        }
-        finally
-        {
-            token.Dispose();
-        }
+        ValidateActive(nameof(Clear));
+        CreateView().Clear();
     }
 
-    /// <summary>Copies exactly the logical range from a bounded source span.</summary>
+    /// <summary>Copies an exact source range after one Region state check.</summary>
     public void CopyFrom(scoped ReadOnlySpan<T> source)
     {
-        NativeHandleMetadata metadata = GetMetadata(nameof(CopyFrom));
-        if (source.Length != metadata.Length)
+        ValidateActive(nameof(CopyFrom));
+        if (source.Length != _length)
         {
-            throw new ArgumentException("The source length must equal the local logical length.", nameof(source));
+            throw new ArgumentException(
+                "The source length must equal the local logical length.",
+                nameof(source));
         }
 
-        NativeOperationToken token = EnterOperation(nameof(CopyFrom));
-        try
-        {
-            token.GetView<T>().CopyFrom(source);
-        }
-        finally
-        {
-            token.Dispose();
-        }
+        CreateView().CopyFrom(source);
     }
 
-    /// <summary>Copies the logical range into a destination with sufficient capacity.</summary>
+    /// <summary>Copies the logical range after one Region state check.</summary>
     public void CopyTo(scoped Span<T> destination)
     {
-        NativeHandleMetadata metadata = GetMetadata(nameof(CopyTo));
-        if (destination.Length < metadata.Length)
+        ValidateActive(nameof(CopyTo));
+        if (destination.Length < _length)
         {
-            throw new ArgumentException("The destination must contain at least the local logical length.", nameof(destination));
+            throw new ArgumentException(
+                "The destination must contain the complete local range.",
+                nameof(destination));
         }
 
-        NativeOperationToken token = EnterOperation(nameof(CopyTo));
-        try
-        {
-            token.GetView<T>().CopyTo(destination);
-        }
-        finally
-        {
-            token.Dispose();
-        }
+        CreateView().CopyTo(destination);
     }
 
-    /// <summary>Runs one synchronous bounded mutation callback.</summary>
+    /// <summary>Runs one synchronous bounded write callback.</summary>
     public void Access(NativeLeaseAction<T> action)
     {
         ArgumentNullException.ThrowIfNull(action);
-        NativeOperationToken token = EnterOperation(nameof(Access));
-        try
-        {
-            action(token.GetView<T>());
-        }
-        finally
-        {
-            token.Dispose();
-        }
+        ValidateActive(nameof(Access));
+        action(CreateView());
     }
 
-    /// <summary>Runs one synchronous bounded read callback and returns its managed result.</summary>
+    /// <summary>Runs one synchronous bounded read callback.</summary>
     public TResult Read<TResult>(NativeLeaseFunc<T, TResult> action)
     {
         ArgumentNullException.ThrowIfNull(action);
-        NativeOperationToken token = EnterOperation(nameof(Read));
-        try
-        {
-            return action(token.GetView<T>());
-        }
-        finally
-        {
-            token.Dispose();
-        }
+        ValidateActive(nameof(Read));
+        return action(CreateView());
     }
 
-    private NativeOperationToken EnterIndexedOperation(string operation, int index)
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private int GetValidatedLength(string operation)
     {
-        NativeHandleMetadata metadata = GetMetadata(operation);
-        ValidateIndex(index, metadata.Length);
-        return EnterOperation(operation);
+        ValidateActive(operation);
+        return _length;
     }
 
-    private NativeOwnerKernel GetKernel(string operation) =>
-        _kernel ?? throw new NativeAllocationUninitializedException(nameof(Local<T>), operation);
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void ValidateActive(string operation)
+    {
+        NativeRegionKernel kernel = _kernel
+            ?? throw new NativeAllocationUninitializedException(
+                nameof(Local<T>),
+                operation);
+        kernel.ValidateActive(operation);
+    }
 
-    private NativeGeneration GetGenerationState(string operation) =>
-        _generationState
-        ?? throw new NativeAllocationUninitializedException(
-            nameof(Local<T>),
-            operation);
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private NativeLeaseView<T> CreateView() =>
+        new(_pointer, _length);
 
-    private NativeAllocation GetAllocationState(string operation) =>
-        _allocationState
-        ?? throw new NativeAllocationUninitializedException(
-            nameof(Local<T>),
-            operation);
-
-    private NativeOperationToken EnterOperation(string operation) =>
-        GetKernel(operation).EnterOperation(
-            GetGenerationState(operation),
-            GetAllocationState(operation),
-            _generation,
-            _allocationId,
-            operation);
-
-    private NativeHandleMetadata GetMetadata(string operation) =>
-        GetKernel(operation).ValidateHandle(
-            GetGenerationState(operation),
-            GetAllocationState(operation),
-            _generation,
-            _allocationId,
-            operation);
-
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void ValidateIndex(int index, int length)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(index);
         if (index >= length)
         {
-            throw new ArgumentOutOfRangeException(nameof(index), index, "The index is outside the logical local range.");
+            throw new ArgumentOutOfRangeException(
+                nameof(index),
+                index,
+                "The index is outside the logical local range.");
         }
     }
 }

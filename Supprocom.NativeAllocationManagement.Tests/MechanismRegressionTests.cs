@@ -38,7 +38,7 @@ public sealed class MechanismRegressionTests
     }
 
     [Fact]
-    public void ReferenceContainingStructsWorkForPoolRegionAndArenaGenerations()
+    public void ReferenceContainingStructsWorkForPoolAndArenaGenerations()
     {
         NativeMemoryTestHooks.Reset();
         NativePool<ReferenceCell> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
@@ -58,13 +58,6 @@ public sealed class MechanismRegressionTests
             ArenaLease<ReferenceCell> freshArenaLease = arena.Scratch<ReferenceCell>(1, static writer => writer.Fill(default!));
             Assert.Equal(default, freshArenaLease[0]);
 
-            using (NativeRegion region = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory))
-            {
-                Local<ReferenceCell> local = region.Lease<ReferenceCell>(1, static writer => writer.Fill(default!));
-                local[0] = new ReferenceCell("region", 11);
-                Assert.Equal(new ReferenceCell("region", 11), local[0]);
-                Assert.Equal(1, region.CurrentReferenceRootCountForTest);
-            }
         }
         finally
         {
@@ -1160,30 +1153,6 @@ public sealed class MechanismRegressionTests
         Assert.Equal((nuint)0, returnedPool.TrimRetainedMemoryByLeaseSize(1));
         returnedPool.Dispose();
         Assert.Throws<NativeAllocationDisposedException>(() => returnedPool.TrimRetainedMemory());
-
-        NativeRegion unleasedRegion = new(doNotLeaseOnDeclaration: true);
-        Assert.Equal((nuint)0, unleasedRegion.TrimRetainedMemory());
-        Assert.Equal((nuint)0, unleasedRegion.TrimRetainedMemoryByBytes(1));
-        Assert.Equal((nuint)0, unleasedRegion.TrimRetainedMemoryByLeaseSize<int>(1));
-        unleasedRegion.Dispose();
-
-        NativeRegion returnedRegion = new();
-        returnedRegion.ReturnMemoryToNativeMemory();
-        Assert.Equal((nuint)0, returnedRegion.TrimRetainedMemory());
-        Assert.Equal((nuint)0, returnedRegion.TrimRetainedMemoryByBytes(1));
-        Assert.Equal((nuint)0, returnedRegion.TrimRetainedMemoryByLeaseSize<int>(1));
-        returnedRegion.Dispose();
-
-        NativeRegion region = new();
-        region.Dispose();
-        try
-        {
-            _ = region.TrimRetainedMemory();
-            Assert.Fail("A disposed region trim must throw.");
-        }
-        catch (NativeAllocationDisposedException)
-        {
-        }
 
         NativeArena arena = new();
         arena.ReturnMemoryToNativeMemory();

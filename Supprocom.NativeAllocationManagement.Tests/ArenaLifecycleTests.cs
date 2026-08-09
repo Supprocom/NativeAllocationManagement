@@ -255,7 +255,7 @@ public sealed class ArenaLifecycleTests
     }
 
     [Fact]
-    public void VaryingScopedBatchSizesKeepOnlyCurrentRecordsLive()
+    public void VaryingScopedBatchSizesUseNoManagedRecords()
     {
         NativeArena arena = new(
             preAllocateBytes: 4096,
@@ -270,14 +270,14 @@ public sealed class ArenaLifecycleTests
         ArenaLease<uint> third = arena.ScratchScoped<uint>(
             8,
             static writer => writer.Fill(3));
-        Assert.Equal(3, arena.CurrentAllocationRecordCountForTest);
+        Assert.Equal(0, arena.CurrentAllocationRecordCountForTest);
         arena.RecycleScoped();
         Assert.Equal(0, arena.CurrentAllocationRecordCountForTest);
 
         ArenaLease<long> only = arena.ScratchScoped<long>(
             4,
             static writer => writer.Fill(4));
-        Assert.Equal(1, arena.CurrentAllocationRecordCountForTest);
+        Assert.Equal(0, arena.CurrentAllocationRecordCountForTest);
         arena.RecycleScoped();
         Assert.Equal(0, arena.CurrentAllocationRecordCountForTest);
 
@@ -332,26 +332,22 @@ public sealed class ArenaLifecycleTests
     }
 
     [Fact]
-    public void DelayedActivationIsAllocationFreeAndFailureAtomicForAllOwners()
+    public void DelayedActivationIsAllocationFreeAndFailureAtomicForPoolAndArena()
     {
         NativeMemoryTestHooks.Reset();
         NativeMemoryTestMetrics before = NativeMemoryTestHooks.Snapshot();
         NativePool<string> pool = new(preLease: 4, doNotLeaseOnDeclaration: true);
         NativeArena arena = new(preAllocateBytes: 64, doNotLeaseOnDeclaration: true);
-        NativeRegion region = new(preAllocateBytes: 64, doNotLeaseOnDeclaration: true);
         NativeMemoryTestMetrics afterConstruction = NativeMemoryTestHooks.Snapshot();
 
         Assert.Equal(before.AllocationCount, afterConstruction.AllocationCount);
         Assert.Equal(NativeOwnerLifecycle.Unleased, pool.CurrentLifecycle);
         Assert.Equal(NativeOwnerLifecycle.Unleased, arena.CurrentLifecycle);
-        Assert.Equal(NativeOwnerLifecycle.Unleased, region.CurrentLifecycle);
 
         Assert.IsType<NativeAllocationStateException>(Record(() => pool.Rent(1, static writer => writer.Fill(default!))));
         Assert.IsType<NativeAllocationStateException>(Record(() => arena.Scratch<int>(1, static writer => writer.Fill(default!))));
-        Assert.IsType<NativeAllocationStateException>(RecordRegionLease(ref region));
         Assert.IsType<NativeAllocationStateException>(Record(pool.ReturnMemoryToNativeMemory));
         Assert.IsType<NativeAllocationStateException>(Record(arena.ReleaseLeasesToNativeMemory));
-        Assert.IsType<NativeAllocationStateException>(RecordRegionReturn(ref region));
 
         NativeMemoryTestHooks.FailNextAllocation();
         NativeAllocationFailedException failure = Assert.Throws<NativeAllocationFailedException>(pool.LeaseFromMemory);
@@ -360,14 +356,11 @@ public sealed class ArenaLifecycleTests
 
         pool.LeaseFromMemory();
         arena.LeaseFromMemory();
-        region.LeaseFromMemory();
         Assert.Equal(NativeOwnerLifecycle.Active, pool.CurrentLifecycle);
         Assert.Equal(NativeOwnerLifecycle.Active, arena.CurrentLifecycle);
-        Assert.Equal(NativeOwnerLifecycle.Active, region.CurrentLifecycle);
 
         pool.Dispose();
         arena.Dispose();
-        region.Dispose();
     }
 
     [Fact]
@@ -448,19 +441,17 @@ public sealed class ArenaLifecycleTests
     }
 
     [Fact]
-    public void MemoryReturnClearsReferenceRootsForEveryOwnerAndPolicy()
+    public void MemoryReturnClearsReferenceRootsForPoolAndArenaPolicies()
     {
         foreach (NativeMemoryReturn policy in Enum.GetValues<NativeMemoryReturn>())
         {
             WeakReference poolRoot = ReturnPoolReference(policy);
-            WeakReference regionRoot = ReturnRegionReference(policy);
             WeakReference arenaRoot = ReturnArenaReference(policy);
 
             GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
             GC.WaitForPendingFinalizers();
 
             Assert.False(poolRoot.IsAlive);
-            Assert.False(regionRoot.IsAlive);
             Assert.False(arenaRoot.IsAlive);
         }
     }
@@ -495,27 +486,6 @@ public sealed class ArenaLifecycleTests
         }
 
         pool.Dispose();
-        held = null!;
-        return weak;
-    }
-
-    private static WeakReference ReturnRegionReference(NativeMemoryReturn policy)
-    {
-        NativeRegion region = new(returnMemoryOnDispose: policy);
-        Local<object> lease = region.Lease<object>(1, static writer => writer.Fill(default!));
-        object held = new();
-        WeakReference weak = new(held);
-        lease[0] = held;
-        if (policy == NativeMemoryReturn.ToNativeMemory)
-        {
-            region.ReturnMemoryToNativeMemory();
-        }
-        else
-        {
-            region.ReturnMemoryToGarbageCollector();
-        }
-
-        region.Dispose();
         held = null!;
         return weak;
     }
@@ -560,7 +530,7 @@ public sealed class ArenaLifecycleTests
     }
 
     [Fact]
-    public void EveryOwnerTrimFormFreesWholeIdleUnitsAndAllowsOnDemandGrowth()
+    public void PoolAndArenaTrimFormsFreeWholeIdleUnitsAndAllowGrowth()
     {
         Func<NativePool<int>, nuint>[] poolTrims =
         [
@@ -578,21 +548,6 @@ public sealed class ArenaLifecycleTests
             Assert.Equal(0, lease[0]);
             lease.Dispose();
             pool.Dispose();
-        }
-
-        for (int trimKind = 0; trimKind < 3; trimKind++)
-        {
-            NativeRegion region = new(4096, NativeMemoryReturn.ToNativeMemory);
-            nuint released = trimKind switch
-            {
-                0 => region.TrimRetainedMemory(),
-                1 => region.TrimRetainedMemoryByBytes(1),
-                _ => region.TrimRetainedMemoryByLeaseSize<int>(1)
-            };
-            Assert.True(released >= 4096);
-            Local<int> lease = region.Lease<int>(1, static writer => writer.Fill(default!));
-            Assert.Equal(0, lease[0]);
-            region.Dispose();
         }
 
         Func<NativeArena, nuint>[] arenaTrims =
@@ -614,39 +569,6 @@ public sealed class ArenaLifecycleTests
             Assert.Equal(0, fresh[0]);
             arena.Dispose();
         }
-    }
-
-    [Fact]
-    public void RegionRecyclesAScopedTailBeforeTrimmingWithoutMovingOrdinaryStorage()
-    {
-        NativeMemoryTestHooks.Reset();
-        NativeRegion region = new(4096, NativeMemoryReturn.ToNativeMemory);
-        Local<int> ordinary = region.Lease<int>(1, static writer => writer.Fill(default!));
-        ordinary[0] = 31;
-        scoped Local<byte> scopedTail = region.LeaseScoped<byte>(5_000, static writer => writer.Fill(default!));
-        scopedTail[0] = 42;
-
-        region.RecycleScoped();
-        nuint released = region.TrimRetainedMemoryByBytes(1);
-
-        Assert.True(released >= 4096);
-        Assert.Equal(31, ordinary[0]);
-        region.Dispose();
-    }
-
-    [Fact]
-    public void RegionTrimDoesNotFreeAnActiveSegmentJustBecauseItsTailIsUnused()
-    {
-        NativeMemoryTestHooks.Reset();
-        NativeRegion region = new(4096, NativeMemoryReturn.ToNativeMemory);
-        Local<int> ordinary = region.Lease<int>(1, static writer => writer.Fill(default!));
-        ordinary[0] = 17;
-
-        nuint released = region.TrimRetainedMemory();
-
-        Assert.Equal((nuint)0, released);
-        Assert.Equal(17, ordinary[0]);
-        region.Dispose();
     }
 
     [Fact]
@@ -817,34 +739,6 @@ public sealed class ArenaLifecycleTests
         }
 
         throw new Xunit.Sdk.XunitException("Expected a returned arena lease.");
-    }
-
-    private static Exception RecordRegionLease(ref NativeRegion region)
-    {
-        try
-        {
-            region.Lease<int>(1, static writer => writer.Fill(default!));
-        }
-        catch (Exception exception)
-        {
-            return exception;
-        }
-
-        throw new Xunit.Sdk.XunitException("Expected an exception.");
-    }
-
-    private static Exception RecordRegionReturn(ref NativeRegion region)
-    {
-        try
-        {
-            region.ReturnMemoryToNativeMemory();
-        }
-        catch (Exception exception)
-        {
-            return exception;
-        }
-
-        throw new Xunit.Sdk.XunitException("Expected an exception.");
     }
 
     private sealed unsafe class AlignedTestBuffer : SafeBuffer

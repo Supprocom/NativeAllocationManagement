@@ -475,78 +475,25 @@ public sealed class RuntimeLifecycleTests
     }
 
     [Fact]
-    public void DelayedRegionActivationRetainsReservationAndKeepsReturnedRegionsTerminal()
-    {
-        foreach (NativeMemoryReturn policy in Enum.GetValues<NativeMemoryReturn>())
-        {
-            foreach (nuint reservation in new nuint[] { 0, 32 })
-            {
-                NativeMemoryTestHooks.Reset();
-                using NativeRegion region = new(
-                    reservation,
-                    policy,
-                    doNotLeaseOnDeclaration: true);
-                NativeMemoryTestMetrics before = NativeMemoryTestHooks.Snapshot();
-
-                Assert.Equal(NativeOwnerLifecycle.Unleased, region.CurrentLifecycle);
-                NativeAllocationStateException leaseBeforeActivation = CaptureRegionLeaseState(region);
-                Assert.Equal(NativeOwnerLifecycle.Unleased, leaseBeforeActivation.CurrentLifecycle);
-                NativeAllocationStateException nativeReturnBeforeActivation = CaptureRegionNativeMemoryReturnState(region);
-                NativeAllocationStateException garbageReturnBeforeActivation = CaptureRegionGarbageReturnState(region);
-                Assert.Equal(NativeOwnerLifecycle.Unleased, nativeReturnBeforeActivation.CurrentLifecycle);
-                Assert.Equal(NativeOwnerLifecycle.Unleased, garbageReturnBeforeActivation.CurrentLifecycle);
-                Assert.IsType<NativeAllocationStateException>(CaptureRegionRecycleState(region));
-                Assert.Equal((nuint)0, CaptureRegionTrimState(region, 0));
-                Assert.Equal((nuint)0, CaptureRegionTrimState(region, 1));
-                Assert.Equal((nuint)0, CaptureRegionTrimState(region, 2));
-                Assert.Equal(before.AllocationCount, NativeMemoryTestHooks.Snapshot().AllocationCount);
-
-                region.LeaseFromMemory();
-                Assert.Equal(NativeOwnerLifecycle.Active, region.CurrentLifecycle);
-                NativeAllocationStateException duplicateActivation = CaptureRegionActiveActivation(region);
-                Assert.Equal(NativeOwnerLifecycle.Active, duplicateActivation.CurrentLifecycle);
-                Local<int> values = region.Lease<int>(0, static writer => writer.Fill(default!));
-                Assert.Equal(0, values.Length);
-                if (policy == NativeMemoryReturn.ToNativeMemory)
-                {
-                    region.ReturnMemoryToNativeMemory();
-                }
-                else
-                {
-                    region.ReturnMemoryToGarbageCollector();
-                }
-
-                Assert.Equal(NativeOwnerLifecycle.Returned, region.CurrentLifecycle);
-                NativeAllocationStateException reLease = CaptureRegionReLeaseState(region);
-                Assert.Equal(NativeOwnerLifecycle.Returned, reLease.CurrentLifecycle);
-            }
-        }
-    }
-
-    [Fact]
-    public void DisposingUnleasedOwnersIsTerminalAndAllocationFree()
+    public void DisposingUnleasedPoolAndArenaIsTerminalAndAllocationFree()
     {
         NativeMemoryTestHooks.Reset();
         NativePool<int> pool = new(preLease: 8, doNotLeaseOnDeclaration: true);
-        NativeRegion region = new(preAllocateBytes: 32, doNotLeaseOnDeclaration: true);
         NativeArena arena = new(preAllocateBytes: 64, doNotLeaseOnDeclaration: true);
         NativeMemoryTestMetrics before = NativeMemoryTestHooks.Snapshot();
 
         pool.Dispose();
-        region.Dispose();
         arena.Dispose();
 
         Assert.Equal(NativeOwnerLifecycle.Disposed, pool.CurrentLifecycle);
-        Assert.Equal(NativeOwnerLifecycle.Disposed, region.CurrentLifecycle);
         Assert.Equal(NativeOwnerLifecycle.Disposed, arena.CurrentLifecycle);
         Assert.Equal(before.AllocationCount, NativeMemoryTestHooks.Snapshot().AllocationCount);
         Assert.Throws<NativeAllocationDisposedException>(() => pool.LeaseFromMemory());
-        Assert.IsType<NativeAllocationDisposedException>(CaptureRegionDisposedActivation(region));
         Assert.Throws<NativeAllocationDisposedException>(() => arena.LeaseFromMemory());
     }
 
     [Fact]
-    public void DelayedActivationFailuresRemainUnleasedAndRetryAtomically()
+    public void DelayedPoolActivationFailuresRemainUnleasedAndRetryAtomically()
     {
         NativeMemoryTestHooks.Reset();
         NativePool<int> pool = new(preLease: 4, doNotLeaseOnDeclaration: true);
@@ -558,17 +505,6 @@ public sealed class RuntimeLifecycleTests
         Pooled<int> poolLease = pool.Rent(1, static writer => writer.Fill(default!));
         poolLease.Dispose();
         pool.Dispose();
-
-        NativeMemoryTestHooks.Reset();
-        using NativeRegion region = new(preAllocateBytes: 32, doNotLeaseOnDeclaration: true);
-        NativeMemoryTestHooks.FailNextAllocation();
-        NativeAllocationFailedException regionFailure = CaptureRegionActivationFailure(region);
-        Assert.Equal(NativeOwnerLifecycle.Unleased, regionFailure.CurrentLifecycle);
-        Assert.Equal(NativeOwnerLifecycle.Unleased, region.CurrentLifecycle);
-        region.LeaseFromMemory();
-        Local<int> local = region.Lease<int>(1, static writer => writer.Fill(default!));
-        local[0] = 17;
-        Assert.Equal(17, local[0]);
     }
 
     [Fact]
@@ -747,22 +683,21 @@ public sealed class RuntimeLifecycleTests
         longs[0] = 40;
         longs[1] = 2;
         Assert.Equal(42, longs.Read(static span => span[0] + span[1]));
-        region.ReturnMemoryToNativeMemory();
+        region.Dispose();
         Assert.True(NativeMemoryTestHooks.Snapshot().FreeCount >= 1);
-        Assert.IsType<NativeAllocationReturnedException>(CaptureReturned(bytes));
+        Assert.IsType<NativeAllocationDisposedException>(CaptureDisposed(bytes));
     }
 
     [Fact]
-    public void RegionGrowthAndGarbageCollectorReturnUseTheSameLifecycleGate()
+    public void RegionGrowthAndGarbageCollectorCleanupUseOneLifetimeGate()
     {
         NativeMemoryTestHooks.Reset();
         NativeRegion region = new(preAllocateBytes: 1, returnMemoryOnDispose: NativeMemoryReturn.ToGarbageCollector);
         Local<long> first = region.Lease<long>(32, static writer => writer.Fill(default!));
         first[0] = 8;
-        region.ReturnMemoryToGarbageCollector();
-        Assert.IsType<NativeAllocationReturnedException>(CaptureReturned(first));
-        Assert.Equal(1, NativeMemoryTestHooks.Snapshot().DetachedGenerationCount);
         region.Dispose();
+        Assert.IsType<NativeAllocationDisposedException>(CaptureDisposed(first));
+        Assert.Equal(1, NativeMemoryTestHooks.Snapshot().DetachedGenerationCount);
     }
 
     [Fact]
@@ -914,8 +849,7 @@ public sealed class RuntimeLifecycleTests
         AssertUninitialized(AccessDefaultLocal);
         AssertUninitialized(ReadCallbackDefaultLocal);
         AssertUninitialized(LeaseDefaultRegion);
-        AssertUninitialized(ReturnNativeDefaultRegion);
-        AssertUninitialized(ReturnGarbageDefaultRegion);
+        AssertUninitialized(GetStatisticsDefaultRegion);
         AssertUninitialized(DisposeDefaultRegion);
     }
 
@@ -933,14 +867,16 @@ public sealed class RuntimeLifecycleTests
     }
 
     [Fact]
-    public void NativeRegionExposesLeaseWithoutTheRemovedOperation()
+    public void NativeRegionExposesOnlyItsSingleLifetimeOperations()
     {
         MethodInfo[] methods = typeof(NativeRegion).GetMethods(BindingFlags.Public | BindingFlags.Instance);
         Assert.Contains(methods, method => method.Name == "Lease" && method.IsGenericMethodDefinition);
         Assert.DoesNotContain(methods, method => method.Name == "Allocate");
-        Assert.Contains(
-            methods,
-            method => method.Name == "LeaseFromMemory" && method.GetParameters().Length == 0);
+        Assert.DoesNotContain(methods, method => method.Name == "LeaseScoped");
+        Assert.DoesNotContain(methods, method => method.Name == "RecycleScoped");
+        Assert.DoesNotContain(methods, method => method.Name == "LeaseFromMemory");
+        Assert.DoesNotContain(methods, method => method.Name.StartsWith("ReturnMemoryTo", StringComparison.Ordinal));
+        Assert.DoesNotContain(methods, method => method.Name.StartsWith("TrimRetainedMemory", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -1316,128 +1252,6 @@ public sealed class RuntimeLifecycleTests
         Assert.Equal(NativeOwnerLifecycle.Uninitialized, exception.CurrentLifecycle);
     }
 
-    private static NativeAllocationStateException CaptureRegionLeaseState(NativeRegion region)
-    {
-        try
-        {
-            _ = region.Lease<int>(1, static writer => writer.Fill(default!));
-        }
-        catch (NativeAllocationStateException exception)
-        {
-            return exception;
-        }
-
-        throw new Xunit.Sdk.XunitException("Expected a region lease lifecycle failure.");
-    }
-
-    private static NativeAllocationStateException CaptureRegionNativeMemoryReturnState(NativeRegion region)
-    {
-        try
-        {
-            region.ReturnMemoryToNativeMemory();
-        }
-        catch (NativeAllocationStateException exception)
-        {
-            return exception;
-        }
-
-        throw new Xunit.Sdk.XunitException("Expected a region native-return lifecycle failure.");
-    }
-
-    private static NativeAllocationStateException CaptureRegionGarbageReturnState(NativeRegion region)
-    {
-        try
-        {
-            region.ReturnMemoryToGarbageCollector();
-        }
-        catch (NativeAllocationStateException exception)
-        {
-            return exception;
-        }
-
-        throw new Xunit.Sdk.XunitException("Expected a region garbage-return lifecycle failure.");
-    }
-
-    private static NativeAllocationStateException CaptureRegionReLeaseState(NativeRegion region)
-    {
-        try
-        {
-            region.LeaseFromMemory();
-        }
-        catch (NativeAllocationStateException exception)
-        {
-            return exception;
-        }
-
-        throw new Xunit.Sdk.XunitException("Expected a returned region activation failure.");
-    }
-
-    private static NativeAllocationStateException CaptureRegionActiveActivation(NativeRegion region)
-    {
-        try
-        {
-            region.LeaseFromMemory();
-        }
-        catch (NativeAllocationStateException exception)
-        {
-            return exception;
-        }
-
-        throw new Xunit.Sdk.XunitException("Expected a duplicate region activation failure.");
-    }
-
-    private static NativeAllocationStateException CaptureRegionRecycleState(NativeRegion region)
-    {
-        try
-        {
-            region.RecycleScoped();
-        }
-        catch (NativeAllocationStateException exception)
-        {
-            return exception;
-        }
-
-        throw new Xunit.Sdk.XunitException("Expected an unleased region recycle failure.");
-    }
-
-    private static nuint CaptureRegionTrimState(NativeRegion region, int trimKind)
-    {
-        return trimKind switch
-        {
-            0 => region.TrimRetainedMemory(),
-            1 => region.TrimRetainedMemoryByBytes(1),
-            _ => region.TrimRetainedMemoryByLeaseSize<int>(1)
-        };
-    }
-
-    private static NativeAllocationDisposedException CaptureRegionDisposedActivation(NativeRegion region)
-    {
-        try
-        {
-            region.LeaseFromMemory();
-        }
-        catch (NativeAllocationDisposedException exception)
-        {
-            return exception;
-        }
-
-        throw new Xunit.Sdk.XunitException("Expected a disposed region activation failure.");
-    }
-
-    private static NativeAllocationFailedException CaptureRegionActivationFailure(NativeRegion region)
-    {
-        try
-        {
-            region.LeaseFromMemory();
-        }
-        catch (NativeAllocationFailedException exception)
-        {
-            return exception;
-        }
-
-        throw new Xunit.Sdk.XunitException("Expected a delayed region activation allocation failure.");
-    }
-
     private static void ReadDefaultPooled()
     {
         Pooled<int> value = default;
@@ -1546,16 +1360,10 @@ public sealed class RuntimeLifecycleTests
         _ = value.Lease<int>(1, static writer => writer.Fill(default!));
     }
 
-    private static void ReturnNativeDefaultRegion()
+    private static void GetStatisticsDefaultRegion()
     {
         NativeRegion value = default;
-        value.ReturnMemoryToNativeMemory();
-    }
-
-    private static void ReturnGarbageDefaultRegion()
-    {
-        NativeRegion value = default;
-        value.ReturnMemoryToGarbageCollector();
+        _ = value.GetStatistics();
     }
 
     private static void DisposeDefaultRegion()
@@ -1645,31 +1453,31 @@ public sealed class RuntimeLifecycleTests
         throw new Xunit.Sdk.XunitException("Expected NativeAllocationReturnedException.");
     }
 
-    private static NativeAllocationReturnedException CaptureReturned(Local<byte> local)
+    private static NativeAllocationDisposedException CaptureDisposed(Local<byte> local)
     {
         try
         {
             ReadLocal(local);
         }
-        catch (NativeAllocationReturnedException exception)
+        catch (NativeAllocationDisposedException exception)
         {
             return exception;
         }
 
-        throw new Xunit.Sdk.XunitException("Expected NativeAllocationReturnedException.");
+        throw new Xunit.Sdk.XunitException("Expected NativeAllocationDisposedException.");
     }
 
-    private static NativeAllocationReturnedException CaptureReturned(Local<long> local)
+    private static NativeAllocationDisposedException CaptureDisposed(Local<long> local)
     {
         try
         {
             _ = local[0];
         }
-        catch (NativeAllocationReturnedException exception)
+        catch (NativeAllocationDisposedException exception)
         {
             return exception;
         }
 
-        throw new Xunit.Sdk.XunitException("Expected NativeAllocationReturnedException.");
+        throw new Xunit.Sdk.XunitException("Expected NativeAllocationDisposedException.");
     }
 }

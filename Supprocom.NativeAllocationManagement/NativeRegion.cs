@@ -1,113 +1,59 @@
 namespace Supprocom.NativeAllocationManagement;
 
-/// <summary>A stack-confined heterogeneous bump owner for one explicit braced using statement.</summary>
+/// <summary>A thread-confined bump owner with one lexical lifetime.</summary>
 public readonly ref struct NativeRegion
 {
-    private readonly NativeOwnerKernel? _kernel;
+    private readonly NativeRegionKernel? _kernel;
 
-    /// <summary>Creates an active region with default reservation and cleanup policy.</summary>
+    /// <summary>Creates one active Region with finalizable emergency cleanup.</summary>
     public NativeRegion()
     {
-        _kernel = NativeOwnerKernel.CreateRegion(
+        _kernel = new NativeRegionKernel(
             preAllocateBytes: 0,
-            "NativeRegion",
-            NativeMemoryReturn.ToGarbageCollector,
-            containsReferences: false,
-            doNotLeaseOnDeclaration: false);
+            NativeMemoryReturn.ToGarbageCollector);
     }
 
-    internal NativeOwnerLifecycle CurrentLifecycle => _kernel?.Lifecycle ?? NativeOwnerLifecycle.Uninitialized;
-
-    internal int CurrentAllocationRecordCountForTest => _kernel?.CurrentAllocationRecordCountForTest() ?? 0;
-
-    internal int CurrentReferenceRootCountForTest => _kernel?.CurrentReferenceRootCountForTest() ?? 0;
-
-    /// <summary>Reads the current logical and physical state of this owner.</summary>
-    public NativeOwnerStatistics GetStatistics() => GetKernel(nameof(GetStatistics)).GetStatistics();
-
-    /// <summary>Creates an active region unless the first generation is explicitly deferred.</summary>
-    /// <param name="preAllocateBytes">Optional initial byte reservation.</param>
-    /// <param name="returnMemoryOnDispose">The physical cleanup policy used by <see cref="Dispose"/>.</param>
-    /// <param name="doNotLeaseOnDeclaration">When true, defer the first generation until <see cref="LeaseFromMemory"/>.</param>
+    /// <summary>Creates one active Region with the specified native reservation.</summary>
+    /// <param name="preAllocateBytes">The initial native byte capacity.</param>
+    /// <param name="returnMemoryOnDispose">The cleanup policy for the complete Region.</param>
     public NativeRegion(
         nuint preAllocateBytes = 0,
-        NativeMemoryReturn returnMemoryOnDispose = NativeMemoryReturn.ToGarbageCollector,
-        bool doNotLeaseOnDeclaration = false)
+        NativeMemoryReturn returnMemoryOnDispose = NativeMemoryReturn.ToGarbageCollector)
     {
-        NativeMemoryReturnValidation.Validate(returnMemoryOnDispose, nameof(returnMemoryOnDispose));
-        _kernel = NativeOwnerKernel.CreateRegion(
-            preAllocateBytes,
-            "NativeRegion",
+        NativeMemoryReturnValidation.Validate(
             returnMemoryOnDispose,
-            containsReferences: false,
-            doNotLeaseOnDeclaration);
+            nameof(returnMemoryOnDispose));
+        _kernel = new NativeRegionKernel(
+            preAllocateBytes,
+            returnMemoryOnDispose);
     }
 
-    /// <summary>Initializes an ordinary heterogeneous range before publication.</summary>
+    internal NativeOwnerLifecycle CurrentLifecycle =>
+        _kernel?.Lifecycle
+        ?? NativeOwnerLifecycle.Uninitialized;
+
+    internal int CurrentAllocationRecordCountForTest => 0;
+
+    /// <summary>Gets the current Region storage statistics.</summary>
+    public NativeOwnerStatistics GetStatistics() =>
+        GetKernel(nameof(GetStatistics)).GetStatistics();
+
+    /// <summary>Initializes and publishes one unmanaged bump range.</summary>
     public Local<T> Lease<T>(
         int length,
         NativeLeaseInitializer<T> initializer)
+        where T : unmanaged
     {
-        NativeOwnerKernel kernel = GetKernel(nameof(Lease));
-        NativeRegionAllocation allocation = kernel.LeaseBumpInitialized(
-            length,
-            NativeTypeLayout.StorageSize<T>(),
-            NativeTypeLayout.Alignment<T>(),
-            scoped: false,
-            NativeTypeLayout.ContainsReferences<T>(),
-            initializer);
-        return new Local<T>(kernel, allocation);
+        NativeRegionKernel kernel = GetKernel(nameof(Lease));
+        return kernel.LeaseInitialized(length, initializer);
     }
 
-    /// <summary>Initializes a scoped heterogeneous range before publication.</summary>
-    public Local<T> LeaseScoped<T>(
-        int length,
-        NativeLeaseInitializer<T> initializer)
-    {
-        NativeOwnerKernel kernel = GetKernel(nameof(LeaseScoped));
-        NativeRegionAllocation allocation = kernel.LeaseBumpInitialized(
-            length,
-            NativeTypeLayout.StorageSize<T>(),
-            NativeTypeLayout.Alignment<T>(),
-            scoped: true,
-            NativeTypeLayout.ContainsReferences<T>(),
-            initializer);
-        return new Local<T>(kernel, allocation);
-    }
-
-    /// <summary>Publishes the initial region generation when declaration leasing was deferred.</summary>
-    public void LeaseFromMemory() => GetKernel(nameof(LeaseFromMemory)).LeaseFromMemory();
-
-    /// <summary>Recycles the complete analyzer-proven dead scoped pending set.</summary>
-    public void RecycleScoped() => GetKernel(nameof(RecycleScoped)).RecycleScoped();
-
-    /// <summary>Adds one exact retained byte segment for later heterogeneous leases.</summary>
-    public nuint ReserveRetainedMemory(nuint byteLength) =>
-        GetKernel(nameof(ReserveRetainedMemory)).ReserveRetainedMemory(byteLength);
-
-    /// <summary>Ends the current region generation and frees native storage immediately.</summary>
-    public void ReturnMemoryToNativeMemory() => GetKernel(nameof(ReturnMemoryToNativeMemory)).ReturnMemoryToNativeMemory();
-
-    /// <summary>Ends the current region generation and detaches storage for finalizable cleanup.</summary>
-    public void ReturnMemoryToGarbageCollector() => GetKernel(nameof(ReturnMemoryToGarbageCollector)).ReturnMemoryToGarbageCollector();
-
-    /// <summary>Releases every eligible idle segment without changing the region lifecycle.</summary>
-    public nuint TrimRetainedMemory() => GetKernel(nameof(TrimRetainedMemory)).TrimRetainedMemory();
-
-    /// <summary>Releases whole idle segments until the requested physical byte budget is met.</summary>
-    public nuint TrimRetainedMemoryByBytes(nuint bytesToRelease) =>
-        GetKernel(nameof(TrimRetainedMemoryByBytes)).TrimRetainedMemoryByBytes(bytesToRelease);
-
-    /// <summary>Trims by the exact physical footprint requested by a heterogeneous lease shape.</summary>
-    public nuint TrimRetainedMemoryByLeaseSize<T>(int leaseLength = 1) =>
-        GetKernel(nameof(TrimRetainedMemoryByLeaseSize)).TrimRetainedMemoryByLeaseSize(
-            leaseLength,
-            NativeTypeLayout.StorageSize<T>(),
-            NativeTypeLayout.Alignment<T>());
-
-    /// <summary>Ends the lexical region using its configured memory policy.</summary>
+    /// <summary>Invalidates all Local handles and ends the Region lifetime.</summary>
     public void Dispose() => GetKernel(nameof(Dispose)).Dispose();
 
-    private NativeOwnerKernel GetKernel(string operation) =>
-        _kernel ?? throw new NativeAllocationUninitializedException(nameof(NativeRegion), operation);
+    private NativeRegionKernel GetKernel(string operation) =>
+        _kernel
+        ?? throw new NativeAllocationUninitializedException(
+            nameof(NativeRegion),
+            operation);
 }
