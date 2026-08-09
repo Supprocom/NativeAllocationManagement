@@ -65,6 +65,32 @@ public sealed class NativePoolSimpleTests
     }
 
     [Fact]
+    public void IncompleteInitializerReportsProgressAndReturnsTheSlab()
+    {
+        using NativePool<int> pool = new(
+            preLease: 4,
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+
+        InvalidOperationException exception =
+            Assert.Throws<InvalidOperationException>(() => pool.Rent(
+                4,
+                static writer => writer.Write(1)));
+        Assert.Equal(
+            "The native lease initializer wrote 1 of 4 required elements.",
+            exception.Message);
+
+        NativeOwnerStatistics afterFailure = pool.GetStatistics();
+        Assert.Equal(0, afterFailure.RequestedBytes);
+        Assert.Equal(1, afterFailure.AvailableSegmentCount);
+
+        Pooled<int> lease = pool.Rent(
+            4,
+            static writer => writer.Fill(9));
+        lease.Dispose();
+        Assert.Equal(0, pool.GetStatistics().RequestedBytes);
+    }
+
+    [Fact]
     public void StaleCopyCannotAccessOrReturnAReusedSlab()
     {
         using NativePool<int> pool = new(

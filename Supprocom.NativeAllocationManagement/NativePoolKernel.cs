@@ -87,15 +87,7 @@ internal sealed unsafe class NativePoolKernel<T>
         ValidateOwner(nameof(NativePool<T>.Rent));
         long token = TakeLeaseToken();
 
-        int slabIndex = TakeFree(length);
-        if (slabIndex < 0)
-        {
-            int capacity = RoundCapacity(length);
-            slabIndex = AddSlab(
-                capacity,
-                CalculateByteLength(capacity),
-                "rent growth");
-        }
+        int slabIndex = TakeOrAddSlab(length);
 
         ref Slab slab = ref _slabs[slabIndex];
         slab.State = SlabState.Initializing;
@@ -114,8 +106,9 @@ internal sealed unsafe class NativePoolKernel<T>
             initializer(writer);
             if (initializedLength != length)
             {
-                throw new InvalidOperationException(
-                    $"The native lease initializer wrote {initializedLength} of {length} required elements.");
+                ThrowIncompleteInitialization(
+                    initializedLength,
+                    length);
             }
 
             slab.State = SlabState.Leased;
@@ -267,7 +260,7 @@ internal sealed unsafe class NativePoolKernel<T>
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private int TakeFree(int length)
+    private int TakeOrAddSlab(int length)
     {
         if (_returnedLogicalLength == length)
         {
@@ -277,6 +270,12 @@ internal sealed unsafe class NativePoolKernel<T>
             return slabIndex;
         }
 
+        return TakeOrAddSlabSlow(length);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private int TakeOrAddSlabSlow(int length)
+    {
         if (_returnedSlabIndex >= 0)
         {
             int slabIndex = _returnedSlabIndex;
@@ -285,7 +284,17 @@ internal sealed unsafe class NativePoolKernel<T>
             PushFreeList(slabIndex);
         }
 
-        return TakeFreeSlow(length);
+        int selectedSlab = TakeFreeSlow(length);
+        if (selectedSlab >= 0)
+        {
+            return selectedSlab;
+        }
+
+        int capacity = RoundCapacity(length);
+        return AddSlab(
+            capacity,
+            CalculateByteLength(capacity),
+            "rent growth");
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
@@ -761,6 +770,14 @@ internal sealed unsafe class NativePoolKernel<T>
     private static void ThrowLeaseTokenExhausted() =>
         throw new InvalidOperationException(
             "NativePool exhausted its lease-token authority.");
+
+    [DoesNotReturn]
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void ThrowIncompleteInitialization(
+        int initializedLength,
+        int requiredLength) =>
+        throw new InvalidOperationException(
+            $"The native lease initializer wrote {initializedLength} of {requiredLength} required elements.");
 
     ~NativePoolKernel()
     {
