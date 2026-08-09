@@ -8,6 +8,17 @@ namespace Supprocom.NativeAllocationManagement.Performance;
 
 internal static class PoolBinaryComparison
 {
+    internal const int MinimumSampleCount = 8;
+    internal const int SubBatchCount = 64;
+    internal const double MinimumObservationMilliseconds = 1_000d;
+    internal const double MinimumProcessorResidency = 0.95d;
+    internal const double MaximumProcessorResidency = 1.05d;
+    internal const double MaximumWallProcessorDifference = 1.03d;
+    internal const double MaximumPositionBias = 1.03d;
+    internal const double MaximumTemporalDrift = 1.05d;
+    internal const double MaximumCalibrationCenterBias = 1.05d;
+    internal const double MaximumCalibrationUncertainty = 1.10d;
+
     private const string ProbeTypeName =
         "Supprocom.NativeAllocationManagement.Performance.PoolExactHeadProbe";
 
@@ -51,7 +62,15 @@ internal static class PoolBinaryComparison
         }
 
         Console.WriteLine(json);
-        return report.ValidEvidence ? 0 : 3;
+        if (!report.ValidEvidence)
+        {
+            return 3;
+        }
+
+        return HasOption(args, "--require-improvement")
+            && report.Decision != PoolBinaryDecision.Improvement
+                ? 4
+                : 0;
     }
 
     internal static PoolBinaryComparisonReport Run(
@@ -66,105 +85,140 @@ internal static class PoolBinaryComparison
             warmupIterations);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
             measuredIterations);
+        if (warmupIterations % SubBatchCount != 0
+            || measuredIterations % SubBatchCount != 0)
+        {
+            throw new ArgumentException(
+                "Iteration counts must be divisible by 64.");
+        }
 
+        using var calibrationLeft = new ProbeAssemblyHost(baselinePath);
+        using var calibrationRight = new ProbeAssemblyHost(baselinePath);
         using var baseline = new ProbeAssemblyHost(baselinePath);
         using var candidate = new ProbeAssemblyHost(candidatePath);
-        PoolBinaryVariant[] preparationOrder =
+        bool harnessIdentity = baseline.PerformanceSha256
+            == candidate.PerformanceSha256;
+        bool runtimeIdentity = calibrationLeft.RuntimeSha256
+                == calibrationRight.RuntimeSha256
+            && calibrationLeft.RuntimeSha256
+                == baseline.RuntimeSha256;
+
+        ProbeAssemblyHost[] preparationOrder =
         [
-            PoolBinaryVariant.Baseline,
-            PoolBinaryVariant.Candidate,
-            PoolBinaryVariant.Candidate,
-            PoolBinaryVariant.Baseline
+            calibrationLeft,
+            baseline,
+            candidate,
+            calibrationRight,
+            calibrationRight,
+            candidate,
+            baseline,
+            calibrationLeft
+        ];
+        PoolBinaryHost[] preparationHosts =
+        [
+            PoolBinaryHost.CalibrationLeft,
+            PoolBinaryHost.Baseline,
+            PoolBinaryHost.Candidate,
+            PoolBinaryHost.CalibrationRight,
+            PoolBinaryHost.CalibrationRight,
+            PoolBinaryHost.Candidate,
+            PoolBinaryHost.Baseline,
+            PoolBinaryHost.CalibrationLeft
         ];
         var preparations = new PoolBinaryPreparationEvidence[
             preparationOrder.Length];
         for (int index = 0; index < preparationOrder.Length; index++)
         {
-            PoolBinaryVariant variant = preparationOrder[index];
-            PoolExactHeadProbeReport result = variant
-                == PoolBinaryVariant.Baseline
-                    ? baseline.Run(warmupIterations, measuredIterations)
-                    : candidate.Run(warmupIterations, measuredIterations);
             preparations[index] = new PoolBinaryPreparationEvidence(
                 index,
-                variant,
-                result);
+                preparationHosts[index],
+                preparationOrder[index].Run(
+                    warmupIterations,
+                    warmupIterations));
         }
 
-        var pairs = new PoolBinaryPairEvidence[sampleCount];
+        var calibrationPairs = new PoolBinaryPairEvidence[sampleCount];
+        var comparisonPairs = new PoolBinaryPairEvidence[sampleCount];
         for (int sampleIndex = 0;
             sampleIndex < sampleCount;
             sampleIndex++)
         {
             PoolBinaryVariant first = GetFirstVariant(sampleIndex);
-            PoolExactHeadProbeReport firstResult = first
-                == PoolBinaryVariant.Baseline
-                    ? baseline.Run(warmupIterations, measuredIterations)
-                    : candidate.Run(warmupIterations, measuredIterations);
-            PoolExactHeadProbeReport secondResult = first
-                == PoolBinaryVariant.Baseline
-                    ? candidate.Run(warmupIterations, measuredIterations)
-                    : baseline.Run(warmupIterations, measuredIterations);
-            PoolExactHeadProbeReport baselineResult = first
-                == PoolBinaryVariant.Baseline
-                    ? firstResult
-                    : secondResult;
-            PoolExactHeadProbeReport candidateResult = first
-                == PoolBinaryVariant.Candidate
-                    ? firstResult
-                    : secondResult;
-            bool exactParity = HasExactParity(
-                baselineResult,
-                candidateResult);
-            pairs[sampleIndex] = new PoolBinaryPairEvidence(
-                sampleIndex,
-                first,
-                baselineResult,
-                candidateResult,
-                exactParity,
-                baselineResult.ElapsedMilliseconds
-                    / candidateResult.ElapsedMilliseconds,
-                baselineResult.ProcessorMilliseconds
-                    / candidateResult.ProcessorMilliseconds);
+            if ((sampleIndex & 1) == 0)
+            {
+                calibrationPairs[sampleIndex] = MeasurePair(
+                    sampleIndex,
+                    first,
+                    calibrationLeft,
+                    calibrationRight,
+                    warmupIterations,
+                    measuredIterations);
+                comparisonPairs[sampleIndex] = MeasurePair(
+                    sampleIndex,
+                    first,
+                    baseline,
+                    candidate,
+                    warmupIterations,
+                    measuredIterations);
+            }
+            else
+            {
+                comparisonPairs[sampleIndex] = MeasurePair(
+                    sampleIndex,
+                    first,
+                    baseline,
+                    candidate,
+                    warmupIterations,
+                    measuredIterations);
+                calibrationPairs[sampleIndex] = MeasurePair(
+                    sampleIndex,
+                    first,
+                    calibrationLeft,
+                    calibrationRight,
+                    warmupIterations,
+                    measuredIterations);
+            }
         }
 
-        double[] elapsedRatios = pairs
-            .Select(static pair => pair.BaselineToCandidateSpeedup)
-            .ToArray();
-        double[] processorRatios = pairs
-            .Select(static pair => pair.BaselineToCandidateProcessorSpeedup)
-            .ToArray();
-        bool balanced = pairs.Count(static pair =>
-                pair.FirstVariant == PoolBinaryVariant.Baseline)
-            == sampleCount / 2
-            && pairs.Count(static pair =>
-                pair.FirstVariant == PoolBinaryVariant.Candidate)
-                == sampleCount / 2;
-        bool exactOutput = pairs.All(static pair => pair.ExactParity)
+        PoolBinaryMeasurementEvidence calibration = Summarize(
+            calibrationPairs);
+        PoolBinaryMeasurementEvidence comparison = Summarize(
+            comparisonPairs);
+        bool exactOutput = calibration.ExactParity
+            && comparison.ExactParity
             && preparations.All(static item =>
                 item.Result.WarmupChecksum
                     == item.Result.WarmupIterations
                 && item.Result.MeasuredChecksum
                     == item.Result.MeasuredIterations);
-        bool zeroManagedAllocation = pairs.All(static pair =>
-                pair.Baseline.ManagedAllocatedBytes == 0
-                && pair.Candidate.ManagedAllocatedBytes == 0)
+        bool zeroManagedAllocation = calibration.ZeroManagedAllocation
+            && comparison.ZeroManagedAllocation
             && preparations.All(static item =>
                 item.Result.ManagedAllocatedBytes == 0);
-        bool zeroFreshSegments = pairs.All(static pair =>
-                pair.Baseline.FreshSegmentAllocationDelta == 0
-                && pair.Candidate.FreshSegmentAllocationDelta == 0)
+        bool zeroFreshSegments = calibration.ZeroFreshSegments
+            && comparison.ZeroFreshSegments
             && preparations.All(static item =>
                 item.Result.FreshSegmentAllocationDelta == 0);
-        bool processorMeasurements = pairs.All(static pair =>
-                IsPositiveFinite(pair.Baseline.ProcessorMilliseconds)
-                && IsPositiveFinite(
-                    pair.Candidate.ProcessorMilliseconds))
-            && preparations.All(static item =>
-                IsPositiveFinite(item.Result.ProcessorMilliseconds));
         bool runtimeConfiguration =
             IsDisabled("DOTNET_TieredCompilation")
             && IsDisabled("DOTNET_TieredPGO");
+        bool calibrationEquivalent = IsCalibrationEquivalent(
+            calibration);
+        bool controlEnvelope = calibrationEquivalent
+            && comparison.MinimumDurationPassed;
+        bool validEvidence = harnessIdentity
+            && runtimeIdentity
+            && exactOutput
+            && calibration.BalancedOrder
+            && comparison.BalancedOrder
+            && zeroManagedAllocation
+            && zeroFreshSegments
+            && runtimeConfiguration
+            && controlEnvelope;
+        PoolBinaryDecision decision = Decide(
+            validEvidence,
+            calibration,
+            comparison);
         return new PoolBinaryComparisonReport(
             baseline.PerformancePath,
             candidate.PerformancePath,
@@ -175,73 +229,309 @@ internal static class PoolBinaryComparison
             sampleCount,
             warmupIterations,
             measuredIterations,
+            SubBatchCount,
             preparations,
-            pairs,
-            pairs.Average(static pair =>
-                pair.Baseline.ElapsedMilliseconds),
-            pairs.Average(static pair =>
-                pair.Candidate.ElapsedMilliseconds),
-            elapsedRatios.Average(),
-            pairs.Sum(static pair =>
-                    pair.Baseline.ElapsedMilliseconds)
-                / pairs.Sum(static pair =>
-                    pair.Candidate.ElapsedMilliseconds),
-            PairedBenchmarkStatistics.ConfidenceLower95(elapsedRatios),
-            pairs.Average(static pair =>
-                pair.Baseline.ProcessorMilliseconds),
-            pairs.Average(static pair =>
-                pair.Candidate.ProcessorMilliseconds),
-            processorRatios.Average(),
-            pairs.Sum(static pair =>
-                    pair.Baseline.ProcessorMilliseconds)
-                / pairs.Sum(static pair =>
-                    pair.Candidate.ProcessorMilliseconds),
-            PairedBenchmarkStatistics.ConfidenceLower95(processorRatios),
-            MeanForPosition(
-                pairs,
-                PoolBinaryVariant.Baseline,
-                firstPosition: true),
-            MeanForPosition(
-                pairs,
-                PoolBinaryVariant.Baseline,
-                firstPosition: false),
-            MeanForPosition(
-                pairs,
-                PoolBinaryVariant.Candidate,
-                firstPosition: true),
-            MeanForPosition(
-                pairs,
-                PoolBinaryVariant.Candidate,
-                firstPosition: false),
+            calibration,
+            comparison,
+            harnessIdentity,
+            runtimeIdentity,
             exactOutput,
-            balanced,
             zeroManagedAllocation,
             zeroFreshSegments,
-            processorMeasurements,
             runtimeConfiguration,
-            exactOutput
-                && balanced
-                && zeroManagedAllocation
-                && zeroFreshSegments
-                && processorMeasurements
-                && runtimeConfiguration,
+            calibrationEquivalent,
+            controlEnvelope,
+            validEvidence,
+            decision,
             DateTimeOffset.UtcNow);
     }
 
     internal static PoolBinaryVariant GetFirstVariant(int sampleIndex) =>
-        (sampleIndex & 1) == 0
+        (sampleIndex & 3) is 0 or 3
             ? PoolBinaryVariant.Baseline
             : PoolBinaryVariant.Candidate;
 
     internal static void ValidateSampleCount(int sampleCount)
     {
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(sampleCount);
-        if ((sampleCount & 1) != 0)
+        if (sampleCount < MinimumSampleCount
+            || (sampleCount & 7) != 0)
         {
             throw new ArgumentException(
-                "The sample count must be positive and even.",
+                "The sample count must be a positive multiple of eight.",
                 nameof(sampleCount));
         }
+    }
+
+    internal static PoolBinaryNoiseAssessment AssessNoise(
+        IReadOnlyList<PoolBinaryPairEvidence> pairs)
+    {
+        bool minimumDuration = pairs.All(static pair =>
+            HasMinimumDuration(pair.Baseline)
+            && HasMinimumDuration(pair.Candidate));
+        bool processorResidency = pairs.All(static pair =>
+            HasValidProcessorResidency(pair.Baseline)
+            && HasValidProcessorResidency(pair.Candidate));
+        bool wallProcessorAgreement = pairs.All(static pair =>
+            IsWithinFactor(
+                pair.BaselineToCandidateSpeedup,
+                pair.BaselineToCandidateProcessorSpeedup,
+                MaximumWallProcessorDifference));
+        bool positionBias = HasBoundedPositionBias(pairs);
+        bool temporalDrift = HasBoundedTemporalDrift(pairs);
+        return new PoolBinaryNoiseAssessment(
+            minimumDuration,
+            processorResidency,
+            wallProcessorAgreement,
+            positionBias,
+            temporalDrift,
+            minimumDuration
+                && processorResidency
+                && wallProcessorAgreement
+                && positionBias
+                && temporalDrift);
+    }
+
+    internal static bool IsCalibrationEquivalent(
+        PoolBinaryMeasurementEvidence calibration) =>
+        calibration.MinimumDurationPassed
+        && calibration.BalancedOrder
+        && IsWithinFactor(
+            calibration.AggregateSpeedup,
+            1d,
+            MaximumCalibrationCenterBias)
+        && IsWithinFactor(
+            calibration.AggregateProcessorSpeedup,
+            1d,
+            MaximumCalibrationCenterBias)
+        && calibration.ConfidenceLower95
+            >= 1d / MaximumCalibrationUncertainty
+        && calibration.ConfidenceUpper95
+            <= MaximumCalibrationUncertainty
+        && calibration.ProcessorConfidenceLower95
+            >= 1d / MaximumCalibrationUncertainty
+        && calibration.ProcessorConfidenceUpper95
+            <= MaximumCalibrationUncertainty;
+
+    internal static PoolBinaryDecision Decide(
+        bool validEvidence,
+        PoolBinaryMeasurementEvidence calibration,
+        PoolBinaryMeasurementEvidence comparison)
+    {
+        if (!validEvidence)
+        {
+            return PoolBinaryDecision.Invalid;
+        }
+
+        double wallNoiseLimit = Math.Max(
+            1d,
+            calibration.ConfidenceUpper95);
+        double processorNoiseLimit = Math.Max(
+            1d,
+            calibration.ProcessorConfidenceUpper95);
+        if (comparison.ConfidenceLower95 > wallNoiseLimit
+            && comparison.ProcessorConfidenceLower95
+                > processorNoiseLimit)
+        {
+            return PoolBinaryDecision.Improvement;
+        }
+
+        double wallRegressionLimit = Math.Min(
+            1d,
+            calibration.ConfidenceLower95);
+        double processorRegressionLimit = Math.Min(
+            1d,
+            calibration.ProcessorConfidenceLower95);
+        if (comparison.ConfidenceUpper95 < wallRegressionLimit
+            && comparison.ProcessorConfidenceUpper95
+                < processorRegressionLimit)
+        {
+            return PoolBinaryDecision.Regression;
+        }
+
+        return PoolBinaryDecision.Inconclusive;
+    }
+
+    private static PoolBinaryPairEvidence MeasurePair(
+        int sampleIndex,
+        PoolBinaryVariant first,
+        ProbeAssemblyHost baseline,
+        ProbeAssemblyHost candidate,
+        int warmupIterations,
+        int measuredIterations)
+    {
+        int warmupBatch = warmupIterations / SubBatchCount;
+        int measuredBatch = measuredIterations / SubBatchCount;
+        var baselineResults = new PoolExactHeadProbeReport[SubBatchCount];
+        var candidateResults = new PoolExactHeadProbeReport[SubBatchCount];
+        for (int subBatch = 0; subBatch < SubBatchCount; subBatch++)
+        {
+            PoolBinaryVariant subBatchFirst = GetFirstVariant(subBatch);
+            if (first == PoolBinaryVariant.Candidate)
+            {
+                subBatchFirst = Invert(subBatchFirst);
+            }
+
+            if (subBatchFirst == PoolBinaryVariant.Baseline)
+            {
+                baselineResults[subBatch] = baseline.Run(
+                    warmupBatch,
+                    measuredBatch);
+                candidateResults[subBatch] = candidate.Run(
+                    warmupBatch,
+                    measuredBatch);
+            }
+            else
+            {
+                candidateResults[subBatch] = candidate.Run(
+                    warmupBatch,
+                    measuredBatch);
+                baselineResults[subBatch] = baseline.Run(
+                    warmupBatch,
+                    measuredBatch);
+            }
+        }
+
+        PoolExactHeadProbeReport baselineResult = Aggregate(
+            baselineResults);
+        PoolExactHeadProbeReport candidateResult = Aggregate(
+            candidateResults);
+        return new PoolBinaryPairEvidence(
+            sampleIndex,
+            first,
+            baselineResult,
+            candidateResult,
+            HasExactParity(baselineResult, candidateResult),
+            baselineResult.ElapsedMilliseconds
+                / candidateResult.ElapsedMilliseconds,
+            baselineResult.ProcessorMilliseconds
+                / candidateResult.ProcessorMilliseconds);
+    }
+
+    private static PoolBinaryVariant Invert(PoolBinaryVariant variant) =>
+        variant == PoolBinaryVariant.Baseline
+            ? PoolBinaryVariant.Candidate
+            : PoolBinaryVariant.Baseline;
+
+    private static PoolExactHeadProbeReport Aggregate(
+        IReadOnlyList<PoolExactHeadProbeReport> results)
+    {
+        int warmupIterations = results.Sum(static item =>
+            item.WarmupIterations);
+        int measuredIterations = results.Sum(static item =>
+            item.MeasuredIterations);
+        double elapsedMilliseconds = results.Sum(static item =>
+            item.ElapsedMilliseconds);
+        double processorMilliseconds = results.Sum(static item =>
+            item.ProcessorMilliseconds);
+        ulong reservedBytes = results[0].ReservedBytes;
+        long retainedBytes = results[0].RetainedBytes;
+        if (results.Any(item =>
+                item.ReservedBytes != reservedBytes
+                || item.RetainedBytes != retainedBytes))
+        {
+            throw new InvalidDataException(
+                "A probe sub-batch changed its storage shape.");
+        }
+
+        return new PoolExactHeadProbeReport(
+            warmupIterations,
+            measuredIterations,
+            reservedBytes,
+            elapsedMilliseconds,
+            processorMilliseconds,
+            measuredIterations / (elapsedMilliseconds / 1_000d),
+            measuredIterations / (processorMilliseconds / 1_000d),
+            results.Sum(static item => item.ManagedAllocatedBytes),
+            results.Sum(static item => item.FreshSegmentAllocationDelta),
+            retainedBytes,
+            results.Sum(static item => item.WarmupChecksum),
+            results.Sum(static item => item.MeasuredChecksum));
+    }
+
+    internal static PoolBinaryMeasurementEvidence Summarize(
+        PoolBinaryPairEvidence[] pairs)
+    {
+        double[] elapsedRatios = pairs
+            .Select(static pair => pair.BaselineToCandidateSpeedup)
+            .ToArray();
+        double[] processorRatios = pairs
+            .Select(static pair =>
+                pair.BaselineToCandidateProcessorSpeedup)
+            .ToArray();
+        (double elapsedLower, double elapsedUpper) =
+            PairedBenchmarkStatistics.RatioConfidence95(
+                elapsedRatios);
+        (double processorLower, double processorUpper) =
+            PairedBenchmarkStatistics.RatioConfidence95(
+                processorRatios);
+        bool balanced = pairs.Count(static pair =>
+                pair.FirstVariant == PoolBinaryVariant.Baseline)
+            == pairs.Length / 2
+            && pairs.Count(static pair =>
+                pair.FirstVariant == PoolBinaryVariant.Candidate)
+                == pairs.Length / 2;
+        bool exactParity = pairs.All(static pair => pair.ExactParity);
+        bool zeroManagedAllocation = pairs.All(static pair =>
+            pair.Baseline.ManagedAllocatedBytes == 0
+            && pair.Candidate.ManagedAllocatedBytes == 0);
+        bool zeroFreshSegments = pairs.All(static pair =>
+            pair.Baseline.FreshSegmentAllocationDelta == 0
+            && pair.Candidate.FreshSegmentAllocationDelta == 0);
+        PoolBinaryNoiseAssessment noise = AssessNoise(pairs);
+        return new PoolBinaryMeasurementEvidence(
+            pairs,
+            pairs.Average(static pair =>
+                pair.Baseline.ElapsedMilliseconds),
+            pairs.Average(static pair =>
+                pair.Candidate.ElapsedMilliseconds),
+            PairedBenchmarkStatistics.GeometricMean(elapsedRatios),
+            pairs.Sum(static pair =>
+                    pair.Baseline.ElapsedMilliseconds)
+                / pairs.Sum(static pair =>
+                    pair.Candidate.ElapsedMilliseconds),
+            elapsedLower,
+            elapsedUpper,
+            pairs.Average(static pair =>
+                pair.Baseline.ProcessorMilliseconds),
+            pairs.Average(static pair =>
+                pair.Candidate.ProcessorMilliseconds),
+            PairedBenchmarkStatistics.GeometricMean(processorRatios),
+            pairs.Sum(static pair =>
+                    pair.Baseline.ProcessorMilliseconds)
+                / pairs.Sum(static pair =>
+                    pair.Candidate.ProcessorMilliseconds),
+            processorLower,
+            processorUpper,
+            MeanForPosition(
+                pairs,
+                PoolBinaryVariant.Baseline,
+                firstPosition: true,
+                processor: false),
+            MeanForPosition(
+                pairs,
+                PoolBinaryVariant.Baseline,
+                firstPosition: false,
+                processor: false),
+            MeanForPosition(
+                pairs,
+                PoolBinaryVariant.Candidate,
+                firstPosition: true,
+                processor: false),
+            MeanForPosition(
+                pairs,
+                PoolBinaryVariant.Candidate,
+                firstPosition: false,
+                processor: false),
+            exactParity,
+            balanced,
+            zeroManagedAllocation,
+            zeroFreshSegments,
+            noise.MinimumDurationPassed,
+            noise.ProcessorResidencyPassed,
+            noise.WallProcessorAgreementPassed,
+            noise.PositionBiasPassed,
+            noise.TemporalDriftPassed,
+            noise.StrictHostStabilityPassed);
     }
 
     private static bool HasExactParity(
@@ -254,15 +544,172 @@ internal static class PoolBinaryComparison
         && baseline.MeasuredChecksum == candidate.MeasuredChecksum
         && baseline.RetainedBytes == candidate.RetainedBytes;
 
+    private static bool HasMinimumDuration(
+        PoolExactHeadProbeReport result) =>
+        result.ElapsedMilliseconds >= MinimumObservationMilliseconds
+        && result.ProcessorMilliseconds
+            >= MinimumObservationMilliseconds;
+
+    private static bool HasValidProcessorResidency(
+        PoolExactHeadProbeReport result)
+    {
+        double residency = result.ProcessorMilliseconds
+            / result.ElapsedMilliseconds;
+        return residency >= MinimumProcessorResidency
+            && residency <= MaximumProcessorResidency;
+    }
+
+    private static bool HasBoundedPositionBias(
+        IReadOnlyList<PoolBinaryPairEvidence> pairs) =>
+        IsWithinFactor(
+            MeanForPosition(
+                pairs,
+                PoolBinaryVariant.Baseline,
+                firstPosition: true,
+                processor: false),
+            MeanForPosition(
+                pairs,
+                PoolBinaryVariant.Baseline,
+                firstPosition: false,
+                processor: false),
+            MaximumPositionBias)
+        && IsWithinFactor(
+            MeanForPosition(
+                pairs,
+                PoolBinaryVariant.Candidate,
+                firstPosition: true,
+                processor: false),
+            MeanForPosition(
+                pairs,
+                PoolBinaryVariant.Candidate,
+                firstPosition: false,
+                processor: false),
+            MaximumPositionBias)
+        && IsWithinFactor(
+            MeanForPosition(
+                pairs,
+                PoolBinaryVariant.Baseline,
+                firstPosition: true,
+                processor: true),
+            MeanForPosition(
+                pairs,
+                PoolBinaryVariant.Baseline,
+                firstPosition: false,
+                processor: true),
+            MaximumPositionBias)
+        && IsWithinFactor(
+            MeanForPosition(
+                pairs,
+                PoolBinaryVariant.Candidate,
+                firstPosition: true,
+                processor: true),
+            MeanForPosition(
+                pairs,
+                PoolBinaryVariant.Candidate,
+                firstPosition: false,
+                processor: true),
+            MaximumPositionBias);
+
+    private static bool HasBoundedTemporalDrift(
+        IReadOnlyList<PoolBinaryPairEvidence> pairs)
+    {
+        int middle = pairs.Count / 2;
+        return HasBoundedTemporalDrift(
+                pairs,
+                middle,
+                PoolBinaryVariant.Baseline,
+                processor: false)
+            && HasBoundedTemporalDrift(
+                pairs,
+                middle,
+                PoolBinaryVariant.Candidate,
+                processor: false)
+            && HasBoundedTemporalDrift(
+                pairs,
+                middle,
+                PoolBinaryVariant.Baseline,
+                processor: true)
+            && HasBoundedTemporalDrift(
+                pairs,
+                middle,
+                PoolBinaryVariant.Candidate,
+                processor: true);
+    }
+
+    private static bool HasBoundedTemporalDrift(
+        IReadOnlyList<PoolBinaryPairEvidence> pairs,
+        int middle,
+        PoolBinaryVariant variant,
+        bool processor)
+    {
+        double first = MeanForRange(
+            pairs,
+            0,
+            middle,
+            variant,
+            processor);
+        double second = MeanForRange(
+            pairs,
+            middle,
+            pairs.Count,
+            variant,
+            processor);
+        return IsWithinFactor(first, second, MaximumTemporalDrift);
+    }
+
     private static double MeanForPosition(
         IReadOnlyCollection<PoolBinaryPairEvidence> pairs,
         PoolBinaryVariant variant,
-        bool firstPosition) =>
+        bool firstPosition,
+        bool processor) =>
         pairs.Where(pair =>
                 (pair.FirstVariant == variant) == firstPosition)
-            .Average(pair => variant == PoolBinaryVariant.Baseline
-                ? pair.Baseline.ElapsedMilliseconds
-                : pair.Candidate.ElapsedMilliseconds);
+            .Average(pair => ReadTime(pair, variant, processor));
+
+    private static double MeanForRange(
+        IReadOnlyList<PoolBinaryPairEvidence> pairs,
+        int start,
+        int end,
+        PoolBinaryVariant variant,
+        bool processor)
+    {
+        double total = 0d;
+        for (int index = start; index < end; index++)
+        {
+            total += ReadTime(pairs[index], variant, processor);
+        }
+
+        return total / (end - start);
+    }
+
+    private static double ReadTime(
+        PoolBinaryPairEvidence pair,
+        PoolBinaryVariant variant,
+        bool processor)
+    {
+        PoolExactHeadProbeReport result = variant
+            == PoolBinaryVariant.Baseline
+                ? pair.Baseline
+                : pair.Candidate;
+        return processor
+            ? result.ProcessorMilliseconds
+            : result.ElapsedMilliseconds;
+    }
+
+    private static bool IsWithinFactor(
+        double first,
+        double second,
+        double maximumFactor)
+    {
+        if (!IsPositiveFinite(first) || !IsPositiveFinite(second))
+        {
+            return false;
+        }
+
+        double ratio = first / second;
+        return ratio >= 1d / maximumFactor
+            && ratio <= maximumFactor;
+    }
 
     private static bool IsDisabled(string name) =>
         string.Equals(
@@ -272,6 +719,9 @@ internal static class PoolBinaryComparison
 
     private static bool IsPositiveFinite(double value) =>
         value > 0d && double.IsFinite(value);
+
+    private static bool HasOption(string[] args, string name) =>
+        args.Contains(name, StringComparer.Ordinal);
 
     private static int ReadIntOption(
         string[] args,
@@ -480,6 +930,22 @@ internal enum PoolBinaryVariant
     Candidate
 }
 
+internal enum PoolBinaryHost
+{
+    CalibrationLeft,
+    CalibrationRight,
+    Baseline,
+    Candidate
+}
+
+internal enum PoolBinaryDecision
+{
+    Invalid,
+    Inconclusive,
+    Improvement,
+    Regression
+}
+
 internal readonly record struct PoolBinaryPairEvidence(
     int SampleIndex,
     PoolBinaryVariant FirstVariant,
@@ -491,8 +957,45 @@ internal readonly record struct PoolBinaryPairEvidence(
 
 internal readonly record struct PoolBinaryPreparationEvidence(
     int Sequence,
-    PoolBinaryVariant Variant,
+    PoolBinaryHost Host,
     PoolExactHeadProbeReport Result);
+
+internal readonly record struct PoolBinaryNoiseAssessment(
+    bool MinimumDurationPassed,
+    bool ProcessorResidencyPassed,
+    bool WallProcessorAgreementPassed,
+    bool PositionBiasPassed,
+    bool TemporalDriftPassed,
+    bool StrictHostStabilityPassed);
+
+internal readonly record struct PoolBinaryMeasurementEvidence(
+    IReadOnlyList<PoolBinaryPairEvidence> Pairs,
+    double BaselineMeanMilliseconds,
+    double CandidateMeanMilliseconds,
+    double PairedGeometricMeanSpeedup,
+    double AggregateSpeedup,
+    double ConfidenceLower95,
+    double ConfidenceUpper95,
+    double BaselineMeanProcessorMilliseconds,
+    double CandidateMeanProcessorMilliseconds,
+    double PairedGeometricMeanProcessorSpeedup,
+    double AggregateProcessorSpeedup,
+    double ProcessorConfidenceLower95,
+    double ProcessorConfidenceUpper95,
+    double BaselineFirstPositionMeanMilliseconds,
+    double BaselineSecondPositionMeanMilliseconds,
+    double CandidateFirstPositionMeanMilliseconds,
+    double CandidateSecondPositionMeanMilliseconds,
+    bool ExactParity,
+    bool BalancedOrder,
+    bool ZeroManagedAllocation,
+    bool ZeroFreshSegments,
+    bool MinimumDurationPassed,
+    bool ProcessorResidencyPassed,
+    bool WallProcessorAgreementPassed,
+    bool PositionBiasPassed,
+    bool TemporalDriftPassed,
+    bool StrictHostStabilityPassed);
 
 internal readonly record struct PoolBinaryComparisonReport(
     string BaselinePerformancePath,
@@ -504,27 +1007,18 @@ internal readonly record struct PoolBinaryComparisonReport(
     int SampleCount,
     int WarmupIterations,
     int MeasuredIterations,
+    int SubBatchCount,
     IReadOnlyList<PoolBinaryPreparationEvidence> Preparations,
-    IReadOnlyList<PoolBinaryPairEvidence> Pairs,
-    double BaselineMeanMilliseconds,
-    double CandidateMeanMilliseconds,
-    double PairedMeanSpeedup,
-    double AggregateSpeedup,
-    double ConfidenceLower95,
-    double BaselineMeanProcessorMilliseconds,
-    double CandidateMeanProcessorMilliseconds,
-    double PairedMeanProcessorSpeedup,
-    double AggregateProcessorSpeedup,
-    double ProcessorConfidenceLower95,
-    double BaselineFirstPositionMeanMilliseconds,
-    double BaselineSecondPositionMeanMilliseconds,
-    double CandidateFirstPositionMeanMilliseconds,
-    double CandidateSecondPositionMeanMilliseconds,
+    PoolBinaryMeasurementEvidence Calibration,
+    PoolBinaryMeasurementEvidence Comparison,
+    bool HarnessIdentityPassed,
+    bool RuntimeIdentityPassed,
     bool ExactParity,
-    bool BalancedOrder,
     bool ZeroManagedAllocation,
     bool ZeroFreshSegments,
-    bool ProcessorMeasurementsPassed,
     bool RuntimeConfigurationPassed,
+    bool CalibrationEquivalent,
+    bool ControlEnvelopePassed,
     bool ValidEvidence,
+    PoolBinaryDecision Decision,
     DateTimeOffset RecordedAtUtc);

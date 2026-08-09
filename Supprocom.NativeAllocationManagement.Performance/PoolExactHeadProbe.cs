@@ -4,8 +4,8 @@ namespace Supprocom.NativeAllocationManagement.Performance;
 
 internal static class PoolExactHeadProbe
 {
-    internal const int DefaultWarmupIterations = 1_000_000;
-    internal const int DefaultMeasuredIterations = 20_000_000;
+    internal const int DefaultWarmupIterations = 5_000_000;
+    internal const int DefaultMeasuredIterations = 100_000_000;
     private static readonly NativeLeaseInitializer<byte> InitializeOne =
         static writer => writer.Write(1);
 

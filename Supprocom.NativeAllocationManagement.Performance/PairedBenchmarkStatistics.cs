@@ -20,6 +20,34 @@ internal static class PairedBenchmarkStatistics
             / Math.Sqrt(samples.Count);
     }
 
+    internal static (double Lower, double Upper) RatioConfidence95(
+        IReadOnlyCollection<double> ratios)
+    {
+        if (ratios.Count < 2
+            || ratios.Any(static value =>
+                value <= 0d || !double.IsFinite(value)))
+        {
+            return (double.NaN, double.NaN);
+        }
+
+        double[] logs = ratios
+            .Select(static value => Math.Log(value))
+            .ToArray();
+        double mean = logs.Average();
+        double sumSquares = logs.Sum(value =>
+            (value - mean) * (value - mean));
+        double standardDeviation = Math.Sqrt(
+            sumSquares / (logs.Length - 1));
+        double margin = StudentCritical95(logs.Length - 1)
+            * standardDeviation
+            / Math.Sqrt(logs.Length);
+        return (Math.Exp(mean - margin), Math.Exp(mean + margin));
+    }
+
+    internal static double GeometricMean(
+        IReadOnlyCollection<double> ratios) =>
+        Math.Exp(ratios.Average(static value => Math.Log(value)));
+
     internal static double LogicalGigabytesPerSecond(
         long logicalBytes,
         double elapsedMilliseconds) =>
