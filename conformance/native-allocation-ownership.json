@@ -330,7 +330,7 @@
     "name": "simple-region-using-declaration",
     "compilerRejected": false,
     "expectedDiagnostics": [],
-    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { using NativeRegion region = new(); Local<int> value = region.Lease<int>(1, static writer => writer.Fill(default!)); value[0] = 42; } }"
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { using NativeRegion region = new(); Local<int> value = region.Lease<int>(1, static writer => writer.Fill(default!)); value.Access(static values => values[0] = 42); } }"
   },
   {
     "name": "region-managed-allocation-warning",

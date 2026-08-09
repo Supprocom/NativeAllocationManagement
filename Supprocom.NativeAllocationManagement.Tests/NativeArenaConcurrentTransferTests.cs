@@ -66,7 +66,6 @@ public sealed class NativeArenaConcurrentTransferTests
     {
         const int workerCount = 24;
         const int length = 1_024;
-        NativeMemoryTestHooks.Reset();
         NativeConcurrentArena arena = new(
             preAllocateBytes: workerCount * length * sizeof(float),
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
@@ -123,8 +122,8 @@ public sealed class NativeArenaConcurrentTransferTests
                 Assert.Equal((double)((index + 1) * length), sum);
             }
 
-            long allocationCount =
-                NativeMemoryTestHooks.Snapshot().AllocationCount;
+            long freshSegmentCount =
+                arena.GetStatistics().FreshSegmentAllocationCount;
             foreach (NativeTransfer<float> transfer in transfers.Reverse())
             {
                 transfer.Dispose();
@@ -140,8 +139,8 @@ public sealed class NativeArenaConcurrentTransferTests
                             length,
                             writer => writer.Fill(index + 31)))));
             Assert.Equal(
-                allocationCount,
-                NativeMemoryTestHooks.Snapshot().AllocationCount);
+                freshSegmentCount,
+                arena.GetStatistics().FreshSegmentAllocationCount);
             foreach (NativeTransfer<float> transfer in reused)
             {
                 transfer.Dispose();
@@ -151,7 +150,6 @@ public sealed class NativeArenaConcurrentTransferTests
         {
             release.Set();
             arena.Dispose();
-            NativeMemoryTestHooks.Reset();
         }
     }
 
@@ -163,7 +161,6 @@ public sealed class NativeArenaConcurrentTransferTests
             .Select(index => (index * 3) + 1)
             .ToArray();
         int totalLength = lengths.Sum();
-        NativeMemoryTestHooks.Reset();
         using NativeConcurrentArena arena = new(
             preAllocateBytes: checked(
                 (nuint)(totalLength * sizeof(long))),
@@ -182,8 +179,8 @@ public sealed class NativeArenaConcurrentTransferTests
                     writer => writer.Fill(value));
             }
 
-            long allocationCount =
-                NativeMemoryTestHooks.Snapshot().AllocationCount;
+            long freshSegmentCount =
+                arena.GetStatistics().FreshSegmentAllocationCount;
             int[] returnedIndexes = Enumerable.Range(0, reservationCount)
                 .Where(static index => (index & 1) != 0)
                 .Reverse()
@@ -200,8 +197,8 @@ public sealed class NativeArenaConcurrentTransferTests
                         lengths[index],
                         writer => writer.Fill(-(index + 1L))))));
             Assert.Equal(
-                allocationCount,
-                NativeMemoryTestHooks.Snapshot().AllocationCount);
+                freshSegmentCount,
+                arena.GetStatistics().FreshSegmentAllocationCount);
 
             for (int index = 0; index < reservationCount; index += 2)
             {
@@ -248,8 +245,6 @@ public sealed class NativeArenaConcurrentTransferTests
                     replacement.Dispose();
                 }
             }
-
-            NativeMemoryTestHooks.Reset();
         }
     }
 
@@ -258,7 +253,6 @@ public sealed class NativeArenaConcurrentTransferTests
     {
         const int workerCount = 8;
         const int length = 512;
-        NativeMemoryTestHooks.Reset();
         NativeConcurrentArena arena = new(
             preAllocateBytes: workerCount * length * sizeof(int),
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
@@ -342,15 +336,15 @@ public sealed class NativeArenaConcurrentTransferTests
                 transfer.Dispose();
             }
 
-            long allocationCount =
-                NativeMemoryTestHooks.Snapshot().AllocationCount;
+            long freshSegmentCount =
+                arena.GetStatistics().FreshSegmentAllocationCount;
             NativeTransfer<int> replacement =
                 arena.ScratchTransferable<int>(
                     length,
                     static writer => writer.Fill(97));
             Assert.Equal(
-                allocationCount,
-                NativeMemoryTestHooks.Snapshot().AllocationCount);
+                freshSegmentCount,
+                arena.GetStatistics().FreshSegmentAllocationCount);
             Assert.Equal(
                 97,
                 replacement.Read(static view => view[0]));
@@ -361,7 +355,6 @@ public sealed class NativeArenaConcurrentTransferTests
         {
             release.Set();
             arena.Dispose();
-            NativeMemoryTestHooks.Reset();
         }
     }
 
@@ -468,13 +461,12 @@ public sealed class NativeArenaConcurrentTransferTests
     {
         const int workerCount = 12;
         const int length = 256;
-        NativeMemoryTestHooks.Reset();
         AlignedTestBuffer buffer = new(
             workerCount * length * sizeof(long));
         NativeConcurrentArena arena = new(
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        long allocationCount =
-            NativeMemoryTestHooks.Snapshot().AllocationCount;
+        long freshSegmentCount =
+            arena.GetStatistics().FreshSegmentAllocationCount;
 
         try
         {
@@ -493,8 +485,8 @@ public sealed class NativeArenaConcurrentTransferTests
                             writer => writer.Fill(index + 101L)))));
 
             Assert.Equal(
-                allocationCount,
-                NativeMemoryTestHooks.Snapshot().AllocationCount);
+                freshSegmentCount,
+                arena.GetStatistics().FreshSegmentAllocationCount);
             for (int index = 0; index < transfers.Length; index++)
             {
                 Assert.Equal(
@@ -513,52 +505,42 @@ public sealed class NativeArenaConcurrentTransferTests
             {
                 arena.Dispose();
             }
-
             buffer.Dispose();
-            NativeMemoryTestHooks.Reset();
         }
     }
 
     [Fact]
     public void ReturnedWaveReusesStorageAroundAnOrdinaryArenaLease()
     {
-        NativeMemoryTestHooks.Reset();
-        try
-        {
-            using NativeConcurrentArena arena = new(
-                preAllocateBytes: 1_024,
-                returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-            NativeTransfer<int> first =
-                arena.ScratchTransferable<int>(
-                    64,
-                    static writer => writer.Fill(17));
-            ConcurrentArenaLease<long> anchor = arena.Scratch<long>(
-                32,
-                static writer => writer.Fill(29));
-            long allocationCount =
-                NativeMemoryTestHooks.Snapshot().AllocationCount;
+        using NativeConcurrentArena arena = new(
+            preAllocateBytes: 1_024,
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeTransfer<int> first =
+            arena.ScratchTransferable<int>(
+                64,
+                static writer => writer.Fill(17));
+        ConcurrentArenaLease<long> anchor = arena.Scratch<long>(
+            32,
+            static writer => writer.Fill(29));
+        long freshSegmentCount =
+            arena.GetStatistics().FreshSegmentAllocationCount;
 
-            first.Dispose();
-            NativeTransfer<int> replacement =
-                arena.ScratchTransferable<int>(
-                    64,
-                    static writer => writer.Fill(31));
+        first.Dispose();
+        NativeTransfer<int> replacement =
+            arena.ScratchTransferable<int>(
+                64,
+                static writer => writer.Fill(31));
 
-            Assert.Equal(
-                allocationCount,
-                NativeMemoryTestHooks.Snapshot().AllocationCount);
-            Assert.Equal(29, anchor.Read(static view => view[0]));
-            Assert.Equal(
-                31,
-                replacement.Read(static view => view[0]));
-            replacement.Dispose();
-            Assert.Equal(29, anchor.Read(static view => view[0]));
-            Assert.Equal(0, arena.CurrentConcurrentReservationCountForTest);
-        }
-        finally
-        {
-            NativeMemoryTestHooks.Reset();
-        }
+        Assert.Equal(
+            freshSegmentCount,
+            arena.GetStatistics().FreshSegmentAllocationCount);
+        Assert.Equal(29, anchor.Read(static view => view[0]));
+        Assert.Equal(
+            31,
+            replacement.Read(static view => view[0]));
+        replacement.Dispose();
+        Assert.Equal(29, anchor.Read(static view => view[0]));
+        Assert.Equal(0, arena.CurrentConcurrentReservationCountForTest);
     }
 
     [Fact]
