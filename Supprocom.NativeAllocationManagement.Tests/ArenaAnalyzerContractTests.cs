@@ -195,7 +195,7 @@ public sealed class ArenaAnalyzerContractTests
                     using (NativeRegion region = new())
                     {
                         Local<int> values = region.Lease<int>(2, static writer => writer.Fill(default!));
-                        values[0] = 1;
+                        values.Access(static view => view[0] = 1);
                     }
                 }
             }
@@ -211,7 +211,7 @@ public sealed class ArenaAnalyzerContractTests
                 {
                     using NativeRegion region = new();
                     Local<int> values = region.Lease<int>(2, static writer => writer.Fill(default!));
-                    values[0] = 1;
+                    values.Access(static view => view[0] = 1);
                 }
             }
             """);

@@ -17,6 +17,7 @@ internal sealed class NativeRegionManagedAllocationAnalysis
 
     private readonly Compilation _compilation;
     private readonly NativeAllocationAnalyzer.NativeSymbols _symbols;
+    private readonly IAssemblySymbol? _runtimeAssembly;
     private readonly INamedTypeSymbol? _leaseInitializer;
     private readonly HashSet<ISymbol> _canonicalAllocations = new(
         SymbolEqualityComparer.Default);
@@ -35,13 +36,13 @@ internal sealed class NativeRegionManagedAllocationAnalysis
         INamedTypeSymbol? leaseInitializer =
             compilation.GetTypeByMetadataName(
                 LeaseInitializerMetadataName);
-        IAssemblySymbol? runtimeAssembly =
+        _runtimeAssembly =
             symbols.Region?.ContainingAssembly
             ?? symbols.Arena?.ContainingAssembly
             ?? symbols.Pool?.ContainingAssembly;
         _leaseInitializer = SymbolEqualityComparer.Default.Equals(
             leaseInitializer?.ContainingAssembly,
-            runtimeAssembly)
+            _runtimeAssembly)
                 ? leaseInitializer
                 : null;
         AddCanonicalAllocations(symbols.Region, symbols.Local);
@@ -131,12 +132,12 @@ internal sealed class NativeRegionManagedAllocationAnalysis
         IInvocationOperation invocation,
         RegionScope region)
     {
+        AnalyzeNativeSynchronousCallbacks(
+            context,
+            invocation,
+            region);
         if (IsCanonicalAllocation(invocation.TargetMethod))
         {
-            AnalyzeCanonicalInitializers(
-                context,
-                invocation,
-                region);
             return;
         }
 
@@ -198,21 +199,21 @@ internal sealed class NativeRegionManagedAllocationAnalysis
         }
     }
 
-    private void AnalyzeCanonicalInitializers(
+    private void AnalyzeNativeSynchronousCallbacks(
         OperationAnalysisContext context,
         IInvocationOperation invocation,
         RegionScope region)
     {
-        if (_leaseInitializer is null)
+        if (!SymbolEqualityComparer.Default.Equals(
+                invocation.TargetMethod.ContainingAssembly,
+                _runtimeAssembly))
         {
             return;
         }
 
         foreach (IArgumentOperation argument in invocation.Arguments)
         {
-            if (!NativeAllocationAnalyzer.NativeSymbols.Is(
-                    argument.Parameter?.Type,
-                    _leaseInitializer))
+            if (!IsNativeSynchronousCallback(argument.Parameter?.Type))
             {
                 continue;
             }
@@ -238,12 +239,26 @@ internal sealed class NativeRegionManagedAllocationAnalysis
                     Report(
                         context,
                         finding.Source,
-                        finding.Kind + " in synchronous native initializer",
+                        finding.Kind + " in synchronous native callback",
                         region,
                         finding.Source);
                 }
             }
         }
+    }
+
+    private bool IsNativeSynchronousCallback(ITypeSymbol? type)
+    {
+        return type is INamedTypeSymbol
+        {
+            TypeKind: TypeKind.Delegate,
+            OriginalDefinition: INamedTypeSymbol definition
+        }
+            && SymbolEqualityComparer.Default.Equals(
+                definition.ContainingAssembly,
+                _runtimeAssembly)
+            && definition.ContainingNamespace.ToDisplayString()
+                == "Supprocom.NativeAllocationManagement";
     }
 
     private bool IsCanonicalAllocation(IMethodSymbol method)

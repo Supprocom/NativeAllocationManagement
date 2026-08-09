@@ -5,6 +5,14 @@ namespace Supprocom.NativeAllocationManagement.Tests;
 
 public sealed class NativeRegionSimpleTests
 {
+    private static readonly NativeSpanStateProcessor<int, int, int>
+        ProcessIteration = static (view, value) =>
+        {
+            int result = view[0];
+            view[1] = value;
+            return result + view[1];
+        };
+
     [Fact]
     public void MixedUnmanagedLeasesPreserveValuesAndAlignment()
     {
@@ -20,10 +28,14 @@ public sealed class NativeRegionSimpleTests
 
         Assert.Equal(6, bytes.Read(static view =>
             view[0] + view[1] + view[2]));
-        Assert.Equal(30, integers[0] + integers[1]);
-        Assert.Equal(90L, longs[0] + longs[1]);
-        Assert.Equal(11d, doubles[0] + doubles[1]);
-        Assert.Equal(42L, cells[0].Wide + cells[1].Wide);
+        Assert.Equal(30, integers.Read(static view =>
+            view[0] + view[1]));
+        Assert.Equal(90L, longs.Read(static view =>
+            view[0] + view[1]));
+        Assert.Equal(11d, doubles.Read(static view =>
+            view[0] + view[1]));
+        Assert.Equal(42L, cells.Read(static view =>
+            view[0].Wide + view[1].Wide));
         Assert.Equal(2, cells.Length);
         Assert.Equal(cells.Length, cells.Capacity);
     }
@@ -36,7 +48,8 @@ public sealed class NativeRegionSimpleTests
             65_536,
             NativeMemoryReturn.ToNativeMemory);
         Local<int> warm = region.Lease<int>(4, FillIntegers);
-        _ = warm[0];
+        _ = warm.Read(static view => view[0]);
+        _ = warm.Process(0, ProcessIteration);
 
         NativeMemoryTestMetrics beforeMetrics =
             NativeMemoryTestHooks.Snapshot();
@@ -45,9 +58,9 @@ public sealed class NativeRegionSimpleTests
         for (int iteration = 0; iteration < 1_000; iteration++)
         {
             Local<int> values = region.Lease<int>(4, FillIntegers);
-            checksum += values[0];
-            values[1] = iteration;
-            checksum += values[1];
+            checksum += values.Process(
+                iteration,
+                ProcessIteration);
         }
 
         long allocatedBytes =
@@ -75,7 +88,7 @@ public sealed class NativeRegionSimpleTests
             GC.GetAllocatedBytesForCurrentThread() - beforeBytes;
 
         Assert.Equal(0, allocatedBytes);
-        Assert.Equal(30L, grown[0]);
+        Assert.Equal(30L, grown.Read(static view => view[0]));
         Assert.True(growthRegion.GetStatistics().SegmentCount >= 2);
     }
 
@@ -103,7 +116,7 @@ public sealed class NativeRegionSimpleTests
         Local<int> values = region.Lease<int>(4, FillIntegers);
         NativeOwnerStatistics after = region.GetStatistics();
 
-        Assert.Equal(10, values[0]);
+        Assert.Equal(10, values.Read(static view => view[0]));
         Assert.Equal(4 * sizeof(int), after.RequestedBytes);
         Assert.Equal(
             before.FreshSegmentAllocationCount,
@@ -134,8 +147,8 @@ public sealed class NativeRegionSimpleTests
         NativeOwnerStatistics after = region.GetStatistics();
 
         Assert.IsType<InvalidOperationException>(failure);
-        Assert.Equal(10, first[0]);
-        Assert.Equal(10, second[0]);
+        Assert.Equal(10, first.Read(static view => view[0]));
+        Assert.Equal(10, second.Read(static view => view[0]));
         Assert.Equal(
             before.FreshSegmentAllocationCount,
             after.FreshSegmentAllocationCount);
@@ -391,7 +404,7 @@ public sealed class NativeRegionSimpleTests
     {
         try
         {
-            _ = local[0];
+            _ = local.Read(static view => view[0]);
         }
         catch (Exception exception)
         {
@@ -406,7 +419,7 @@ public sealed class NativeRegionSimpleTests
     {
         try
         {
-            _ = local[0];
+            _ = local.Read(static view => view[0]);
         }
         catch (Exception exception)
         {

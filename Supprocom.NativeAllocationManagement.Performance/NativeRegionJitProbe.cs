@@ -46,7 +46,7 @@ internal static class NativeRegionJitProbe
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static int ProbeNewAccess(scoped Local<int> local) =>
-        local[0];
+        local.Read(static view => view[0]);
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static int ProbeLegacyAccess(
@@ -81,7 +81,7 @@ internal static class NativeRegionJitProbe
         Local<int> local = kernel.LeaseInitialized(
             1,
             Initializer);
-        return local[0];
+        return local.Read(static view => view[0]);
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]

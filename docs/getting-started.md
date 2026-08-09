@@ -523,23 +523,33 @@ using (NativeRegion region = new(
     Local<int> identifiers = region.Lease<int>(64);
     Local<double> weights = region.Lease<double>(64);
 
-    identifiers.Access(view =>
+    identifiers.Access(static view =>
     {
-        for (int index = 0; index < view.Length; index++)
+        Span<int> values = view.AsSpan();
+        for (int index = 0; index < values.Length; index++)
         {
-            view[index] = index + 1;
+            values[index] = index + 1;
         }
     });
 
-    weights.Access(view => view.Fill(0.5));
-    double firstWeight = weights.Read(view => view[0]);
-    identifiers[0] = checked((int)(firstWeight * 100));
+    weights.Access(static view => view.Fill(0.5));
+    double firstWeight = weights.Read(static view => view[0]);
+    _ = identifiers.Process(
+        checked((int)(firstWeight * 100)),
+        static (values, value) =>
+        {
+            values[0] = value;
+            return values[0];
+        });
 }
 ```
 
 Region locals have no individual physical return. Leaving the braced body invalidates
-the complete generation, so a `Local<T>` cannot be returned, stored, or passed to an
+the complete Region lifetime, so a `Local<T>` cannot be returned, stored, or passed to an
 unknown retaining call.
+
+`Local<T>` does not expose a per-element indexer. Use `Access`, `Read`, or `Process`
+to validate the owner once. Call `AsSpan()` once before a hot element loop.
 
 ## Reusable heterogeneous arenas
 
@@ -552,30 +562,31 @@ has no individual disposal because arena storage is reclaimed as a group.
 using Supprocom.NativeAllocationManagement;
 
 using NativeArena arena = new(preAllocateBytes: 64 * 1024);
-ArenaLease<int> coordinates = arena.Scratch<int>(1_024);
-ArenaLease<string> labels = arena.Scratch<string>(32);
+ArenaLease<int> coordinates = arena.Scratch<int>(
+    1_024,
+    static writer => writer.Fill(0));
+ArenaLease<double> weights = arena.ScratchScoped<double>(
+    32,
+    static writer => writer.Fill(0.5));
 
-coordinates[0] = 7;
-labels[0] = "ready";
-arena.ReleaseLeasesToNativeMemory();
+coordinates.Access(static view => view.AsSpan()[0] = 7);
+double firstWeight = weights.Read(static view => view[0]);
+
+arena.RecycleScoped();
+arena.Reset();
 ```
 
-The arena has one two-ended segment bank. Ordinary scratch values grow from the low end
-and scoped scratch values grow from the high end. `ReleaseLeasesToNativeMemory()` or
-`ReleaseLeasesToGarbageCollector()` invalidates every current lease, advances the
-generation once, and leaves the arena active. Idle segments are reused by the next
-generation; an entered operation on an old generation keeps its retired segment alive
-until the operation exits.
+The arena has separate ordinary and scoped bump lanes. `Reset()` invalidates both lanes
+and retains their segments. `RecycleScoped()` invalidates only the scoped lane.
+
+An active bounded callback blocks reset and disposal. A stale generation or scoped epoch
+cannot access reused storage.
 
 Typed pools are preferred when repeated element types and lease shapes are known, and a
 region is preferred when heterogeneous values share one braced lexical lifetime. Use an
-arena only for a genuinely heterogeneous reusable bulk lifetime. Its one shared budget
-and operation gate mean that a capacity spike in one type can retain space for every
-type. Interior fragmentation cannot be compacted or combined, and NAM does not infer
-managed reachability, move live values, or provide size classes. The developer remains
-responsible for explicit scratch-recycle, generation-release, trim, growth, and final
-return boundaries; an arena is not a reachability-based replacement for managed
-allocation or a predictable typed pool.
+arena only for a heterogeneous reusable bulk lifetime. The base arena is single-writer
+and accepts unmanaged values. It uses bump allocation and does not reclaim individual
+ranges. The developer controls scoped recycle, generation reset, trim, and final disposal.
 
 ## Delayed activation
 

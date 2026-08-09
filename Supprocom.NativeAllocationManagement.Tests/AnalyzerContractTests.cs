@@ -244,7 +244,7 @@ public sealed class AnalyzerContractTests
                     try
                     {
                         Local<int> value = region.Lease<int>(1, static writer => writer.Fill(default!));
-                        value[0] = 1;
+                        value.Access(static values => values[0] = 1);
                     }
                     finally
                     {
@@ -838,7 +838,7 @@ public sealed class AnalyzerContractTests
                     using (NativeRegion region = new())
                     {
                         Local<int> value = region.Lease<int>(1, static writer => writer.Fill(default!));
-                        value[0] = 42;
+                        value.Access(static values => values[0] = 42);
                     }
                 }
             """);
@@ -864,7 +864,14 @@ public sealed class AnalyzerContractTests
                     using (NativeRegion region = new())
                     {
                         Local<int> local = region.Lease<int>(1, static writer => writer.Fill(default!));
-                        local[0] = values[0];
+                        int source = values[0];
+                        _ = local.Process(
+                            source,
+                            static (localValues, value) =>
+                            {
+                                localValues[0] = value;
+                                return value;
+                            });
                     }
                 }
             }
@@ -937,7 +944,7 @@ public sealed class AnalyzerContractTests
 
             using NativeRegion region = new();
             Local<int> value = region.Lease<int>(1, static writer => writer.Fill(default!));
-            value[0] = 42;
+            value.Access(static values => values[0] = 42);
             """);
 
         string[] ids = NativeDiagnostics(diagnostics);
@@ -958,7 +965,7 @@ public sealed class AnalyzerContractTests
                 {
                     using NativeRegion region = new();
                     Local<int> value = region.Lease<int>(1, static writer => writer.Fill(default!));
-                    value[0] = 42;
+                    value.Access(static values => values[0] = 42);
                 }
             }
             """);
@@ -978,7 +985,7 @@ public sealed class AnalyzerContractTests
             using NativeRegion outer = new();
             using NativeRegion inner = new();
             Local<int> value = outer.Lease<int>(1, static writer => writer.Fill(default!));
-            value[0] = 42;
+            value.Access(static values => values[0] = 42);
             """);
 
         string[] ids = NativeDiagnostics(diagnostics);
@@ -1001,13 +1008,13 @@ public sealed class AnalyzerContractTests
                     using (NativeRegion first = new())
                     {
                         Local<int> value = first.Lease<int>(1, static writer => writer.Fill(default!));
-                        value[0] = 1;
+                        value.Access(static values => values[0] = 1);
                     }
 
                     using (NativeRegion second = new())
                     {
                         Local<int> value = second.Lease<int>(1, static writer => writer.Fill(default!));
-                        value[0] = 2;
+                        value.Access(static values => values[0] = 2);
                     }
                 }
             }

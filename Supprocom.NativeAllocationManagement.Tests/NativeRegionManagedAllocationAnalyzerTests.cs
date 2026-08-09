@@ -316,7 +316,9 @@ public sealed class NativeRegionManagedAllocationAnalyzerTests
                             _ = new object();
                             writer.Fill(3);
                         });
-                    _ = local[0] + scratch[0] + pooled[0];
+                    _ = local.Read(static values => values[0])
+                        + scratch.Read(static values => values[0])
+                        + pooled.Read(static values => values[0]);
                     pooled.Dispose();
                 }
             }
@@ -348,7 +350,9 @@ public sealed class NativeRegionManagedAllocationAnalyzerTests
                     Local<int> local = region.Lease<int>(1, InitializeRegion);
                     ArenaLease<int> scratch = arena.Scratch<int>(1, InitializeArena);
                     Pooled<int> pooled = pool.Rent(1, InitializePool);
-                    _ = local[0] + scratch[0] + pooled[0];
+                    _ = local.Read(static values => values[0])
+                        + scratch.Read(static values => values[0])
+                        + pooled.Read(static values => values[0]);
                     pooled.Dispose();
                 }
 
@@ -405,13 +409,100 @@ public sealed class NativeRegionManagedAllocationAnalyzerTests
                         1,
                         Initialize);
                     Pooled<int> pooled = pool.Rent(1, Initialize);
-                    _ = local[0] + scratch[0] + pooled[0];
+                    _ = local.Read(static values => values[0])
+                        + scratch.Read(static values => values[0])
+                        + pooled.Read(static values => values[0]);
                     pooled.Dispose();
                 }
 
                 private static void Initialize(
                     scoped NativeLeaseWriter<int> writer) =>
                     writer.Fill(2);
+            }
+            """);
+
+        AssertNoAnalyzerFailures(diagnostics);
+        Assert.Empty(ManagedAllocationDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task BoundedLocalCallbacksReportManagedAllocations()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    using NativeRegion region = new();
+                    Local<int> local = region.Lease<int>(
+                        1,
+                        static writer => writer.Fill(1));
+
+                    local.Access(static view =>
+                    {
+                        _ = new object();
+                        view[0] = 2;
+                    });
+                    _ = local.Read(Read);
+                    _ = local.Process(
+                        3,
+                        static (values, state) =>
+                        {
+                            _ = new object();
+                            values[0] = state;
+                            return values[0];
+                        });
+                }
+
+                private static int Read(scoped NativeLeaseView<int> view)
+                {
+                    _ = new object();
+                    return view[0];
+                }
+            }
+            """);
+
+        Diagnostic[] warnings = ManagedAllocationDiagnostics(diagnostics);
+        AssertNoAnalyzerFailures(diagnostics);
+        Assert.Equal(3, warnings.Length);
+        Assert.All(warnings, warning => Assert.Equal(
+            "new object()",
+            warning.Location.SourceTree!.GetText()
+                .ToString(warning.Location.SourceSpan)));
+    }
+
+    [Fact]
+    public async Task AllocationFreeBoundedLocalCallbacksDoNotWarn()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    using NativeRegion region = new();
+                    Local<int> local = region.Lease<int>(
+                        1,
+                        static writer => writer.Fill(1));
+
+                    local.Access(static view => view[0] = 2);
+                    _ = local.Read(Read);
+                    _ = local.Process(
+                        3,
+                        static (values, state) =>
+                        {
+                            values[0] = state;
+                            return values[0];
+                        });
+                }
+
+                private static int Read(scoped NativeLeaseView<int> view) =>
+                    view[0];
             }
             """);
 
@@ -440,7 +531,7 @@ public sealed class NativeRegionManagedAllocationAnalyzerTests
                     };
 
                     Local<int> local = region.Lease<int>(1, initializer);
-                    _ = local[0];
+                    _ = local.Read(static values => values[0]);
                 }
             }
             """);
@@ -474,7 +565,7 @@ public sealed class NativeRegionManagedAllocationAnalyzerTests
 
                     initializer = static writer => writer.Fill(2);
                     Local<int> local = region.Lease<int>(1, initializer);
-                    _ = local[0];
+                    _ = local.Read(static values => values[0]);
                 }
             }
             """);
@@ -514,7 +605,7 @@ public sealed class NativeRegionManagedAllocationAnalyzerTests
                     }
 
                     Local<int> local = region.Lease<int>(1, initializer);
-                    _ = local[0];
+                    _ = local.Read(static values => values[0]);
                 }
             }
             """);
@@ -546,7 +637,7 @@ public sealed class NativeRegionManagedAllocationAnalyzerTests
 
                     Replace(ref initializer);
                     Local<int> local = region.Lease<int>(1, initializer);
-                    _ = local[0];
+                    _ = local.Read(static values => values[0]);
                 }
 
                 private static void Replace(
@@ -580,7 +671,7 @@ public sealed class NativeRegionManagedAllocationAnalyzerTests
                     Local<int> local = region.Lease<int>(
                         Replace(ref initializer),
                         initializer);
-                    _ = local[0];
+                    _ = local.Read(static values => values[0]);
                 }
 
                 private static int Replace(
@@ -615,7 +706,7 @@ public sealed class NativeRegionManagedAllocationAnalyzerTests
                     Local<int> local = region.Lease<int>(
                         Replace(ref initializer),
                         initializer);
-                    _ = local[0];
+                    _ = local.Read(static values => values[0]);
                 }
 
                 private static int Replace(
@@ -665,7 +756,7 @@ public sealed class NativeRegionManagedAllocationAnalyzerTests
                     using NativeRegion region = new();
                     replace();
                     Local<int> local = region.Lease<int>(1, initializer);
-                    _ = local[0];
+                    _ = local.Read(static values => values[0]);
                 }
             }
             """);
@@ -697,7 +788,7 @@ public sealed class NativeRegionManagedAllocationAnalyzerTests
                     using NativeRegion region = new();
                     replace();
                     Local<int> local = region.Lease<int>(1, initializer);
-                    _ = local[0];
+                    _ = local.Read(static values => values[0]);
                 }
             }
             """);
@@ -733,7 +824,7 @@ public sealed class NativeRegionManagedAllocationAnalyzerTests
                     using NativeRegion region = new();
                     Replace();
                     Local<int> local = region.Lease<int>(1, initializer);
-                    _ = local[0];
+                    _ = local.Read(static values => values[0]);
                 }
             }
             """);
@@ -862,7 +953,9 @@ public sealed class NativeRegionManagedAllocationAnalyzerTests
                     Local<int> local = region.Lease<int>(1, static writer => writer.Fill(1));
                     ArenaLease<int> scratch = arena.Scratch<int>(1, static writer => writer.Fill(2));
                     Pooled<int> pooled = pool.Rent(1, static writer => writer.Fill(3));
-                    _ = local[0] + scratch[0] + pooled[0];
+                    _ = local.Read(static values => values[0])
+                        + scratch.Read(static values => values[0])
+                        + pooled.Read(static values => values[0]);
                     pooled.Dispose();
                 }
             }
@@ -940,7 +1033,9 @@ public sealed class NativeRegionManagedAllocationAnalyzerTests
                     Local<int> local = WrapRegion(region);
                     ArenaLease<int> scratch = WrapArena(arena);
                     Pooled<int> pooled = WrapPool(pool);
-                    _ = local[0] + scratch[0] + pooled[0];
+                    _ = local.Read(static values => values[0])
+                        + scratch.Read(static values => values[0])
+                        + pooled.Read(static values => values[0]);
                     pooled.Dispose();
                     arena.Dispose();
                     pool.Dispose();

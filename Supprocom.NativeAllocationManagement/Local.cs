@@ -21,56 +21,11 @@ public readonly ref struct Local<T>
         _length = length;
     }
 
-    /// <summary>Gets the logical element count.</summary>
-    public int Length => GetValidatedLength(nameof(Length));
+    /// <summary>Gets the immutable logical element count.</summary>
+    public int Length => _length;
 
-    /// <summary>Gets the physical capacity in elements.</summary>
-    public int Capacity => GetValidatedLength(nameof(Capacity));
-
-    /// <summary>Reads or writes one value after one Region state check.</summary>
-    public T this[int index]
-    {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get
-        {
-            NativeRegionKernel kernel = GetKernel("get_Item");
-            kernel.ValidateActive("get_Item");
-            try
-            {
-                ValidateIndex(index, _length);
-                unsafe
-                {
-                    return Unsafe.Add(
-                        ref Unsafe.AsRef<T>((void*)_pointer),
-                        index);
-                }
-            }
-            finally
-            {
-                GC.KeepAlive(kernel);
-            }
-        }
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        set
-        {
-            NativeRegionKernel kernel = GetKernel("set_Item");
-            kernel.ValidateActive("set_Item");
-            try
-            {
-                ValidateIndex(index, _length);
-                unsafe
-                {
-                    Unsafe.Add(
-                        ref Unsafe.AsRef<T>((void*)_pointer),
-                        index) = value;
-                }
-            }
-            finally
-            {
-                GC.KeepAlive(kernel);
-            }
-        }
-    }
+    /// <summary>Gets the immutable physical capacity in elements.</summary>
+    public int Capacity => _length;
 
     /// <summary>Clears the logical range after one Region state check.</summary>
     public void Clear()
@@ -158,17 +113,26 @@ public readonly ref struct Local<T>
         }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private int GetValidatedLength(string operation)
+    /// <summary>Processes the logical range with explicit caller state.</summary>
+    public TResult Process<TState, TResult>(
+        TState state,
+        NativeSpanStateProcessor<T, TState, TResult> processor)
     {
-        ValidateActive(operation);
-        return _length;
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void ValidateActive(string operation)
-    {
-        GetKernel(operation).ValidateActive(operation);
+        ArgumentNullException.ThrowIfNull(processor);
+        NativeRegionKernel kernel = EnterBorrow(nameof(Process));
+        try
+        {
+            unsafe
+            {
+                return processor(
+                    new Span<T>((void*)_pointer, _length),
+                    state);
+            }
+        }
+        finally
+        {
+            kernel.ExitBorrow();
+        }
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -190,16 +154,4 @@ public readonly ref struct Local<T>
     private NativeLeaseView<T> CreateView() =>
         new(_pointer, _length);
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void ValidateIndex(int index, int length)
-    {
-        ArgumentOutOfRangeException.ThrowIfNegative(index);
-        if (index >= length)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(index),
-                index,
-                "The index is outside the logical local range.");
-        }
-    }
 }

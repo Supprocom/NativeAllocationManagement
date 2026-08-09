@@ -680,8 +680,11 @@ public sealed class RuntimeLifecycleTests
             span[2] = 5;
         });
         Assert.Equal(12, bytes.Read(static span => span[0] + span[1] + span[2]));
-        longs[0] = 40;
-        longs[1] = 2;
+        longs.Access(static span =>
+        {
+            span[0] = 40;
+            span[1] = 2;
+        });
         Assert.Equal(42, longs.Read(static span => span[0] + span[1]));
         region.Dispose();
         Assert.True(NativeMemoryTestHooks.Snapshot().FreeCount >= 1);
@@ -694,7 +697,7 @@ public sealed class RuntimeLifecycleTests
         NativeMemoryTestHooks.Reset();
         NativeRegion region = new(preAllocateBytes: 1, returnMemoryOnDispose: NativeMemoryReturn.ToGarbageCollector);
         Local<long> first = region.Lease<long>(32, static writer => writer.Fill(default!));
-        first[0] = 8;
+        first.Access(static span => span[0] = 8);
         region.Dispose();
         Assert.IsType<NativeAllocationDisposedException>(CaptureDisposed(first));
         Assert.Equal(1, NativeMemoryTestHooks.Snapshot().DetachedGenerationCount);
@@ -840,14 +843,15 @@ public sealed class RuntimeLifecycleTests
         AssertUninitialized(AccessDefaultPooled);
         AssertUninitialized(ReadCallbackDefaultPooled);
         AssertUninitialized(DisposeDefaultPooled);
-        AssertUninitialized(ReadDefaultLocal);
-        AssertUninitialized(ReadDefaultLocalCapacity);
-        AssertUninitialized(ReadDefaultLocalIndexer);
+        Local<int> defaultLocal = default;
+        Assert.Equal(0, defaultLocal.Length);
+        Assert.Equal(0, defaultLocal.Capacity);
         AssertUninitialized(ClearDefaultLocal);
         AssertUninitialized(CopyFromDefaultLocal);
         AssertUninitialized(CopyToDefaultLocal);
         AssertUninitialized(AccessDefaultLocal);
         AssertUninitialized(ReadCallbackDefaultLocal);
+        AssertUninitialized(ProcessDefaultLocal);
         AssertUninitialized(LeaseDefaultRegion);
         AssertUninitialized(GetStatisticsDefaultRegion);
         AssertUninitialized(DisposeDefaultRegion);
@@ -863,6 +867,9 @@ public sealed class RuntimeLifecycleTests
         Assert.Contains(pooledProperties, property => property.Name == "Capacity" && property.PropertyType == typeof(int));
         Assert.DoesNotContain(pooledProperties, property => property.PropertyType == typeof(Span<int>));
         Assert.DoesNotContain(localProperties, property => property.PropertyType == typeof(Span<int>));
+        Assert.DoesNotContain(
+            localProperties,
+            property => property.Name == "Item");
         Assert.Null(typeof(ConcurrentPooled<int>).GetProperty("DangerousPointer", BindingFlags.Public | BindingFlags.Instance));
     }
 
@@ -1048,7 +1055,7 @@ public sealed class RuntimeLifecycleTests
                 NativeMemoryTestMetrics regionBefore = NativeMemoryTestHooks.Snapshot();
                 NativeRegion region = new((nuint)(reservationUnits * sizeof(long)), policy);
                 Local<long> local = region.Lease<long>(2, static writer => writer.Fill(default!));
-                local[0] = 8;
+                local.Access(static span => span[0] = 8);
 
                 region.Dispose();
                 NativeMemoryTestMetrics regionAfter = NativeMemoryTestHooks.Snapshot();
@@ -1187,15 +1194,20 @@ public sealed class RuntimeLifecycleTests
     {
         using NativeRegion region = new(16, NativeMemoryReturn.ToNativeMemory);
         Local<int> local = region.Lease<int>(1, static writer => writer.Fill(default!));
-        local[0] = 1;
+        local.Access(static values => values[0] = 1);
     }
 
     private static int RegionReturn()
     {
         using NativeRegion region = new(16, NativeMemoryReturn.ToNativeMemory);
         Local<int> local = region.Lease<int>(1, static writer => writer.Fill(default!));
-        local[0] = 2;
-        return local[0];
+        return local.Process(
+            2,
+            static (values, value) =>
+            {
+                values[0] = value;
+                return values[0];
+            });
     }
 
     private static void RegionGoto()
@@ -1207,7 +1219,7 @@ public sealed class RuntimeLifecycleTests
             goto End;
         }
 
-        local[0] = 4;
+        local.Access(static values => values[0] = 4);
     End:
         _ = local.Length;
     }
@@ -1223,7 +1235,13 @@ public sealed class RuntimeLifecycleTests
                 continue;
             }
 
-            local[0] = index;
+            _ = local.Process(
+                index,
+                static (values, value) =>
+                {
+                    values[0] = value;
+                    return value;
+                });
             break;
         }
     }
@@ -1232,7 +1250,7 @@ public sealed class RuntimeLifecycleTests
     {
         using NativeRegion region = new(16, NativeMemoryReturn.ToNativeMemory);
         Local<int> local = region.Lease<int>(1, static writer => writer.Fill(default!));
-        local[0] = 3;
+        local.Access(static values => values[0] = 3);
         throw new InvalidOperationException("region exit");
     }
 
@@ -1243,7 +1261,7 @@ public sealed class RuntimeLifecycleTests
 
     private static void ReadLocal(Local<byte> local)
     {
-        _ = local[0];
+        _ = local.Read(static values => values[0]);
     }
 
     private static void AssertUninitialized(Action operation)
@@ -1306,24 +1324,6 @@ public sealed class RuntimeLifecycleTests
         _ = value.Read(static _ => 0);
     }
 
-    private static void ReadDefaultLocal()
-    {
-        Local<int> value = default;
-        _ = value.Length;
-    }
-
-    private static void ReadDefaultLocalCapacity()
-    {
-        Local<int> value = default;
-        _ = value.Capacity;
-    }
-
-    private static void ReadDefaultLocalIndexer()
-    {
-        Local<int> value = default;
-        _ = value[0];
-    }
-
     private static void ClearDefaultLocal()
     {
         Local<int> value = default;
@@ -1352,6 +1352,14 @@ public sealed class RuntimeLifecycleTests
     {
         Local<int> value = default;
         _ = value.Read(static _ => 0);
+    }
+
+    private static void ProcessDefaultLocal()
+    {
+        Local<int> value = default;
+        _ = value.Process(
+            0,
+            static (values, state) => state + values.Length);
     }
 
     private static void LeaseDefaultRegion()
@@ -1471,7 +1479,7 @@ public sealed class RuntimeLifecycleTests
     {
         try
         {
-            _ = local[0];
+            _ = local.Read(static values => values[0]);
         }
         catch (NativeAllocationDisposedException exception)
         {

@@ -121,7 +121,7 @@ public sealed class PackageSmokeTests
                         using (NativeRegion region = new())
                         {
                             Local<int> local = region.Lease<int>(1, static writer => writer.Fill(default!));
-                            local[0] = 7;
+                            local.Access(static values => values[0] = 7);
                         }
 
                         using NativeConcurrentArena arena = new(doNotLeaseOnDeclaration: true);
@@ -448,7 +448,7 @@ public sealed class PackageSmokeTests
                 using (NativeRegion region = new())
                 {
                     Local<int> value = region.Lease<int>(1, static writer => writer.Fill(default!));
-                    value[0] = 42;
+                    value.Access(static values => values[0] = 42);
                 }
                 """);
 
@@ -483,7 +483,7 @@ public sealed class PackageSmokeTests
 
                 using NativeRegion region = new();
                 Local<int> value = region.Lease<int>(1, static writer => writer.Fill(default!));
-                value[0] = 42;
+                value.Access(static values => values[0] = 42);
                 """);
 
             string project = Path.Combine(consumerRoot, "Consumer.csproj");
@@ -520,7 +520,7 @@ public sealed class PackageSmokeTests
                 using NativeRegion outer = new();
                 using NativeRegion inner = new();
                 Local<int> value = outer.Lease<int>(1, static writer => writer.Fill(default!));
-                value[0] = 42;
+                value.Access(static values => values[0] = 42);
                 """);
 
             string project = Path.Combine(consumerRoot, "Consumer.csproj");
@@ -561,7 +561,7 @@ public sealed class PackageSmokeTests
                     {
                         using NativeRegion region = new();
                         Local<int> value = region.Lease<int>(1, static writer => writer.Fill(default!));
-                        value[0] = 42;
+                        value.Access(static values => values[0] = 42);
                     }
                 }
                 """);

@@ -30,6 +30,8 @@ internal static class NativeRegionPhaseBenchmark
             new PhaseCell(13, 17, 19, 23));
     private static readonly NativeLeaseAction<int>
         FillView = static view => view.Fill(7);
+    private static readonly NativeLeaseFunc<int, long>
+        ReadFirstRepeatedlyAction = ReadFirstRepeatedly;
 
     internal static NativeRegionPhaseReport Run()
     {
@@ -259,7 +261,7 @@ internal static class NativeRegionPhaseBenchmark
             GC.GetAllocatedBytesForCurrentThread()
                 - allocatedBefore,
             CollectionDeltas(collectionsBefore),
-            values[0]);
+            values.Read(static view => view[0]));
         kernel.Dispose();
         return evidence;
     }
@@ -322,12 +324,8 @@ internal static class NativeRegionPhaseBenchmark
         int[] collectionsBefore = CollectionCounts();
         long allocatedBefore =
             GC.GetAllocatedBytesForCurrentThread();
-        long checksum = 0;
         long start = Stopwatch.GetTimestamp();
-        for (int index = 0; index < AccessIterations; index++)
-        {
-            checksum += values[0];
-        }
+        long checksum = values.Read(ReadFirstRepeatedlyAction);
 
         long elapsed = Stopwatch.GetTimestamp() - start;
         RegionPhaseEvidence evidence = Evidence(
@@ -565,7 +563,7 @@ internal static class NativeRegionPhaseBenchmark
         for (int index = 0; index < LeaseIterations; index++)
         {
             Local<int> values = region.Lease<int>(4, FillIntegers);
-            checksum += values[0];
+            checksum += values.Read(static view => view[0]);
         }
 
         return checksum;
@@ -608,11 +606,11 @@ internal static class NativeRegionPhaseBenchmark
             Local<long> longs = region.Lease<long>(8, FillLongs);
             Local<double> doubles = region.Lease<double>(8, FillDoubles);
             Local<PhaseCell> cells = region.Lease<PhaseCell>(4, FillCells);
-            checksum += bytes[0]
-                + integers[0]
-                + longs[0]
-                + (long)doubles[0]
-                + cells[0].Wide;
+            checksum += bytes.Read(static view => view[0])
+                + integers.Read(static view => view[0])
+                + longs.Read(static view => view[0])
+                + (long)doubles.Read(static view => view[0])
+                + cells.Read(static view => view[0].Wide);
         }
 
         return checksum;
@@ -791,6 +789,19 @@ internal static class NativeRegionPhaseBenchmark
         {
             token.Dispose();
         }
+    }
+
+    private static long ReadFirstRepeatedly(
+        scoped NativeLeaseView<int> view)
+    {
+        ReadOnlySpan<int> values = view.AsSpan();
+        long checksum = 0;
+        for (int index = 0; index < AccessIterations; index++)
+        {
+            checksum += values[0];
+        }
+
+        return checksum;
     }
 
     private static RegionPhaseEvidence Evidence(
