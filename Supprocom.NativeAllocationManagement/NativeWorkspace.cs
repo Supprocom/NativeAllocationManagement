@@ -1,37 +1,20 @@
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 
 namespace Supprocom.NativeAllocationManagement;
 
-/// <summary>Adds one workspace to a synchronized typed owner.</summary>
-public static class NativeWorkspacePoolExtensions
-{
-    /// <summary>Reserves one fixed-capacity workspace for repeated bounded work.</summary>
-    public static NativeWorkspace<T> CreateWorkspace<T>(
-        this NativeConcurrentPool<T> pool,
-        int capacity)
-        where T : unmanaged
-    {
-        ArgumentNullException.ThrowIfNull(pool);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(capacity);
-        NativeOwnerKernel kernel = pool.KernelForTransfer;
-        NativeWorkspaceState<T> state = new(kernel);
-        state.Begin(capacity);
-        return new NativeWorkspace<T>(state);
-    }
-}
-
-/// <summary>Reuses one fixed native range for repeated single-writer batches.</summary>
+/// <summary>Reuses one fixed native block for repeated single-writer batches.</summary>
 /// <typeparam name="T">The unmanaged element type in the workspace.</typeparam>
 public readonly ref struct NativeWorkspace<T>
     where T : unmanaged
 {
     private readonly NativeWorkspaceState<T> _state;
 
-    internal NativeWorkspace(
-        NativeWorkspaceState<T> state)
+    /// <summary>Creates one workspace with a fixed element reservation.</summary>
+    /// <param name="preLease">The fixed reservation in elements of <typeparamref name="T"/>.</param>
+    public NativeWorkspace(int preLease)
     {
-        _state = state;
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(preLease);
+        _state = new NativeWorkspaceState<T>(preLease);
     }
 
     /// <summary>Gets the fixed physical element capacity.</summary>
@@ -67,7 +50,7 @@ public readonly ref struct NativeWorkspace<T>
         return _state.Read(action);
     }
 
-    /// <summary>Initializes, reads, and resets one range under one lifetime check.</summary>
+    /// <summary>Processes one range with cancellation checks before and after its callbacks.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public TResult Process<TResult>(
         int length,
@@ -77,8 +60,6 @@ public readonly ref struct NativeWorkspace<T>
     {
         ArgumentNullException.ThrowIfNull(initializer);
         ArgumentNullException.ThrowIfNull(reader);
-        ArgumentOutOfRangeException.ThrowIfNegative(length);
-        cancellationToken.ThrowIfCancellationRequested();
         return _state.Process(
             length,
             initializer,
@@ -86,7 +67,7 @@ public readonly ref struct NativeWorkspace<T>
             cancellationToken);
     }
 
-    /// <summary>Processes one range through a static callback and explicit state.</summary>
+    /// <summary>Processes one stateful range with cancellation checks around its callback.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public TResult Process<TState, TResult>(
         int length,
@@ -95,8 +76,6 @@ public readonly ref struct NativeWorkspace<T>
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(processor);
-        ArgumentOutOfRangeException.ThrowIfNegative(length);
-        cancellationToken.ThrowIfCancellationRequested();
         return _state.Process(
             length,
             state,
@@ -107,7 +86,7 @@ public readonly ref struct NativeWorkspace<T>
     /// <summary>Removes logical visibility and retains the fixed native capacity.</summary>
     public void Reset() => _state.Reset();
 
-    /// <summary>Returns the persistent native range exactly once.</summary>
+    /// <summary>Returns the fixed native block exactly once.</summary>
     public void Dispose() => _state.Release();
 
     internal object StateForTest => _state;
@@ -116,73 +95,24 @@ public readonly ref struct NativeWorkspace<T>
 internal sealed class NativeWorkspaceState<T>
     where T : unmanaged
 {
-    private const int Uninitialized = -1;
     private const int Active = 0;
     private const int Released = 1;
 
-    private readonly NativeOwnerKernel _kernel;
-    private NativeGeneration? _generation;
-    private NativeBuilderInitialization _initialization;
-    private int _capacity;
+    private NativeBlock _block;
+    private readonly int _capacity;
     private readonly int _ownerThreadId;
-    private int _state = Uninitialized;
+    private int _state;
     private int _length;
     private int _published;
-    private nint _address;
 
-    internal NativeWorkspaceState(
-        NativeOwnerKernel kernel)
+    internal NativeWorkspaceState(int preLease)
     {
-        _kernel = kernel;
         _ownerThreadId = Environment.CurrentManagedThreadId;
-    }
-
-    internal void Begin(int capacity)
-    {
-        NativeBuilderInitialization initialization =
-            _kernel.BeginPoolBuilder(capacity);
-        try
-        {
-            NativeMemoryTestHooks.CheckManagedPublicationBoundary(
-                "NativeConcurrentPool.CreateWorkspace",
-                ordinal: 1,
-                "NativeWorkspaceState ownership");
-            initialization.Allocation.SetBuilderLength(0);
-            initialization.Allocation.InitializedLength = 0;
-            Span<T> capacitySpan =
-                initialization.Allocation.AsCapacitySpan<T>();
-            unsafe
-            {
-                _address = (nint)Unsafe.AsPointer(
-                    ref MemoryMarshal.GetReference(capacitySpan));
-            }
-
-            _generation = initialization.Generation;
-            _initialization = initialization;
-            _capacity = initialization.Allocation.Capacity;
-            Volatile.Write(ref _state, Active);
-        }
-        catch (Exception failure)
-        {
-            try
-            {
-                _kernel.AbortUnpublishedBuilderInitialization(
-                    initialization);
-            }
-            catch (Exception cleanupFailure)
-            {
-                throw new AggregateException(
-                    "Native workspace publication failed and cleanup also failed.",
-                    failure,
-                    cleanupFailure);
-            }
-            finally
-            {
-                Volatile.Write(ref _state, Released);
-            }
-
-            throw;
-        }
+        _block = NativeBlockAllocator.Allocate<T>(
+            preLease,
+            nameof(NativeWorkspace<T>),
+            "NativeWorkspace.Constructor");
+        _capacity = preLease;
     }
 
     internal int GetCapacity()
@@ -202,23 +132,15 @@ internal sealed class NativeWorkspaceState<T>
         NativeLeaseInitializer<T> initializer,
         CancellationToken cancellationToken)
     {
-        Validate(nameof(NativeWorkspace<T>.Initialize));
-        if (length > _capacity)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(length),
-                "The logical length exceeds the workspace capacity.");
-        }
-
-        NativeAllocation allocation =
-            _initialization.Allocation;
-        allocation.SetBuilderLength(length);
-        allocation.InitializedLength = 0;
-        int initializedLength = 0;
         try
         {
+            ValidateLength(
+                length,
+                nameof(NativeWorkspace<T>.Initialize));
+            int initializedLength = 0;
             NativeLeaseWriter<T> writer = new(
-                allocation,
+                _block.Pointer,
+                length,
                 ref initializedLength);
             initializer(writer);
             cancellationToken.ThrowIfCancellationRequested();
@@ -228,33 +150,50 @@ internal sealed class NativeWorkspaceState<T>
                     $"The workspace initializer wrote {initializedLength} of {length} required elements.");
             }
 
-            allocation.InitializedLength = length;
-            Volatile.Write(ref _length, length);
-            Volatile.Write(ref _published, 1);
+            _length = length;
+            _published = 1;
         }
         catch
         {
-            allocation.InitializedLength = 0;
-            allocation.SetBuilderLength(0);
-            Volatile.Write(ref _length, 0);
-            Volatile.Write(ref _published, 0);
+            _length = 0;
+            _published = 0;
             throw;
+        }
+        finally
+        {
+            GC.KeepAlive(this);
         }
     }
 
     internal void Access(NativeLeaseAction<T> action)
     {
-        ValidateReady(nameof(NativeWorkspace<T>.Access));
-        action(new NativeLeaseView<T>(
-            _initialization.Allocation));
+        try
+        {
+            ValidateReady(nameof(NativeWorkspace<T>.Access));
+            action(new NativeLeaseView<T>(
+                _block.Pointer,
+                _length));
+        }
+        finally
+        {
+            GC.KeepAlive(this);
+        }
     }
 
     internal TResult Read<TResult>(
         NativeLeaseFunc<T, TResult> action)
     {
-        ValidateReady(nameof(NativeWorkspace<T>.Read));
-        return action(new NativeLeaseView<T>(
-            _initialization.Allocation));
+        try
+        {
+            ValidateReady(nameof(NativeWorkspace<T>.Read));
+            return action(new NativeLeaseView<T>(
+                _block.Pointer,
+                _length));
+        }
+        finally
+        {
+            GC.KeepAlive(this);
+        }
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -267,6 +206,7 @@ internal sealed class NativeWorkspaceState<T>
         try
         {
             ValidateProcess(length);
+            cancellationToken.ThrowIfCancellationRequested();
             Span<T> values = CreateSpan(length);
             initializer(values);
             cancellationToken.ThrowIfCancellationRequested();
@@ -288,6 +228,7 @@ internal sealed class NativeWorkspaceState<T>
         try
         {
             ValidateProcess(length);
+            cancellationToken.ThrowIfCancellationRequested();
             Span<T> values = CreateSpan(length);
             TResult result = processor(values, state);
             cancellationToken.ThrowIfCancellationRequested();
@@ -302,12 +243,8 @@ internal sealed class NativeWorkspaceState<T>
     internal void Reset()
     {
         Validate(nameof(NativeWorkspace<T>.Reset));
-        NativeAllocation allocation =
-            _initialization.Allocation;
-        allocation.InitializedLength = 0;
-        allocation.SetBuilderLength(0);
-        Volatile.Write(ref _length, 0);
-        Volatile.Write(ref _published, 0);
+        _length = 0;
+        _published = 0;
     }
 
     internal void Release()
@@ -319,35 +256,22 @@ internal sealed class NativeWorkspaceState<T>
 
     private void ReleaseCore()
     {
-        if (Interlocked.Exchange(
-            ref _state,
-            Released) != Active)
+        if (Interlocked.Exchange(ref _state, Released) != Active)
         {
             return;
         }
 
-        try
-        {
-            NativeAllocation allocation =
-                _initialization.Allocation;
-            allocation.InitializedLength = 0;
-            allocation.SetBuilderLength(_capacity);
-            _kernel.AbortBuilderInitialization(
-                _initialization);
-        }
-        finally
-        {
-            NativeGeneration generation = _generation
-                ?? throw new InvalidOperationException(
-                    "The native workspace has no generation ownership.");
-            _kernel.ExitBuilderGeneration(generation);
-        }
+        NativeBlock block = _block;
+        _block = default;
+        _length = 0;
+        _published = 0;
+        NativeBlockAllocator.Free(block);
     }
 
     private void ValidateReady(string operation)
     {
         Validate(operation);
-        if (Volatile.Read(ref _published) == 0)
+        if (_published == 0)
         {
             throw new InvalidOperationException(
                 $"NativeWorkspace.{operation} requires a published range.");
@@ -358,34 +282,44 @@ internal sealed class NativeWorkspaceState<T>
     private void Validate(string operation)
     {
         ValidateOwnerThread(operation);
-
-        if (Volatile.Read(ref _state) != Active)
+        if (_state != Active)
         {
             throw new ObjectDisposedException(
                 $"NativeWorkspace<{typeof(T).Name}>");
         }
-
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private unsafe Span<T> CreateSpan(int length) =>
-        new((void*)_address, length);
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void ValidateProcess(int length)
+    private void ValidateLength(int length, string operation)
     {
-        Validate(nameof(NativeWorkspace<T>.Process));
-        if (_published != 0)
-        {
-            throw new InvalidOperationException(
-                "NativeWorkspace.Process requires Reset after a published range.");
-        }
-
+        Validate(operation);
         if (length > _capacity)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(length),
                 "The logical length exceeds the workspace capacity.");
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private unsafe Span<T> CreateSpan(int length) =>
+        new((void*)_block.Pointer, length);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void ValidateProcess(int length)
+    {
+        Validate(nameof(NativeWorkspace<T>.Process));
+        if ((uint)length > (uint)_capacity)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(length),
+                "The logical length exceeds the workspace capacity.");
+        }
+
+        if (_published != 0)
+        {
+            throw new InvalidOperationException(
+                "NativeWorkspace.Process requires Reset after a published range.");
         }
     }
 

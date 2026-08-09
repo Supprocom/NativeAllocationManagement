@@ -1163,12 +1163,8 @@ internal static class NativeWorkspaceStateBenchmark
 
                 allocationBefore =
                     GC.GetAllocatedBytesForCurrentThread();
-                using NativeConcurrentPool<float> pool = new(
-                    preLease: _options.WorkspaceLength,
-                    returnMemoryOnDispose:
-                        NativeMemoryReturn.ToNativeMemory);
                 using NativeWorkspace<float> nativeWorkspace =
-                    pool.CreateWorkspace(_options.WorkspaceLength);
+                    new(preLease: _options.WorkspaceLength);
                 NativeSetupAllocatedBytes =
                     GC.GetAllocatedBytesForCurrentThread()
                         - allocationBefore;
@@ -1198,9 +1194,9 @@ internal static class NativeWorkspaceStateBenchmark
                                     in nativeWorkspace);
                                 break;
                             case WorkspaceWorkerCommand.Snapshot:
-                                FreshSegmentAllocationCount = pool
-                                    .GetStatistics()
-                                    .FreshSegmentAllocationCount;
+                                FreshSegmentAllocationCount =
+                                    NativeMemoryTestHooks.Snapshot()
+                                        .AllocationCount;
                                 break;
                             case WorkspaceWorkerCommand.CancellationProbe:
                                 CancellationCleanupPassed =

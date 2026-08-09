@@ -453,8 +453,9 @@ owner return, release, or disposal also invalidates later field operations.
 
 ## Reuse one fixed worker workspace
 
-`NativeWorkspace<T>` retains one typed native range for one worker thread. Use it when
-each batch has a known maximum size.
+`NativeWorkspace<T>` owns one fixed native block for one worker thread. Use it when each
+batch has a known maximum size. The workspace does not rent from a pool or publish an
+allocation record.
 
 The explicit-state `Process` overload gives one bounded span to one static callback.
 It passes caller state without a closure allocation.
@@ -462,8 +463,7 @@ It passes caller state without a closure allocation.
 ```csharp
 using Supprocom.NativeAllocationManagement;
 
-using NativePool<float> pool = new(preLease: 51_200);
-using NativeWorkspace<float> workspace = pool.CreateWorkspace(51_200);
+using NativeWorkspace<float> workspace = new(preLease: 51_200);
 
 ulong checksum = 0;
 for (int batchIndex = 0; batchIndex < 729; batchIndex++)
@@ -493,6 +493,9 @@ readonly record struct MapState(
     int BatchIndex,
     ulong Checksum);
 ```
+
+Construction allocates the block once. `Reset` removes only its logical publication.
+Disposal or emergency finalization frees the block exactly once.
 
 The workspace checks its owner thread before each operation. The callback cannot keep
 the scoped span after `Process` returns.

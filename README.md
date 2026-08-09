@@ -6,11 +6,11 @@ heterogeneous lifetime. `NativeArena` provides reusable heterogeneous storage.
 
 `NativeBuilder<T>` writes growable unmanaged sequences without managed intermediate
 arrays. `NativeTransfer<T>` moves heap-storable ownership across thread boundaries.
-`NativeWorkspace<T>` reuses one fixed typed range in a worker hot loop.
+`NativeWorkspace<T>` reuses one fixed typed block in a worker hot loop.
 
-The runtime checks owner state, generation identity, allocation identity, and active
-operations. The bundled Roslyn analyzer checks ownership and bounded-view rules in the
-consumer source. The package targets .NET 10.
+Each bounded operation checks the state required by its allocator contract. The bundled
+Roslyn analyzer checks ownership and bounded-view rules in consumer source. The package
+targets .NET 10.
 
 ## Documentation
 

@@ -1996,6 +1996,12 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     operation,
                     "NativeBuilder");
             }
+            else if (IsNativeWorkspace(operation.Type))
+            {
+                RegisterWorkspaceFactory(
+                    operation,
+                    "NativeWorkspace");
+            }
             else if (IsOwnerType(operation.Type))
             {
                 RegisterOwner(operation);
@@ -2044,11 +2050,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 ProcessBuilderInvocation(operation);
             }
 
-            if (IsWorkspaceFactoryInvocation(operation))
-            {
-                RegisterWorkspaceFactory(operation);
-            }
-            else if (IsNativeWorkspace(
+            if (IsNativeWorkspace(
                 operation.TargetMethod.ContainingType))
             {
                 ProcessWorkspaceInvocation(operation);
@@ -2545,7 +2547,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
             if (value is not null
                 && IsNativeWorkspace(value.Type)
-                && !IsWorkspaceFactoryInvocation(value)
+                && !IsWorkspaceFactoryOperation(value)
                 && !IsWorkspaceBorrowArgument(operation))
             {
                 string destination = operation.Parent is IInvocationOperation invocation
@@ -2598,7 +2600,6 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     if (operation.Parent is IInvocationOperation invocation
                         && (IsTransferFactoryInvocation(invocation)
                             || IsBuilderFactoryOperation(invocation)
-                            || IsWorkspaceFactoryInvocation(invocation)
                             || GetLifecycleEffect(invocation.TargetMethod, operation.Parameter)
                                 is not LifecycleEffect.None
                             || IsNonRetainingOwnerParameter(
@@ -2663,7 +2664,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
             if (value is not null
                 && IsNativeWorkspace(value.Type)
-                && !IsWorkspaceFactoryInvocation(value))
+                && !IsWorkspaceFactoryOperation(value))
             {
                 if (GetWorkspace(value) is TransferState workspace)
                 {
@@ -3358,7 +3359,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         }
 
         private void RegisterWorkspaceFactory(
-            IInvocationOperation operation)
+            IOperation operation,
+            string operationName)
         {
             Target target = FindTarget(operation);
             if (target.Symbol is not ILocalSymbol
@@ -3367,7 +3369,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 Report(
                     NativeAllocationDiagnosticDescriptors.WorkspaceAcquisitionEscape,
                     operation.Syntax,
-                    operation.TargetMethod.Name);
+                    operationName);
                 return;
             }
 
@@ -3479,7 +3481,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             {
                 if (value is not null
                     && IsNativeWorkspace(value.Type)
-                    && !IsWorkspaceFactoryInvocation(value))
+                    && !IsWorkspaceFactoryOperation(value))
                 {
                     if (GetWorkspace(value) is TransferState discarded)
                     {
@@ -3499,7 +3501,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 return;
             }
 
-            if (IsWorkspaceFactoryInvocation(value))
+            if (IsWorkspaceFactoryOperation(value))
             {
                 return;
             }
@@ -4432,12 +4434,9 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             operation is IObjectCreationOperation creation
                 && IsNativeBuilder(creation.Type);
 
-        private bool IsWorkspaceFactoryInvocation(IOperation? operation) =>
-            operation is IInvocationOperation invocation
-            && invocation.TargetMethod.Name == "CreateWorkspace"
-            && invocation.TargetMethod.ContainingType.ToDisplayString()
-                == "Supprocom.NativeAllocationManagement.NativeWorkspacePoolExtensions"
-            && IsNativeWorkspace(invocation.Type);
+        private bool IsWorkspaceFactoryOperation(IOperation? operation) =>
+            operation is IObjectCreationOperation creation
+            && IsNativeWorkspace(creation.Type);
 
         private bool IsWorkspaceBorrowArgument(
             IArgumentOperation argument) =>

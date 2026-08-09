@@ -17,7 +17,7 @@ public sealed class NativeWorkspaceAnalyzerTests
                 public static int Run(NativeConcurrentPool<int> pool)
                 {
                     using NativeWorkspace<int> workspace =
-                        pool.CreateWorkspace(16);
+                        new NativeWorkspace<int>(preLease: 16);
                     return workspace.Process(
                         16,
                         static values => values.Fill(7),
@@ -41,7 +41,7 @@ public sealed class NativeWorkspaceAnalyzerTests
                 public static int Run(NativeConcurrentPool<int> pool)
                 {
                     using NativeWorkspace<int> workspace =
-                        pool.CreateWorkspace(16);
+                        new NativeWorkspace<int>(preLease: 16);
                     ProcessState state = new(7, 5);
                     return workspace.Process(
                         16,
@@ -87,7 +87,7 @@ public sealed class NativeWorkspaceAnalyzerTests
                 public static void Run(NativeConcurrentPool<int> pool)
                 {
                     using NativeWorkspace<int> workspace =
-                        pool.CreateWorkspace(16);
+                        new NativeWorkspace<int>(preLease: 16);
                     workspace.Process(
                         16,
                         7,
@@ -124,7 +124,7 @@ public sealed class NativeWorkspaceAnalyzerTests
                     bool stop)
                 {
                     NativeWorkspace<int> workspace =
-                        pool.CreateWorkspace(8);
+                        new NativeWorkspace<int>(preLease: 8);
                     try
                     {
                         if (stop)
@@ -160,7 +160,7 @@ public sealed class NativeWorkspaceAnalyzerTests
                 public static int Run(NativeConcurrentPool<int> pool)
                 {
                     using NativeWorkspace<int> workspace =
-                        pool.CreateWorkspace(8);
+                        new NativeWorkspace<int>(preLease: 8);
                     return Read(in workspace);
                 }
 
@@ -198,7 +198,7 @@ public sealed class NativeWorkspaceAnalyzerTests
                         returnMemoryOnDispose:
                             NativeMemoryReturn.ToNativeMemory);
                     using NativeWorkspace<float> workspace =
-                        pool.CreateWorkspace(51_200);
+                        new NativeWorkspace<float>(preLease: 51_200);
                     int lastValue = 0;
                     try
                     {
@@ -282,7 +282,7 @@ public sealed class NativeWorkspaceAnalyzerTests
                 public static void Run(NativeConcurrentPool<int> pool)
                 {
                     NativeWorkspace<int> workspace =
-                        pool.CreateWorkspace(8);
+                        new NativeWorkspace<int>(preLease: 8);
                     NativeWorkspace<int> alias = workspace;
                     alias.Dispose();
                 }
@@ -306,7 +306,7 @@ public sealed class NativeWorkspaceAnalyzerTests
                     bool dispose)
                 {
                     NativeWorkspace<int> workspace =
-                        pool.CreateWorkspace(8);
+                        new NativeWorkspace<int>(preLease: 8);
                     if (dispose)
                     {
                         workspace.Dispose();
@@ -330,7 +330,7 @@ public sealed class NativeWorkspaceAnalyzerTests
                 public static void Run(NativeConcurrentPool<int> pool)
                 {
                     NativeWorkspace<int> workspace =
-                        pool.CreateWorkspace(8);
+                        new NativeWorkspace<int>(preLease: 8);
                     workspace.Dispose();
                     _ = workspace.Capacity;
                     workspace.Dispose();
@@ -356,13 +356,13 @@ public sealed class NativeWorkspaceAnalyzerTests
                 public static NativeWorkspace<int> Return(
                     NativeConcurrentPool<int> pool)
                 {
-                    return pool.CreateWorkspace(8);
+                    return new NativeWorkspace<int>(preLease: 8);
                 }
 
                 public static void Discard(NativeConcurrentPool<int> pool)
                 {
-                    _ = pool.CreateWorkspace(8);
-                    Drop(pool.CreateWorkspace(8));
+                    _ = new NativeWorkspace<int>(preLease: 8);
+                    Drop(new NativeWorkspace<int>(preLease: 8));
                 }
 
                 private static void Drop(
@@ -439,7 +439,7 @@ public sealed class NativeWorkspaceAnalyzerTests
                 public static void Run(NativeConcurrentPool<int> pool)
                 {
                     NativeWorkspace<int> workspace =
-                        pool.CreateWorkspace(8);
+                        new NativeWorkspace<int>(preLease: 8);
                     Action action = () => workspace.Reset();
                     action();
                     workspace.Dispose();
@@ -468,14 +468,14 @@ public sealed class NativeWorkspaceAnalyzerTests
                     NativeConcurrentPool<int> pool)
                 {
                     NativeWorkspace<int> workspace =
-                        pool.CreateWorkspace(8);
+                        new NativeWorkspace<int>(preLease: 8);
                     return workspace;
                 }
 
                 public static void Store(NativeConcurrentPool<int> pool)
                 {
                     NativeWorkspace<int> workspace =
-                        pool.CreateWorkspace(8);
+                        new NativeWorkspace<int>(preLease: 8);
                     WorkspaceHolder holder = default;
                     holder.Value = workspace;
                     workspace.Dispose();
@@ -501,7 +501,7 @@ public sealed class NativeWorkspaceAnalyzerTests
                 public static async Task Run(NativeConcurrentPool<int> pool)
                 {
                     NativeWorkspace<int> workspace =
-                        pool.CreateWorkspace(8);
+                        new NativeWorkspace<int>(preLease: 8);
                     await Task.Yield();
                     workspace.Dispose();
                 }
