@@ -108,6 +108,12 @@ internal static class Program
         }
 
         if (args.Length != 0
+            && args[0] == "--pool-binary-comparison")
+        {
+            return PoolBinaryComparison.RunCommand(args);
+        }
+
+        if (args.Length != 0
             && args[0] is "--native-workspace-state"
                 or "--native-workspace-state-worker"
                 or "--native-workspace-state-pair-worker")
