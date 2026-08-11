@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+
 namespace Supprocom.NativeAllocationManagement;
 
 /// <summary>Builds one growable unmanaged sequence directly in native storage.</summary>
@@ -123,6 +125,119 @@ public sealed class NativeBuilder<T> : IDisposable
         }
     }
 
+    /// <summary>Writes one bounded native range with explicit callback state.</summary>
+    /// <typeparam name="TState">The callback state type.</typeparam>
+    /// <param name="maximumAdditionalCount">The maximum number of elements for this write.</param>
+    /// <param name="state">The callback state.</param>
+    /// <param name="action">The static callback that writes and commits the initialized prefix.</param>
+    /// <param name="cancellationToken">The token that can cancel the complete builder.</param>
+    public void Write<TState>(
+        int maximumAdditionalCount,
+        scoped in TState state,
+        NativeBuilderWriteStateAction<T, TState> action,
+        CancellationToken cancellationToken = default)
+        where TState : allows ref struct
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(
+            maximumAdditionalCount);
+        ArgumentNullException.ThrowIfNull(action);
+        EnterOperation(nameof(Write));
+        try
+        {
+            IntPtr address = _block.Pointer;
+            int count = _count;
+            int capacity = _capacity;
+            NativeBuilderBorrow<T> borrow = new(
+                this,
+                ref address,
+                ref count,
+                ref capacity);
+            if (cancellationToken.CanBeCanceled)
+            {
+                borrow.Write(
+                    maximumAdditionalCount,
+                    in state,
+                    action,
+                    cancellationToken);
+            }
+            else
+            {
+                borrow.Write(
+                    maximumAdditionalCount,
+                    in state,
+                    action);
+            }
+
+            ThrowIfBorrowOperationFailed(count);
+            _count = count;
+        }
+        catch (Exception failure)
+        {
+            FailOperation(failure);
+            throw;
+        }
+        finally
+        {
+            ExitOperation();
+            GC.KeepAlive(this);
+        }
+    }
+
+    /// <summary>Writes one bounded native range with a compile-time callback.</summary>
+    /// <typeparam name="TState">The callback state type.</typeparam>
+    /// <typeparam name="TAction">The compile-time callback type.</typeparam>
+    /// <param name="maximumAdditionalCount">The maximum element count for this write.</param>
+    /// <param name="state">The callback state.</param>
+    /// <param name="cancellationToken">The token that can cancel the complete builder.</param>
+    public void Write<TState, TAction>(
+        int maximumAdditionalCount,
+        scoped in TState state,
+        CancellationToken cancellationToken = default)
+        where TState : allows ref struct
+        where TAction : struct, INativeBuilderWriteAction<T, TState>
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(
+            maximumAdditionalCount);
+        EnterOperation(nameof(Write));
+        try
+        {
+            IntPtr address = _block.Pointer;
+            int count = _count;
+            int capacity = _capacity;
+            NativeBuilderBorrow<T> borrow = new(
+                this,
+                ref address,
+                ref count,
+                ref capacity);
+            if (cancellationToken.CanBeCanceled)
+            {
+                borrow.Write<TState, TAction>(
+                    maximumAdditionalCount,
+                    in state,
+                    cancellationToken);
+            }
+            else
+            {
+                borrow.Write<TState, TAction>(
+                    maximumAdditionalCount,
+                    in state);
+            }
+
+            ThrowIfBorrowOperationFailed(count);
+            _count = count;
+        }
+        catch (Exception failure)
+        {
+            FailOperation(failure);
+            throw;
+        }
+        finally
+        {
+            ExitOperation();
+            GC.KeepAlive(this);
+        }
+    }
+
     /// <summary>Provides one exclusive builder borrow to a bounded callback.</summary>
     /// <param name="action">The callback that receives exclusive builder authority.</param>
     /// <param name="cancellationToken">The token that can cancel the complete builder.</param>
@@ -134,10 +249,78 @@ public sealed class NativeBuilder<T> : IDisposable
         EnterOperation(nameof(Borrow));
         try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            NativeBuilderBorrow<T> borrow = new(this);
+            bool canCancel = cancellationToken.CanBeCanceled;
+            if (canCancel)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+
+            IntPtr address = _block.Pointer;
+            int count = _count;
+            int capacity = _capacity;
+            NativeBuilderBorrow<T> borrow = new(
+                this,
+                ref address,
+                ref count,
+                ref capacity);
             action(ref borrow);
-            cancellationToken.ThrowIfCancellationRequested();
+            if (canCancel)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+
+            ThrowIfBorrowOperationFailed(count);
+            _count = count;
+        }
+        catch (Exception failure)
+        {
+            FailOperation(failure);
+            throw;
+        }
+        finally
+        {
+            ExitOperation();
+            GC.KeepAlive(this);
+        }
+    }
+
+    /// <summary>Provides one exclusive builder borrow with explicit callback state.</summary>
+    /// <typeparam name="TState">The callback state type.</typeparam>
+    /// <param name="state">The callback state.</param>
+    /// <param name="action">The static callback that receives builder authority.</param>
+    /// <param name="cancellationToken">The token that can cancel the complete builder.</param>
+    public void Borrow<TState>(
+        scoped in TState state,
+        NativeBuilderBorrowStateAction<T, TState> action,
+        CancellationToken cancellationToken = default)
+        where TState : allows ref struct
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        EnterOperation(nameof(Borrow));
+        try
+        {
+            bool canCancel = cancellationToken.CanBeCanceled;
+            if (canCancel)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+
+            IntPtr address = _block.Pointer;
+            int count = _count;
+            int capacity = _capacity;
+            NativeBuilderBorrow<T> borrow = new(
+                this,
+                ref address,
+                ref count,
+                ref capacity);
+            action(ref borrow, in state);
+            if (canCancel)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+
+            ThrowIfBorrowOperationFailed(count);
+            _count = count;
         }
         catch (Exception failure)
         {
@@ -184,11 +367,38 @@ public sealed class NativeBuilder<T> : IDisposable
 
         try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            NativeBuilderBorrow<T> firstBorrow = new(this);
-            NativeBuilderBorrow<T> secondBorrow = new(second);
+            bool canCancel = cancellationToken.CanBeCanceled;
+            if (canCancel)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+
+            IntPtr firstAddress = _block.Pointer;
+            int firstCount = _count;
+            int firstCapacity = _capacity;
+            IntPtr secondAddress = second._block.Pointer;
+            int secondCount = second._count;
+            int secondCapacity = second._capacity;
+            NativeBuilderBorrow<T> firstBorrow = new(
+                this,
+                ref firstAddress,
+                ref firstCount,
+                ref firstCapacity);
+            NativeBuilderBorrow<T> secondBorrow = new(
+                second,
+                ref secondAddress,
+                ref secondCount,
+                ref secondCapacity);
             action(ref firstBorrow, ref secondBorrow);
-            cancellationToken.ThrowIfCancellationRequested();
+            if (canCancel)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+
+            ThrowIfBorrowOperationFailed(firstCount);
+            ThrowIfBorrowOperationFailed(secondCount);
+            _count = firstCount;
+            second._count = secondCount;
         }
         catch (Exception failure)
         {
@@ -305,71 +515,24 @@ public sealed class NativeBuilder<T> : IDisposable
         }
     }
 
-    internal int ReadBorrowedState(
-        bool readCapacity)
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal unsafe Span<T> PrepareBorrowedRange(
+        int start,
+        int additionalCount,
+        ref IntPtr address,
+        ref int capacity)
     {
-        return readCapacity
-            ? _capacity
-            : _count;
-    }
+        int required = checked(start + additionalCount);
+        if (required > capacity)
+        {
+            EnsureCapacity(required);
+            address = _block.Pointer;
+            capacity = _capacity;
+        }
 
-    internal void AppendBorrowed(
-        T value,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            AppendDirect(value, _count);
-            _count++;
-            cancellationToken.ThrowIfCancellationRequested();
-        }
-        catch (Exception failure)
-        {
-            FailOperation(failure);
-            throw;
-        }
-    }
-
-    internal void AppendBorrowed(
-        scoped ReadOnlySpan<T> source,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            int required = checked(_count + source.Length);
-            AppendDirect(source, _count, required);
-            _count = required;
-            cancellationToken.ThrowIfCancellationRequested();
-        }
-        catch (Exception failure)
-        {
-            FailOperation(failure);
-            throw;
-        }
-    }
-
-    internal void WriteBorrowed(
-        int maximumAdditionalCount,
-        NativeBuilderWriteAction<T> action,
-        CancellationToken cancellationToken)
-    {
-        ArgumentOutOfRangeException.ThrowIfNegative(
-            maximumAdditionalCount);
-        ArgumentNullException.ThrowIfNull(action);
-        try
-        {
-            WriteCore(
-                maximumAdditionalCount,
-                action,
-                cancellationToken);
-        }
-        catch (Exception failure)
-        {
-            FailOperation(failure);
-            throw;
-        }
+        return new Span<T>(
+            ((T*)address) + start,
+            additionalCount);
     }
 
     private void WriteCore(
@@ -377,20 +540,31 @@ public sealed class NativeBuilder<T> : IDisposable
         NativeBuilderWriteAction<T> action,
         CancellationToken cancellationToken)
     {
-        cancellationToken.ThrowIfCancellationRequested();
+        bool canCancel = cancellationToken.CanBeCanceled;
+        if (canCancel)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+
         int required = checked(
             _count + maximumAdditionalCount);
         Span<T> values = PrepareWriteDirect(
             _count,
             required,
             maximumAdditionalCount);
-        cancellationToken.ThrowIfCancellationRequested();
+        if (canCancel)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+        }
 
         int committedCount = -1;
         action(new NativeBuilderWriter<T>(
             values,
             ref committedCount));
-        cancellationToken.ThrowIfCancellationRequested();
+        if (canCancel)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+        }
         if (committedCount < 0)
         {
             throw new InvalidOperationException(
@@ -437,6 +611,16 @@ public sealed class NativeBuilder<T> : IDisposable
     private void ExitOperation()
     {
         Volatile.Write(ref _writerGate, 0);
+    }
+
+    private static void ThrowIfBorrowOperationFailed(
+        int count)
+    {
+        if (count < 0)
+        {
+            throw new InvalidOperationException(
+                "The builder borrow contains a failed operation.");
+        }
     }
 
     private void EnterTerminalOperation(

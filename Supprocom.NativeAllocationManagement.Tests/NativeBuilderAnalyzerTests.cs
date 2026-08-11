@@ -1355,6 +1355,414 @@ public sealed class NativeBuilderAnalyzerTests
         Assert.Contains("NAM1044", ids);
     }
 
+    [Fact]
+    public async Task StateWriteAcceptsStaticCallbacksAndNestedHelpers()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public readonly record struct WriteState(int Start, int Count);
+
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    using NativeBuilder<int> owner = new(preLease: 4);
+                    WriteState first = new(3, 2);
+                    owner.Write(first.Count, in first, Write);
+                    WriteState second = new(7, 2);
+                    owner.Borrow(
+                        in second,
+                        static (
+                            scoped ref NativeBuilderBorrow<int> borrow,
+                            scoped in WriteState state) =>
+                            borrow.Write(
+                                state.Count,
+                                in state,
+                                static (
+                                    scoped NativeBuilderWriter<int> writer,
+                                    scoped in WriteState writeState) =>
+                                    WriteNested(
+                                        ref writer,
+                                        in writeState)));
+                    NativeTransfer<int> transfer = owner.Complete();
+                    transfer.Dispose();
+                }
+
+                private static void Write(
+                    scoped NativeBuilderWriter<int> writer,
+                    scoped in WriteState state) =>
+                    WriteNested(ref writer, in state);
+
+                private static void WriteNested(
+                    scoped ref NativeBuilderWriter<int> writer,
+                    scoped in WriteState state)
+                {
+                    for (int index = 0; index < state.Count; index++)
+                    {
+                        writer.AsSpan()[index] = state.Start + index;
+                    }
+
+                    writer.Commit(state.Count);
+                }
+            }
+            """);
+
+        AssertNoNativeDiagnostics(diagnostics);
+    }
+
+    [Fact]
+    public async Task StateWriteRejectsCapturingAndIndirectCallbacks()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public readonly record struct WriteState(int Value);
+
+            public static class Sample
+            {
+                public static void Run(bool useFirst)
+                {
+                    using NativeBuilder<int> builder = new(preLease: 2);
+                    WriteState state = new(5);
+                    int captured = 7;
+                    builder.Write(
+                        1,
+                        in state,
+                        (
+                            scoped NativeBuilderWriter<int> writer,
+                            scoped in WriteState callbackState) =>
+                        {
+                            writer.AsSpan()[0] =
+                                callbackState.Value + captured;
+                            writer.Commit(1);
+                        });
+                    NativeBuilderWriteStateAction<int, WriteState> stored =
+                        Direct;
+                    builder.Write(1, in state, stored);
+                    builder.Write(
+                        1,
+                        in state,
+                        Identity(Direct));
+                    builder.Dispose();
+                }
+
+                private static NativeBuilderWriteStateAction<int, WriteState>
+                    Identity(
+                        NativeBuilderWriteStateAction<int, WriteState> action) =>
+                    action;
+
+                private static void Direct(
+                    scoped NativeBuilderWriter<int> writer,
+                    scoped in WriteState state)
+                {
+                    writer.AsSpan()[0] = state.Value;
+                    writer.Commit(1);
+                }
+            }
+            """);
+
+        Assert.True(
+            NativeDiagnostics(diagnostics)
+                .Count(id => id == "NAM1046") >= 3,
+            string.Join(Environment.NewLine, diagnostics));
+    }
+
+    [Fact]
+    public async Task StateWriteRejectsEscapeBoxingAndUnscopedForwarding()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using System;
+            using Supprocom.NativeAllocationManagement;
+
+            public readonly record struct WriteState(int Value);
+
+            public static class Sample
+            {
+                private static WriteState _stored;
+
+                public static void Run()
+                {
+                    using NativeBuilder<int> builder = new(preLease: 2);
+                    WriteState state = new(11);
+                    builder.Write(1, in state, Escape);
+                    builder.Dispose();
+                }
+
+                private static void Escape(
+                    scoped NativeBuilderWriter<int> writer,
+                    scoped in WriteState state)
+                {
+                    WriteState alias = state;
+                    _stored = state;
+                    object boxed = state;
+                    Forward(state);
+                    Action capture = () => Console.WriteLine(state.Value);
+                    capture();
+                    writer.Commit(0);
+                }
+
+                private static void Forward(WriteState state)
+                {
+                }
+            }
+            """);
+
+        string[] ids = NativeDiagnostics(diagnostics);
+        Assert.Contains("NAM1045", ids);
+        Assert.Contains("NAM1046", ids);
+    }
+
+    [Fact]
+    public async Task StateWriteRejectsOwnershipBearingState()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public readonly record struct OwnerState(
+                NativeBuilder<int> Builder,
+                int Value);
+
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    using NativeBuilder<int> builder = new(preLease: 2);
+                    OwnerState state = new(builder, 13);
+                    builder.Write(1, in state, Write);
+                    builder.Dispose();
+                }
+
+                private static void Write(
+                    scoped NativeBuilderWriter<int> writer,
+                    scoped in OwnerState state)
+                {
+                    writer.AsSpan()[0] = state.Value;
+                    writer.Commit(1);
+                }
+            }
+            """);
+
+        Assert.Contains("NAM1046", NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task CompileTimeStateWriteAcceptsOwnerAndBorrowedWrites()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public readonly record struct WriteState(int Start, int Count);
+
+            public readonly struct WriteAction
+                : INativeBuilderWriteAction<int, WriteState>
+            {
+                public static void Invoke(
+                    scoped NativeBuilderWriter<int> writer,
+                    scoped in WriteState state) =>
+                    WriteNested(ref writer, in state);
+
+                private static void WriteNested(
+                    scoped ref NativeBuilderWriter<int> writer,
+                    scoped in WriteState state)
+                {
+                    for (int index = 0; index < state.Count; index++)
+                    {
+                        writer.AsSpan()[index] = state.Start + index;
+                    }
+
+                    writer.Commit(state.Count);
+                }
+            }
+
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    using NativeBuilder<int> builder = new(preLease: 4);
+                    WriteState first = new(3, 2);
+                    builder.Write<WriteState, WriteAction>(
+                        first.Count,
+                        in first);
+                    WriteState second = new(7, 2);
+                    builder.Borrow(
+                        in second,
+                        static (
+                            scoped ref NativeBuilderBorrow<int> borrow,
+                            scoped in WriteState state) =>
+                            borrow.Write<WriteState, WriteAction>(
+                                state.Count,
+                                in state));
+                    NativeTransfer<int> transfer = builder.Complete();
+                    transfer.Dispose();
+                }
+            }
+            """);
+
+        AssertNoNativeDiagnostics(diagnostics);
+    }
+
+    [Fact]
+    public async Task CompileTimeStateWriteRejectsEscapedAuthorityAndState()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using System;
+            using Supprocom.NativeAllocationManagement;
+
+            public readonly record struct WriteState(int Value);
+
+            public readonly struct InvalidAction
+                : INativeBuilderWriteAction<int, WriteState>
+            {
+                private static WriteState _stored;
+
+                public static void Invoke(
+                    scoped NativeBuilderWriter<int> writer,
+                    scoped in WriteState state)
+                {
+                    NativeBuilderWriter<int> alias = writer;
+                    Span<int> view = writer.AsSpan();
+                    Store(view);
+                    _stored = state;
+                    object boxed = state;
+                    alias.Commit(0);
+                    _ = boxed;
+                }
+
+                private static void Store(Span<int> values)
+                {
+                }
+            }
+
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    using NativeBuilder<int> builder = new(preLease: 1);
+                    WriteState state = new(5);
+                    builder.Write<WriteState, InvalidAction>(1, in state);
+                    builder.Dispose();
+                }
+            }
+            """);
+
+        string[] ids = NativeDiagnostics(diagnostics);
+        Assert.Contains("NAM1041", ids);
+        Assert.Contains("NAM1042", ids);
+        Assert.Contains("NAM1045", ids);
+        Assert.Contains("NAM1046", ids);
+    }
+
+    [Fact]
+    public async Task CompileTimeStateWriteRejectsOwnerStateAndMissingAction()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public readonly record struct OwnerState(
+                NativeBuilder<int> Builder,
+                int Value);
+
+            public readonly struct OwnerAction
+                : INativeBuilderWriteAction<int, OwnerState>
+            {
+                public static void Invoke(
+                    scoped NativeBuilderWriter<int> writer,
+                    scoped in OwnerState state)
+                {
+                    writer.AsSpan()[0] = state.Value;
+                    writer.Commit(1);
+                }
+            }
+
+            public readonly struct MissingAction
+                : INativeBuilderWriteAction<int, int>
+            {
+            }
+
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    using NativeBuilder<int> builder = new(preLease: 1);
+                    OwnerState state = new(builder, 5);
+                    builder.Write<OwnerState, OwnerAction>(1, in state);
+                    int value = 7;
+                    builder.Write<int, MissingAction>(1, in value);
+                    builder.Dispose();
+                }
+            }
+            """);
+
+        Assert.True(
+            NativeDiagnostics(diagnostics)
+                .Count(id => id == "NAM1046") >= 2,
+            string.Join(Environment.NewLine, diagnostics));
+    }
+
+    [Fact]
+    public async Task CompileTimeStateWriteRejectsAsyncOrIteratorAction()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using System.Collections.Generic;
+            using System.Threading.Tasks;
+            using Supprocom.NativeAllocationManagement;
+
+            public readonly struct AsyncAction
+                : INativeBuilderWriteAction<int, int>
+            {
+                public static async void Invoke(
+                    scoped NativeBuilderWriter<int> writer,
+                    scoped in int state)
+                {
+                    await Task.Yield();
+                    writer.Commit(0);
+                }
+            }
+
+            public readonly struct IteratorAction
+                : INativeBuilderWriteAction<int, int>
+            {
+                public static IEnumerable<int> Invoke(
+                    scoped NativeBuilderWriter<int> writer,
+                    scoped in int state)
+                {
+                    writer.Commit(0);
+                    yield return state;
+                }
+            }
+
+            public static class Sample
+            {
+                public static void Run(bool useAsync)
+                {
+                    using NativeBuilder<int> builder = new(preLease: 1);
+                    int state = 0;
+                    if (useAsync)
+                    {
+                        builder.Write<int, AsyncAction>(0, in state);
+                    }
+                    else
+                    {
+                        builder.Write<int, IteratorAction>(0, in state);
+                    }
+
+                    builder.Dispose();
+                }
+            }
+            """);
+
+        Assert.Contains("NAM1046", NativeDiagnostics(diagnostics));
+    }
+
     private static Task<ImmutableArray<Diagnostic>> AnalyzeAsync(
         string source) =>
         AnalyzerContractTests.AnalyzeAsync(source);

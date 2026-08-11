@@ -94,6 +94,13 @@ internal static class Program
         }
 
         if (args.Length != 0
+            && args[0] is "--native-builder-state"
+                or "--native-builder-state-worker")
+        {
+            return await NativeBuilderStateRegression.RunCommandAsync(args);
+        }
+
+        if (args.Length != 0
             && args[0] is "--pooled-regression" or "--pooled-regression-worker")
         {
             return await PooledPerformanceRegression.RunCommandAsync(args);

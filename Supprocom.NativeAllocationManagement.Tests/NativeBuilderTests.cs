@@ -121,6 +121,189 @@ public sealed class NativeBuilderTests
         transfer.Dispose();
     }
 
+    [Fact]
+    public void StateWriteForwardsStateThroughNestedHelpers()
+    {
+        using NativeBuilder<int> builder =
+            new NativeBuilder<int>(preLease: 4);
+        WriteState state = new(Start: 5, Count: 4);
+
+        builder.Write(
+            state.Count,
+            in state,
+            WriteStateValues);
+        NativeTransfer<int> transfer = builder.Complete();
+
+        Assert.Equal(
+            new[] { 5, 6, 7, 8 },
+            transfer.Read(
+                static view => view.AsSpan().ToArray()));
+        transfer.Dispose();
+    }
+
+    [Fact]
+    public void BorrowedStateWriteUsesTheSameWritePipeline()
+    {
+        using NativeBuilder<int> builder =
+            new NativeBuilder<int>(preLease: 4);
+        WriteState state = new(Start: 11, Count: 3);
+
+        builder.Borrow(
+            in state,
+            static (
+                scoped ref NativeBuilderBorrow<int> borrow,
+                scoped in WriteState callbackState) =>
+                borrow.Write(
+                    callbackState.Count,
+                    in callbackState,
+                    WriteStateValues));
+        NativeTransfer<int> transfer = builder.Complete();
+
+        Assert.Equal(
+            new[] { 11, 12, 13 },
+            transfer.Read(
+                static view => view.AsSpan().ToArray()));
+        transfer.Dispose();
+    }
+
+    [Fact]
+    public void CompileTimeStateWriteUsesTheSameWritePipeline()
+    {
+        using NativeBuilder<int> builder =
+            new NativeBuilder<int>(preLease: 4);
+        WriteState state = new(Start: 41, Count: 4);
+
+        builder.Write<WriteState, CompileTimeStateWriter>(
+            state.Count,
+            in state);
+        NativeTransfer<int> transfer = builder.Complete();
+
+        Assert.Equal(
+            new[] { 41, 42, 43, 44 },
+            transfer.Read(static view => view.AsSpan().ToArray()));
+        transfer.Dispose();
+    }
+
+    [Fact]
+    public void BorrowedCompileTimeStateWriteUsesTheSamePipeline()
+    {
+        using NativeBuilder<int> builder =
+            new NativeBuilder<int>(preLease: 3);
+        WriteState state = new(Start: 47, Count: 3);
+
+        builder.Borrow(
+            in state,
+            static (
+                scoped ref NativeBuilderBorrow<int> borrow,
+                scoped in WriteState callbackState) =>
+                borrow.Write<WriteState, CompileTimeStateWriter>(
+                    callbackState.Count,
+                    in callbackState));
+        NativeTransfer<int> transfer = builder.Complete();
+
+        Assert.Equal(
+            new[] { 47, 48, 49 },
+            transfer.Read(static view => view.AsSpan().ToArray()));
+        transfer.Dispose();
+    }
+
+    [Fact]
+    public void StateWriteSupportsARefStructState()
+    {
+        using NativeBuilder<int> builder =
+            new NativeBuilder<int>(preLease: 4);
+        ReadOnlySpan<int> source = [17, 19, 23];
+        SpanWriteState state = new(source);
+
+        builder.Write(
+            source.Length,
+            in state,
+            WriteSpanState);
+        NativeTransfer<int> transfer = builder.Complete();
+
+        Assert.Equal(
+            new[] { 17, 19, 23 },
+            transfer.Read(
+                static view => view.AsSpan().ToArray()));
+        transfer.Dispose();
+    }
+
+    [Fact]
+    public void StateWriteCallbackFailureReturnsStorageExactlyOnce()
+    {
+        using NativeMetricsScope metrics = new();
+        NativeBuilder<int> builder =
+            new NativeBuilder<int>(preLease: 2);
+        WriteState state = new(Start: 29, Count: 2);
+
+        Assert.Throws<FormatException>(
+            () => builder.Write(
+                state.Count,
+                in state,
+                FailStateWrite));
+
+        builder.Dispose();
+        builder.Dispose();
+        metrics.AssertBalanced();
+    }
+
+    [Fact]
+    public void BorrowedStateWriteCancellationReturnsStorageExactlyOnce()
+    {
+        using NativeMetricsScope metrics = new();
+        NativeBuilder<int> builder =
+            new NativeBuilder<int>(preLease: 2);
+        using CancellationTokenSource cancellation = new();
+        WriteState state = new(Start: 31, Count: 2);
+
+        cancellation.Cancel();
+        Assert.Throws<OperationCanceledException>(
+            () => builder.Borrow(
+                in state,
+                static (
+                    scoped ref NativeBuilderBorrow<int> borrow,
+                    scoped in WriteState callbackState) =>
+                    borrow.Write(
+                        callbackState.Count,
+                        in callbackState,
+                        WriteStateValues,
+                        new CancellationToken(canceled: true))));
+
+        builder.Dispose();
+        metrics.AssertBalanced();
+    }
+
+    [Fact]
+    public void StateWriteGrowthFailureReturnsStorageExactlyOnce()
+    {
+        NativeMemoryTestHooks.Reset();
+        try
+        {
+            NativeBuilder<int> builder =
+                new NativeBuilder<int>(preLease: 1);
+            WriteState state = new(Start: 37, Count: 4);
+            NativeMemoryTestHooks.FailNextAllocation();
+
+            Assert.Throws<NativeAllocationFailedException>(
+                () => builder.Write(
+                    state.Count,
+                    in state,
+                    WriteStateValues));
+
+            builder.Dispose();
+            NativeMemoryTestMetrics metrics =
+                NativeMemoryTestHooks.Snapshot();
+            Assert.Equal(
+                metrics.AllocationCount,
+                metrics.FreeCount);
+            Assert.Equal(0, metrics.OutstandingNativeBytes);
+        }
+        finally
+        {
+            NativeMemoryTestHooks.Reset();
+        }
+    }
+
     [Theory]
     [InlineData(-1)]
     [InlineData(3)]
@@ -1006,6 +1189,53 @@ public sealed class NativeBuilderTests
         second.Append([7, 11, 13]);
     }
 
+    private static void WriteStateValues(
+        scoped NativeBuilderWriter<int> writer,
+        scoped in WriteState state)
+    {
+        WriteStateValuesNested(ref writer, in state);
+    }
+
+    private static void WriteStateValuesNested(
+        scoped ref NativeBuilderWriter<int> writer,
+        scoped in WriteState state)
+    {
+        Span<int> values = writer.AsSpan();
+        for (int index = 0; index < state.Count; index++)
+        {
+            values[index] = state.Start + index;
+        }
+
+        writer.Commit(state.Count);
+    }
+
+    private static void WriteSpanState(
+        scoped NativeBuilderWriter<int> writer,
+        scoped in SpanWriteState state)
+    {
+        state.Values.CopyTo(writer.AsSpan());
+        writer.Commit(state.Values.Length);
+    }
+
+    private static void FailStateWrite(
+        scoped NativeBuilderWriter<int> writer,
+        scoped in WriteState state)
+    {
+        writer.AsSpan()[0] = state.Start;
+        throw new FormatException("Expected test failure.");
+    }
+
+    private readonly struct CompileTimeStateWriter
+        : INativeBuilderWriteAction<int, WriteState>
+    {
+        public static void Invoke(
+            scoped NativeBuilderWriter<int> writer,
+            scoped in WriteState state)
+        {
+            WriteStateValues(writer, in state);
+        }
+    }
+
     private static IEnumerable<OpCode> ReadOpCodes(MethodInfo method)
     {
         MethodBody? body = method.GetMethodBody();
@@ -1075,5 +1305,17 @@ public sealed class NativeBuilderTests
         }
 
         public void Dispose() => NativeMemoryTestHooks.Reset();
+    }
+
+    private readonly record struct WriteState(int Start, int Count);
+
+    private readonly ref struct SpanWriteState
+    {
+        internal SpanWriteState(ReadOnlySpan<int> values)
+        {
+            Values = values;
+        }
+
+        internal ReadOnlySpan<int> Values { get; }
     }
 }

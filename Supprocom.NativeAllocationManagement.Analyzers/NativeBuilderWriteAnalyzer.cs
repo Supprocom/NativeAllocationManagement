@@ -35,13 +35,25 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
         "Exclusive native builder borrow requires scoped ref authority",
         "Builder borrow '{0}' cannot use '{1}'. Forward it only through a source-visible scoped ref parameter.");
 
+    private static readonly DiagnosticDescriptor StateEscape = Create(
+        "NAM1045",
+        "Native builder write state cannot escape",
+        "Builder write state '{0}' cannot escape through '{1}'. Keep it inside the active Write callback.");
+
+    private static readonly DiagnosticDescriptor InvalidStateAuthority = Create(
+        "NAM1046",
+        "Native builder write state requires direct authority",
+        "Builder write state '{0}' cannot use '{1}'. Use one exact static callback and scoped input state.");
+
     /// <inheritdoc />
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics =>
         ImmutableArray.Create(
             ViewEscape,
             InvalidAuthority,
             BorrowEscape,
-            InvalidBorrowAuthority);
+            InvalidBorrowAuthority,
+            StateEscape,
+            InvalidStateAuthority);
 
     /// <inheritdoc />
     public override void Initialize(AnalysisContext context)
@@ -104,6 +116,27 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
                 anonymous.Body,
                 parameters,
                 [],
+                [],
+                symbols,
+                context.ReportDiagnostic,
+                expressionReturn: false);
+            return;
+        }
+
+        if (parameters.Length == 2
+            && (symbols.IsWriter(parameters[0].Type)
+                || symbols.IsBorrow(parameters[0].Type))
+            && !symbols.IsBorrow(parameters[1].Type))
+        {
+            AnalyzeAuthorityBody(
+                anonymous.Body,
+                symbols.IsWriter(parameters[0].Type)
+                    ? [parameters[0]]
+                    : [],
+                symbols.IsBorrow(parameters[0].Type)
+                    ? [parameters[0]]
+                    : [],
+                [parameters[1]],
                 symbols,
                 context.ReportDiagnostic,
                 expressionReturn: false);
@@ -124,6 +157,7 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
             anonymous.Body,
             [],
             parameters,
+            [],
             symbols,
             context.ReportDiagnostic,
             expressionReturn: false);
@@ -188,7 +222,23 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
         IParameterSymbol[] borrows = method.Parameters
             .Where(parameter => symbols.IsBorrow(parameter.Type))
             .ToArray();
-        if (writers.Length == 0 && borrows.Length == 0)
+        IParameterSymbol[] states = writers.Length + borrows.Length == 1
+                && method.Parameters.Length == 2
+            ? method.Parameters
+                .Where(parameter =>
+                    !writers.Any(writer =>
+                        SymbolEqualityComparer.Default.Equals(
+                            parameter,
+                            writer))
+                    && !borrows.Any(borrow =>
+                        SymbolEqualityComparer.Default.Equals(
+                            parameter,
+                            borrow)))
+                .ToArray()
+            : [];
+        if (writers.Length == 0
+            && borrows.Length == 0
+            && states.Length == 0)
         {
             return;
         }
@@ -213,6 +263,7 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
             operation,
             writers,
             borrows,
+            states,
             symbols,
             context.ReportDiagnostic,
             expressionBody && !method.ReturnsVoid);
@@ -246,6 +297,29 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
             return;
         }
 
+        if (symbols.IsBuilderStateWrite(invocation.TargetMethod))
+        {
+            AnalyzeStateCallbackArgument(
+                context.ReportDiagnostic,
+                invocation,
+                symbols,
+                symbols.IsWriteStateAction,
+                symbols.IsWriter,
+                RefKind.None,
+                "writer state");
+            return;
+        }
+
+        if (symbols.IsBuilderCompileTimeStateWrite(
+                invocation.TargetMethod))
+        {
+            AnalyzeCompileTimeStateWrite(
+                context.ReportDiagnostic,
+                invocation,
+                symbols);
+            return;
+        }
+
         if (symbols.IsBuilderWrite(invocation.TargetMethod))
         {
             AnalyzeCallbackArgument(
@@ -269,6 +343,19 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
                 RefKind.Ref,
                 InvalidBorrowAuthority,
                 "borrow");
+            return;
+        }
+
+        if (symbols.IsBuilderStateBorrow(invocation.TargetMethod))
+        {
+            AnalyzeStateCallbackArgument(
+                context.ReportDiagnostic,
+                invocation,
+                symbols,
+                symbols.IsBorrowStateAction,
+                symbols.IsBorrow,
+                RefKind.Ref,
+                "borrow state");
         }
     }
 
@@ -276,6 +363,7 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
         IOperation body,
         IParameterSymbol[] writers,
         IParameterSymbol[] borrows,
+        IParameterSymbol[] states,
         Symbols symbols,
         Action<Diagnostic> report,
         bool expressionReturn)
@@ -306,6 +394,20 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
             }
 
             borrowWalker.Visit(body);
+        }
+
+        if (states.Length != 0)
+        {
+            StateUsageWalker stateWalker = new(
+                symbols,
+                states,
+                report);
+            if (expressionReturn)
+            {
+                stateWalker.ReportExpressionReturn(body);
+            }
+
+            stateWalker.Visit(body);
         }
     }
 
@@ -341,6 +443,162 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
                 "an indirect callback"));
         }
     }
+
+    private static void AnalyzeStateCallbackArgument(
+        Action<Diagnostic> report,
+        IInvocationOperation invocation,
+        Symbols symbols,
+        Func<ITypeSymbol?, bool> isAction,
+        Func<ITypeSymbol?, bool> isAuthority,
+        RefKind authorityRefKind,
+        string authorityName)
+    {
+        IArgumentOperation? callback = invocation.Arguments
+            .FirstOrDefault(argument =>
+                isAction(argument.Parameter?.Type));
+        if (callback is null
+            || callback.Parameter?.Type is not INamedTypeSymbol actionType
+            || actionType.TypeArguments.Length != 2)
+        {
+            return;
+        }
+
+        ITypeSymbol stateType = actionType.TypeArguments[1];
+        if (!IsDirectStateCallback(
+                callback.Value,
+                symbols,
+                stateType,
+                isAuthority,
+                authorityRefKind))
+        {
+            report(Diagnostic.Create(
+                InvalidStateAuthority,
+                callback.Syntax.GetLocation(),
+                authorityName,
+                "an indirect or capturing callback"));
+        }
+
+        IArgumentOperation? state = invocation.Arguments
+            .FirstOrDefault(argument =>
+                argument.Parameter?.RefKind == RefKind.In);
+        if (state is not null
+            && symbols.IsOwnerBearingState(stateType))
+        {
+            report(Diagnostic.Create(
+                InvalidStateAuthority,
+                state.Syntax.GetLocation(),
+                "state",
+                "an ownership-bearing state type"));
+        }
+    }
+
+    private static void AnalyzeCompileTimeStateWrite(
+        Action<Diagnostic> report,
+        IInvocationOperation invocation,
+        Symbols symbols)
+    {
+        if (!symbols.TryGetCompileTimeStateWrite(
+                invocation.TargetMethod,
+                out ITypeSymbol stateType,
+                out IMethodSymbol action))
+        {
+            report(Diagnostic.Create(
+                InvalidStateAuthority,
+                invocation.Syntax.GetLocation(),
+                "writer state",
+                "an unresolved compile-time callback"));
+            return;
+        }
+
+        if (action.IsAsync
+            || action.DeclaringSyntaxReferences.Length != 1
+            || HasDirectYield(action.DeclaringSyntaxReferences[0]
+                .GetSyntax()))
+        {
+            report(Diagnostic.Create(
+                InvalidStateAuthority,
+                invocation.Syntax.GetLocation(),
+                "writer state",
+                "an asynchronous or iterator callback"));
+        }
+
+        IArgumentOperation? state = invocation.Arguments
+            .FirstOrDefault(argument =>
+                argument.Parameter?.RefKind == RefKind.In);
+        if (state is not null
+            && symbols.IsOwnerBearingState(stateType))
+        {
+            report(Diagnostic.Create(
+                InvalidStateAuthority,
+                state.Syntax.GetLocation(),
+                "state",
+                "an ownership-bearing state type"));
+        }
+    }
+
+    private static bool HasDirectYield(SyntaxNode declaration) =>
+        declaration.DescendantNodes(descendIntoChildren: node =>
+            node is not AnonymousFunctionExpressionSyntax
+                and not LocalFunctionStatementSyntax)
+            .Any(node => node is YieldStatementSyntax);
+
+    private static bool IsDirectStateCallback(
+        IOperation value,
+        Symbols symbols,
+        ITypeSymbol stateType,
+        Func<ITypeSymbol?, bool> isAuthority,
+        RefKind authorityRefKind)
+    {
+        IOperation callback = UnwrapCallbackValue(value);
+        if (callback is IAnonymousFunctionOperation anonymous)
+        {
+            return anonymous.Syntax
+                    is AnonymousFunctionExpressionSyntax syntax
+                && syntax.Modifiers.Any(modifier =>
+                    modifier.IsKind(SyntaxKind.StaticKeyword))
+                && !anonymous.Symbol.IsAsync
+                && HasStateCallbackParameters(
+                    anonymous.Symbol.Parameters,
+                    symbols,
+                    stateType,
+                    isAuthority,
+                    authorityRefKind);
+        }
+
+        if (callback is not IMethodReferenceOperation reference)
+        {
+            return false;
+        }
+
+        IMethodSymbol method = reference.Method;
+        IMethodSymbol declaration = method.OriginalDefinition;
+        return method.ReturnsVoid
+            && method.IsStatic
+            && !method.IsAsync
+            && declaration.DeclaringSyntaxReferences.Length == 1
+            && HasStateCallbackParameters(
+                method.Parameters,
+                symbols,
+                stateType,
+                isAuthority,
+                authorityRefKind);
+    }
+
+    private static bool HasStateCallbackParameters(
+        ImmutableArray<IParameterSymbol> parameters,
+        Symbols symbols,
+        ITypeSymbol stateType,
+        Func<ITypeSymbol?, bool> isAuthority,
+        RefKind authorityRefKind) =>
+        parameters.Length == 2
+        && parameters[0].RefKind == authorityRefKind
+        && parameters[0].ScopedKind != ScopedKind.None
+        && isAuthority(parameters[0].Type)
+        && parameters[1].RefKind == RefKind.In
+        && parameters[1].ScopedKind != ScopedKind.None
+        && SymbolEqualityComparer.Default.Equals(
+            parameters[1].Type,
+            stateType);
 
     private static bool IsDirectCallback(
         IOperation value,
@@ -457,12 +715,18 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
                 Namespace + "NativeBuilderWriter`1");
             WriteAction = runtimeAssembly.GetTypeByMetadataName(
                 Namespace + "NativeBuilderWriteAction`1");
+            WriteStateAction = runtimeAssembly.GetTypeByMetadataName(
+                Namespace + "NativeBuilderWriteStateAction`2");
+            CompileTimeWriteAction = runtimeAssembly.GetTypeByMetadataName(
+                Namespace + "INativeBuilderWriteAction`2");
             Borrow = runtimeAssembly.GetTypeByMetadataName(
                 Namespace + "NativeBuilderBorrow`1");
             BorrowAction = runtimeAssembly.GetTypeByMetadataName(
                 Namespace + "NativeBuilderBorrowAction`1");
             PairBorrowAction = runtimeAssembly.GetTypeByMetadataName(
                 Namespace + "NativeBuilderPairBorrowAction`1");
+            BorrowStateAction = runtimeAssembly.GetTypeByMetadataName(
+                Namespace + "NativeBuilderBorrowStateAction`2");
         }
 
         internal INamedTypeSymbol? Builder { get; }
@@ -471,19 +735,28 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
 
         internal INamedTypeSymbol? WriteAction { get; }
 
+        internal INamedTypeSymbol? WriteStateAction { get; }
+
+        internal INamedTypeSymbol? CompileTimeWriteAction { get; }
+
         internal INamedTypeSymbol? Borrow { get; }
 
         internal INamedTypeSymbol? BorrowAction { get; }
 
         internal INamedTypeSymbol? PairBorrowAction { get; }
 
+        internal INamedTypeSymbol? BorrowStateAction { get; }
+
         internal bool IsAvailable =>
             Builder is not null
             && Writer is not null
             && WriteAction is not null
+            && WriteStateAction is not null
+            && CompileTimeWriteAction is not null
             && Borrow is not null
             && BorrowAction is not null
-            && PairBorrowAction is not null;
+            && PairBorrowAction is not null
+            && BorrowStateAction is not null;
 
         internal bool IsBuilderWrite(IMethodSymbol method) =>
             method.Name == "Write"
@@ -492,17 +765,103 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
             && method.Parameters.Any(parameter =>
                 IsWriteAction(parameter.Type));
 
+        internal bool IsBuilderStateWrite(IMethodSymbol method) =>
+            method.Name == "Write"
+            && (Is(method.ContainingType, Builder)
+                || Is(method.ContainingType, Borrow))
+            && method.Parameters.Any(parameter =>
+                IsWriteStateAction(parameter.Type));
+
+        internal bool IsBuilderCompileTimeStateWrite(
+            IMethodSymbol method) =>
+            method.Name == "Write"
+            && (Is(method.ContainingType, Builder)
+                || Is(method.ContainingType, Borrow))
+            && method.TypeArguments.Length == 2
+            && method.Parameters.Any(parameter =>
+                parameter.RefKind == RefKind.In)
+            && !method.Parameters.Any(parameter =>
+                IsWriteStateAction(parameter.Type));
+
+        internal bool TryGetCompileTimeStateWrite(
+            IMethodSymbol method,
+            out ITypeSymbol stateType,
+            out IMethodSymbol action)
+        {
+            stateType = null!;
+            action = null!;
+            if (!IsBuilderCompileTimeStateWrite(method)
+                || method.TypeArguments[1]
+                    is not INamedTypeSymbol actionType
+                || actionType.TypeKind != TypeKind.Struct
+                || actionType.DeclaringSyntaxReferences.Length != 1
+                || method.ContainingType.TypeArguments.Length != 1)
+            {
+                return false;
+            }
+
+            ITypeSymbol resolvedStateType = method.TypeArguments[0];
+            ITypeSymbol elementType =
+                method.ContainingType.TypeArguments[0];
+            INamedTypeSymbol? contract = actionType.AllInterfaces
+                .SingleOrDefault(candidate =>
+                    Is(candidate, CompileTimeWriteAction)
+                    && candidate.TypeArguments.Length == 2
+                    && SymbolEqualityComparer.Default.Equals(
+                        candidate.TypeArguments[0],
+                        elementType)
+                    && SymbolEqualityComparer.Default.Equals(
+                        candidate.TypeArguments[1],
+                        resolvedStateType));
+            IMethodSymbol? contractMethod = contract?
+                .GetMembers("Invoke")
+                .OfType<IMethodSymbol>()
+                .SingleOrDefault();
+            IMethodSymbol? resolvedAction = contractMethod is null
+                ? null
+                : actionType.FindImplementationForInterfaceMember(
+                    contractMethod) as IMethodSymbol;
+            if (resolvedAction is null
+                || !resolvedAction.IsStatic
+                || !resolvedAction.ReturnsVoid
+                || resolvedAction.Parameters.Length != 2
+                || resolvedAction.Parameters[0].RefKind != RefKind.None
+                || resolvedAction.Parameters[0].ScopedKind == ScopedKind.None
+                || !IsWriter(resolvedAction.Parameters[0].Type)
+                || resolvedAction.Parameters[1].RefKind != RefKind.In
+                || resolvedAction.Parameters[1].ScopedKind == ScopedKind.None
+                || !SymbolEqualityComparer.Default.Equals(
+                    resolvedAction.Parameters[1].Type,
+                    resolvedStateType))
+            {
+                return false;
+            }
+
+            stateType = resolvedStateType;
+            action = resolvedAction;
+            return true;
+        }
+
         internal bool IsBuilderBorrow(IMethodSymbol method) =>
             method.Name == "Borrow"
             && Is(method.ContainingType, Builder)
             && method.Parameters.Any(parameter =>
                 GetBorrowActionArity(parameter.Type) != 0);
 
+        internal bool IsBuilderStateBorrow(IMethodSymbol method) =>
+            method.Name == "Borrow"
+            && Is(method.ContainingType, Builder)
+            && method.Parameters.Any(parameter =>
+                IsBorrowStateAction(parameter.Type));
+
         internal bool IsWriter(ITypeSymbol? type) =>
             Is(type, Writer);
 
         internal bool IsWriteAction(ITypeSymbol? type) =>
             Is(type, WriteAction);
+
+        internal bool IsWriteStateAction(ITypeSymbol? type) =>
+            Is(type, WriteStateAction);
 
         internal int GetWriteActionArity(ITypeSymbol? type) =>
             IsWriteAction(type) ? 1 : 0;
@@ -512,6 +871,9 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
 
         internal bool IsBorrowAction(ITypeSymbol? type) =>
             Is(type, BorrowAction);
+
+        internal bool IsBorrowStateAction(ITypeSymbol? type) =>
+            Is(type, BorrowStateAction);
 
         internal int GetBorrowActionArity(ITypeSymbol? type)
         {
@@ -525,6 +887,49 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
 
         internal bool IsBuilder(ITypeSymbol? type) =>
             Is(type, Builder);
+
+        internal bool IsOwnerBearingState(ITypeSymbol type) =>
+            IsOwnerBearingState(
+                type,
+                new HashSet<ITypeSymbol>(
+                    SymbolEqualityComparer.Default));
+
+        internal bool IsScopedInForward(
+            IParameterSymbol? parameter,
+            ITypeSymbol stateType)
+        {
+            if (parameter is null
+                || parameter.RefKind != RefKind.In
+                || parameter.ScopedKind == ScopedKind.None
+                || !SymbolEqualityComparer.Default.Equals(
+                    parameter.Type,
+                    stateType)
+                || parameter.ContainingSymbol
+                    is not IMethodSymbol method
+                || method.DeclaringSyntaxReferences.Length != 1)
+            {
+                return false;
+            }
+
+            IParameterSymbol declaration =
+                method.OriginalDefinition.Parameters[
+                    parameter.Ordinal];
+            return declaration.RefKind == RefKind.In
+                && declaration.ScopedKind != ScopedKind.None;
+        }
+
+        internal bool IsStateBoundaryForward(
+            IArgumentOperation argument,
+            ITypeSymbol stateType) =>
+            argument.Parent is IInvocationOperation invocation
+            && argument.Parameter?.RefKind == RefKind.In
+            && SymbolEqualityComparer.Default.Equals(
+                argument.Parameter.Type,
+                stateType)
+            && (IsBuilderStateWrite(invocation.TargetMethod)
+                || IsBuilderStateBorrow(invocation.TargetMethod)
+                || IsBuilderCompileTimeStateWrite(
+                    invocation.TargetMethod));
 
         internal bool IsScopedRefForward(
             IParameterSymbol? parameter,
@@ -564,6 +969,95 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
             string name = named.OriginalDefinition.ToDisplayString();
             return name is "System.Span<T>"
                 or "System.ReadOnlySpan<T>";
+        }
+
+        private bool IsOwnerBearingState(
+            ITypeSymbol type,
+            HashSet<ITypeSymbol> visited)
+        {
+            if (!visited.Add(type)
+                || type.SpecialType != SpecialType.None
+                    && type.SpecialType != SpecialType.System_Object)
+            {
+                return false;
+            }
+
+            if (type.SpecialType == SpecialType.System_Object
+                || type.TypeKind is TypeKind.Dynamic
+                    or TypeKind.Interface
+                    or TypeKind.Delegate
+                    or TypeKind.Pointer
+                    or TypeKind.FunctionPointer
+                    or TypeKind.TypeParameter)
+            {
+                return true;
+            }
+
+            if (type is IArrayTypeSymbol array)
+            {
+                return IsOwnerBearingState(
+                    array.ElementType,
+                    visited);
+            }
+
+            if (type is not INamedTypeSymbol named)
+            {
+                return false;
+            }
+
+            if (IsNamOwnershipType(named))
+            {
+                return true;
+            }
+
+            if (named.IsTupleType
+                && named.TupleElements.Any(element =>
+                    IsOwnerBearingState(
+                        element.Type,
+                        visited)))
+            {
+                return true;
+            }
+
+            if (!named.Locations.Any(location =>
+                location.IsInSource))
+            {
+                return false;
+            }
+
+            return named.GetMembers()
+                .OfType<IFieldSymbol>()
+                .Where(field => !field.IsStatic)
+                .Any(field => IsOwnerBearingState(
+                    field.Type,
+                    visited));
+        }
+
+        private static bool IsNamOwnershipType(
+            INamedTypeSymbol type)
+        {
+            if (type.ContainingNamespace.ToDisplayString()
+                != "Supprocom.NativeAllocationManagement")
+            {
+                return false;
+            }
+
+            return type.OriginalDefinition.Name is
+                "NativePool"
+                or "NativeConcurrentPool"
+                or "NativeRegion"
+                or "NativeArena"
+                or "NativeConcurrentArena"
+                or "Pooled"
+                or "ConcurrentPooled"
+                or "Local"
+                or "ArenaLease"
+                or "ConcurrentArenaLease"
+                or "NativeTransfer"
+                or "NativeBuilder"
+                or "NativeBuilderBorrow"
+                or "NativeBuilderWriter"
+                or "NativeWorkspace";
         }
 
         private static bool Is(
@@ -816,6 +1310,266 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
                     IsWriter(reference.Parameter));
             return parameter?.Parameter.Name ?? "view";
         }
+
+        private void Report(
+            DiagnosticDescriptor descriptor,
+            SyntaxNode syntax,
+            string name,
+            string destination)
+        {
+            TextSpan span = syntax.Span;
+            DiagnosticKey key = new(
+                descriptor.Id,
+                syntax.SyntaxTree,
+                span.Start,
+                span.Length);
+            if (_reported.Add(key))
+            {
+                _report(Diagnostic.Create(
+                    descriptor,
+                    syntax.GetLocation(),
+                    name,
+                    destination));
+            }
+        }
+    }
+
+    private sealed class StateUsageWalker : OperationWalker
+    {
+        private readonly Symbols _symbols;
+        private readonly IParameterSymbol[] _states;
+        private readonly Action<Diagnostic> _report;
+        private readonly HashSet<DiagnosticKey> _reported = [];
+
+        internal StateUsageWalker(
+            Symbols symbols,
+            IParameterSymbol[] states,
+            Action<Diagnostic> report)
+        {
+            _symbols = symbols;
+            _states = states;
+            _report = report;
+        }
+
+        internal void ReportExpressionReturn(IOperation operation)
+        {
+            if (ContainsState(operation))
+            {
+                Report(
+                    StateEscape,
+                    operation.Syntax,
+                    StateName(operation),
+                    "the helper return");
+            }
+        }
+
+        public override void VisitParameterReference(
+            IParameterReferenceOperation operation)
+        {
+            if (IsState(operation.Parameter)
+                && !IsPermittedUse(operation))
+            {
+                Report(
+                    InvalidStateAuthority,
+                    operation.Syntax,
+                    operation.Parameter.Name,
+                    "an alias or unscoped operation");
+            }
+
+            base.VisitParameterReference(operation);
+        }
+
+        public override void VisitVariableDeclarator(
+            IVariableDeclaratorOperation operation)
+        {
+            if (IsDirectStateValue(operation.Initializer?.Value))
+            {
+                Report(
+                    StateEscape,
+                    operation.Syntax,
+                    StateName(operation.Initializer?.Value),
+                    "a local alias");
+            }
+
+            base.VisitVariableDeclarator(operation);
+        }
+
+        public override void VisitSimpleAssignment(
+            ISimpleAssignmentOperation operation)
+        {
+            if (IsDirectStateValue(operation.Value))
+            {
+                Report(
+                    StateEscape,
+                    operation.Syntax,
+                    StateName(operation.Value),
+                    "an assignment");
+            }
+
+            base.VisitSimpleAssignment(operation);
+        }
+
+        public override void VisitReturn(IReturnOperation operation)
+        {
+            if (ContainsState(operation.ReturnedValue))
+            {
+                Report(
+                    StateEscape,
+                    operation.Syntax,
+                    StateName(operation.ReturnedValue),
+                    "the callback return");
+            }
+
+            base.VisitReturn(operation);
+        }
+
+        public override void VisitArgument(IArgumentOperation operation)
+        {
+            if (IsDirectStateValue(operation.Value))
+            {
+                IParameterReferenceOperation reference = operation.Value
+                    .DescendantsAndSelf()
+                    .OfType<IParameterReferenceOperation>()
+                    .First(item => IsState(item.Parameter));
+                if (!_symbols.IsScopedInForward(
+                        operation.Parameter,
+                        reference.Parameter.Type)
+                    && !_symbols.IsStateBoundaryForward(
+                        operation,
+                        reference.Parameter.Type))
+                {
+                    Report(
+                        StateEscape,
+                        operation.Syntax,
+                        reference.Parameter.Name,
+                        "an unscoped call");
+                }
+            }
+            else if (ContainsState(operation.Value)
+                && operation.Value.Type?.IsRefLikeType == true
+                && operation.Parameter?.ScopedKind
+                    == ScopedKind.None)
+            {
+                Report(
+                    StateEscape,
+                    operation.Syntax,
+                    StateName(operation.Value),
+                    "an unscoped derived view");
+            }
+
+            base.VisitArgument(operation);
+        }
+
+        public override void VisitAnonymousFunction(
+            IAnonymousFunctionOperation operation)
+        {
+            IParameterReferenceOperation? captured = operation.Body
+                .DescendantsAndSelf()
+                .OfType<IParameterReferenceOperation>()
+                .FirstOrDefault(reference =>
+                    IsState(reference.Parameter));
+            if (captured is not null)
+            {
+                Report(
+                    StateEscape,
+                    operation.Syntax,
+                    captured.Parameter.Name,
+                    "a nested callback");
+                return;
+            }
+
+            base.VisitAnonymousFunction(operation);
+        }
+
+        public override void VisitLocalFunction(
+            ILocalFunctionOperation operation)
+        {
+            IParameterReferenceOperation? captured = operation.Body
+                .DescendantsAndSelf()
+                .OfType<IParameterReferenceOperation>()
+                .FirstOrDefault(reference =>
+                    IsState(reference.Parameter));
+            if (captured is not null)
+            {
+                Report(
+                    StateEscape,
+                    operation.Syntax,
+                    captured.Parameter.Name,
+                    "a nested local function");
+                return;
+            }
+
+            base.VisitLocalFunction(operation);
+        }
+
+        private bool IsPermittedUse(
+            IParameterReferenceOperation reference)
+        {
+            IOperation? parent = reference.Parent;
+            while (parent is IConversionOperation conversion
+                && conversion.IsImplicit)
+            {
+                parent = parent.Parent;
+            }
+
+            if (parent is IFieldReferenceOperation field
+                && ReferenceEquals(field.Instance, reference)
+                || parent is IPropertyReferenceOperation property
+                && ReferenceEquals(property.Instance, reference)
+                || parent is IArrayElementReferenceOperation array
+                && ReferenceEquals(array.ArrayReference, reference))
+            {
+                return true;
+            }
+
+            return parent is IArgumentOperation argument
+                && (_symbols.IsScopedInForward(
+                        argument.Parameter,
+                        reference.Parameter.Type)
+                    || _symbols.IsStateBoundaryForward(
+                        argument,
+                        reference.Parameter.Type));
+        }
+
+        private bool IsDirectStateValue(IOperation? operation)
+        {
+            IOperation? current = operation;
+            while (current is IConversionOperation conversion
+                && conversion.OperatorMethod is null
+                && conversion.Conversion.IsIdentity
+                || current is IParenthesizedOperation)
+            {
+                current = current switch
+                {
+                    IConversionOperation item => item.Operand,
+                    IParenthesizedOperation item => item.Operand,
+                    _ => current
+                };
+            }
+
+            return current is IParameterReferenceOperation reference
+                && IsState(reference.Parameter);
+        }
+
+        private bool ContainsState(IOperation? operation) =>
+            operation?.DescendantsAndSelf()
+                .OfType<IParameterReferenceOperation>()
+                .Any(reference => IsState(reference.Parameter))
+            == true;
+
+        private bool IsState(IParameterSymbol parameter) =>
+            _states.Any(state =>
+                SymbolEqualityComparer.Default.Equals(
+                    state,
+                    parameter));
+
+        private string StateName(IOperation? operation) =>
+            operation?.DescendantsAndSelf()
+                .OfType<IParameterReferenceOperation>()
+                .FirstOrDefault(reference =>
+                    IsState(reference.Parameter))
+                ?.Parameter.Name
+            ?? "state";
 
         private void Report(
             DiagnosticDescriptor descriptor,

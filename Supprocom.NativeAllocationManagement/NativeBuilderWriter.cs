@@ -29,8 +29,7 @@ public readonly ref struct NativeBuilderWriter<T>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Commit(int actualCount)
     {
-        ArgumentOutOfRangeException.ThrowIfNegative(actualCount);
-        if (actualCount > _values.Length)
+        if ((uint)actualCount > (uint)_values.Length)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(actualCount),
@@ -52,3 +51,25 @@ public readonly ref struct NativeBuilderWriter<T>
 public delegate void NativeBuilderWriteAction<T>(
     scoped NativeBuilderWriter<T> writer)
     where T : unmanaged;
+
+/// <summary>Writes one bounded builder range with explicit callback state.</summary>
+/// <typeparam name="T">The unmanaged element type.</typeparam>
+/// <typeparam name="TState">The callback state type.</typeparam>
+public delegate void NativeBuilderWriteStateAction<T, TState>(
+    scoped NativeBuilderWriter<T> writer,
+    scoped in TState state)
+    where T : unmanaged
+    where TState : allows ref struct;
+
+/// <summary>Defines one compile-time state writer for a bounded builder range.</summary>
+/// <typeparam name="T">The unmanaged element type.</typeparam>
+/// <typeparam name="TState">The callback state type.</typeparam>
+public interface INativeBuilderWriteAction<T, TState>
+    where T : unmanaged
+    where TState : allows ref struct
+{
+    /// <summary>Writes and commits one bounded native range.</summary>
+    static abstract void Invoke(
+        scoped NativeBuilderWriter<T> writer,
+        scoped in TState state);
+}
