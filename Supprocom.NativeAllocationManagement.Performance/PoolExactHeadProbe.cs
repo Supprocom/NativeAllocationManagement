@@ -28,12 +28,15 @@ internal static class PoolExactHeadProbe
         using Process process = Process.GetCurrentProcess();
         TimeSpan processorBefore = process.TotalProcessorTime;
         long allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
-        Stopwatch clock = Stopwatch.StartNew();
+        long timestampBefore = Stopwatch.GetTimestamp();
         long checksum = RunIterations(pool, measuredIterations);
-        clock.Stop();
+        long timestampAfter = Stopwatch.GetTimestamp();
+        long allocatedAfter = GC.GetAllocatedBytesForCurrentThread();
         TimeSpan processorAfter = process.TotalProcessorTime;
-        long allocated = GC.GetAllocatedBytesForCurrentThread()
-            - allocatedBefore;
+        TimeSpan elapsed = Stopwatch.GetElapsedTime(
+            timestampBefore,
+            timestampAfter);
+        long allocated = allocatedAfter - allocatedBefore;
         NativeOwnerStatistics after = pool.GetStatistics();
 
         double processorMilliseconds =
@@ -42,10 +45,10 @@ internal static class PoolExactHeadProbe
             warmupIterations,
             measuredIterations,
             ReservedBytes: 1,
-            clock.Elapsed.TotalMilliseconds,
+            elapsed.TotalMilliseconds,
             processorMilliseconds,
             MeasuredOperationsPerSecond:
-                measuredIterations / clock.Elapsed.TotalSeconds,
+                measuredIterations / elapsed.TotalSeconds,
             MeasuredProcessorOperationsPerSecond:
                 measuredIterations
                 / (processorMilliseconds / 1_000d),
