@@ -130,10 +130,33 @@ public sealed class PublicSurfaceTests
             builderFields,
             field => field.Name is "_borrowEpoch"
                 or "_activeBorrowAuthority");
-        FieldInfo borrowField = Assert.Single(
-            typeof(NativeBuilderBorrow<int>).GetFields(
-                BindingFlags.Instance | BindingFlags.NonPublic));
-        Assert.Equal(typeof(NativeBuilder<int>), borrowField.FieldType);
+        FieldInfo[] borrowFields = typeof(NativeBuilderBorrow<int>)
+            .GetFields(BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.Equal(4, borrowFields.Length);
+        Assert.Equal(
+            typeof(NativeBuilder<int>),
+            Assert.Single(
+                borrowFields,
+                static field => field.Name == "_builder").FieldType);
+        Assert.Equal(
+            typeof(IntPtr).MakeByRefType(),
+            Assert.Single(
+                borrowFields,
+                static field => field.Name == "_address").FieldType);
+        Assert.Equal(
+            typeof(int).MakeByRefType(),
+            Assert.Single(
+                borrowFields,
+                static field => field.Name == "_count").FieldType);
+        Assert.Equal(
+            typeof(int).MakeByRefType(),
+            Assert.Single(
+                borrowFields,
+                static field => field.Name == "_capacity").FieldType);
+        Assert.DoesNotContain(
+            borrowFields,
+            static field => field.Name is "_borrowEpoch"
+                or "_activeBorrowAuthority");
         ConstructorInfo arenaConstructor = Assert.Single(typeof(NativeArena).GetConstructors());
         Assert.Contains(arenaConstructor.GetParameters(), parameter => parameter.Name == "returnMemoryOnDispose");
         Assert.DoesNotContain(
