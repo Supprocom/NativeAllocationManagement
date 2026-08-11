@@ -166,8 +166,8 @@ public sealed class ArenaAnalyzerContractTests
                     {
                         try
                         {
-                            { scoped ConcurrentPooled<int> first = pool.LeaseScoped(2, static writer => writer.Fill(default!)); first[0] = index; }
-                            { scoped ConcurrentPooled<int> second = pool.LeaseScoped(2, static writer => writer.Fill(default!)); second[0] = index + 1; }
+                            { scoped ConcurrentPooled<int> first = pool.LeaseScoped(2, static writer => writer.Fill(default!)); first.Access(view => view[0] = index); }
+                            { scoped ConcurrentPooled<int> second = pool.LeaseScoped(2, static writer => writer.Fill(default!)); second.Access(view => view[0] = index + 1); }
                         }
                         finally
                         {
@@ -249,7 +249,7 @@ public sealed class ArenaAnalyzerContractTests
                 public static void Run()
                 {
                     NativeConcurrentPool<int> pool = new();
-                    { scoped ConcurrentPooled<int> pooled = pool.LeaseScoped(2, static writer => writer.Fill(default!)); pooled[0] = 1; }
+                    { scoped ConcurrentPooled<int> pooled = pool.LeaseScoped(2, static writer => writer.Fill(default!)); pooled.Access(static view => view[0] = 1); }
                     pool.RecycleScoped();
                     pool.Dispose();
                 }

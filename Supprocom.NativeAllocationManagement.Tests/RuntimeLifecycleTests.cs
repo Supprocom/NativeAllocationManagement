@@ -58,8 +58,8 @@ public sealed class RuntimeLifecycleTests
                 writer.Write(3);
                 writer.Write(4);
             });
-        Assert.Equal(1, lease[0]);
-        Assert.Equal(4, lease[3]);
+        Assert.Equal(1, lease.Read(__namIndexedView => __namIndexedView[0]));
+        Assert.Equal(4, lease.Read(__namIndexedView => __namIndexedView[3]));
         Assert.Equal(0, NativeMemoryTestHooks.Snapshot().ZeroedAllocationCount);
 
         lease.Dispose();
@@ -87,12 +87,12 @@ public sealed class RuntimeLifecycleTests
                 range.Complete();
             });
 
-        Assert.Equal(1, lease[0]);
-        Assert.Equal(2, lease[1]);
-        Assert.Equal(3, lease[2]);
-        Assert.Equal(4, lease[3]);
-        Assert.Equal(5, lease[4]);
-        Assert.Equal(5, lease[5]);
+        Assert.Equal(1, lease.Read(__namIndexedView => __namIndexedView[0]));
+        Assert.Equal(2, lease.Read(__namIndexedView => __namIndexedView[1]));
+        Assert.Equal(3, lease.Read(__namIndexedView => __namIndexedView[2]));
+        Assert.Equal(4, lease.Read(__namIndexedView => __namIndexedView[3]));
+        Assert.Equal(5, lease.Read(__namIndexedView => __namIndexedView[4]));
+        Assert.Equal(5, lease.Read(__namIndexedView => __namIndexedView[5]));
         lease.Dispose();
         pool.Dispose();
     }
@@ -169,10 +169,10 @@ public sealed class RuntimeLifecycleTests
                 replacement.Complete();
             });
 
-        Assert.Equal(7, lease[0]);
-        Assert.Equal(11, lease[1]);
-        Assert.Equal(13, lease[2]);
-        Assert.Equal(7, lease[3]);
+        Assert.Equal(7, lease.Read(__namIndexedView => __namIndexedView[0]));
+        Assert.Equal(11, lease.Read(__namIndexedView => __namIndexedView[1]));
+        Assert.Equal(13, lease.Read(__namIndexedView => __namIndexedView[2]));
+        Assert.Equal(7, lease.Read(__namIndexedView => __namIndexedView[3]));
         lease.Dispose();
         pool.Dispose();
     }
@@ -196,11 +196,11 @@ public sealed class RuntimeLifecycleTests
                 initialized[2] = 11;
             });
 
-        Assert.Equal(3, lease[0]);
-        Assert.Equal(5, lease[1]);
-        Assert.Equal(7, lease[2]);
-        Assert.Equal(11, lease[3]);
-        Assert.Equal(3, lease[4]);
+        Assert.Equal(3, lease.Read(__namIndexedView => __namIndexedView[0]));
+        Assert.Equal(5, lease.Read(__namIndexedView => __namIndexedView[1]));
+        Assert.Equal(7, lease.Read(__namIndexedView => __namIndexedView[2]));
+        Assert.Equal(11, lease.Read(__namIndexedView => __namIndexedView[3]));
+        Assert.Equal(3, lease.Read(__namIndexedView => __namIndexedView[4]));
         lease.Dispose();
         pool.Dispose();
     }
@@ -289,12 +289,12 @@ public sealed class RuntimeLifecycleTests
                 writer.Fill(5, 1, 31);
             });
 
-        Assert.Equal(7, lease[0]);
-        Assert.Equal(11, lease[1]);
-        Assert.Equal(22, lease[2]);
-        Assert.Equal(11, lease[3]);
-        Assert.Equal(29, lease[4]);
-        Assert.Equal(31, lease[5]);
+        Assert.Equal(7, lease.Read(__namIndexedView => __namIndexedView[0]));
+        Assert.Equal(11, lease.Read(__namIndexedView => __namIndexedView[1]));
+        Assert.Equal(22, lease.Read(__namIndexedView => __namIndexedView[2]));
+        Assert.Equal(11, lease.Read(__namIndexedView => __namIndexedView[3]));
+        Assert.Equal(29, lease.Read(__namIndexedView => __namIndexedView[4]));
+        Assert.Equal(31, lease.Read(__namIndexedView => __namIndexedView[5]));
         lease.Dispose();
         pool.Dispose();
     }
@@ -345,8 +345,8 @@ public sealed class RuntimeLifecycleTests
                 writer.Write(3);
                 writer.Write(4);
             });
-        Assert.Equal(1, valid[0]);
-        Assert.Equal(4, valid[3]);
+        Assert.Equal(1, valid.Read(__namIndexedView => __namIndexedView[0]));
+        Assert.Equal(4, valid.Read(__namIndexedView => __namIndexedView[3]));
         valid.Dispose();
         pool.Dispose();
     }
@@ -384,8 +384,8 @@ public sealed class RuntimeLifecycleTests
                 writer.Write(replacement);
                 writer.Fill(1, 3, first);
             });
-        Assert.Same(replacement, valid[0]);
-        Assert.Same(first, valid[3]);
+        Assert.Same(replacement, valid.Read(__namIndexedView => __namIndexedView[0]));
+        Assert.Same(first, valid.Read(__namIndexedView => __namIndexedView[3]));
         valid.Dispose();
         pool.Dispose();
     }
@@ -415,8 +415,8 @@ public sealed class RuntimeLifecycleTests
         ConcurrentPooled<object> lease = pool.Rent(
             4,
             static writer => writer.Fill(null!));
-        Assert.Null(lease[0]);
-        Assert.Null(lease[3]);
+        Assert.Null(lease.Read(__namIndexedView => __namIndexedView[0]));
+        Assert.Null(lease.Read(__namIndexedView => __namIndexedView[3]));
         lease.Dispose();
         pool.Dispose();
     }
@@ -540,7 +540,7 @@ public sealed class RuntimeLifecycleTests
         ConcurrentPooled<int> second = pool.Rent(9, static writer => writer.Fill(default!));
         Assert.Equal(4, first.Capacity);
         Assert.True(second.Capacity >= 9);
-        Assert.Equal(0, second[0]);
+        Assert.Equal(0, second.Read(__namIndexedView => __namIndexedView[0]));
 
         first.Access(static span => span.Fill(17));
         first.Dispose();
@@ -590,7 +590,7 @@ public sealed class RuntimeLifecycleTests
         NativeMemoryTestHooks.Reset();
         NativeConcurrentPool<int> pool = new(preLease: 4, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         ConcurrentPooled<int> oldLease = pool.Rent(1, static writer => writer.Fill(default!));
-        oldLease[0] = 12;
+        oldLease.Access(__namIndexedView => __namIndexedView[0] = 12);
 
         pool.ReturnMemoryToNativeMemory();
         long freeAfterReturn = NativeMemoryTestHooks.Snapshot().FreeCount;
@@ -601,7 +601,7 @@ public sealed class RuntimeLifecycleTests
 
         pool.LeaseFromMemory();
         ConcurrentPooled<int> newLease = pool.Rent(1, static writer => writer.Fill(default!));
-        Assert.Equal(0, newLease[0]);
+        Assert.Equal(0, newLease.Read(__namIndexedView => __namIndexedView[0]));
         newLease.Dispose();
         pool.Dispose();
         Assert.True(NativeMemoryTestHooks.Snapshot().FreeCount >= freeAfterReturn + 1);
@@ -631,7 +631,7 @@ public sealed class RuntimeLifecycleTests
         pool.ReturnMemoryToGarbageCollector();
         pool.LeaseFromMemory();
         ConcurrentPooled<int> newLease = pool.Rent(1, static writer => writer.Fill(default!));
-        Assert.Equal(0, newLease[0]);
+        Assert.Equal(0, newLease.Read(__namIndexedView => __namIndexedView[0]));
         Assert.IsType<NativeAllocationReturnedException>(CaptureReturned(oldLease));
         newLease.Dispose();
 
@@ -735,14 +735,14 @@ public sealed class RuntimeLifecycleTests
             DetachOldGenerationAndReleaseHandle(pool);
         pool.LeaseFromMemory();
         ConcurrentPooled<long> currentLease = pool.Rent(4, static writer => writer.Fill(default!));
-        Assert.Equal(0, currentLease[0]);
+        Assert.Equal(0, currentLease.Read(__namIndexedView => __namIndexedView[0]));
 
         GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
         GC.WaitForPendingFinalizers();
         GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
 
         Assert.True(NativeMemoryTestHooks.Snapshot().DetachedNativeBytes < detachedAfterReturn);
-        Assert.Equal(0, currentLease[0]);
+        Assert.Equal(0, currentLease.Read(__namIndexedView => __namIndexedView[0]));
         currentLease.Dispose();
         pool.Dispose();
     }
@@ -895,8 +895,8 @@ public sealed class RuntimeLifecycleTests
         NativeMemoryTestHooks.FailNextAllocation();
         NativeAllocationFailedException failure = Assert.Throws<NativeAllocationFailedException>(() => pool.Rent(100, static writer => writer.Fill(default!)));
         Assert.Equal(NativeOwnerLifecycle.Active, failure.CurrentLifecycle);
-        existing[0] = 7;
-        Assert.Equal(7, existing[0]);
+        existing.Access(__namIndexedView => __namIndexedView[0] = 7);
+        Assert.Equal(7, existing.Read(__namIndexedView => __namIndexedView[0]));
         existing.Dispose();
         pool.Dispose();
     }
@@ -944,7 +944,7 @@ public sealed class RuntimeLifecycleTests
 
         pool.LeaseFromMemory();
         ConcurrentPooled<int> lease = pool.Rent(1, static writer => writer.Fill(default!));
-        Assert.Equal(0, lease[0]);
+        Assert.Equal(0, lease.Read(__namIndexedView => __namIndexedView[0]));
         lease.Dispose();
         pool.Dispose();
     }
@@ -1003,7 +1003,7 @@ public sealed class RuntimeLifecycleTests
             4,
             static writer => writer.Fill(null!));
         object marker = new();
-        lease[0] = marker;
+        lease.Access(__namIndexedView => __namIndexedView[0] = marker);
         NativeMemoryTestHooks.FailNextClear();
 
         Exception? failure = null;
@@ -1017,13 +1017,13 @@ public sealed class RuntimeLifecycleTests
         }
 
         Assert.IsType<InvalidOperationException>(failure);
-        Assert.Same(marker, lease[0]);
+        Assert.Same(marker, lease.Read(__namIndexedView => __namIndexedView[0]));
 
         lease.Dispose();
         ConcurrentPooled<object> reused = pool.Rent(
             2,
             static writer => writer.Fill(null!));
-        Assert.Null(reused[0]);
+        Assert.Null(reused.Read(__namIndexedView => __namIndexedView[0]));
         reused.Dispose();
         pool.Dispose();
     }
@@ -1124,8 +1124,8 @@ public sealed class RuntimeLifecycleTests
     {
         NativeConcurrentPool<int> pool = new();
         ConcurrentPooled<int> lease = pool.Rent(2, static writer => writer.Fill(default!));
-        lease[0] = 11;
-        lease[1] = 12;
+        lease.Access(__namIndexedView => __namIndexedView[0] = 11);
+        lease.Access(__namIndexedView => __namIndexedView[1] = 12);
         int[] source = [31];
         int[] destination = [41];
 
@@ -1133,8 +1133,8 @@ public sealed class RuntimeLifecycleTests
         Assert.IsType<ArgumentException>(CaptureArgumentFailure(lease, 1));
         Assert.Equal(new[] { 31 }, source);
         Assert.Equal(new[] { 41 }, destination);
-        Assert.Equal(11, lease[0]);
-        Assert.Equal(12, lease[1]);
+        Assert.Equal(11, lease.Read(__namIndexedView => __namIndexedView[0]));
+        Assert.Equal(12, lease.Read(__namIndexedView => __namIndexedView[1]));
 
         lease.Dispose();
         pool.Dispose();
@@ -1256,7 +1256,7 @@ public sealed class RuntimeLifecycleTests
 
     private static void ReadFirst(ConcurrentPooled<int> lease)
     {
-        _ = lease[0];
+        _ = lease.Read(__namIndexedView => __namIndexedView[0]);
     }
 
     private static void ReadLocal(Local<byte> local)
@@ -1291,7 +1291,7 @@ public sealed class RuntimeLifecycleTests
     private static void ReadDefaultPooledIndexer()
     {
         ConcurrentPooled<int> value = default;
-        _ = value[0];
+        _ = value.Read(__namIndexedView => __namIndexedView[0]);
     }
 
     private static void ClearDefaultPooled()
@@ -1393,7 +1393,7 @@ public sealed class RuntimeLifecycleTests
                     lease.CopyTo(new int[1]);
                     break;
                 default:
-                    _ = lease[2];
+                    _ = lease.Read(__namIndexedView => __namIndexedView[2]);
                     break;
             }
         }

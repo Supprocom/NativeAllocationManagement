@@ -27,6 +27,10 @@ public sealed class PublicSurfaceTests
         Assert.NotNull(typeof(NativeConcurrentPool<int>).GetMethod("ReleaseLeasesToGarbageCollector"));
         Assert.NotNull(typeof(NativeArena).GetMethod("Scratch"));
         Assert.NotNull(typeof(NativeArena).GetMethod("ScratchScoped"));
+        Assert.Null(typeof(NativeConcurrentArena).GetMethod(
+            "ScratchTransferable"));
+        Assert.Null(typeof(ConcurrentPooled<int>).GetProperty("Item"));
+        Assert.Null(typeof(ConcurrentArenaLease<int>).GetProperty("Item"));
         Assert.NotNull(typeof(NativeRegion).GetMethod("Lease"));
         Assert.NotNull(typeof(NativePool<int>).GetMethod("GetStatistics"));
         Assert.NotNull(typeof(NativeArena).GetMethod("GetStatistics"));
@@ -120,6 +124,16 @@ public sealed class PublicSurfaceTests
         Assert.DoesNotContain(
             builderConstructor.GetParameters(),
             parameter => parameter.Name == "initialCapacity");
+        FieldInfo[] builderFields = typeof(NativeBuilder<int>).GetFields(
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.DoesNotContain(
+            builderFields,
+            field => field.Name is "_borrowEpoch"
+                or "_activeBorrowAuthority");
+        FieldInfo borrowField = Assert.Single(
+            typeof(NativeBuilderBorrow<int>).GetFields(
+                BindingFlags.Instance | BindingFlags.NonPublic));
+        Assert.Equal(typeof(NativeBuilder<int>), borrowField.FieldType);
         ConstructorInfo arenaConstructor = Assert.Single(typeof(NativeArena).GetConstructors());
         Assert.Contains(arenaConstructor.GetParameters(), parameter => parameter.Name == "returnMemoryOnDispose");
         Assert.DoesNotContain(

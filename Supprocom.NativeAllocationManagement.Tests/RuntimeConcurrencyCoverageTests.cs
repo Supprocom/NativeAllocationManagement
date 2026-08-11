@@ -7,7 +7,7 @@ public sealed class RuntimeConcurrencyCoverageTests
     [Fact]
     public async Task EveryNativeTouchAppliesTheSelectedReturnPolicyWhileEntered()
     {
-        string[] operations = ["get_Item", "set_Item", "Clear", "CopyFrom", "CopyTo", "Access", "Read"];
+        string[] operations = ["Clear", "CopyFrom", "CopyTo", "Access", "Read"];
         foreach (NativeMemoryReturn policy in Enum.GetValues<NativeMemoryReturn>())
         {
             NativeConcurrentPool<int> pool = new();
@@ -29,7 +29,7 @@ public sealed class RuntimeConcurrencyCoverageTests
     [Fact]
     public async Task EveryNativeTouchRejectsAWholeGenerationReturnThatWinsBeforeEntry()
     {
-        string[] operations = ["get_Item", "set_Item", "Clear", "CopyFrom", "CopyTo", "Access", "Read"];
+        string[] operations = ["Clear", "CopyFrom", "CopyTo", "Access", "Read"];
         foreach (NativeMemoryReturn policy in Enum.GetValues<NativeMemoryReturn>())
         {
             foreach (string operation in operations)
@@ -42,7 +42,7 @@ public sealed class RuntimeConcurrencyCoverageTests
     [Fact]
     public async Task EveryArenaNativeTouchAppliesBothReturnPoliciesWhileEntered()
     {
-        string[] operations = ["get_Item", "set_Item", "Clear", "CopyFrom", "CopyTo", "Access", "Read"];
+        string[] operations = ["Clear", "CopyFrom", "CopyTo", "Access", "Read"];
         foreach (NativeMemoryReturn policy in Enum.GetValues<NativeMemoryReturn>())
         {
             foreach (string operation in operations)
@@ -56,7 +56,7 @@ public sealed class RuntimeConcurrencyCoverageTests
     [Fact]
     public async Task EveryArenaNativeTouchRejectsASelectedTransitionThatWinsBeforeEntry()
     {
-        string[] operations = ["get_Item", "set_Item", "Clear", "CopyFrom", "CopyTo", "Access", "Read"];
+        string[] operations = ["Clear", "CopyFrom", "CopyTo", "Access", "Read"];
         foreach (NativeMemoryReturn policy in Enum.GetValues<NativeMemoryReturn>())
         {
             foreach (string operation in operations)
@@ -256,7 +256,7 @@ public sealed class RuntimeConcurrencyCoverageTests
             if (leaseException is null)
             {
                 ConcurrentPooled<int> lease = pool.Rent(1, static writer => writer.Fill(default!));
-                Assert.Equal(0, lease[0]);
+                Assert.Equal(0, lease.Read(__namIndexedView => __namIndexedView[0]));
                 lease.Dispose();
             }
 
@@ -436,8 +436,8 @@ public sealed class RuntimeConcurrencyCoverageTests
                 NativeMemoryTestHooks.SetOperationEntered(null);
                 pool.LeaseFromMemory();
                 ConcurrentPooled<int> current = pool.Rent(1, static writer => writer.Fill(default!));
-                current[0] = 17;
-                Assert.Equal(17, current[0]);
+                current.Access(__namIndexedView => __namIndexedView[0] = 17);
+                Assert.Equal(17, current.Read(__namIndexedView => __namIndexedView[0]));
                 current.Dispose();
 
                 release.Set();
@@ -600,12 +600,6 @@ public sealed class RuntimeConcurrencyCoverageTests
     {
         switch (operation)
         {
-            case "get_Item":
-                _ = lease[0];
-                break;
-            case "set_Item":
-                lease[0] = 2;
-                break;
             case "Clear":
                 lease.Clear();
                 break;
@@ -673,12 +667,6 @@ public sealed class RuntimeConcurrencyCoverageTests
         {
             switch (operation)
             {
-                case "get_Item":
-                    _ = lease[0];
-                    break;
-                case "set_Item":
-                    lease[0] = 2;
-                    break;
                 case "Clear":
                     lease.Clear();
                     break;

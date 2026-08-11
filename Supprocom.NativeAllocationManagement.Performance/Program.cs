@@ -87,14 +87,6 @@ internal static class Program
         }
 
         if (args.Length != 0
-            && args[0] is "--concurrent-arena"
-                or "--concurrent-arena-worker"
-                or "--concurrent-arena-session")
-        {
-            return await ConcurrentArenaBenchmark.RunCommandAsync(args);
-        }
-
-        if (args.Length != 0
             && args[0] is "--pooled-regression" or "--pooled-regression-worker")
         {
             return await PooledPerformanceRegression.RunCommandAsync(args);

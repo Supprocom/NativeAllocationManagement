@@ -1,3 +1,5 @@
+using System.Reflection;
+
 namespace Supprocom.NativeAllocationManagement.Tests;
 
 public sealed class NativeArenaFastLaneTests
@@ -79,6 +81,57 @@ public sealed class NativeArenaFastLaneTests
             CaptureRead(ordinary));
         Assert.IsType<NativeAllocationReturnedException>(
             CaptureRead(scoped));
+    }
+
+    [Fact]
+    public void ResetEpochExhaustionPermanentlyClosesTheArena()
+    {
+        NativeArena arena = new(
+            preAllocateBytes: 4_096,
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        ArenaLease<int> lease = arena.Scratch<int>(
+            1,
+            static writer => writer.Write(17));
+        SetEpoch(arena, "_generation");
+
+        NativeAllocationStateException failure = Assert.Throws<
+            NativeAllocationStateException>(arena.Reset);
+
+        Assert.Equal("Reset", failure.Operation);
+        Assert.Equal(
+            NativeOwnerLifecycle.Disposed,
+            arena.CurrentLifecycle);
+        Assert.IsType<NativeAllocationDisposedException>(
+            CaptureRead(lease));
+        arena.Dispose();
+    }
+
+    [Fact]
+    public void ScopedEpochExhaustionPermanentlyClosesTheArena()
+    {
+        NativeArena arena = new(
+            preAllocateBytes: 4_096,
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        ArenaLease<int> ordinary = arena.Scratch<int>(
+            1,
+            static writer => writer.Write(17));
+        ArenaLease<int> scoped = arena.ScratchScoped<int>(
+            1,
+            static writer => writer.Write(23));
+        SetEpoch(arena, "_scopeEpoch");
+
+        NativeAllocationStateException failure = Assert.Throws<
+            NativeAllocationStateException>(arena.RecycleScoped);
+
+        Assert.Equal("RecycleScoped", failure.Operation);
+        Assert.Equal(
+            NativeOwnerLifecycle.Disposed,
+            arena.CurrentLifecycle);
+        Assert.IsType<NativeAllocationDisposedException>(
+            CaptureRead(ordinary));
+        Assert.IsType<NativeAllocationDisposedException>(
+            CaptureRead(scoped));
+        arena.Dispose();
     }
 
     [Fact]
@@ -340,5 +393,25 @@ public sealed class NativeArenaFastLaneTests
 
         throw new Xunit.Sdk.XunitException(
             "Expected the Arena lease read to fail.");
+    }
+
+    private static void SetEpoch(
+        NativeArena arena,
+        string fieldName)
+    {
+        FieldInfo kernelField = typeof(NativeArena).GetField(
+            "_kernel",
+            BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new Xunit.Sdk.XunitException(
+                "NativeArena does not contain its kernel field.");
+        object kernel = kernelField.GetValue(arena)
+            ?? throw new Xunit.Sdk.XunitException(
+                "NativeArena did not publish its kernel state.");
+        FieldInfo epochField = kernel.GetType().GetField(
+            fieldName,
+            BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new Xunit.Sdk.XunitException(
+                "NativeArenaKernel does not contain the epoch field.");
+        epochField.SetValue(kernel, ulong.MaxValue);
     }
 }

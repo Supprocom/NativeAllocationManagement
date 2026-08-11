@@ -4424,11 +4424,9 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         private bool IsTransferFactoryInvocation(IOperation operation) =>
             operation is IInvocationOperation invocation
             && IsNativeTransfer(invocation.Type)
-            && (invocation.TargetMethod.Name == "RentTransferable"
-                    && invocation.TargetMethod.ContainingType.ToDisplayString()
-                        == "Supprocom.NativeAllocationManagement.NativeTransferPoolExtensions"
-                || invocation.TargetMethod.Name == "ScratchTransferable"
-                    && IsNativeArena(invocation.TargetMethod.ContainingType));
+            && invocation.TargetMethod.Name == "RentTransferable"
+            && invocation.TargetMethod.ContainingType.ToDisplayString()
+                == "Supprocom.NativeAllocationManagement.NativeTransferPoolExtensions";
 
         private bool IsBuilderFactoryOperation(IOperation operation) =>
             operation is IObjectCreationOperation creation
@@ -6091,8 +6089,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             }
 
             return IsNativeArena(invocation.TargetMethod.ContainingType)
-                && name is "ScratchTransferable"
-                    or "GetStatistics"
+                && name is "GetStatistics"
                     or "CaptureDiagnosticSnapshot";
         }
 

@@ -6,34 +6,25 @@ public readonly ref struct NativeBuilderBorrow<T>
     where T : unmanaged
 {
     private readonly NativeBuilder<T> _builder;
-    private readonly int _authority;
 
-    internal NativeBuilderBorrow(
-        NativeBuilder<T> builder,
-        int authority)
+    internal NativeBuilderBorrow(NativeBuilder<T> builder)
     {
         _builder = builder;
-        _authority = authority;
     }
 
     /// <summary>Gets the initialized element count.</summary>
     public int Count => _builder.ReadBorrowedState(
-        _authority,
         readCapacity: false);
 
     /// <summary>Gets the current native element capacity.</summary>
     public int Capacity => _builder.ReadBorrowedState(
-        _authority,
         readCapacity: true);
-
-    internal int AuthorityForTest => _authority;
 
     /// <summary>Appends one value through the exclusive borrow.</summary>
     public void Append(
         T value,
         CancellationToken cancellationToken = default) =>
         _builder.AppendBorrowed(
-            _authority,
             value,
             cancellationToken);
 
@@ -42,7 +33,6 @@ public readonly ref struct NativeBuilderBorrow<T>
         scoped ReadOnlySpan<T> source,
         CancellationToken cancellationToken = default) =>
         _builder.AppendBorrowed(
-            _authority,
             source,
             cancellationToken);
 
@@ -52,7 +42,6 @@ public readonly ref struct NativeBuilderBorrow<T>
         NativeBuilderWriteAction<T> action,
         CancellationToken cancellationToken = default) =>
         _builder.WriteBorrowed(
-            _authority,
             maximumAdditionalCount,
             action,
             cancellationToken);

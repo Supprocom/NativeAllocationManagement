@@ -367,45 +367,6 @@ public sealed class NativeBuilderTests
     }
 
     [Fact]
-    public void BorrowAuthorityExpiresAfterTheCallback()
-    {
-        using NativeBuilder<int> builder =
-            new NativeBuilder<int>(preLease: 2);
-        int authority = 0;
-
-        void RecordAuthority(
-            scoped ref NativeBuilderBorrow<int> borrow)
-        {
-            authority = borrow.AuthorityForTest;
-            borrow.Append(29);
-        }
-
-        builder.Borrow(RecordAuthority);
-        NativeBuilderBorrow<int> stale = new(
-            builder,
-            authority);
-
-        bool staleRejected = false;
-        try
-        {
-            stale.Append(31);
-        }
-        catch (InvalidOperationException)
-        {
-            staleRejected = true;
-        }
-
-        Assert.True(staleRejected);
-        builder.Append(31);
-        NativeTransfer<int> transfer = builder.Complete();
-        Assert.Equal(
-            new[] { 29, 31 },
-            transfer.Read(
-                static view => view.AsSpan().ToArray()));
-        transfer.Dispose();
-    }
-
-    [Fact]
     public void GeometricReallocationCreatesNoManagedIntermediateArray()
     {
         Type? resolvedAllocatorType =

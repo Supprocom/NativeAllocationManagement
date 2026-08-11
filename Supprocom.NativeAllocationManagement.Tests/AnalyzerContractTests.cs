@@ -1155,8 +1155,6 @@ public sealed class AnalyzerContractTests
                     pool.ReturnMemoryToNativeMemory();
                     _ = stale.Length;
                     _ = stale.Capacity;
-                    _ = stale[0];
-                    stale[0] = 1;
                     stale.Clear();
                     stale.CopyFrom(new int[2]);
                     stale.CopyTo(new int[2]);
@@ -1169,7 +1167,7 @@ public sealed class AnalyzerContractTests
             """);
 
         Assert.True(
-            NativeDiagnostics(diagnostics).Count(id => id == "NAM1004") >= 10,
+            NativeDiagnostics(diagnostics).Count(id => id == "NAM1004") >= 8,
             string.Join(", ", NativeDiagnostics(diagnostics)));
     }
 

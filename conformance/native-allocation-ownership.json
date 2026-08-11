@@ -181,20 +181,18 @@
     "compilerRejected": false,
     "expectedDiagnostics": [
       { "id": "NAM1007", "count": 1, "facts": [{ "line": 2, "column": 181, "provenance": "pool -> stale" }] },
-      { "id": "NAM1004", "count": 10, "facts": [
+      { "id": "NAM1004", "count": 8, "facts": [
         { "line": 2, "column": 220, "provenance": "stale -> Length" },
         { "line": 2, "column": 238, "provenance": "stale -> Capacity" },
-        { "line": 2, "column": 258, "provenance": "stale -> this[]" },
-        { "line": 2, "column": 268, "provenance": "stale -> this[]" },
-        { "line": 2, "column": 282, "provenance": "stale -> Clear" },
-        { "line": 2, "column": 297, "provenance": "stale -> CopyFrom" },
-        { "line": 2, "column": 325, "provenance": "stale -> CopyTo" },
-        { "line": 2, "column": 351, "provenance": "stale -> Access" },
-        { "line": 2, "column": 386, "provenance": "stale -> Read" },
-        { "line": 2, "column": 422, "provenance": "stale -> Dispose" }
+        { "line": 2, "column": 254, "provenance": "stale -> Clear" },
+        { "line": 2, "column": 269, "provenance": "stale -> CopyFrom" },
+        { "line": 2, "column": 297, "provenance": "stale -> CopyTo" },
+        { "line": 2, "column": 323, "provenance": "stale -> Access" },
+        { "line": 2, "column": 358, "provenance": "stale -> Read" },
+        { "line": 2, "column": 394, "provenance": "stale -> Dispose" }
       ] }
     ],
-    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativeConcurrentPool<int> pool = new(); ConcurrentPooled<int> stale = pool.Rent(2, static writer => writer.Fill(default!)); pool.ReturnMemoryToNativeMemory(); _ = stale.Length; _ = stale.Capacity; _ = stale[0]; stale[0] = 1; stale.Clear(); stale.CopyFrom(new int[2]); stale.CopyTo(new int[2]); stale.Access(static _ => { }); _ = stale.Read(static span => span[0]); stale.Dispose(); pool.Dispose(); } }"
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativeConcurrentPool<int> pool = new(); ConcurrentPooled<int> stale = pool.Rent(2, static writer => writer.Fill(default!)); pool.ReturnMemoryToNativeMemory(); _ = stale.Length; _ = stale.Capacity; stale.Clear(); stale.CopyFrom(new int[2]); stale.CopyTo(new int[2]); stale.Access(static _ => { }); _ = stale.Read(static span => span[0]); stale.Dispose(); pool.Dispose(); } }"
   },
   {
     "name": "var-spelling-and-multiple-pools",
@@ -462,7 +460,7 @@
     "name": "arena-scoped-recycle-complete",
     "compilerRejected": false,
     "expectedDiagnostics": [],
-    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativeConcurrentArena arena = new(); { scoped ConcurrentArenaLease<int> value = arena.ScratchScoped<int>(1, static writer => writer.Fill(default!)); value[0] = 1; } arena.RecycleScoped(); arena.Dispose(); } }"
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { NativeConcurrentArena arena = new(); { scoped ConcurrentArenaLease<int> value = arena.ScratchScoped<int>(1, static writer => writer.Fill(default!)); value.Access(static view => view[0] = 1); } arena.RecycleScoped(); arena.Dispose(); } }"
   },
   {
     "name": "arena-scoped-recycle-missing",
@@ -470,6 +468,6 @@
     "expectedDiagnostics": [
       { "id": "NAM1020", "count": 1, "severity": "Warning", "facts": [{ "line": 2, "column": 93, "provenance": "arena" }] }
     ],
-    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { using NativeConcurrentArena arena = new(); { scoped ConcurrentArenaLease<int> value = arena.ScratchScoped<int>(1, static writer => writer.Fill(default!)); value[0] = 1; } } }"
+    "source": "using Supprocom.NativeAllocationManagement;\npublic static class Sample { public static void Run() { using NativeConcurrentArena arena = new(); { scoped ConcurrentArenaLease<int> value = arena.ScratchScoped<int>(1, static writer => writer.Fill(default!)); value.Access(static view => view[0] = 1); } } }"
   }
 ]

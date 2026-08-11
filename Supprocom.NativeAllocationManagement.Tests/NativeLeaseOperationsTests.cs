@@ -75,14 +75,14 @@ public sealed class NativeLeaseOperationsTests
                 sections[0] = 39;
             });
 
-        Assert.Equal(36, first[0]);
-        Assert.Equal(37, second[0]);
-        Assert.Equal(38, third[0]);
-        Assert.Equal(22, first[1]);
-        Assert.Equal(34, arenaFirst[0]);
-        Assert.Equal(35, arenaSecond[0]);
-        Assert.Equal(39, arenaThird[0]);
-        Assert.Equal(30, arenaFourth[0]);
+        Assert.Equal(36, first.Read(__namIndexedView => __namIndexedView[0]));
+        Assert.Equal(37, second.Read(__namIndexedView => __namIndexedView[0]));
+        Assert.Equal(38, third.Read(__namIndexedView => __namIndexedView[0]));
+        Assert.Equal(22, first.Read(__namIndexedView => __namIndexedView[1]));
+        Assert.Equal(34, arenaFirst.Read(__namIndexedView => __namIndexedView[0]));
+        Assert.Equal(35, arenaSecond.Read(__namIndexedView => __namIndexedView[0]));
+        Assert.Equal(39, arenaThird.Read(__namIndexedView => __namIndexedView[0]));
+        Assert.Equal(30, arenaFourth.Read(__namIndexedView => __namIndexedView[0]));
     }
 
     [Fact]
@@ -95,8 +95,8 @@ public sealed class NativeLeaseOperationsTests
         ConcurrentPooled<int> stale = stalePool.Rent(1, static writer => writer.Fill(default!));
         stalePool.ReturnMemoryToNativeMemory();
 
-        good[0] = 40;
-        Assert.Equal(40, good[0]);
+        good.Access(__namIndexedView => __namIndexedView[0] = 40);
+        Assert.Equal(40, good.Read(__namIndexedView => __namIndexedView[0]));
 
         NativeAllocationException? entryFailure = null;
         try
@@ -109,8 +109,8 @@ public sealed class NativeLeaseOperationsTests
         }
 
         Assert.NotNull(entryFailure);
-        good[0] = 41;
-        Assert.Equal(41, good[0]);
+        good.Access(__namIndexedView => __namIndexedView[0] = 41);
+        Assert.Equal(41, good.Read(__namIndexedView => __namIndexedView[0]));
 
         bool callbackFailed = false;
         try
@@ -149,8 +149,8 @@ public sealed class NativeLeaseOperationsTests
             tripleFailure = exception;
         }
         Assert.NotNull(tripleFailure);
-        tripleFirst[0] = 11;
-        Assert.Equal(11, tripleFirst[0]);
+        tripleFirst.Access(__namIndexedView => __namIndexedView[0] = 11);
+        Assert.Equal(11, tripleFirst.Read(__namIndexedView => __namIndexedView[0]));
 
         using NativeConcurrentPool<int> pooledFirstPool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         using NativeConcurrentArena staleArena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
@@ -167,8 +167,8 @@ public sealed class NativeLeaseOperationsTests
             pooledArenaFailure = exception;
         }
         Assert.NotNull(pooledArenaFailure);
-        pooledFirst[0] = 12;
-        Assert.Equal(12, pooledFirst[0]);
+        pooledFirst.Access(__namIndexedView => __namIndexedView[0] = 12);
+        Assert.Equal(12, pooledFirst.Read(__namIndexedView => __namIndexedView[0]));
 
         using NativeConcurrentPool<int> quintuplePool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         using NativeConcurrentArena goodArena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
@@ -189,14 +189,14 @@ public sealed class NativeLeaseOperationsTests
             quintupleFailure = exception;
         }
         Assert.NotNull(quintupleFailure);
-        first[0] = 13;
-        second[0] = 14;
-        third[0] = 15;
-        fourth[0] = 16;
-        Assert.Equal(13, first[0]);
-        Assert.Equal(14, second[0]);
-        Assert.Equal(15, third[0]);
-        Assert.Equal(16, fourth[0]);
+        first.Access(__namIndexedView => __namIndexedView[0] = 13);
+        second.Access(__namIndexedView => __namIndexedView[0] = 14);
+        third.Access(__namIndexedView => __namIndexedView[0] = 15);
+        fourth.Access(__namIndexedView => __namIndexedView[0] = 16);
+        Assert.Equal(13, first.Read(__namIndexedView => __namIndexedView[0]));
+        Assert.Equal(14, second.Read(__namIndexedView => __namIndexedView[0]));
+        Assert.Equal(15, third.Read(__namIndexedView => __namIndexedView[0]));
+        Assert.Equal(16, fourth.Read(__namIndexedView => __namIndexedView[0]));
     }
 
     [Fact]
@@ -266,20 +266,20 @@ public sealed class NativeLeaseOperationsTests
         Assert.True(quintupleThrown);
         Assert.True(pooledFourArenaThrown);
 
-        first[0] = 21;
-        second[0] = 22;
-        third[0] = 23;
-        fourth[0] = 24;
-        fifth[0] = 25;
-        sixth[0] = 26;
-        seventh[0] = 27;
-        Assert.Equal(21, first[0]);
-        Assert.Equal(22, second[0]);
-        Assert.Equal(23, third[0]);
-        Assert.Equal(24, fourth[0]);
-        Assert.Equal(25, fifth[0]);
-        Assert.Equal(26, sixth[0]);
-        Assert.Equal(27, seventh[0]);
+        first.Access(__namIndexedView => __namIndexedView[0] = 21);
+        second.Access(__namIndexedView => __namIndexedView[0] = 22);
+        third.Access(__namIndexedView => __namIndexedView[0] = 23);
+        fourth.Access(__namIndexedView => __namIndexedView[0] = 24);
+        fifth.Access(__namIndexedView => __namIndexedView[0] = 25);
+        sixth.Access(__namIndexedView => __namIndexedView[0] = 26);
+        seventh.Access(__namIndexedView => __namIndexedView[0] = 27);
+        Assert.Equal(21, first.Read(__namIndexedView => __namIndexedView[0]));
+        Assert.Equal(22, second.Read(__namIndexedView => __namIndexedView[0]));
+        Assert.Equal(23, third.Read(__namIndexedView => __namIndexedView[0]));
+        Assert.Equal(24, fourth.Read(__namIndexedView => __namIndexedView[0]));
+        Assert.Equal(25, fifth.Read(__namIndexedView => __namIndexedView[0]));
+        Assert.Equal(26, sixth.Read(__namIndexedView => __namIndexedView[0]));
+        Assert.Equal(27, seventh.Read(__namIndexedView => __namIndexedView[0]));
     }
 
     [Fact]
@@ -294,7 +294,7 @@ public sealed class NativeLeaseOperationsTests
             first[0] = 7;
             second[0] += 1;
         });
-        Assert.Equal(8, lease[0]);
+        Assert.Equal(8, lease.Read(__namIndexedView => __namIndexedView[0]));
 
         NativeAllocationException? strictFailure = null;
         NativeLeaseOperations.Access(lease, lease, (_, _) =>
@@ -313,7 +313,7 @@ public sealed class NativeLeaseOperationsTests
         pool.ReturnMemoryToNativeMemory();
         pool.LeaseFromMemory();
         ConcurrentPooled<int> fresh = pool.Rent(1, static writer => writer.Fill(default!));
-        fresh[0] = 19;
+        fresh.Access(__namIndexedView => __namIndexedView[0] = 19);
         fresh.Dispose();
     }
 
@@ -337,8 +337,8 @@ public sealed class NativeLeaseOperationsTests
         }
 
         Assert.NotNull(failure);
-        first[0] = 73;
-        Assert.Equal(73, first[0]);
+        first.Access(__namIndexedView => __namIndexedView[0] = 73);
+        Assert.Equal(73, first.Read(__namIndexedView => __namIndexedView[0]));
         first.Dispose();
         pool.ReturnMemoryToNativeMemory();
     }
@@ -387,8 +387,8 @@ public sealed class NativeLeaseOperationsTests
 
         Assert.Equal(2, notifications);
         Assert.IsType<NativeAllocationInUseException>(transitionFailure);
-        Assert.Equal(81, first[0]);
-        Assert.Equal(82, second[0]);
+        Assert.Equal(81, first.Read(__namIndexedView => __namIndexedView[0]));
+        Assert.Equal(82, second.Read(__namIndexedView => __namIndexedView[0]));
     }
 
     [Fact]
@@ -397,13 +397,13 @@ public sealed class NativeLeaseOperationsTests
         NativeMemoryTestHooks.Reset();
         using NativeConcurrentPool<string> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         ConcurrentPooled<string> values = pool.Rent(2, static writer => writer.Fill(default!));
-        values[0] = "first";
+        values.Access(__namIndexedView => __namIndexedView[0] = "first");
         NativeLeaseOperations.Access(values, values, (first, second) =>
         {
             second[1] = first[0] + "-second";
         });
 
-        Assert.Equal("first-second", values[1]);
+        Assert.Equal("first-second", values.Read(__namIndexedView => __namIndexedView[1]));
         pool.ReleaseLeasesToGarbageCollector();
         NativeAllocationException? staleFailure = null;
         try
@@ -417,7 +417,7 @@ public sealed class NativeLeaseOperationsTests
 
         Assert.NotNull(staleFailure);
         ConcurrentPooled<string> fresh = pool.Rent(1, static writer => writer.Fill(default!));
-        Assert.Null(fresh[0]);
+        Assert.Null(fresh.Read(__namIndexedView => __namIndexedView[0]));
         fresh.Dispose();
     }
 
@@ -468,14 +468,14 @@ public sealed class NativeLeaseOperationsTests
                 out third,
                 out fourth);
 
-            Assert.Equal(10, first[0]);
-            Assert.Equal(20, first[1]);
-            Assert.Equal(20, second[0]);
-            Assert.Equal(30, second[1]);
-            Assert.Equal(30, third[0]);
-            Assert.Equal(40, third[1]);
-            Assert.Equal("10", fourth[0]);
-            Assert.Equal("40", fourth[1]);
+            Assert.Equal(10, first.Read(__namIndexedView => __namIndexedView[0]));
+            Assert.Equal(20, first.Read(__namIndexedView => __namIndexedView[1]));
+            Assert.Equal(20, second.Read(__namIndexedView => __namIndexedView[0]));
+            Assert.Equal(30, second.Read(__namIndexedView => __namIndexedView[1]));
+            Assert.Equal(30, third.Read(__namIndexedView => __namIndexedView[0]));
+            Assert.Equal(40, third.Read(__namIndexedView => __namIndexedView[1]));
+            Assert.Equal("10", fourth.Read(__namIndexedView => __namIndexedView[0]));
+            Assert.Equal("40", fourth.Read(__namIndexedView => __namIndexedView[1]));
         }
 
         arena.RecycleScoped();
@@ -551,13 +551,13 @@ public sealed class NativeLeaseOperationsTests
                 out third,
                 out fourth);
 
-            Assert.Equal(12, first[0]);
-            Assert.Equal(34, first[1]);
-            Assert.Equal(34, second[0]);
-            Assert.Equal(12, third[0]);
-            Assert.Equal(12, third[1]);
-            Assert.Equal(12, third[2]);
-            Assert.Equal(46u, fourth[0]);
+            Assert.Equal(12, first.Read(__namIndexedView => __namIndexedView[0]));
+            Assert.Equal(34, first.Read(__namIndexedView => __namIndexedView[1]));
+            Assert.Equal(34, second.Read(__namIndexedView => __namIndexedView[0]));
+            Assert.Equal(12, third.Read(__namIndexedView => __namIndexedView[0]));
+            Assert.Equal(12, third.Read(__namIndexedView => __namIndexedView[1]));
+            Assert.Equal(12, third.Read(__namIndexedView => __namIndexedView[2]));
+            Assert.Equal(46u, fourth.Read(__namIndexedView => __namIndexedView[0]));
         }
     }
 
@@ -650,10 +650,10 @@ public sealed class NativeLeaseOperationsTests
                 out third,
                 out empty);
 
-            Assert.Equal(12, first[0]);
-            Assert.Equal(12, first[1]);
-            Assert.Equal(13, second[0]);
-            Assert.Equal(14u, third[0]);
+            Assert.Equal(12, first.Read(__namIndexedView => __namIndexedView[0]));
+            Assert.Equal(12, first.Read(__namIndexedView => __namIndexedView[1]));
+            Assert.Equal(13, second.Read(__namIndexedView => __namIndexedView[0]));
+            Assert.Equal(14u, third.Read(__namIndexedView => __namIndexedView[0]));
             Assert.Equal(0, empty.Length);
         }
     }
@@ -740,8 +740,8 @@ public sealed class NativeLeaseOperationsTests
         ConcurrentArenaLease<int> next = arena.Scratch<int>(
             1,
             static writer => writer.Write(15));
-        Assert.Equal(15, next[0]);
-        Assert.Equal(9, source[0]);
+        Assert.Equal(15, next.Read(__namIndexedView => __namIndexedView[0]));
+        Assert.Equal(9, source.Read(__namIndexedView => __namIndexedView[0]));
     }
 
     [Fact]
@@ -883,19 +883,19 @@ public sealed class NativeLeaseOperationsTests
                 out seventh,
                 out eighth);
 
-            Assert.Equal(5, first[0]);
-            Assert.Equal(8, first[1]);
-            Assert.Equal(13, second[0]);
-            Assert.Equal(8, third[0]);
-            Assert.Equal(8, third[1]);
-            Assert.Equal(8, third[2]);
-            Assert.Equal(40u, fourth[0]);
-            Assert.Equal(5, fifth[0]);
-            Assert.Equal(8, fifth[1]);
-            Assert.Equal(13, sixth[0]);
-            Assert.Equal(2.5f, seventh[0]);
-            Assert.Equal(2.5d, eighth[0]);
-            Assert.Equal(4d, eighth[1]);
+            Assert.Equal(5, first.Read(__namIndexedView => __namIndexedView[0]));
+            Assert.Equal(8, first.Read(__namIndexedView => __namIndexedView[1]));
+            Assert.Equal(13, second.Read(__namIndexedView => __namIndexedView[0]));
+            Assert.Equal(8, third.Read(__namIndexedView => __namIndexedView[0]));
+            Assert.Equal(8, third.Read(__namIndexedView => __namIndexedView[1]));
+            Assert.Equal(8, third.Read(__namIndexedView => __namIndexedView[2]));
+            Assert.Equal(40u, fourth.Read(__namIndexedView => __namIndexedView[0]));
+            Assert.Equal(5, fifth.Read(__namIndexedView => __namIndexedView[0]));
+            Assert.Equal(8, fifth.Read(__namIndexedView => __namIndexedView[1]));
+            Assert.Equal(13, sixth.Read(__namIndexedView => __namIndexedView[0]));
+            Assert.Equal(2.5f, seventh.Read(__namIndexedView => __namIndexedView[0]));
+            Assert.Equal(2.5d, eighth.Read(__namIndexedView => __namIndexedView[0]));
+            Assert.Equal(4d, eighth.Read(__namIndexedView => __namIndexedView[1]));
         }
     }
 
@@ -961,11 +961,11 @@ public sealed class NativeLeaseOperationsTests
 
         Assert.True(failed);
         Assert.Equal(1, arena.CurrentAllocationRecordCountForTest);
-        Assert.Equal(21, source[0]);
+        Assert.Equal(21, source.Read(__namIndexedView => __namIndexedView[0]));
         ConcurrentArenaLease<int> next = arena.Scratch<int>(
             1,
             static writer => writer.Write(34));
-        Assert.Equal(34, next[0]);
+        Assert.Equal(34, next.Read(__namIndexedView => __namIndexedView[0]));
     }
 
     [Fact]
@@ -1046,11 +1046,11 @@ public sealed class NativeLeaseOperationsTests
                 out second,
                 out third,
                 out fourth);
-            Assert.Equal(7, first[0]);
-            Assert.Equal(8, second[0]);
-            Assert.Equal(9, third[0]);
-            Assert.Equal("complete", fourth[0]);
-            Assert.Equal("published", fourth[1]);
+            Assert.Equal(7, first.Read(__namIndexedView => __namIndexedView[0]));
+            Assert.Equal(8, second.Read(__namIndexedView => __namIndexedView[0]));
+            Assert.Equal(9, third.Read(__namIndexedView => __namIndexedView[0]));
+            Assert.Equal("complete", fourth.Read(__namIndexedView => __namIndexedView[0]));
+            Assert.Equal("published", fourth.Read(__namIndexedView => __namIndexedView[1]));
         }
 
         arena.RecycleScoped();
@@ -1122,9 +1122,9 @@ public sealed class NativeLeaseOperationsTests
         }
 
         Assert.Equal(4, admissions);
-        Assert.Equal(5, first[0]);
-        Assert.Equal(18, third[0]);
-        Assert.Equal(5, fourth[0]);
+        Assert.Equal(5, first.Read(__namIndexedView => __namIndexedView[0]));
+        Assert.Equal(18, third.Read(__namIndexedView => __namIndexedView[0]));
+        Assert.Equal(5, fourth.Read(__namIndexedView => __namIndexedView[0]));
 
         bool callbackFailed = false;
         try
@@ -1144,8 +1144,8 @@ public sealed class NativeLeaseOperationsTests
         }
 
         Assert.True(callbackFailed);
-        first[0] = 21;
-        Assert.Equal(21, first[0]);
+        first.Access(__namIndexedView => __namIndexedView[0] = 21);
+        Assert.Equal(21, first.Read(__namIndexedView => __namIndexedView[0]));
     }
 
     [Fact]
@@ -1210,7 +1210,7 @@ public sealed class NativeLeaseOperationsTests
         }
 
         Assert.Equal(1, admissions);
-        Assert.Equal(27, first[0]);
+        Assert.Equal(27, first.Read(__namIndexedView => __namIndexedView[0]));
 
         bool failed = false;
         try
@@ -1232,8 +1232,8 @@ public sealed class NativeLeaseOperationsTests
         }
 
         Assert.True(failed);
-        first[0] = 34;
-        Assert.Equal(34, first[0]);
+        first.Access(__namIndexedView => __namIndexedView[0] = 34);
+        Assert.Equal(34, first.Read(__namIndexedView => __namIndexedView[0]));
     }
 
     [Fact]
@@ -1303,7 +1303,7 @@ public sealed class NativeLeaseOperationsTests
         }
 
         Assert.Equal(1, admissions);
-        Assert.Equal(35, first[0]);
+        Assert.Equal(35, first.Read(__namIndexedView => __namIndexedView[0]));
 
         bool failed = false;
         try
@@ -1326,8 +1326,8 @@ public sealed class NativeLeaseOperationsTests
         }
 
         Assert.True(failed);
-        first[0] = 43;
-        Assert.Equal(43, first[0]);
+        first.Access(__namIndexedView => __namIndexedView[0] = 43);
+        Assert.Equal(43, first.Read(__namIndexedView => __namIndexedView[0]));
     }
 
     [Fact]
@@ -1405,10 +1405,10 @@ public sealed class NativeLeaseOperationsTests
                 out third,
                 out fourth);
 
-            Assert.Equal(7, first[0]);
-            Assert.Equal(11, second[0]);
-            Assert.Equal(7, third[0]);
-            Assert.Equal("complete", fourth[0]);
+            Assert.Equal(7, first.Read(__namIndexedView => __namIndexedView[0]));
+            Assert.Equal(11, second.Read(__namIndexedView => __namIndexedView[0]));
+            Assert.Equal(7, third.Read(__namIndexedView => __namIndexedView[0]));
+            Assert.Equal("complete", fourth.Read(__namIndexedView => __namIndexedView[0]));
         }
 
         arena.RecycleScoped();

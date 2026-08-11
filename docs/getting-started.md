@@ -252,49 +252,9 @@ transfer, and the receiver must still dispose its transfer object.
 An entered receiver callback blocks strict owner disposal. Retry owner disposal after
 the callback exits.
 
-`NativeConcurrentArena.ScratchTransferable<T>` supports the same move contract for
-heterogeneous concurrent storage. A transfer can use external storage that the
-concurrent arena accepted through `ReserveExternalMemory`.
-
-The same arena accepts concurrent `ScratchTransferable<T>` calls. The arena reserves a
-disjoint range before each initializer runs. The callback writes directly into its range
-without holding the arena lock. Failure returns only that range.
-
-```csharp
-using NativeConcurrentArena arena = new(
-    preAllocateBytes: 24u * 25_600u * sizeof(float));
-
-Parallel.For(0, 24, index =>
-{
-    NativeTransfer<float>? map = arena.ScratchTransferable<float>(
-        25_600,
-        writer => writer.Fill(index));
-    try
-    {
-        ProcessMap(NativeTransfer<float>.Move(ref map));
-    }
-    finally
-    {
-        map?.Dispose();
-    }
-});
-
-static void ProcessMap(NativeTransfer<float> map)
-{
-    try
-    {
-        float first = map.Read(static view => view[0]);
-        Console.WriteLine(first);
-    }
-    finally
-    {
-        map.Dispose();
-    }
-}
-```
-
-Each `ProcessMap` call owns its transfer. It must dispose or move that ownership on every
-exit. No worker-local arena wrapper, queue, or semaphore is necessary.
+`NativeConcurrentArena` provides generation-bound concurrent scratch storage. Its leases
+cannot leave the arena generation. Use `NativeConcurrentPool<T>.RentTransferable` when
+independent storage must move to another thread and return separately.
 
 `NAM1021` rejects ownership copies. `NAM1022` rejects inactive use and double disposal.
 `NAM1023` rejects invalid moves.
@@ -597,8 +557,9 @@ ranges. The developer controls scoped recycle, generation reset, trim, and final
 ## Concurrent owner generations
 
 `NativeConcurrentPool<T>` and `NativeConcurrentArena` keep the broader synchronized
-generation contract. Use these types only when storage needs concurrent access,
-transferable ownership, managed-reference roots, or explicit memory-return transitions.
+generation contract. Use them only for concurrent access, managed-reference roots, or
+explicit memory-return transitions. Only the pool provides separately returned transfer
+ownership.
 
 Construction normally publishes an active generation. Passing
 `doNotLeaseOnDeclaration: true` defers that generation. The configured reservation
@@ -618,9 +579,9 @@ using ConcurrentPooled<byte> buffer = pool.Rent(
 buffer.Access(view => view.Fill(0x2A));
 ```
 
-The same form applies to `NativeConcurrentArena`. Acquisition and lifecycle operations
-reject an unleased owner. Disposal before activation is valid and terminal. A failed
-activation does not publish a partial generation.
+`NativeConcurrentArena` uses `Scratch<T>` and generation-bound leases. Acquisition and
+lifecycle operations reject an unleased owner. Disposal before activation is valid and
+terminal. A failed activation does not publish a partial generation.
 
 Memory return ends the current concurrent-owner generation. A later
 `LeaseFromMemory()` creates the next generation. Lease release invalidates current

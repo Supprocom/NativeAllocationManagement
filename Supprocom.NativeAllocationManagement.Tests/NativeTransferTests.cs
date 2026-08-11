@@ -386,50 +386,6 @@ public sealed class NativeTransferTests
     }
 
     [Fact]
-    public void TransferUsesMappedExternalArenaStorage()
-    {
-        NativeMemoryTestHooks.Reset();
-        AlignedTestBuffer buffer = new(4096);
-        NativeConcurrentArena arena = new(
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        long upstreamAllocations =
-            NativeMemoryTestHooks.Snapshot().AllocationCount;
-        Assert.Equal(
-            (nuint)4096,
-            arena.ReserveExternalMemory(
-                buffer,
-                byteOffset: 0,
-                byteLength: 4096));
-        buffer.Dispose();
-        NativeTransfer<long>? source = arena.ScratchTransferable<long>(
-            4,
-            static writer => writer.Write([2L, 3L, 5L, 7L]));
-        NativeTransfer<long> destination =
-            NativeTransfer<long>.Move(ref source);
-
-        Assert.Equal(
-            17,
-            destination.Read(
-                static view =>
-                {
-                    long total = 0;
-                    foreach (long value in view.AsSpan())
-                    {
-                        total += value;
-                    }
-
-                    return total;
-                }));
-        Assert.Equal(
-            upstreamAllocations,
-            NativeMemoryTestHooks.Snapshot().AllocationCount);
-        destination.Dispose();
-        arena.Dispose();
-
-        Assert.Equal(1, buffer.ReleaseCount);
-    }
-
-    [Fact]
     public void AbandonedReceiverFinalizerReturnsTheLease()
     {
         using NativeConcurrentPool<int> pool = new(

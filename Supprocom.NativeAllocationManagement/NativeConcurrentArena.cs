@@ -118,23 +118,6 @@ public sealed class NativeConcurrentArena : IDisposable
                     ? 2u
                     : 1u;
 
-    /// <summary>Concurrently reserves and initializes an unmanaged arena range for destructive ownership transfer.</summary>
-    public NativeTransfer<T> ScratchTransferable<T>(
-        int length,
-        NativeLeaseInitializer<T> initializer)
-        where T : unmanaged
-    {
-        NativeRegionAllocation allocation = _kernel.LeaseConcurrentBumpInitialized(
-            length,
-            NativeTypeLayout.StorageSize<T>(),
-            NativeTypeLayout.Alignment<T>(),
-            initializer);
-        return NativeTransfer<T>.Create(
-            _kernel,
-            allocation,
-            "NativeConcurrentArena.ScratchTransferable");
-    }
-
     internal NativeArenaTransferBatch<T> CreateTransferBatch<T>(
         int count,
         int length)
@@ -312,37 +295,6 @@ public readonly ref struct ConcurrentArenaLease<T>
         }
     }
 
-    /// <summary>Reads or writes one value through the owner operation gate.</summary>
-    public T this[int index]
-    {
-        get
-        {
-            NativeArenaOperationToken token = EnterOperation("get_Item");
-            try
-            {
-                ValidateIndex(index);
-                return token.GetValue<T>(index);
-            }
-            finally
-            {
-                token.Dispose();
-            }
-        }
-        set
-        {
-            NativeArenaOperationToken token = EnterOperation("set_Item");
-            try
-            {
-                ValidateIndex(index);
-                token.SetValue(index, value);
-            }
-            finally
-            {
-                token.Dispose();
-            }
-        }
-    }
-
     /// <summary>Clears the logical range.</summary>
     public void Clear()
     {
@@ -469,15 +421,6 @@ public readonly ref struct ConcurrentArenaLease<T>
         finally
         {
             token.Dispose();
-        }
-    }
-
-    private void ValidateIndex(int index)
-    {
-        ArgumentOutOfRangeException.ThrowIfNegative(index);
-        if (index >= _length)
-        {
-            throw new ArgumentOutOfRangeException(nameof(index), index, "The index is outside the logical arena range.");
         }
     }
 

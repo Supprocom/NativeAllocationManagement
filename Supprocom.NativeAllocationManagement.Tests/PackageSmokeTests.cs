@@ -111,7 +111,7 @@ public sealed class PackageSmokeTests
                         pool.LeaseFromMemory();
                         {
                             ConcurrentPooled<int> values = pool.Rent(1, static writer => writer.Fill(default!));
-                            values[0] = 7;
+                            values.Access(static view => view[0] = 7);
                             values.Dispose();
                         }
                         _ = pool.TrimRetainedMemory();
@@ -149,7 +149,7 @@ public sealed class PackageSmokeTests
                         }
                         {
                             ConcurrentArenaLease<string> labels = arena.Scratch<string>(1, static writer => writer.Fill(default!));
-                            labels[0] = "package";
+                            labels.Access(static view => view[0] = "package");
                         }
 
                         arena.ReleaseLeasesToNativeMemory();
@@ -159,7 +159,7 @@ public sealed class PackageSmokeTests
 
                         {
                             scoped ConcurrentArenaLease<int> scopedValues = arena.ScratchScoped<int>(1, static writer => writer.Fill(default!));
-                            scopedValues[0] = 9;
+                            scopedValues.Access(static view => view[0] = 9);
                         }
 
                         arena.RecycleScoped();
@@ -341,13 +341,18 @@ public sealed class PackageSmokeTests
                         bool valid = true;
                         NativeConcurrentPool<string> pool = new(preLease: 2);
                         ConcurrentPooled<string> first = pool.Rent(2, static writer => writer.Fill(default!));
-                        first[0] = "first";
-                        first[1] = "second";
-                        valid &= first[0] == "first" && first[1] == "second";
+                        first.Access(static view =>
+                        {
+                            view[0] = "first";
+                            view[1] = "second";
+                        });
+                        valid &= first.Read(static view =>
+                            view[0] == "first" && view[1] == "second");
 
                         first.Dispose();
                         ConcurrentPooled<string> reused = pool.Rent(2, static writer => writer.Fill(default!));
-                        valid &= reused[0] is null && reused[1] is null;
+                        valid &= reused.Read(static view =>
+                            view[0] is null && view[1] is null);
 
                         reused.Dispose();
                         pool.Dispose();
@@ -355,14 +360,23 @@ public sealed class PackageSmokeTests
                         NativeConcurrentArena arena = new();
                         {
                             ConcurrentArenaLease<ReferenceCell> firstArena = arena.Scratch<ReferenceCell>(1, static writer => writer.Fill(default!));
-                            firstArena[0] = new ReferenceCell { Text = "arena", Number = 4 };
-                            valid &= firstArena[0].Text == "arena" && firstArena[0].Number == 4;
+                            firstArena.Access(static view =>
+                                view[0] = new ReferenceCell
+                                {
+                                    Text = "arena",
+                                    Number = 4
+                                });
+                            valid &= firstArena.Read(static view =>
+                                view[0].Text == "arena"
+                                && view[0].Number == 4);
                         }
 
                         arena.ReleaseLeasesToNativeMemory();
                         {
                             ConcurrentArenaLease<ReferenceCell> reusedArena = arena.Scratch<ReferenceCell>(1, static writer => writer.Fill(default!));
-                            valid &= reusedArena[0].Text is null && reusedArena[0].Number == 0;
+                            valid &= reusedArena.Read(static view =>
+                                view[0].Text is null
+                                && view[0].Number == 0);
                         }
 
                         arena.Dispose();
@@ -408,7 +422,7 @@ public sealed class PackageSmokeTests
                     public static void Run(NativeConcurrentArena arena)
                     {
                         scoped ConcurrentArenaLease<int> values = arena.ScratchScoped<int>(1, static writer => writer.Fill(default!));
-                        values[0] = 1;
+                        values.Access(static view => view[0] = 1);
                         arena.RecycleScoped();
                     }
                 }
@@ -1000,7 +1014,7 @@ public sealed class PackageSmokeTests
                     {
                         using NativeConcurrentPool<int> pool = new();
                         using ConcurrentPooled<int> values = pool.Rent(1, static writer => writer.Fill(default!));
-                        values[0] = 7;
+                        values.Access(static view => view[0] = 7);
                     }
                 }
                 """);
@@ -1148,7 +1162,7 @@ public sealed class PackageSmokeTests
                         using NativeConcurrentArena arena = new();
                         {
                             scoped ConcurrentArenaLease<int> values = arena.ScratchScoped<int>(1, static writer => writer.Fill(default!));
-                            values[0] = 1;
+                            values.Access(static view => view[0] = 1);
                         }
                     }
                 }
@@ -1228,7 +1242,7 @@ public sealed class PackageSmokeTests
 
                         deferredPool.LeaseFromMemory();
                         ConcurrentPooled<int> current = deferredPool.Rent(1, static writer => writer.Fill(default!));
-                        if (current[0] != 0)
+                        if (current.Read(static view => view[0]) != 0)
                         {
                             return 14;
                         }
@@ -1339,7 +1353,8 @@ public sealed class PackageSmokeTests
                             gcPool.ReturnMemoryToGarbageCollector();
                             gcPool.LeaseFromMemory();
                             ConcurrentPooled<int> freshInsideCallback = gcPool.Rent(1, static writer => writer.Fill(default!));
-                            bool freshWasZeroed = freshInsideCallback[0] == 0;
+                            bool freshWasZeroed = freshInsideCallback.Read(
+                                static view => view[0]) == 0;
                             freshInsideCallback.Dispose();
                             gcPool.ReturnMemoryToNativeMemory();
                             gcPool.Dispose();

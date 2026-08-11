@@ -16,9 +16,9 @@ public sealed class NativeTransferAnalyzerTests
             {
                 public static void Run()
                 {
-                    using NativeArena arena = new();
+                    using NativeConcurrentPool<int> pool = new();
                     NativeTransfer<int> transfer =
-                        arena.ScratchTransferable<int>(
+                        pool.RentTransferable(
                             32,
                             static writer => writer.InitializeRemaining(
                                 static values =>
@@ -1209,7 +1209,7 @@ public sealed class NativeTransferAnalyzerTests
     }
 
     [Fact]
-    public async Task ParallelCallbacksCanPublishConcurrentArenaTransfers()
+    public async Task ParallelCallbacksCanPublishConcurrentPoolTransfers()
     {
         ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
             """
@@ -1235,13 +1235,13 @@ public sealed class NativeTransferAnalyzerTests
             public static class Sample
             {
                 public static void Run(
-                    NativeArena arena,
+                    NativeConcurrentPool<float> pool,
                     Owner?[] owners)
                 {
                     Parallel.For(0, owners.Length, index =>
                     {
                         NativeTransfer<float>? transfer =
-                            arena.ScratchTransferable<float>(
+                            pool.RentTransferable(
                                 25_600,
                                 writer => writer.Fill(index));
                         try
@@ -1264,7 +1264,7 @@ public sealed class NativeTransferAnalyzerTests
     }
 
     [Fact]
-    public async Task ParallelArenaCallbackStillRequiresTransferCleanup()
+    public async Task ParallelPoolCallbackStillRequiresTransferCleanup()
     {
         ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
             """
@@ -1273,12 +1273,12 @@ public sealed class NativeTransferAnalyzerTests
 
             public static class Sample
             {
-                public static void Run(NativeArena arena)
+                public static void Run(NativeConcurrentPool<float> pool)
                 {
                     Parallel.For(0, 1, _ =>
                     {
                         NativeTransfer<float> transfer =
-                            arena.ScratchTransferable<float>(
+                            pool.RentTransferable(
                                 4,
                                 static writer => writer.Fill(1));
                         _ = transfer.Length;

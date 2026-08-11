@@ -36,7 +36,7 @@ public sealed class ConcurrencyTests
             await worker;
 
             ConcurrentPooled<int> usable = pool.Rent(1, static writer => writer.Fill(default!));
-            Assert.Equal(0, usable[0]);
+            Assert.Equal(0, usable.Read(__namIndexedView => __namIndexedView[0]));
             usable.Dispose();
             pool.Dispose();
         }
@@ -96,8 +96,8 @@ public sealed class ConcurrencyTests
             NativeMemoryTestHooks.SetOperationEntered(null);
             pool.LeaseFromMemory();
             ConcurrentPooled<int> current = pool.Rent(1, static writer => writer.Fill(default!));
-            current[0] = 7;
-            Assert.Equal(7, current[0]);
+            current.Access(__namIndexedView => __namIndexedView[0] = 7);
+            Assert.Equal(7, current.Read(__namIndexedView => __namIndexedView[0]));
             current.Dispose();
 
             release.Set();
@@ -114,7 +114,7 @@ public sealed class ConcurrencyTests
 
             Assert.Equal(0, NativeMemoryTestHooks.Snapshot().DetachedNativeBytes);
             ConcurrentPooled<int> verified = pool.Rent(1, static writer => writer.Fill(default!));
-            Assert.Equal(0, verified[0]);
+            Assert.Equal(0, verified.Read(__namIndexedView => __namIndexedView[0]));
             verified.Dispose();
             pool.Dispose();
         }
@@ -183,7 +183,7 @@ public sealed class ConcurrencyTests
             Assert.Null(await worker);
             Assert.NotNull(returnException);
             ConcurrentPooled<int> reused = pool.Rent(2, static writer => writer.Fill(default!));
-            Assert.Equal(0, reused[0]);
+            Assert.Equal(0, reused.Read(__namIndexedView => __namIndexedView[0]));
             reused.Dispose();
             pool.Dispose();
         }
@@ -200,8 +200,8 @@ public sealed class ConcurrencyTests
         Parallel.For(0, 16, index =>
         {
             ConcurrentPooled<int> lease = pool.Rent(1, static writer => writer.Fill(default!));
-            lease[0] = index;
-            Assert.Equal(index, lease[0]);
+            lease.Access(__namIndexedView => __namIndexedView[0] = index);
+            Assert.Equal(index, lease.Read(__namIndexedView => __namIndexedView[0]));
             lease.Dispose();
         });
         pool.Dispose();
@@ -209,7 +209,7 @@ public sealed class ConcurrencyTests
 
     private static void Read(ConcurrentPooled<int> lease)
     {
-        _ = lease[0];
+        _ = lease.Read(__namIndexedView => __namIndexedView[0]);
     }
 
     private static NativeAllocationReturnedException CaptureReturned(ConcurrentPooled<int> lease)

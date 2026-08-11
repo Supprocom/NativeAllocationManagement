@@ -43,39 +43,6 @@ public readonly ref struct ConcurrentPooled<T>
     /// <summary>Gets the physical element capacity.</summary>
     public int Capacity => GetMetadata(nameof(Capacity)).Capacity;
 
-    /// <summary>Reads or writes one synchronized element.</summary>
-    public T this[int index]
-    {
-        get
-        {
-            NativeOperationToken token = EnterIndexedOperation(
-                "get_Item",
-                index);
-            try
-            {
-                return token.GetValue<T>(index);
-            }
-            finally
-            {
-                token.Dispose();
-            }
-        }
-        set
-        {
-            NativeOperationToken token = EnterIndexedOperation(
-                "set_Item",
-                index);
-            try
-            {
-                token.SetValue(index, value);
-            }
-            finally
-            {
-                token.Dispose();
-            }
-        }
-    }
-
     /// <summary>Clears the logical range.</summary>
     public void Clear()
     {
@@ -93,14 +60,6 @@ public readonly ref struct ConcurrentPooled<T>
     /// <summary>Copies one exact bounded source.</summary>
     public void CopyFrom(scoped ReadOnlySpan<T> source)
     {
-        NativeHandleMetadata metadata = GetMetadata(nameof(CopyFrom));
-        if (source.Length != metadata.Length)
-        {
-            throw new ArgumentException(
-                "The source length must equal the lease length.",
-                nameof(source));
-        }
-
         NativeOperationToken token = EnterOperation(nameof(CopyFrom));
         try
         {
@@ -115,14 +74,6 @@ public readonly ref struct ConcurrentPooled<T>
     /// <summary>Copies the logical range into one bounded destination.</summary>
     public void CopyTo(scoped Span<T> destination)
     {
-        NativeHandleMetadata metadata = GetMetadata(nameof(CopyTo));
-        if (destination.Length < metadata.Length)
-        {
-            throw new ArgumentException(
-                "The destination is smaller than the lease.",
-                nameof(destination));
-        }
-
         NativeOperationToken token = EnterOperation(nameof(CopyTo));
         try
         {
@@ -169,23 +120,6 @@ public readonly ref struct ConcurrentPooled<T>
         GetKernel(nameof(Dispose)).ReturnLease(
             _generation,
             _allocationId);
-
-    private NativeOperationToken EnterIndexedOperation(
-        string operation,
-        int index)
-    {
-        NativeHandleMetadata metadata = GetMetadata(operation);
-        ArgumentOutOfRangeException.ThrowIfNegative(index);
-        if (index >= metadata.Length)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(index),
-                index,
-                "The index is outside the logical lease range.");
-        }
-
-        return EnterOperation(operation);
-    }
 
     private NativeOwnerKernel GetKernel(string operation) =>
         _kernel

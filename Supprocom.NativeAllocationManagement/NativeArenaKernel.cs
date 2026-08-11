@@ -171,17 +171,26 @@ internal sealed unsafe class NativeArenaKernel
     internal void Reset()
     {
         ValidateBoundary(nameof(NativeArena.Reset));
+        ulong nextGeneration = GetNextEpochOrClose(
+            _generation,
+            nameof(NativeArena.Reset));
+        ulong nextScopeEpoch = GetNextEpochOrClose(
+            _scopeEpoch,
+            nameof(NativeArena.Reset));
         ResetLane(ref _ordinary);
         ResetLane(ref _scoped);
-        _generation = NextEpoch(_generation);
-        _scopeEpoch = NextEpoch(_scopeEpoch);
+        _generation = nextGeneration;
+        _scopeEpoch = nextScopeEpoch;
     }
 
     internal void RecycleScoped()
     {
         ValidateBoundary(nameof(NativeArena.RecycleScoped));
+        ulong nextScopeEpoch = GetNextEpochOrClose(
+            _scopeEpoch,
+            nameof(NativeArena.RecycleScoped));
         ResetLane(ref _scoped);
-        _scopeEpoch = NextEpoch(_scopeEpoch);
+        _scopeEpoch = nextScopeEpoch;
     }
 
     internal NativeOwnerStatistics GetStatistics()
@@ -242,9 +251,12 @@ internal sealed unsafe class NativeArenaKernel
             ThrowBoundaryInUse(nameof(Dispose));
         }
 
+        Close();
+    }
+
+    private void Close()
+    {
         _lifecycle = NativeOwnerLifecycle.Disposed;
-        _generation = NextEpoch(_generation);
-        _scopeEpoch = NextEpoch(_scopeEpoch);
         if (_returnMemoryOnDispose
             == NativeMemoryReturn.ToNativeMemory)
         {
@@ -257,6 +269,20 @@ internal sealed unsafe class NativeArenaKernel
         MarkDetached(_scoped);
         NativeMemoryTestHooks.RecordDetachedGeneration(
             NativeMemoryTestHooks.CurrentMetricsEpoch);
+    }
+
+    private ulong GetNextEpochOrClose(
+        ulong epoch,
+        string operation)
+    {
+        if (epoch != ulong.MaxValue)
+        {
+            return epoch + 1;
+        }
+
+        Close();
+        ThrowEpochExhausted(operation);
+        return 0;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -796,12 +822,18 @@ internal sealed unsafe class NativeArenaKernel
         return checked(value + mask) & ~mask;
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static ulong NextEpoch(ulong epoch)
-    {
-        epoch++;
-        return epoch == 0 ? 1 : epoch;
-    }
+    [DoesNotReturn]
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private void ThrowEpochExhausted(string operation) =>
+        throw new NativeAllocationStateException(
+            "NativeArena exhausted its non-reusable lease epoch.",
+            OwnerKind,
+            unchecked((long)_generation),
+            unchecked((long)_generation),
+            operation,
+            activeOperationCount: 0,
+            allocationId: 0,
+            _lifecycle);
 
     ~NativeArenaKernel()
     {

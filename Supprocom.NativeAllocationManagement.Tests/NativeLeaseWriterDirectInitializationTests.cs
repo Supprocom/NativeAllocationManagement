@@ -37,13 +37,13 @@ public sealed class NativeLeaseWriterDirectInitializationTests
     [Fact]
     public void FailedDirectCallbackAbortsTheReservation()
     {
-        using NativeConcurrentArena arena = new(
-            preAllocateBytes: 16 * sizeof(int),
+        using NativeConcurrentPool<int> pool = new(
+            preLease: 16,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
 
         InvalidOperationException exception = Assert.Throws<
             InvalidOperationException>(
-            () => arena.ScratchTransferable<int>(
+            () => pool.RentTransferable(
                 16,
                 writer => writer.InitializeRemaining(
                     static values =>
@@ -53,11 +53,10 @@ public sealed class NativeLeaseWriterDirectInitializationTests
                     })));
 
         Assert.Equal("failure", exception.Message);
-        Assert.Equal(0, arena.CurrentAllocationRecordCountForTest);
-        Assert.Equal(0, arena.CurrentConcurrentReservationCountForTest);
+        Assert.Equal(0, pool.CurrentAllocationRecordCountForTest);
 
         using NativeTransfer<int> replacement =
-            arena.ScratchTransferable<int>(
+            pool.RentTransferable(
                 16,
                 static writer => writer.Fill(43));
         Assert.Equal(43, replacement.Read(static view => view[0]));
@@ -66,14 +65,14 @@ public sealed class NativeLeaseWriterDirectInitializationTests
     [Fact]
     public void CanceledDirectCallbackAbortsTheReservation()
     {
-        using NativeConcurrentArena arena = new(
-            preAllocateBytes: 16 * sizeof(int),
+        using NativeConcurrentPool<int> pool = new(
+            preLease: 16,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         CancellationTokenSource cancellation = new();
         cancellation.Cancel();
 
         Assert.Throws<OperationCanceledException>(
-            () => arena.ScratchTransferable<int>(
+            () => pool.RentTransferable(
                 16,
                 writer => writer.InitializeRemaining(
                     values =>
@@ -82,17 +81,16 @@ public sealed class NativeLeaseWriterDirectInitializationTests
                         cancellation.Token.ThrowIfCancellationRequested();
                     })));
 
-        Assert.Equal(0, arena.CurrentAllocationRecordCountForTest);
-        Assert.Equal(0, arena.CurrentConcurrentReservationCountForTest);
+        Assert.Equal(0, pool.CurrentAllocationRecordCountForTest);
     }
 
     [Fact]
     public void EmptyDirectCallbackPublishesAnEmptyTransfer()
     {
         bool invoked = false;
-        using NativeConcurrentArena arena = new();
+        using NativeConcurrentPool<int> pool = new();
         using NativeTransfer<int> transfer =
-            arena.ScratchTransferable<int>(
+            pool.RentTransferable(
                 0,
                 writer => writer.InitializeRemaining(
                     values =>

@@ -14,8 +14,6 @@ public sealed class NativeBuilder<T> : IDisposable
 
     private int _state;
     private int _writerGate;
-    private int _borrowEpoch;
-    private int _activeBorrowAuthority;
     private int _count;
     private int _capacity;
     private NativeBlock _block;
@@ -134,19 +132,12 @@ public sealed class NativeBuilder<T> : IDisposable
     {
         ArgumentNullException.ThrowIfNull(action);
         EnterOperation(nameof(Borrow));
-        int authority = NextBorrowAuthority();
-        Volatile.Write(
-            ref _activeBorrowAuthority,
-            authority);
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
-            NativeBuilderBorrow<T> borrow = new(
-                this,
-                authority);
+            NativeBuilderBorrow<T> borrow = new(this);
             action(ref borrow);
             cancellationToken.ThrowIfCancellationRequested();
-            ValidateBorrowAuthority(authority);
         }
         catch (Exception failure)
         {
@@ -155,10 +146,6 @@ public sealed class NativeBuilder<T> : IDisposable
         }
         finally
         {
-            Interlocked.CompareExchange(
-                ref _activeBorrowAuthority,
-                0,
-                authority);
             ExitOperation();
             GC.KeepAlive(this);
         }
@@ -266,21 +253,17 @@ public sealed class NativeBuilder<T> : IDisposable
     }
 
     internal int ReadBorrowedState(
-        int authority,
         bool readCapacity)
     {
-        ValidateBorrowAuthority(authority);
         return readCapacity
             ? _capacity
             : _count;
     }
 
     internal void AppendBorrowed(
-        int authority,
         T value,
         CancellationToken cancellationToken)
     {
-        ValidateBorrowAuthority(authority);
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -296,11 +279,9 @@ public sealed class NativeBuilder<T> : IDisposable
     }
 
     internal void AppendBorrowed(
-        int authority,
         scoped ReadOnlySpan<T> source,
         CancellationToken cancellationToken)
     {
-        ValidateBorrowAuthority(authority);
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -317,7 +298,6 @@ public sealed class NativeBuilder<T> : IDisposable
     }
 
     internal void WriteBorrowed(
-        int authority,
         int maximumAdditionalCount,
         NativeBuilderWriteAction<T> action,
         CancellationToken cancellationToken)
@@ -325,7 +305,6 @@ public sealed class NativeBuilder<T> : IDisposable
         ArgumentOutOfRangeException.ThrowIfNegative(
             maximumAdditionalCount);
         ArgumentNullException.ThrowIfNull(action);
-        ValidateBorrowAuthority(authority);
         try
         {
             WriteCore(
@@ -366,31 +345,6 @@ public sealed class NativeBuilder<T> : IDisposable
         }
 
         _count = checked(_count + committedCount);
-    }
-
-    private int NextBorrowAuthority()
-    {
-        int authority = Interlocked.Increment(
-            ref _borrowEpoch);
-        if (authority != 0)
-        {
-            return authority;
-        }
-
-        return Interlocked.Increment(ref _borrowEpoch);
-    }
-
-    private void ValidateBorrowAuthority(int authority)
-    {
-        if (authority == 0
-            || Volatile.Read(ref _activeBorrowAuthority)
-                != authority
-            || Volatile.Read(ref _state) != Active
-            || Volatile.Read(ref _writerGate) != 1)
-        {
-            throw new InvalidOperationException(
-                "The native builder borrow is not active in its callback.");
-        }
     }
 
     private void EnterOperation(string operation)

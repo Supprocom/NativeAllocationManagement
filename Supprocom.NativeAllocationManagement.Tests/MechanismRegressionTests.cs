@@ -17,18 +17,18 @@ public sealed class MechanismRegressionTests
         try
         {
             ConcurrentPooled<string> first = pool.Rent(2, static writer => writer.Fill(default!));
-            first[0] = "first";
-            first[1] = "second";
-            Assert.Equal("first", first[0]);
-            Assert.Equal("second", first[1]);
+            first.Access(__namIndexedView => __namIndexedView[0] = "first");
+            first.Access(__namIndexedView => __namIndexedView[1] = "second");
+            Assert.Equal("first", first.Read(__namIndexedView => __namIndexedView[0]));
+            Assert.Equal("second", first.Read(__namIndexedView => __namIndexedView[1]));
             Assert.Equal(2, pool.CurrentReferenceRootCountForTest);
             first.Dispose();
             Assert.Equal(0, pool.CurrentReferenceRootCountForTest);
             Assert.Equal(0, pool.CurrentAllocationRecordCountForTest);
 
             ConcurrentPooled<string> reused = pool.Rent(2, static writer => writer.Fill(default!));
-            Assert.Null(reused[0]);
-            Assert.Null(reused[1]);
+            Assert.Null(reused.Read(__namIndexedView => __namIndexedView[0]));
+            Assert.Null(reused.Read(__namIndexedView => __namIndexedView[1]));
             reused.Dispose();
         }
         finally
@@ -46,17 +46,17 @@ public sealed class MechanismRegressionTests
         try
         {
             ConcurrentPooled<ReferenceCell> pooled = pool.Rent(1, static writer => writer.Fill(default!));
-            pooled[0] = new ReferenceCell("pool", 7);
-            Assert.Equal(new ReferenceCell("pool", 7), pooled[0]);
+            pooled.Access(__namIndexedView => __namIndexedView[0] = new ReferenceCell("pool", 7));
+            Assert.Equal(new ReferenceCell("pool", 7), pooled.Read(__namIndexedView => __namIndexedView[0]));
             pooled.Dispose();
 
             ConcurrentArenaLease<ReferenceCell> arenaLease = arena.Scratch<ReferenceCell>(1, static writer => writer.Fill(default!));
-            arenaLease[0] = new ReferenceCell("arena", 9);
-            Assert.Equal(new ReferenceCell("arena", 9), arenaLease[0]);
+            arenaLease.Access(__namIndexedView => __namIndexedView[0] = new ReferenceCell("arena", 9));
+            Assert.Equal(new ReferenceCell("arena", 9), arenaLease.Read(__namIndexedView => __namIndexedView[0]));
             arena.ReleaseLeasesToNativeMemory();
             Assert.Equal(0, arena.CurrentReferenceRootCountForTest);
             ConcurrentArenaLease<ReferenceCell> freshArenaLease = arena.Scratch<ReferenceCell>(1, static writer => writer.Fill(default!));
-            Assert.Equal(default, freshArenaLease[0]);
+            Assert.Equal(default, freshArenaLease.Read(__namIndexedView => __namIndexedView[0]));
 
         }
         finally
@@ -75,19 +75,19 @@ public sealed class MechanismRegressionTests
         try
         {
             scoped ConcurrentPooled<string> pooled = pool.LeaseScoped(1, static writer => writer.Fill(default!));
-            pooled[0] = "pool scoped";
+            pooled.Access(__namIndexedView => __namIndexedView[0] = "pool scoped");
             pool.RecycleScoped();
             Assert.Equal(0, pool.CurrentReferenceRootCountForTest);
             ConcurrentPooled<string> pooledReuse = pool.Rent(1, static writer => writer.Fill(default!));
-            Assert.Null(pooledReuse[0]);
+            Assert.Null(pooledReuse.Read(__namIndexedView => __namIndexedView[0]));
             pooledReuse.Dispose();
 
             scoped ConcurrentArenaLease<string> scratch = arena.ScratchScoped<string>(1, static writer => writer.Fill(default!));
-            scratch[0] = "arena scoped";
+            scratch.Access(__namIndexedView => __namIndexedView[0] = "arena scoped");
             arena.RecycleScoped();
             Assert.Equal(0, arena.CurrentReferenceRootCountForTest);
             ConcurrentArenaLease<string> scratchReuse = arena.Scratch<string>(1, static writer => writer.Fill(default!));
-            Assert.Null(scratchReuse[0]);
+            Assert.Null(scratchReuse.Read(__namIndexedView => __namIndexedView[0]));
         }
         finally
         {
@@ -105,8 +105,8 @@ public sealed class MechanismRegressionTests
         {
             ConcurrentPooled<int> staleFirst = pool.LeaseScoped(4, static writer => writer.Fill(default!));
             ConcurrentPooled<int> staleSecond = pool.LeaseScoped(4, static writer => writer.Fill(default!));
-            staleFirst[0] = 17;
-            staleSecond[0] = 23;
+            staleFirst.Access(__namIndexedView => __namIndexedView[0] = 17);
+            staleSecond.Access(__namIndexedView => __namIndexedView[0] = 23);
             long[] ordinalsBeforeRecycle = pool.CurrentSegmentOrdinalsForTest;
 
             Assert.Equal(2, pool.CurrentAllocationRecordCountForTest);
@@ -116,7 +116,7 @@ public sealed class MechanismRegressionTests
 
             try
             {
-                _ = staleFirst[0];
+                _ = staleFirst.Read(__namIndexedView => __namIndexedView[0]);
                 Assert.Fail("A scoped handle must be stale after RecycleScoped.");
             }
             catch (NativeAllocationException)
@@ -125,7 +125,7 @@ public sealed class MechanismRegressionTests
 
             ConcurrentPooled<int> reused = pool.Rent(4, static writer => writer.Fill(default!));
             Assert.Equal(ordinalsBeforeRecycle, pool.CurrentSegmentOrdinalsForTest);
-            Assert.Equal(0, reused[0]);
+            Assert.Equal(0, reused.Read(__namIndexedView => __namIndexedView[0]));
             reused.Dispose();
             Assert.Equal(0, pool.CurrentAllocationRecordCountForTest);
             _ = staleSecond;
@@ -166,12 +166,12 @@ public sealed class MechanismRegressionTests
         try
         {
             ConcurrentPooled<int> lease = pool.Rent(1, static writer => writer.Fill(default!));
-            lease[0] = 57;
+            lease.Access(__namIndexedView => __namIndexedView[0] = 57);
             NativeMemoryTestHooks.FailNextRetiredSnapshotPreparation();
 
             Assert.Throws<InvalidOperationException>(() => pool.ReturnMemoryToGarbageCollector());
             Assert.Equal(NativeOwnerLifecycle.Active, pool.CurrentLifecycle);
-            Assert.Equal(57, lease[0]);
+            Assert.Equal(57, lease.Read(__namIndexedView => __namIndexedView[0]));
             Assert.Equal(1, pool.CurrentAllocationRecordCountForTest);
 
             pool.ReturnMemoryToNativeMemory();
@@ -204,9 +204,9 @@ public sealed class MechanismRegressionTests
             Task<int> worker = Task.Run(() =>
             {
                 ConcurrentPooled<int> lease = pool.Rent(1, static writer => writer.Fill(default!));
-                lease[0] = 91;
+                lease.Access(__namIndexedView => __namIndexedView[0] = 91);
                 lease.Access(_ => allowCallback.Wait(TimeSpan.FromSeconds(10)));
-                return lease[0];
+                return lease.Read(__namIndexedView => __namIndexedView[0]);
             });
 
             Assert.True(entered.Wait(TimeSpan.FromSeconds(10)));
@@ -249,14 +249,14 @@ public sealed class MechanismRegressionTests
         try
         {
             scoped ConcurrentPooled<string> lease = pool.LeaseScoped(1, static writer => writer.Fill(default!));
-            lease[0] = "before epoch overflow";
+            lease.Access(__namIndexedView => __namIndexedView[0] = "before epoch overflow");
             pool.SetScopeEpochForTest(long.MaxValue);
 
             Assert.Throws<OverflowException>(() => pool.RecycleScoped());
             Assert.Equal(NativeOwnerLifecycle.Active, pool.CurrentLifecycle);
             Assert.Equal(long.MaxValue, pool.CurrentScopeEpochForTest);
             Assert.Equal(1, pool.CurrentReferenceRootCountForTest);
-            Assert.Equal("before epoch overflow", lease[0]);
+            Assert.Equal("before epoch overflow", lease.Read(__namIndexedView => __namIndexedView[0]));
 
             pool.SetScopeEpochForTest(0);
             pool.RecycleScoped();
@@ -277,14 +277,14 @@ public sealed class MechanismRegressionTests
         try
         {
             ConcurrentPooled<string> lease = pool.Rent(1, static writer => writer.Fill(default!));
-            lease[0] = "before generation overflow";
+            lease.Access(__namIndexedView => __namIndexedView[0] = "before generation overflow");
             pool.SetGenerationCounterForTest(long.MaxValue);
 
             Assert.Throws<OverflowException>(() => pool.Dispose());
             Assert.Equal(NativeOwnerLifecycle.Active, pool.CurrentLifecycle);
             Assert.Equal(long.MaxValue, pool.GenerationCounterForTest);
             Assert.Equal(1, pool.CurrentReferenceRootCountForTest);
-            Assert.Equal("before generation overflow", lease[0]);
+            Assert.Equal("before generation overflow", lease.Read(__namIndexedView => __namIndexedView[0]));
 
             pool.SetGenerationCounterForTest(0);
             pool.Dispose();
@@ -305,25 +305,25 @@ public sealed class MechanismRegressionTests
         try
         {
             ConcurrentPooled<string> first = pool.Rent(1, static writer => writer.Fill(default!));
-            first[0] = "first";
+            first.Access(__namIndexedView => __namIndexedView[0] = "first");
             ConcurrentPooled<string> second = pool.Rent(2, static writer => writer.Fill(default!));
-            second[0] = "second-0";
-            second[1] = "second-1";
+            second.Access(__namIndexedView => __namIndexedView[0] = "second-0");
+            second.Access(__namIndexedView => __namIndexedView[1] = "second-1");
 
             NativeMemoryTestHooks.FailAtCommitBoundary(1);
             Assert.Throws<InvalidOperationException>(() => pool.ReleaseLeasesToNativeMemory());
             Assert.Equal(NativeOwnerLifecycle.Active, pool.CurrentLifecycle);
-            Assert.Equal("first", first[0]);
-            Assert.Equal("second-0", second[0]);
-            Assert.Equal("second-1", second[1]);
+            Assert.Equal("first", first.Read(__namIndexedView => __namIndexedView[0]));
+            Assert.Equal("second-0", second.Read(__namIndexedView => __namIndexedView[0]));
+            Assert.Equal("second-1", second.Read(__namIndexedView => __namIndexedView[1]));
             Assert.Equal(3, pool.CurrentReferenceRootCountForTest);
 
             NativeMemoryTestHooks.FailAtCommitBoundary(3);
             Assert.Throws<InvalidOperationException>(() => pool.ReleaseLeasesToNativeMemory());
             Assert.Equal(NativeOwnerLifecycle.Active, pool.CurrentLifecycle);
-            Assert.Equal("first", first[0]);
-            Assert.Equal("second-0", second[0]);
-            Assert.Equal("second-1", second[1]);
+            Assert.Equal("first", first.Read(__namIndexedView => __namIndexedView[0]));
+            Assert.Equal("second-0", second.Read(__namIndexedView => __namIndexedView[0]));
+            Assert.Equal("second-1", second.Read(__namIndexedView => __namIndexedView[1]));
             Assert.Equal(3, pool.CurrentReferenceRootCountForTest);
 
             pool.ReleaseLeasesToNativeMemory();
@@ -344,19 +344,19 @@ public sealed class MechanismRegressionTests
         try
         {
             ConcurrentPooled<int> returned = returnPool.Rent(1, static writer => writer.Fill(default!));
-            returned[0] = 41;
+            returned.Access(__namIndexedView => __namIndexedView[0] = 41);
             NativeMemoryTestHooks.FailAtCommitBoundary(1);
             Assert.Throws<InvalidOperationException>(() => returnPool.ReturnMemoryToNativeMemory());
             Assert.Equal(NativeOwnerLifecycle.Active, returnPool.CurrentLifecycle);
-            Assert.Equal(41, returned[0]);
+            Assert.Equal(41, returned.Read(__namIndexedView => __namIndexedView[0]));
             returnPool.ReturnMemoryToNativeMemory();
 
             scoped ConcurrentPooled<int> scoped = scopedPool.LeaseScoped(1, static writer => writer.Fill(default!));
-            scoped[0] = 73;
+            scoped.Access(__namIndexedView => __namIndexedView[0] = 73);
             NativeMemoryTestHooks.FailAtCommitBoundary(1);
             Assert.Throws<InvalidOperationException>(() => scopedPool.RecycleScoped());
             Assert.Equal(NativeOwnerLifecycle.Active, scopedPool.CurrentLifecycle);
-            Assert.Equal(73, scoped[0]);
+            Assert.Equal(73, scoped.Read(__namIndexedView => __namIndexedView[0]));
             scopedPool.RecycleScoped();
         }
         finally
@@ -386,8 +386,9 @@ public sealed class MechanismRegressionTests
         {
             Task<int> worker = Task.Run(() =>
             {
-                ConcurrentPooled<int> lease = pool.Rent(1, static writer => writer.Fill(default!));
-                lease[0] = 42;
+                ConcurrentPooled<int> lease = pool.Rent(
+                    1,
+                    static writer => writer.Write(42));
                 int observed = 0;
                 lease.Access(view =>
                 {
@@ -430,8 +431,9 @@ public sealed class MechanismRegressionTests
         {
             Task<int> worker = Task.Run(() =>
             {
-                ConcurrentPooled<int> lease = pool.Rent(1, static writer => writer.Fill(default!));
-                lease[0] = 73;
+                ConcurrentPooled<int> lease = pool.Rent(
+                    1,
+                    static writer => writer.Write(73));
                 int observed = 0;
                 lease.Access(view =>
                 {
@@ -635,7 +637,7 @@ public sealed class MechanismRegressionTests
 
             ConcurrentPooled<int> fresh = pool.Rent(1, static writer => writer.Fill(default!));
             Assert.Equal([2L], pool.CurrentSegmentOrdinalsForTest);
-            fresh[0] = 9;
+            fresh.Access(__namIndexedView => __namIndexedView[0] = 9);
             fresh.Dispose();
             Assert.Equal(freeBeforeFreshRent, NativeMemoryTestHooks.Snapshot().FreeCount);
         }
@@ -957,7 +959,7 @@ public sealed class MechanismRegressionTests
             Assert.Equal([1L, 2L, 3L, 4L, 5L, 6L], arena.CurrentSegmentOrdinalsForTest);
             ConcurrentArenaLease<int> fresh = arena.Scratch<int>(1, static writer => writer.Fill(default!));
             Assert.Equal([1L, 2L, 3L, 4L, 5L, 6L], arena.CurrentSegmentOrdinalsForTest);
-            fresh[0] = 99;
+            fresh.Access(__namIndexedView => __namIndexedView[0] = 99);
             Assert.Equal(capacities, arena.CurrentBankCapacitiesForTest);
         }
         finally
@@ -1035,7 +1037,7 @@ public sealed class MechanismRegressionTests
 
             ConcurrentArenaLease<int> fresh = arena.Scratch<int>(1, static writer => writer.Fill(default!));
             Assert.Equal([7L], arena.CurrentSegmentOrdinalsForTest);
-            fresh[0] = 99;
+            fresh.Access(__namIndexedView => __namIndexedView[0] = 99);
             Assert.Equal(capacities, arena.CurrentBankCapacitiesForTest);
         }
         finally
@@ -1080,7 +1082,7 @@ public sealed class MechanismRegressionTests
 
         NativeConcurrentPool<string> referencePool = new(preLease: 2, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         ConcurrentPooled<string> referenceLease = referencePool.Rent(2, static writer => writer.Fill(default!));
-        referenceLease[0] = "root";
+        referenceLease.Access(__namIndexedView => __namIndexedView[0] = "root");
         referenceLease.Dispose();
         Assert.Equal((nuint)(2 * IntPtr.Size), referencePool.TrimRetainedMemoryByLeaseSize(1));
         referencePool.Dispose();
@@ -1189,8 +1191,9 @@ public sealed class MechanismRegressionTests
     {
         try
         {
-            ConcurrentPooled<int> lease = pool.Rent(length, static writer => writer.Fill(default!));
-            lease[0] = value;
+            ConcurrentPooled<int> lease = pool.Rent(
+                length,
+                writer => writer.Fill(value));
             lease.Access(_ =>
             {
                 entered?.Set();
@@ -1213,8 +1216,9 @@ public sealed class MechanismRegressionTests
     {
         try
         {
-            ConcurrentArenaLease<int> lease = arena.Scratch<int>(length, static writer => writer.Fill(default!));
-            lease[0] = value;
+            ConcurrentArenaLease<int> lease = arena.Scratch<int>(
+                length,
+                writer => writer.Fill(value));
             lease.Access(_ =>
             {
                 entered?.Set();
