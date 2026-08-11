@@ -114,6 +114,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 Namespace + "NativeTransfer`1");
             Builder = runtimeAssembly.GetTypeByMetadataName(
                 Namespace + "NativeBuilder`1");
+            BuilderPairBorrowAction = runtimeAssembly.GetTypeByMetadataName(
+                Namespace + "NativeBuilderPairBorrowAction`1");
             Workspace = runtimeAssembly.GetTypeByMetadataName(
                 Namespace + "NativeWorkspace`1");
             LeaseView = runtimeAssembly.GetTypeByMetadataName(
@@ -144,6 +146,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
         internal INamedTypeSymbol? Builder { get; }
 
+        internal INamedTypeSymbol? BuilderPairBorrowAction { get; }
+
         internal INamedTypeSymbol? Workspace { get; }
 
         internal INamedTypeSymbol? LeaseView { get; }
@@ -161,6 +165,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             && ConcurrentArenaLease is not null
             && Transfer is not null
             && Builder is not null
+            && BuilderPairBorrowAction is not null
             && Workspace is not null
             && LeaseView is not null;
 
@@ -2524,7 +2529,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
             if (value is not null
                 && IsNativeBuilder(value.Type)
-                && !IsBuilderFactoryOperation(value))
+                && !IsBuilderFactoryOperation(value)
+                && !IsCompositeBuilderBorrowArgument(operation))
             {
                 string destination = operation.Parent is IInvocationOperation invocation
                     ? invocation.TargetMethod.ToDisplayString(
@@ -3287,6 +3293,17 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 builder,
                 operation.Syntax,
                 operation.TargetMethod.Name))
+            {
+                return;
+            }
+
+            if (TryGetCompositeBuilderBorrow(
+                    operation,
+                    out TransferState second)
+                && !CheckBuilderActive(
+                    second,
+                    operation.Syntax,
+                    operation.TargetMethod.Name))
             {
                 return;
             }
@@ -4431,6 +4448,52 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         private bool IsBuilderFactoryOperation(IOperation operation) =>
             operation is IObjectCreationOperation creation
                 && IsNativeBuilder(creation.Type);
+
+        private bool IsCompositeBuilderBorrowArgument(
+            IArgumentOperation argument) =>
+            argument.Parent is IInvocationOperation invocation
+            && IsCompositeBuilderBorrowInvocation(invocation)
+            && argument.Parameter?.Ordinal == 0
+            && Unwrap(argument.Value) is ILocalReferenceOperation local
+            && GetBuilder(local) is not null;
+
+        private bool TryGetCompositeBuilderBorrow(
+            IInvocationOperation invocation,
+            out TransferState second)
+        {
+            second = null!;
+            if (!IsCompositeBuilderBorrowInvocation(invocation))
+            {
+                return false;
+            }
+
+            IArgumentOperation? argument = invocation.Arguments
+                .FirstOrDefault(item => item.Parameter?.Ordinal == 0);
+            if (Unwrap(argument?.Value) is not ILocalReferenceOperation local)
+            {
+                return false;
+            }
+
+            TransferState? candidate = GetBuilder(local);
+            if (candidate is null)
+            {
+                return false;
+            }
+
+            second = candidate;
+            return true;
+        }
+
+        private bool IsCompositeBuilderBorrowInvocation(
+            IInvocationOperation invocation) =>
+            invocation.TargetMethod.Name == "Borrow"
+            && IsNativeBuilder(invocation.TargetMethod.ContainingType)
+            && invocation.TargetMethod.Parameters.Length >= 2
+            && IsNativeBuilder(
+                invocation.TargetMethod.Parameters[0].Type)
+            && NativeSymbols.Is(
+                invocation.TargetMethod.Parameters[1].Type,
+                _symbols.BuilderPairBorrowAction);
 
         private bool IsWorkspaceFactoryOperation(IOperation? operation) =>
             operation is IObjectCreationOperation creation

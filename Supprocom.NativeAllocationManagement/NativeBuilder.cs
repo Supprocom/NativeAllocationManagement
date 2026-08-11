@@ -151,6 +151,59 @@ public sealed class NativeBuilder<T> : IDisposable
         }
     }
 
+    /// <summary>Provides two exclusive builder borrows to one bounded callback.</summary>
+    /// <param name="second">The second builder owner.</param>
+    /// <param name="action">The callback that receives both builder authorities.</param>
+    /// <param name="cancellationToken">The token that can cancel both builders.</param>
+    public void Borrow(
+        NativeBuilder<T> second,
+        NativeBuilderPairBorrowAction<T> action,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(second);
+        ArgumentNullException.ThrowIfNull(action);
+        if (ReferenceEquals(this, second))
+        {
+            throw new ArgumentException(
+                "A composite builder borrow requires two different owners.",
+                nameof(second));
+        }
+
+        EnterOperation(nameof(Borrow));
+        try
+        {
+            second.EnterOperation(nameof(Borrow));
+        }
+        catch
+        {
+            ExitOperation();
+            GC.KeepAlive(second);
+            GC.KeepAlive(this);
+            throw;
+        }
+
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            NativeBuilderBorrow<T> firstBorrow = new(this);
+            NativeBuilderBorrow<T> secondBorrow = new(second);
+            action(ref firstBorrow, ref secondBorrow);
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+        catch (Exception failure)
+        {
+            FailPair(this, second, failure);
+            throw;
+        }
+        finally
+        {
+            second.ExitOperation();
+            ExitOperation();
+            GC.KeepAlive(second);
+            GC.KeepAlive(this);
+        }
+    }
+
     /// <summary>Publishes one exact logical range and invalidates this builder.</summary>
     public NativeTransfer<T> Complete(
         CancellationToken cancellationToken = default)
@@ -437,6 +490,41 @@ public sealed class NativeBuilder<T> : IDisposable
                 failure,
                 cleanupFailure);
         }
+    }
+
+    private static void FailPair(
+        NativeBuilder<T> first,
+        NativeBuilder<T> second,
+        Exception failure)
+    {
+        List<Exception>? cleanupFailures = null;
+        try
+        {
+            first.FailOperation(failure);
+        }
+        catch (Exception cleanupFailure)
+        {
+            (cleanupFailures ??= []).Add(cleanupFailure);
+        }
+
+        try
+        {
+            second.FailOperation(failure);
+        }
+        catch (Exception cleanupFailure)
+        {
+            (cleanupFailures ??= []).Add(cleanupFailure);
+        }
+
+        if (cleanupFailures is null)
+        {
+            return;
+        }
+
+        cleanupFailures.Insert(0, failure);
+        throw new AggregateException(
+            "A composite native builder operation failed during cleanup.",
+            cleanupFailures);
     }
 
     private void EnsureActive(string operation)

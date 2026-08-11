@@ -1234,6 +1234,127 @@ public sealed class NativeBuilderAnalyzerTests
         AssertNoNativeDiagnostics(diagnostics);
     }
 
+    [Fact]
+    public async Task CompositeBorrowAcceptsTwoOwnersAndNestedHelpers()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    using NativeBuilder<uint> opaque =
+                        new NativeBuilder<uint>(preLease: 4);
+                    using NativeBuilder<uint> transparent =
+                        new NativeBuilder<uint>(preLease: 4);
+                    opaque.Borrow(transparent, Emit);
+                    NativeTransfer<uint> opaqueTransfer = opaque.Complete();
+                    NativeTransfer<uint> transparentTransfer =
+                        transparent.Complete();
+                    opaqueTransfer.Dispose();
+                    transparentTransfer.Dispose();
+                }
+
+                private static void Emit(
+                    scoped ref NativeBuilderBorrow<uint> opaque,
+                    scoped ref NativeBuilderBorrow<uint> transparent)
+                {
+                    EmitOpaque(ref opaque);
+                    EmitTransparent(ref transparent);
+                }
+
+                private static void EmitOpaque(
+                    scoped ref NativeBuilderBorrow<uint> opaque) =>
+                    opaque.Append(1U);
+
+                private static void EmitTransparent(
+                    scoped ref NativeBuilderBorrow<uint> transparent) =>
+                    transparent.Append(2U);
+            }
+            """);
+
+        AssertNoNativeDiagnostics(diagnostics);
+    }
+
+    [Fact]
+    public async Task CompositeBorrowRejectsIndirectCallbackAuthority()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    NativeBuilderPairBorrowAction<int> action = Direct;
+                    using NativeBuilder<int> first = new();
+                    using NativeBuilder<int> second = new();
+                    first.Borrow(second, Identity(action));
+                    first.Dispose();
+                    second.Dispose();
+                }
+
+                private static NativeBuilderPairBorrowAction<int> Identity(
+                    NativeBuilderPairBorrowAction<int> action) => action;
+
+                private static void Direct(
+                    scoped ref NativeBuilderBorrow<int> first,
+                    scoped ref NativeBuilderBorrow<int> second)
+                {
+                    first.Append(1);
+                    second.Append(2);
+                }
+            }
+            """);
+
+        Assert.Contains("NAM1044", NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task CompositeBorrowRejectsEscapeCaptureAndOwnerUse()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using System;
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    using NativeBuilder<int> first = new();
+                    using NativeBuilder<int> second = new();
+                    NativeBuilderBorrow<int> escaped = default;
+                    first.Borrow(
+                        second,
+                        (
+                            scoped ref NativeBuilderBorrow<int> firstBorrow,
+                            scoped ref NativeBuilderBorrow<int> secondBorrow) =>
+                        {
+                            escaped = firstBorrow;
+                            Action capture = () => _ = secondBorrow.Count;
+                            capture();
+                            first.Append(1);
+                            second.Dispose();
+                            first.Borrow(
+                                static (
+                                    scoped ref NativeBuilderBorrow<int> nested) =>
+                                    nested.Append(2));
+                        });
+                    first.Dispose();
+                    second.Dispose();
+                }
+            }
+            """);
+
+        string[] ids = NativeDiagnostics(diagnostics);
+        Assert.Contains("NAM1043", ids);
+        Assert.Contains("NAM1044", ids);
+    }
+
     private static Task<ImmutableArray<Diagnostic>> AnalyzeAsync(
         string source) =>
         AnalyzerContractTests.AnalyzeAsync(source);

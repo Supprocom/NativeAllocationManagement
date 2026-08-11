@@ -91,17 +91,18 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
             context.Node,
             context.CancellationToken)
             is not IAnonymousFunctionOperation anonymous
-            || anonymous.Symbol.Parameters.Length != 1)
+            || anonymous.Symbol.Parameters.Length == 0)
         {
             return;
         }
 
-        IParameterSymbol parameter = anonymous.Symbol.Parameters[0];
-        if (symbols.IsWriter(parameter.Type))
+        IParameterSymbol[] parameters = anonymous.Symbol.Parameters.ToArray();
+        if (parameters.Length == 1
+            && symbols.IsWriter(parameters[0].Type))
         {
             AnalyzeAuthorityBody(
                 anonymous.Body,
-                [parameter],
+                parameters,
                 [],
                 symbols,
                 context.ReportDiagnostic,
@@ -109,18 +110,20 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
             return;
         }
 
-        if (!symbols.IsBorrow(parameter.Type))
+        if (parameters.Length is not (1 or 2)
+            || parameters.Any(parameter =>
+                !symbols.IsBorrow(parameter.Type)))
         {
             return;
         }
 
         ReportInvalidBorrowParameters(
-            [parameter],
+            parameters,
             context.ReportDiagnostic);
         AnalyzeAuthorityBody(
             anonymous.Body,
             [],
-            [parameter],
+            parameters,
             symbols,
             context.ReportDiagnostic,
             expressionReturn: false);
@@ -248,7 +251,7 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
             AnalyzeCallbackArgument(
                 context.ReportDiagnostic,
                 invocation,
-                symbols.IsWriteAction,
+                symbols.GetWriteActionArity,
                 symbols.IsWriter,
                 RefKind.None,
                 InvalidAuthority,
@@ -261,7 +264,7 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
             AnalyzeCallbackArgument(
                 context.ReportDiagnostic,
                 invocation,
-                symbols.IsBorrowAction,
+                symbols.GetBorrowActionArity,
                 symbols.IsBorrow,
                 RefKind.Ref,
                 InvalidBorrowAuthority,
@@ -309,7 +312,7 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
     private static void AnalyzeCallbackArgument(
         Action<Diagnostic> report,
         IInvocationOperation invocation,
-        Func<ITypeSymbol?, bool> isAction,
+        Func<ITypeSymbol?, int> getActionArity,
         Func<ITypeSymbol?, bool> isAuthority,
         RefKind refKind,
         DiagnosticDescriptor descriptor,
@@ -317,16 +320,19 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
     {
         IArgumentOperation? callback = invocation.Arguments
             .FirstOrDefault(argument =>
-                isAction(argument.Parameter?.Type));
+                getActionArity(argument.Parameter?.Type) != 0);
         if (callback is null)
         {
             return;
         }
 
+        int expectedParameterCount = getActionArity(
+            callback.Parameter?.Type);
         if (!IsDirectCallback(
             callback.Value,
             isAuthority,
-            refKind))
+            refKind,
+            expectedParameterCount))
         {
             report(Diagnostic.Create(
                 descriptor,
@@ -339,15 +345,17 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
     private static bool IsDirectCallback(
         IOperation value,
         Func<ITypeSymbol?, bool> isAuthority,
-        RefKind refKind)
+        RefKind refKind,
+        int expectedParameterCount)
     {
         IOperation callback = UnwrapCallbackValue(value);
         if (callback is IAnonymousFunctionOperation anonymous)
         {
-            return anonymous.Symbol.Parameters.Length == 1
-                && anonymous.Symbol.Parameters[0].RefKind == refKind
-                && isAuthority(
-                    anonymous.Symbol.Parameters[0].Type);
+            return anonymous.Symbol.Parameters.Length
+                    == expectedParameterCount
+                && anonymous.Symbol.Parameters.All(parameter =>
+                    parameter.RefKind == refKind
+                    && isAuthority(parameter.Type));
         }
 
         if (callback is not IMethodReferenceOperation reference)
@@ -358,12 +366,11 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
         IMethodSymbol declaration = reference.Method.OriginalDefinition;
         return declaration.ReturnsVoid
             && !declaration.IsAsync
-            && declaration.Parameters.Length == 1
-            && declaration.Parameters[0].RefKind == refKind
-            && declaration.Parameters[0].ScopedKind
-                != ScopedKind.None
-            && isAuthority(
-                declaration.Parameters[0].Type)
+            && declaration.Parameters.Length == expectedParameterCount
+            && declaration.Parameters.All(parameter =>
+                parameter.RefKind == refKind
+                && parameter.ScopedKind != ScopedKind.None
+                && isAuthority(parameter.Type))
             && declaration.DeclaringSyntaxReferences.Length == 1;
     }
 
@@ -454,6 +461,8 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
                 Namespace + "NativeBuilderBorrow`1");
             BorrowAction = runtimeAssembly.GetTypeByMetadataName(
                 Namespace + "NativeBuilderBorrowAction`1");
+            PairBorrowAction = runtimeAssembly.GetTypeByMetadataName(
+                Namespace + "NativeBuilderPairBorrowAction`1");
         }
 
         internal INamedTypeSymbol? Builder { get; }
@@ -466,12 +475,15 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
 
         internal INamedTypeSymbol? BorrowAction { get; }
 
+        internal INamedTypeSymbol? PairBorrowAction { get; }
+
         internal bool IsAvailable =>
             Builder is not null
             && Writer is not null
             && WriteAction is not null
             && Borrow is not null
-            && BorrowAction is not null;
+            && BorrowAction is not null
+            && PairBorrowAction is not null;
 
         internal bool IsBuilderWrite(IMethodSymbol method) =>
             method.Name == "Write"
@@ -484,7 +496,7 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
             method.Name == "Borrow"
             && Is(method.ContainingType, Builder)
             && method.Parameters.Any(parameter =>
-                IsBorrowAction(parameter.Type));
+                GetBorrowActionArity(parameter.Type) != 0);
 
         internal bool IsWriter(ITypeSymbol? type) =>
             Is(type, Writer);
@@ -492,11 +504,24 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
         internal bool IsWriteAction(ITypeSymbol? type) =>
             Is(type, WriteAction);
 
+        internal int GetWriteActionArity(ITypeSymbol? type) =>
+            IsWriteAction(type) ? 1 : 0;
+
         internal bool IsBorrow(ITypeSymbol? type) =>
             Is(type, Borrow);
 
         internal bool IsBorrowAction(ITypeSymbol? type) =>
             Is(type, BorrowAction);
+
+        internal int GetBorrowActionArity(ITypeSymbol? type)
+        {
+            if (Is(type, BorrowAction))
+            {
+                return 1;
+            }
+
+            return Is(type, PairBorrowAction) ? 2 : 0;
+        }
 
         internal bool IsBuilder(ITypeSymbol? type) =>
             Is(type, Builder);

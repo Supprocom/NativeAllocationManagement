@@ -52,3 +52,10 @@ public readonly ref struct NativeBuilderBorrow<T>
 public delegate void NativeBuilderBorrowAction<T>(
     scoped ref NativeBuilderBorrow<T> builder)
     where T : unmanaged;
+
+/// <summary>Uses two exclusive builder borrows during one bounded callback.</summary>
+/// <typeparam name="T">The unmanaged element type.</typeparam>
+public delegate void NativeBuilderPairBorrowAction<T>(
+    scoped ref NativeBuilderBorrow<T> first,
+    scoped ref NativeBuilderBorrow<T> second)
+    where T : unmanaged;

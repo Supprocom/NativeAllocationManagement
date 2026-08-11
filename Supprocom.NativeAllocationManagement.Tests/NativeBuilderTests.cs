@@ -367,6 +367,180 @@ public sealed class NativeBuilderTests
     }
 
     [Fact]
+    public void CompositeBorrowWritesBothBuildersThroughNestedHelpers()
+    {
+        using NativeBuilder<int> first =
+            new NativeBuilder<int>(preLease: 2);
+        using NativeBuilder<int> second =
+            new NativeBuilder<int>(preLease: 2);
+
+        first.Borrow(second, WriteNestedPair);
+        NativeTransfer<int> firstTransfer = first.Complete();
+        NativeTransfer<int> secondTransfer = second.Complete();
+
+        Assert.Equal(
+            new[] { 2, 3, 5 },
+            firstTransfer.Read(
+                static view => view.AsSpan().ToArray()));
+        Assert.Equal(
+            new[] { 7, 11, 13 },
+            secondTransfer.Read(
+                static view => view.AsSpan().ToArray()));
+        firstTransfer.Dispose();
+        secondTransfer.Dispose();
+    }
+
+    [Fact]
+    public void CompositeBorrowRejectsDuplicateOwnerWithoutMutation()
+    {
+        using NativeBuilder<int> builder =
+            new NativeBuilder<int>(preLease: 2);
+
+        Assert.Throws<ArgumentException>(
+            () => builder.Borrow(builder, WriteNestedPair));
+
+        builder.Append(17);
+        NativeTransfer<int> transfer = builder.Complete();
+        Assert.Equal(
+            new[] { 17 },
+            transfer.Read(
+                static view => view.AsSpan().ToArray()));
+        transfer.Dispose();
+    }
+
+    [Fact]
+    public async Task CompositeBorrowReleasesFirstGateWhenSecondIsBusy()
+    {
+        using NativeBuilder<int> first =
+            new NativeBuilder<int>(preLease: 2);
+        using NativeBuilder<int> second =
+            new NativeBuilder<int>(preLease: 2);
+        using ManualResetEventSlim entered = new(false);
+        using ManualResetEventSlim release = new(false);
+
+        void HoldSecond(
+            scoped ref NativeBuilderBorrow<int> borrow)
+        {
+            entered.Set();
+            Assert.True(release.Wait(TimeSpan.FromSeconds(5)));
+        }
+
+        Task active = Task.Run(
+            () => second.Borrow(HoldSecond));
+        Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
+        Assert.Throws<InvalidOperationException>(
+            () => first.Borrow(second, WriteNestedPair));
+
+        first.Append(19);
+        release.Set();
+        await active.WaitAsync(TimeSpan.FromSeconds(5));
+        second.Append(23);
+
+        NativeTransfer<int> firstTransfer = first.Complete();
+        NativeTransfer<int> secondTransfer = second.Complete();
+        Assert.Equal(19, firstTransfer.Read(static view => view[0]));
+        Assert.Equal(23, secondTransfer.Read(static view => view[0]));
+        firstTransfer.Dispose();
+        secondTransfer.Dispose();
+    }
+
+    [Fact]
+    public void CompositeBorrowFailureReturnsBothBlocksExactlyOnce()
+    {
+        using NativeMetricsScope metrics = new();
+        NativeBuilder<int> first =
+            new NativeBuilder<int>(preLease: 2);
+        NativeBuilder<int> second =
+            new NativeBuilder<int>(preLease: 2);
+
+        Assert.Throws<FormatException>(
+            () => first.Borrow(
+                second,
+                static (
+                    scoped ref NativeBuilderBorrow<int> firstBorrow,
+                    scoped ref NativeBuilderBorrow<int> secondBorrow) =>
+                {
+                    firstBorrow.Append(29);
+                    secondBorrow.Append(31);
+                    throw new FormatException("Expected test failure.");
+                }));
+
+        first.Dispose();
+        first.Dispose();
+        second.Dispose();
+        second.Dispose();
+        metrics.AssertBalanced();
+    }
+
+    [Fact]
+    public void CompositeBorrowCancellationReturnsBothBlocksExactlyOnce()
+    {
+        using NativeMetricsScope metrics = new();
+        NativeBuilder<int> first =
+            new NativeBuilder<int>(preLease: 2);
+        NativeBuilder<int> second =
+            new NativeBuilder<int>(preLease: 2);
+        using CancellationTokenSource cancellation = new();
+
+        void Cancel(
+            scoped ref NativeBuilderBorrow<int> firstBorrow,
+            scoped ref NativeBuilderBorrow<int> secondBorrow)
+        {
+            firstBorrow.Append(37);
+            secondBorrow.Append(41);
+            cancellation.Cancel();
+        }
+
+        Assert.Throws<OperationCanceledException>(
+            () => first.Borrow(
+                second,
+                Cancel,
+                cancellation.Token));
+
+        first.Dispose();
+        second.Dispose();
+        metrics.AssertBalanced();
+    }
+
+    [Fact]
+    public void CompositeBorrowGrowthFailureReturnsBothBlocksExactlyOnce()
+    {
+        NativeMemoryTestHooks.Reset();
+        try
+        {
+            NativeBuilder<int> first =
+                new NativeBuilder<int>(preLease: 1);
+            NativeBuilder<int> second =
+                new NativeBuilder<int>(preLease: 1);
+
+            Assert.Throws<NativeAllocationFailedException>(
+                () => first.Borrow(
+                    second,
+                    static (
+                        scoped ref NativeBuilderBorrow<int> firstBorrow,
+                        scoped ref NativeBuilderBorrow<int> secondBorrow) =>
+                    {
+                        firstBorrow.Append(43);
+                        NativeMemoryTestHooks.FailNextAllocation();
+                        secondBorrow.Append([47, 53]);
+                    }));
+
+            first.Dispose();
+            second.Dispose();
+            NativeMemoryTestMetrics metrics =
+                NativeMemoryTestHooks.Snapshot();
+            Assert.Equal(
+                metrics.AllocationCount,
+                metrics.FreeCount);
+            Assert.Equal(0, metrics.OutstandingNativeBytes);
+        }
+        finally
+        {
+            NativeMemoryTestHooks.Reset();
+        }
+    }
+
+    [Fact]
     public void GeometricReallocationCreatesNoManagedIntermediateArray()
     {
         Type? resolvedAllocatorType =
@@ -810,6 +984,26 @@ public sealed class NativeBuilderTests
     {
         borrow.Append(13);
         throw new FormatException("Expected test failure.");
+    }
+
+    private static void WriteNestedPair(
+        scoped ref NativeBuilderBorrow<int> first,
+        scoped ref NativeBuilderBorrow<int> second)
+    {
+        WriteFirst(ref first);
+        WriteSecond(ref second);
+    }
+
+    private static void WriteFirst(
+        scoped ref NativeBuilderBorrow<int> first)
+    {
+        first.Append([2, 3, 5]);
+    }
+
+    private static void WriteSecond(
+        scoped ref NativeBuilderBorrow<int> second)
+    {
+        second.Append([7, 11, 13]);
     }
 
     private static IEnumerable<OpCode> ReadOpCodes(MethodInfo method)
