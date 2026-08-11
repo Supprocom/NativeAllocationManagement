@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
@@ -1431,20 +1430,6 @@ internal sealed class NativeAllocation
 
     internal bool IsScoped { get; private set; }
 
-    internal bool IsArenaTransferSlot { get; private set; }
-
-    internal int ArenaTransferSlotIndex { get; private set; } = -1;
-
-    internal int ArenaTransferVersion { get; private set; }
-
-    internal int ArenaTransferSizeClass { get; private set; }
-
-    internal nuint ArenaTransferBlockBytes { get; private set; }
-
-    internal NativeArenaTransferLane? ArenaTransferLane { get; private set; }
-
-    internal int ArenaTransferNextSlot;
-
     internal long ScopeEpoch => Volatile.Read(ref _scopeEpoch);
 
     internal void SetScopeEpochForTest(long value) =>
@@ -1497,55 +1482,6 @@ internal sealed class NativeAllocation
         NativeOperationAdmission.Reset(ref _operationAdmission);
         InitializedLength = 0;
         Volatile.Write(ref _id, id);
-    }
-
-    internal void ConfigureArenaTransferSlot(int slotIndex)
-    {
-        ArgumentOutOfRangeException.ThrowIfNegative(slotIndex);
-        IsArenaTransferSlot = true;
-        ArenaTransferSlotIndex = slotIndex;
-        Lifecycle = NativeAllocationLifecycle.Returned;
-    }
-
-    internal long ResetArenaTransfer(
-        NativeArenaTransferLane lane,
-        NativeBumpSegment? bumpSegment,
-        nuint offsetBytes,
-        int length,
-        int capacity,
-        nuint storageBytes,
-        int sizeClass,
-        nuint blockBytes)
-    {
-        if (!IsArenaTransferSlot
-            || ArenaTransferSlotIndex < 0)
-        {
-            throw new InvalidOperationException(
-                "The Arena transfer record is not a compact slot.");
-        }
-
-        int version = checked(ArenaTransferVersion + 1);
-        long id = NativeOwnerKernel.PackArenaTransferId(
-            ArenaTransferSlotIndex,
-            version);
-        ArenaTransferVersion = version;
-        ArenaTransferSizeClass = sizeClass;
-        ArenaTransferBlockBytes = blockBytes;
-        ArenaTransferLane = lane;
-        ArenaTransferNextSlot = 0;
-        Reset(
-            id,
-            slab: null,
-            bumpSegment,
-            offsetBytes,
-            length,
-            capacity,
-            storageBytes,
-            referenceRoots: null,
-            scoped: false,
-            scopeEpoch: 0);
-        Lifecycle = NativeAllocationLifecycle.Initializing;
-        return id;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -1775,53 +1711,6 @@ internal sealed class NativeAllocation
         {
             destination[index] = GetValue<T>(index);
         }
-    }
-}
-
-internal sealed class NativeArenaTransferLane
-{
-    private int _initializerActive;
-
-    internal NativeArenaTransferLane(
-        NativeOwnerKernel owner,
-        NativeGeneration generation,
-        int threadId,
-        int sizeClassCount)
-    {
-        Owner = owner;
-        Generation = generation;
-        ThreadId = threadId;
-        FreeSlotHeads = new long[sizeClassCount];
-        RemoteFreeSlotHeads = new long[sizeClassCount];
-        ChunkSegments = new NativeBumpSegment?[sizeClassCount];
-        ChunkCursors = new nuint[sizeClassCount];
-        ChunkLimits = new nuint[sizeClassCount];
-    }
-
-    internal NativeOwnerKernel Owner { get; }
-
-    internal NativeGeneration Generation { get; }
-
-    internal int ThreadId { get; }
-
-    internal long[] FreeSlotHeads { get; }
-
-    internal long[] RemoteFreeSlotHeads { get; }
-
-    internal NativeBumpSegment?[] ChunkSegments { get; }
-
-    internal nuint[] ChunkCursors { get; }
-
-    internal nuint[] ChunkLimits { get; }
-
-    internal int UnusedSlotHead { get; set; }
-
-    internal bool InitializerActive
-    {
-        get => Volatile.Read(ref _initializerActive) != 0;
-        set => Volatile.Write(
-            ref _initializerActive,
-            value ? 1 : 0);
     }
 }
 
@@ -2624,8 +2513,6 @@ internal sealed class NativeGeneration
     private long _scopeEpoch;
     private int _memoryDetached;
     private int _initializationsInProgress;
-    private NativeAllocation?[] _arenaTransferSlots = [];
-    private NativeArenaTransferLane[] _arenaTransferLaneSnapshot = [];
     private NativeArenaTransferBatchState[]
         _arenaTransferBatchSnapshot = [];
 
@@ -2691,29 +2578,11 @@ internal sealed class NativeGeneration
         }
     }
 
-    internal List<NativeArenaTransferLane> ArenaTransferLanes { get; } = [];
-
     internal List<NativeArenaTransferBatchState>
         ArenaTransferBatches { get; } = [];
 
-    internal NativeArenaTransferLane[] ArenaTransferLaneSnapshot =>
-        Volatile.Read(ref _arenaTransferLaneSnapshot);
-
     internal NativeArenaTransferBatchState[] ArenaTransferBatchSnapshot =>
         Volatile.Read(ref _arenaTransferBatchSnapshot);
-
-    internal NativeAllocation?[] ArenaTransferSlots =>
-        Volatile.Read(ref _arenaTransferSlots);
-
-    internal int ArenaTransferSlotCount { get; set; }
-
-    internal void PublishArenaTransferSlots(
-        NativeAllocation?[] slots) =>
-        Volatile.Write(ref _arenaTransferSlots, slots);
-
-    internal void PublishArenaTransferLanes(
-        NativeArenaTransferLane[] lanes) =>
-        Volatile.Write(ref _arenaTransferLaneSnapshot, lanes);
 
     internal void PublishArenaTransferBatches(
         NativeArenaTransferBatchState[] batches) =>
@@ -3268,15 +3137,6 @@ internal ref struct NativeMultiOwnerOperationToken
 internal sealed class NativeOwnerKernel
 {
     private const nuint DefaultBumpSegmentBytes = 4096;
-    private const int ArenaTransferSlotBatchSize = 32;
-    private const nuint ArenaTransferMinimumChunkBytes = 262_144;
-    internal const int ArenaTransferSizeClassCount = 65;
-    private const long ArenaTransferIdMarker = long.MinValue;
-
-    [ThreadStatic]
-    private static WeakReference<NativeArenaTransferLane>?
-        _cachedArenaTransferLane;
-
     private readonly Lock _gate = new();
     private readonly NativeOwnerKind _kind;
     private readonly string _ownerKind;
@@ -3311,7 +3171,6 @@ internal sealed class NativeOwnerKernel
     private int _arenaFastBoundaryClosing;
     private int _arenaFastOperationDepth;
     private NativeGeneration? _arenaFastHazardGeneration;
-    private NativeGeneration? _arenaTransferGeneration;
     private NativeBumpSegment? _arenaTransferCentralSegment;
     private long _arenaTransferSlowPathCount;
     private long _arenaTransferSlotCreationCount;
@@ -3360,21 +3219,6 @@ internal sealed class NativeOwnerKernel
                     ? checked((long)allocation.Length * _storageElementSize)
                     : checked((long)allocation.StorageBytes);
                 requestedBytes = checked(requestedBytes + allocationBytes);
-            }
-
-            foreach (NativeAllocation? allocation in
-                current.ArenaTransferSlots)
-            {
-                if (allocation is null
-                    || allocation.Lifecycle
-                        != NativeAllocationLifecycle.Active)
-                {
-                    continue;
-                }
-
-                requestedBytes = checked(
-                    requestedBytes
-                    + checked((long)allocation.StorageBytes));
             }
 
             foreach (NativeArenaTransferBatchState batch in
@@ -3915,15 +3759,6 @@ internal sealed class NativeOwnerKernel
             return false;
         }
 
-        foreach (NativeArenaTransferLane lane in
-            generation.ArenaTransferLaneSnapshot)
-        {
-            if (lane.InitializerActive)
-            {
-                return true;
-            }
-        }
-
         foreach (NativeArenaTransferBatchState batch in
             generation.ArenaTransferBatchSnapshot)
         {
@@ -3940,21 +3775,6 @@ internal sealed class NativeOwnerKernel
         NativeGeneration generation)
     {
         int count = 0;
-        NativeAllocation?[] slots = generation.ArenaTransferSlots;
-        int slotCount = Math.Min(
-            generation.ArenaTransferSlotCount,
-            slots.Length);
-        for (int index = 0; index < slotCount; index++)
-        {
-            NativeAllocation? allocation = slots[index];
-            if (allocation is not null
-                && allocation.Lifecycle
-                    != NativeAllocationLifecycle.Returned)
-            {
-                count++;
-            }
-        }
-
         foreach (NativeArenaTransferBatchState batch in
             generation.ArenaTransferBatchSnapshot)
         {
@@ -3983,19 +3803,6 @@ internal sealed class NativeOwnerKernel
         NativeGeneration generation)
     {
         int count = 0;
-        NativeAllocation?[] slots = generation.ArenaTransferSlots;
-        int slotCount = Math.Min(
-            generation.ArenaTransferSlotCount,
-            slots.Length);
-        for (int index = 0; index < slotCount; index++)
-        {
-            if (slots[index] is { } allocation)
-            {
-                count = checked(
-                    count + allocation.ActiveOperations);
-            }
-        }
-
         foreach (NativeArenaTransferBatchState batch in
             generation.ArenaTransferBatchSnapshot)
         {
@@ -5412,7 +5219,7 @@ internal sealed class NativeOwnerKernel
         }
 
         NativeGeneration generation =
-            BeginArenaTransferInitialization();
+            BeginArenaTransferBatchInitialization();
         long authority = 0;
         bool initializing = false;
         try
@@ -5713,177 +5520,8 @@ internal sealed class NativeOwnerKernel
         }
     }
 
-    internal NativeRegionAllocation LeaseConcurrentBumpInitialized<T>(
-        int length,
-        int elementSize,
-        nuint alignment,
-        NativeLeaseInitializer<T> initializer)
-        where T : unmanaged
-    {
-        ArgumentNullException.ThrowIfNull(initializer);
-        ValidateBumpInitializationArguments(
-            length,
-            elementSize,
-            alignment);
-        (
-            nuint storageBytes,
-            nuint blockBytes,
-            int sizeClass,
-            int capacity) = CalculateArenaTransferLayout(
-                length,
-                elementSize);
-        NativeGeneration generation =
-            BeginArenaTransferInitialization();
-        NativeArenaTransferLane? lane = null;
-        NativeAllocation? allocation = null;
-        bool published = false;
-        try
-        {
-            lane = EnterArenaTransferLane(generation);
-            allocation = RentArenaTransferSlot(
-                lane,
-                length,
-                capacity,
-                storageBytes,
-                blockBytes,
-                sizeClass);
-            int initializedLength = 0;
-            NativeLeaseWriter<T> writer = new(
-                allocation,
-                ref initializedLength);
-            initializer(writer);
-            if (initializedLength != length)
-            {
-                throw new InvalidOperationException(
-                    "The native lease initializer did not write all logical elements.");
-            }
-
-            allocation.InitializedLength = 0;
-            allocation.Lifecycle = NativeAllocationLifecycle.Active;
-            published = true;
-            return new NativeRegionAllocation(
-                allocation.Id,
-                allocation);
-        }
-        catch
-        {
-            if (allocation is not null && !published)
-            {
-                allocation.InitializedLength = 0;
-                allocation.Lifecycle =
-                    NativeAllocationLifecycle.Returned;
-                ReturnArenaTransferSlot(allocation);
-            }
-
-            throw;
-        }
-        finally
-        {
-            if (lane is not null)
-            {
-                lane.InitializerActive = false;
-            }
-        }
-    }
-
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private NativeArenaTransferLane EnterArenaTransferLane(
-        NativeGeneration generation)
-    {
-        NativeArenaTransferLane lane =
-            GetArenaTransferLane(generation);
-        if (lane.InitializerActive)
-        {
-            throw CreateInUseException(
-                "ScratchTransferable",
-                generation.Number,
-                0,
-                generation.ActiveOperations,
-                "An Arena transfer initializer is already active on this producer lane.");
-        }
-
-        lane.InitializerActive = true;
-        if (!ReferenceEquals(
-                Volatile.Read(ref _current),
-                generation)
-            || _lifecycle != NativeOwnerLifecycle.Active
-            || Volatile.Read(
-                ref _arenaFastBoundaryClosing) != 0
-            || Volatile.Read(
-                ref _arenaFastInitializerActive) != 0
-            || Volatile.Read(
-                ref generation.ArenaInitializationsInProgress) != 0)
-        {
-            lane.InitializerActive = false;
-            throw CreateInUseException(
-                "ScratchTransferable",
-                generation.Number,
-                0,
-                generation.ActiveOperations,
-                "The Arena changed before the transfer reservation started.");
-        }
-
-        return lane;
-    }
-
-    internal static long PackArenaTransferId(
-        int slotIndex,
-        int version)
-    {
-        ArgumentOutOfRangeException.ThrowIfNegative(slotIndex);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(version);
-        uint storedIndex = checked((uint)(slotIndex + 1));
-        return ArenaTransferIdMarker
-            | ((long)(uint)version << 32)
-            | storedIndex;
-    }
-
-    private static (
-        nuint StorageBytes,
-        nuint BlockBytes,
-        int SizeClass,
-        int Capacity) CalculateArenaTransferLayout(
-            int length,
-            int elementSize)
-    {
-        nuint storageBytes = CalculateByteLength(
-            length,
-            elementSize,
-            "Arena transfer allocation");
-        if (storageBytes == 0)
-        {
-            return (0, 0, 0, 0);
-        }
-
-        ulong minimum = Math.Max(
-            (ulong)storageBytes,
-            (ulong)(uint)IntPtr.Size);
-        ulong rounded = BitOperations.RoundUpToPowerOf2(
-            minimum);
-        if (rounded == 0
-            || rounded > (ulong)nuint.MaxValue)
-        {
-            throw new OverflowException(
-                "The Arena transfer size class overflows native addressable storage.");
-        }
-
-        nuint blockBytes = (nuint)rounded;
-        int sizeClass = checked(
-            BitOperations.Log2(rounded) + 1);
-        nuint elementCapacity = blockBytes
-            / (nuint)(uint)elementSize;
-        int capacity = elementCapacity > int.MaxValue
-            ? int.MaxValue
-            : (int)elementCapacity;
-        return (
-            storageBytes,
-            blockBytes,
-            sizeClass,
-            capacity);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private NativeGeneration BeginArenaTransferInitialization()
+    private NativeGeneration BeginArenaTransferBatchInitialization()
     {
         NativeGeneration? generation =
             Volatile.Read(ref _current);
@@ -5900,24 +5538,24 @@ internal sealed class NativeOwnerKernel
             return generation;
         }
 
-        return BeginArenaTransferInitializationSlow();
+        return BeginArenaTransferBatchInitializationSlow();
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     private NativeGeneration
-        BeginArenaTransferInitializationSlow()
+        BeginArenaTransferBatchInitializationSlow()
     {
         lock (_gate)
         {
             _arenaTransferSlowPathCount = checked(
                 _arenaTransferSlowPathCount + 1);
             NativeGeneration generation = EnsureActiveLocked(
-                "ScratchTransferable");
+                "TransferBatch.Initialize");
             if (_kind != NativeOwnerKind.Arena)
             {
                 throw CreateStateException(
-                    "ScratchTransferable",
-                    "Only NativeArena has transferable scratch lanes.",
+                    "TransferBatch.Initialize",
+                    "Only NativeArena has fixed transfer batches.",
                     0);
             }
 
@@ -5926,7 +5564,7 @@ internal sealed class NativeOwnerKernel
                 || generation.InitializationsInProgress != 0)
             {
                 throw CreateInUseException(
-                    "ScratchTransferable",
+                    "TransferBatch.Initialize",
                     generation.Number,
                     0,
                     generation.ActiveOperations,
@@ -5937,7 +5575,7 @@ internal sealed class NativeOwnerKernel
                     ref _arenaFastBoundaryClosing) != 0)
             {
                 throw CreateInUseException(
-                    "ScratchTransferable",
+                    "TransferBatch.Initialize",
                     generation.Number,
                     0,
                     generation.ActiveOperations,
@@ -5946,646 +5584,6 @@ internal sealed class NativeOwnerKernel
 
             return generation;
         }
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private NativeArenaTransferLane GetArenaTransferLane(
-        NativeGeneration generation)
-    {
-        int threadId = Environment.CurrentManagedThreadId;
-        WeakReference<NativeArenaTransferLane>? cached =
-            _cachedArenaTransferLane;
-        if (cached is not null
-            && cached.TryGetTarget(
-                out NativeArenaTransferLane? lane)
-            && ReferenceEquals(lane.Owner, this)
-            && ReferenceEquals(lane.Generation, generation)
-            && lane.ThreadId == threadId)
-        {
-            return lane;
-        }
-
-        return GetArenaTransferLaneSlow(
-            generation,
-            threadId);
-    }
-
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    private NativeArenaTransferLane GetArenaTransferLaneSlow(
-        NativeGeneration generation,
-        int threadId)
-    {
-        lock (_gate)
-        {
-            _arenaTransferSlowPathCount = checked(
-                _arenaTransferSlowPathCount + 1);
-            if (!ReferenceEquals(generation, _current)
-                || _lifecycle != NativeOwnerLifecycle.Active)
-            {
-                throw CreateStateException(
-                    "ScratchTransferable",
-                    "The Arena changed before the producer lane became active.",
-                    0);
-            }
-
-            foreach (NativeArenaTransferLane candidate in
-                generation.ArenaTransferLanes)
-            {
-                if (candidate.ThreadId != threadId)
-                {
-                    continue;
-                }
-
-                CacheArenaTransferLane(candidate);
-                return candidate;
-            }
-
-            generation.ArenaTransferLanes.EnsureCapacity(
-                checked(generation.ArenaTransferLanes.Count + 1));
-            NativeArenaTransferLane created = new(
-                this,
-                generation,
-                threadId,
-                ArenaTransferSizeClassCount);
-            generation.ArenaTransferLanes.Add(created);
-            generation.PublishArenaTransferLanes(
-                generation.ArenaTransferLanes.ToArray());
-            CacheArenaTransferLane(created);
-            return created;
-        }
-    }
-
-    private static void CacheArenaTransferLane(
-        NativeArenaTransferLane lane)
-    {
-        WeakReference<NativeArenaTransferLane>? cached =
-            _cachedArenaTransferLane;
-        if (cached is null)
-        {
-            _cachedArenaTransferLane = new(
-                lane);
-            return;
-        }
-
-        cached.SetTarget(lane);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private NativeAllocation RentArenaTransferSlot(
-        NativeArenaTransferLane lane,
-        int length,
-        int capacity,
-        nuint storageBytes,
-        nuint blockBytes,
-        int sizeClass)
-    {
-        NativeGeneration generation = lane.Generation;
-        NativeAllocation? allocation =
-            PopArenaTransferFreeSlot(
-                lane,
-                sizeClass);
-        if (allocation is null)
-        {
-            allocation = PopArenaTransferRemoteSlot(
-                lane,
-                sizeClass);
-        }
-
-        if (allocation is null
-            && (lane.UnusedSlotHead == 0
-                || (blockBytes != 0
-                    && !HasArenaTransferChunkSpace(
-                        lane,
-                        sizeClass,
-                        blockBytes))))
-        {
-            allocation = RefillArenaTransferLaneSlow(
-                lane,
-                sizeClass,
-                blockBytes);
-        }
-
-        NativeBumpSegment? segment;
-        nuint offset;
-        if (allocation is null)
-        {
-            allocation = PopArenaTransferUnusedSlot(lane);
-            if (blockBytes == 0)
-            {
-                segment = null;
-                offset = 0;
-            }
-            else
-            {
-                segment = lane.ChunkSegments[sizeClass]
-                    ?? throw new InvalidOperationException(
-                        "The Arena transfer lane has no active chunk.");
-                nuint cursor = AlignUp(
-                    lane.ChunkCursors[sizeClass],
-                    (nuint)IntPtr.Size);
-                offset = cursor;
-                lane.ChunkCursors[sizeClass] = checked(
-                    cursor + blockBytes);
-            }
-        }
-        else
-        {
-            segment = allocation.BumpSegment;
-            offset = allocation.OffsetBytes;
-        }
-
-        _ = allocation.ResetArenaTransfer(
-            lane,
-            segment,
-            offset,
-            length,
-            capacity,
-            storageBytes,
-            sizeClass,
-            blockBytes);
-        return allocation;
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool HasArenaTransferChunkSpace(
-        NativeArenaTransferLane lane,
-        int sizeClass,
-        nuint blockBytes)
-    {
-        NativeBumpSegment? segment =
-            lane.ChunkSegments[sizeClass];
-        if (segment is null)
-        {
-            return false;
-        }
-
-        nuint cursor = AlignUp(
-            lane.ChunkCursors[sizeClass],
-            (nuint)IntPtr.Size);
-        nuint limit = lane.ChunkLimits[sizeClass];
-        return cursor <= limit
-            && blockBytes <= limit - cursor;
-    }
-
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    private NativeAllocation? RefillArenaTransferLaneSlow(
-        NativeArenaTransferLane lane,
-        int sizeClass,
-        nuint blockBytes)
-    {
-        lock (_gate)
-        {
-            _arenaTransferSlowPathCount = checked(
-                _arenaTransferSlowPathCount + 1);
-            NativeGeneration generation = EnsureActiveLocked(
-                "ScratchTransferable");
-            if (!ReferenceEquals(generation, lane.Generation)
-                || Volatile.Read(
-                    ref _arenaFastBoundaryClosing) != 0)
-            {
-                throw CreateStateException(
-                    "ScratchTransferable",
-                    "The Arena changed before the producer lane refilled.",
-                    0);
-            }
-
-            NativeAllocation? recycled =
-                PopArenaTransferRemoteSlot(
-                    lane,
-                    sizeClass)
-                ?? StealArenaTransferSlotLocked(
-                    generation,
-                    lane,
-                    sizeClass);
-            if (recycled is not null)
-            {
-                return recycled;
-            }
-
-            if (lane.UnusedSlotHead == 0)
-            {
-                AddArenaTransferSlotBatchLocked(
-                    generation,
-                    lane);
-            }
-
-            if (blockBytes != 0
-                && !HasArenaTransferChunkSpace(
-                    lane,
-                    sizeClass,
-                    blockBytes))
-            {
-                ReserveArenaTransferChunkLocked(
-                    generation,
-                    lane,
-                    sizeClass,
-                    blockBytes);
-            }
-
-            return null;
-        }
-    }
-
-    private static NativeAllocation?
-        StealArenaTransferSlotLocked(
-        NativeGeneration generation,
-        NativeArenaTransferLane receivingLane,
-        int sizeClass)
-    {
-        foreach (NativeArenaTransferLane candidate in
-            generation.ArenaTransferLanes)
-        {
-            if (ReferenceEquals(candidate, receivingLane))
-            {
-                continue;
-            }
-
-            NativeAllocation? allocation =
-                PopArenaTransferFreeSlot(
-                    candidate,
-                    sizeClass);
-            allocation ??= PopArenaTransferRemoteSlot(
-                candidate,
-                sizeClass);
-            if (allocation is not null)
-            {
-                return allocation;
-            }
-        }
-
-        return null;
-    }
-
-    private void AddArenaTransferSlotBatchLocked(
-        NativeGeneration generation,
-        NativeArenaTransferLane lane)
-    {
-        int firstIndex = generation.ArenaTransferSlotCount;
-        int requiredCount = checked(
-            firstIndex + ArenaTransferSlotBatchSize);
-        NativeAllocation?[] slots =
-            generation.ArenaTransferSlots;
-        if (slots.Length < requiredCount)
-        {
-            int doubled = slots.Length == 0
-                ? ArenaTransferSlotBatchSize
-                : checked(slots.Length * 2);
-            int capacity = Math.Max(
-                doubled,
-                requiredCount);
-            NativeAllocation?[] expanded = new NativeAllocation?[capacity];
-            slots.CopyTo(expanded, 0);
-            slots = expanded;
-        }
-
-        for (int index = firstIndex;
-            index < requiredCount;
-            index++)
-        {
-            NativeAllocation allocation = new(
-                generation,
-                id: 0,
-                slab: null,
-                bumpSegment: null,
-                offsetBytes: 0,
-                length: 0,
-                capacity: 0,
-                storageBytes: 0,
-                referenceRoots: null,
-                scoped: false,
-                scopeEpoch: 0);
-            allocation.ConfigureArenaTransferSlot(index);
-            allocation.ArenaTransferNextSlot =
-                lane.UnusedSlotHead;
-            lane.UnusedSlotHead = checked(index + 1);
-            slots[index] = allocation;
-        }
-
-        generation.ArenaTransferSlotCount = requiredCount;
-        generation.PublishArenaTransferSlots(slots);
-        _arenaTransferSlotCreationCount = checked(
-            _arenaTransferSlotCreationCount
-            + ArenaTransferSlotBatchSize);
-    }
-
-    private void ReserveArenaTransferChunkLocked(
-        NativeGeneration generation,
-        NativeArenaTransferLane lane,
-        int sizeClass,
-        nuint blockBytes)
-    {
-        bool firstChunk =
-            lane.ChunkSegments[sizeClass] is null;
-        nuint desiredBytes = blockBytes;
-        if (!firstChunk)
-        {
-            try
-            {
-                desiredBytes = checked(
-                    blockBytes
-                    * ArenaTransferSlotBatchSize);
-            }
-            catch (OverflowException)
-            {
-                desiredBytes = blockBytes;
-            }
-
-            if (desiredBytes < ArenaTransferMinimumChunkBytes)
-            {
-                desiredBytes = ArenaTransferMinimumChunkBytes;
-            }
-        }
-
-        if (!ReferenceEquals(
-                _arenaTransferGeneration,
-                generation))
-        {
-            _arenaTransferGeneration = generation;
-            _arenaTransferCentralSegment = null;
-        }
-
-        NativeBumpSegment? segment =
-            _arenaTransferCentralSegment;
-        if (!TryReserveArenaTransferChunk(
-                segment,
-                desiredBytes,
-                blockBytes,
-                out nuint offset,
-                out nuint chunkBytes))
-        {
-            segment = null;
-            foreach (NativeBumpSegment candidate in
-                generation.BumpSegments)
-            {
-                if (candidate.IsArenaFastSegment
-                    || (!candidate.IsArenaTransferSegment
-                        && !candidate.IsCompletelyIdle)
-                    || !TryReserveArenaTransferChunk(
-                        candidate,
-                        desiredBytes,
-                        blockBytes,
-                        out offset,
-                        out chunkBytes))
-                {
-                    continue;
-                }
-
-                segment = candidate;
-                break;
-            }
-
-            if (segment is null)
-            {
-                nuint segmentBytes = desiredBytes > DefaultBumpSegmentBytes
-                    ? desiredBytes
-                    : DefaultBumpSegmentBytes;
-                generation.BumpSegments.EnsureCapacity(
-                    checked(generation.BumpSegments.Count + 1));
-                generation.Owner.PrepareAddSegmentCapacity(1);
-                NativeSegment nativeSegment = NativeSegment.Allocate(
-                    segmentBytes,
-                    _ownerKind,
-                    generation.Number,
-                    "arena transfer lane growth",
-                    _lifecycle,
-                    zeroed: false);
-                NativeBumpSegment created = new(
-                    nativeSegment,
-                    NextSegmentOrdinalLocked())
-                {
-                    IsArenaTransferSegment = true
-                };
-                try
-                {
-                    AppendBumpSegmentLocked(
-                        generation,
-                        created);
-                    generation.Owner.AddSegment(nativeSegment);
-                    _freshSegmentAllocationCount++;
-                    segment = created;
-                    if (!TryReserveArenaTransferChunk(
-                            segment,
-                            desiredBytes,
-                            blockBytes,
-                            out offset,
-                            out chunkBytes))
-                    {
-                        throw new InvalidOperationException(
-                            "The Arena transfer segment did not provide its required chunk.");
-                    }
-                }
-                catch
-                {
-                    generation.BumpSegments.Remove(created);
-                    generation.Owner.RemoveSegment(nativeSegment);
-                    nativeSegment.FreeNow();
-                    ResetBumpTraversal(generation);
-                    throw;
-                }
-            }
-        }
-
-        segment!.IsArenaTransferSegment = true;
-        _arenaTransferCentralSegment = segment;
-        lane.ChunkSegments[sizeClass] = segment;
-        lane.ChunkCursors[sizeClass] = offset;
-        lane.ChunkLimits[sizeClass] = checked(
-            offset + chunkBytes);
-    }
-
-    private static bool TryReserveArenaTransferChunk(
-        NativeBumpSegment? segment,
-        nuint desiredBytes,
-        nuint minimumBytes,
-        out nuint offset,
-        out nuint chunkBytes)
-    {
-        offset = 0;
-        chunkBytes = 0;
-        if (segment is null
-            || segment.IsArenaFastSegment
-            || segment.HighCursor < segment.LowCursor)
-        {
-            return false;
-        }
-
-        nuint candidate = AlignUp(
-            segment.LowCursor,
-            (nuint)IntPtr.Size);
-        if (candidate > segment.HighCursor
-            || minimumBytes
-                > segment.HighCursor - candidate)
-        {
-            return false;
-        }
-
-        nuint available = segment.HighCursor - candidate;
-        chunkBytes = desiredBytes < available
-            ? desiredBytes
-            : available;
-        segment.LowCursor = checked(candidate + chunkBytes);
-        segment.IsArenaTransferSegment = true;
-        offset = candidate;
-        return true;
-    }
-
-    private static NativeAllocation?
-        PopArenaTransferFreeSlot(
-            NativeArenaTransferLane lane,
-            int sizeClass)
-    {
-        while (true)
-        {
-            long observed = Volatile.Read(
-                ref lane.FreeSlotHeads[sizeClass]);
-            int storedIndex = unchecked((int)(uint)observed);
-            if (storedIndex == 0)
-            {
-                return null;
-            }
-
-            NativeAllocation allocation =
-                GetArenaTransferSlot(
-                    lane.Generation,
-                    storedIndex);
-            int nextIndex = allocation.ArenaTransferNextSlot;
-            long updated = AdvanceArenaTransferHead(
-                observed,
-                nextIndex);
-            if (Interlocked.CompareExchange(
-                    ref lane.FreeSlotHeads[sizeClass],
-                    updated,
-                    observed) == observed)
-            {
-                allocation.ArenaTransferNextSlot = 0;
-                return allocation;
-            }
-        }
-    }
-
-    private static NativeAllocation
-        PopArenaTransferUnusedSlot(
-            NativeArenaTransferLane lane)
-    {
-        int head = lane.UnusedSlotHead;
-        if (head == 0)
-        {
-            throw new InvalidOperationException(
-                "The Arena transfer lane has no unused publication slot.");
-        }
-
-        NativeAllocation allocation =
-            GetArenaTransferSlot(
-                lane.Generation,
-                head);
-        lane.UnusedSlotHead =
-            allocation.ArenaTransferNextSlot;
-        allocation.ArenaTransferNextSlot = 0;
-        return allocation;
-    }
-
-    private static NativeAllocation GetArenaTransferSlot(
-        NativeGeneration generation,
-        int storedIndex)
-    {
-        NativeAllocation?[] slots =
-            generation.ArenaTransferSlots;
-        int index = checked(storedIndex - 1);
-        return (uint)index < (uint)slots.Length
-            ? slots[index]
-                ?? throw new InvalidOperationException(
-                    "The Arena transfer slot is not published.")
-            : throw new InvalidOperationException(
-                "The Arena transfer slot index is outside the publication table.");
-    }
-
-    private static NativeAllocation?
-        PopArenaTransferRemoteSlot(
-        NativeArenaTransferLane lane,
-        int sizeClass)
-    {
-        while (true)
-        {
-            long observed = Volatile.Read(
-                ref lane.RemoteFreeSlotHeads[sizeClass]);
-            int storedIndex = unchecked((int)(uint)observed);
-            if (storedIndex == 0)
-            {
-                return null;
-            }
-
-            NativeAllocation allocation =
-                GetArenaTransferSlot(
-                    lane.Generation,
-                    storedIndex);
-            int nextIndex = allocation.ArenaTransferNextSlot;
-            long updated = AdvanceArenaTransferHead(
-                observed,
-                nextIndex);
-            if (Interlocked.CompareExchange(
-                    ref lane.RemoteFreeSlotHeads[sizeClass],
-                    updated,
-                    observed) == observed)
-            {
-                allocation.ArenaTransferNextSlot = 0;
-                return allocation;
-            }
-        }
-    }
-
-    private static void ReturnArenaTransferSlot(
-        NativeAllocation allocation)
-    {
-        NativeArenaTransferLane lane = allocation.ArenaTransferLane
-            ?? throw new InvalidOperationException(
-                "The Arena transfer slot has no producer lane.");
-        int storedIndex = checked(
-            allocation.ArenaTransferSlotIndex + 1);
-        int sizeClass = allocation.ArenaTransferSizeClass;
-        if (Environment.CurrentManagedThreadId == lane.ThreadId)
-        {
-            PushArenaTransferSlot(
-                ref lane.FreeSlotHeads[sizeClass],
-                allocation,
-                storedIndex);
-            return;
-        }
-
-        PushArenaTransferSlot(
-            ref lane.RemoteFreeSlotHeads[sizeClass],
-            allocation,
-            storedIndex);
-    }
-
-    private static void PushArenaTransferSlot(
-        ref long head,
-        NativeAllocation allocation,
-        int storedIndex)
-    {
-        long observed;
-        do
-        {
-            observed = Volatile.Read(ref head);
-            allocation.ArenaTransferNextSlot =
-                unchecked((int)(uint)observed);
-        }
-        while (Interlocked.CompareExchange(
-            ref head,
-            AdvanceArenaTransferHead(
-                observed,
-                storedIndex),
-            observed) != observed);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static long AdvanceArenaTransferHead(
-        long observed,
-        int storedIndex)
-    {
-        uint stamp = unchecked((uint)((ulong)observed >> 32) + 1);
-        return unchecked(
-            ((long)stamp << 32)
-            | (uint)storedIndex);
     }
 
     private NativeRegionAllocation LeaseBumpInitializedCore<T>(
@@ -8484,19 +7482,6 @@ internal sealed class NativeOwnerKernel
         NativeMemoryTestHooks.NotifyBeforeOperationEntry(
             operation,
             this);
-        if (expectedAllocation.IsArenaTransferSlot)
-        {
-            TransferArenaSlotAuthority(
-                expectedGeneration,
-                expectedAllocation,
-                generationNumber,
-                allocationId,
-                operation,
-                state,
-                publish);
-            return;
-        }
-
         lock (_gate)
         {
             NativeGeneration generation = EnsureActiveLocked(
@@ -8522,120 +7507,6 @@ internal sealed class NativeOwnerKernel
         }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void TransferArenaSlotAuthority<TState>(
-        NativeGeneration generation,
-        NativeAllocation allocation,
-        long generationNumber,
-        long allocationId,
-        string operation,
-        TState state,
-        Action<TState> publish)
-    {
-        if (Volatile.Read(
-                ref _arenaFastBoundaryClosing) == 0
-            && IsDirectHandleActive(
-                generation,
-                allocation,
-                generationNumber,
-                allocationId)
-            && allocation.TryEnterOperation())
-        {
-            try
-            {
-                if (Volatile.Read(
-                        ref _arenaFastBoundaryClosing) == 0
-                    && IsDirectHandleActive(
-                        generation,
-                        allocation,
-                        generationNumber,
-                        allocationId))
-                {
-                    publish(state);
-                    return;
-                }
-            }
-            finally
-            {
-                allocation.ExitOperation();
-            }
-        }
-
-        TransferArenaSlotAuthoritySlow(
-            generation,
-            allocation,
-            generationNumber,
-            allocationId,
-            operation,
-            state,
-            publish);
-    }
-
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    private void TransferArenaSlotAuthoritySlow<TState>(
-        NativeGeneration expectedGeneration,
-        NativeAllocation expectedAllocation,
-        long generationNumber,
-        long allocationId,
-        string operation,
-        TState state,
-        Action<TState> publish)
-    {
-        lock (_gate)
-        {
-            NativeGeneration generation = EnsureActiveLocked(
-                operation,
-                generationNumber,
-                allocationId);
-            if (Volatile.Read(
-                    ref _arenaFastBoundaryClosing) != 0)
-            {
-                throw CreateInUseException(
-                    operation,
-                    generationNumber,
-                    allocationId,
-                    expectedAllocation.ActiveOperations,
-                    "The Arena is in a lane-boundary transition.");
-            }
-
-            if (!ReferenceEquals(
-                    generation,
-                    expectedGeneration)
-                || !IsDirectHandleActive(
-                    generation,
-                    expectedAllocation,
-                    generationNumber,
-                    allocationId))
-            {
-                throw CreateReturnedException(
-                    operation,
-                    generationNumber,
-                    _generation,
-                    allocationId,
-                    "The transfer authority belongs to an inactive allocation.");
-            }
-
-            if (!expectedAllocation.TryEnterOperation())
-            {
-                throw CreateInUseException(
-                    operation,
-                    generationNumber,
-                    allocationId,
-                    expectedAllocation.ActiveOperations,
-                    "The transfer slot does not accept an operation.");
-            }
-
-            try
-            {
-                publish(state);
-            }
-            finally
-            {
-                expectedAllocation.ExitOperation();
-            }
-        }
-    }
-
     private NativeOperationToken EnterOperationCore(
         NativeGeneration generation,
         NativeAllocation allocation,
@@ -8652,17 +7523,6 @@ internal sealed class NativeOwnerKernel
         }
 
         NativeOperationToken token;
-        if (allocation.IsArenaTransferSlot)
-        {
-            token = EnterArenaTransferOperation(
-                generation,
-                allocation,
-                generationNumber,
-                allocationId,
-                operation);
-            goto Entered;
-        }
-
         bool enterAllocation = _kind == NativeOwnerKind.Pool;
         if (IsDirectHandleActive(
                 generation,
@@ -8740,111 +7600,6 @@ internal sealed class NativeOwnerKernel
         }
 
         return token;
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private NativeOperationToken EnterArenaTransferOperation(
-        NativeGeneration generation,
-        NativeAllocation allocation,
-        long generationNumber,
-        long allocationId,
-        string operation)
-    {
-        if (Volatile.Read(
-                ref _arenaFastBoundaryClosing) == 0
-            && IsDirectHandleActive(
-                generation,
-                allocation,
-                generationNumber,
-                allocationId)
-            && allocation.TryEnterOperation())
-        {
-            if (Volatile.Read(
-                    ref _arenaFastBoundaryClosing) == 0
-                && IsDirectHandleActive(
-                    generation,
-                    allocation,
-                    generationNumber,
-                    allocationId))
-            {
-                return new NativeOperationToken(
-                    this,
-                    generation,
-                    allocation,
-                    allocationEntered: true,
-                    operation,
-                    generationEntered: false);
-            }
-
-            allocation.ExitOperation();
-        }
-
-        return EnterArenaTransferOperationSlow(
-            generation,
-            allocation,
-            generationNumber,
-            allocationId,
-            operation);
-    }
-
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    private NativeOperationToken EnterArenaTransferOperationSlow(
-        NativeGeneration expectedGeneration,
-        NativeAllocation expectedAllocation,
-        long generationNumber,
-        long allocationId,
-        string operation)
-    {
-        lock (_gate)
-        {
-            NativeGeneration generation = EnsureActiveLocked(
-                operation,
-                generationNumber,
-                allocationId);
-            if (Volatile.Read(
-                    ref _arenaFastBoundaryClosing) != 0)
-            {
-                throw CreateInUseException(
-                    operation,
-                    generationNumber,
-                    allocationId,
-                    expectedAllocation.ActiveOperations,
-                    "The Arena is in a lane-boundary transition.");
-            }
-
-            if (!ReferenceEquals(generation, expectedGeneration)
-                || !IsDirectHandleActive(
-                    generation,
-                    expectedAllocation,
-                    generationNumber,
-                    allocationId))
-            {
-                throw CreateReturnedException(
-                    operation,
-                    generationNumber,
-                    _generation,
-                    allocationId,
-                    "The transfer slot is not active.");
-            }
-
-            if (!expectedAllocation.TryEnterOperation())
-            {
-                throw CreateInUseException(
-                    operation,
-                    generationNumber,
-                    allocationId,
-                    expectedAllocation.ActiveOperations,
-                    "The transfer slot does not accept an operation.");
-            }
-
-            return new NativeOperationToken(
-                this,
-                generation,
-                expectedAllocation,
-                allocationEntered: true,
-                operation,
-                generationEntered: false);
-        }
     }
 
     private NativeOperationToken EnterOperationSlow(
@@ -9178,10 +7933,9 @@ internal sealed class NativeOwnerKernel
         string operation)
     {
         _ = operation;
-        int allocationOperations = -1;
         if (allocationEntered)
         {
-            allocationOperations = allocation.ExitOperation();
+            allocation.ExitOperation();
         }
 
         if (generationEntered)
@@ -9190,18 +7944,6 @@ internal sealed class NativeOwnerKernel
             return;
         }
 
-        if (allocation.IsArenaTransferSlot
-            && allocationOperations == 0
-            && (generation.MemoryDetached
-                || !ReferenceEquals(
-                    Volatile.Read(ref _current),
-                    generation)))
-        {
-            lock (_gate)
-            {
-                FinishOperationExitLocked(generation);
-            }
-        }
     }
 
     internal void ExitCompositeOperation(
@@ -9268,15 +8010,6 @@ internal sealed class NativeOwnerKernel
         long allocationId,
         string operation = "Pooled.Dispose")
     {
-        if (allocationId < 0)
-        {
-            ReturnArenaTransferLease(
-                generationNumber,
-                allocationId,
-                operation);
-            return;
-        }
-
         lock (_gate)
         {
             if (_lifecycle is NativeOwnerLifecycle.Disposed or NativeOwnerLifecycle.Returned or NativeOwnerLifecycle.Unleased)
@@ -9533,126 +8266,6 @@ internal sealed class NativeOwnerKernel
                 EndArenaFastBoundary();
             }
         }
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void ReturnArenaTransferLease(
-        long generationNumber,
-        long allocationId,
-        string operation)
-    {
-        NativeGeneration? generation =
-            Volatile.Read(ref _current);
-        if (generation is null
-            || generation.Number != generationNumber)
-        {
-            return;
-        }
-
-        if (Volatile.Read(
-                ref _arenaFastBoundaryClosing) == 0
-            && ReferenceEquals(
-                Volatile.Read(ref _current),
-                generation)
-            && _lifecycle == NativeOwnerLifecycle.Active)
-        {
-            ReturnArenaTransferLeaseCore(
-                generation,
-                allocationId);
-            return;
-        }
-
-        ReturnArenaTransferLeaseSlow(
-            generationNumber,
-            allocationId,
-            operation);
-    }
-
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    private void ReturnArenaTransferLeaseSlow(
-        long generationNumber,
-        long allocationId,
-        string operation)
-    {
-        _ = operation;
-        lock (_gate)
-        {
-            if (_lifecycle != NativeOwnerLifecycle.Active)
-            {
-                return;
-            }
-
-            NativeGeneration? generation = _current;
-            if (generation is null
-                || generation.Number != generationNumber)
-            {
-                return;
-            }
-
-            ReturnArenaTransferLeaseCore(
-                generation,
-                allocationId);
-        }
-    }
-
-    private static void ReturnArenaTransferLeaseCore(
-        NativeGeneration generation,
-        long allocationId)
-    {
-        if (!TryGetArenaTransferSlot(
-                generation,
-                allocationId,
-                out NativeAllocation? allocation)
-            || allocation is null
-            || !allocation.TryTransitionLifecycle(
-                NativeAllocationLifecycle.Active,
-                NativeAllocationLifecycle.Returning))
-        {
-            return;
-        }
-
-        allocation.InitializedLength = 0;
-        allocation.Lifecycle =
-            NativeAllocationLifecycle.Returned;
-        ReturnArenaTransferSlot(allocation);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool TryGetArenaTransferSlot(
-        NativeGeneration generation,
-        long allocationId,
-        out NativeAllocation? allocation)
-    {
-        allocation = null;
-        if (allocationId >= 0)
-        {
-            return false;
-        }
-
-        uint storedIndex = (uint)allocationId;
-        if (storedIndex == 0)
-        {
-            return false;
-        }
-
-        int index = checked((int)(storedIndex - 1));
-        NativeAllocation?[] slots =
-            generation.ArenaTransferSlots;
-        if ((uint)index >= (uint)slots.Length)
-        {
-            return false;
-        }
-
-        NativeAllocation? candidate = slots[index];
-        if (candidate is null
-            || !candidate.IsArenaTransferSlot
-            || candidate.Id != allocationId)
-        {
-            return false;
-        }
-
-        allocation = candidate;
-        return true;
     }
 
     private static void RecordArenaScopedReclaimedRanges(
@@ -10940,16 +9553,6 @@ internal sealed class NativeOwnerKernel
         foreach (NativeAllocation allocation in generation.Allocations.Values)
         {
             allocation.Lifecycle = NativeAllocationLifecycle.Returned;
-        }
-
-        foreach (NativeAllocation? allocation in
-            generation.ArenaTransferSlots)
-        {
-            if (allocation is not null)
-            {
-                allocation.Lifecycle =
-                    NativeAllocationLifecycle.Returned;
-            }
         }
 
         foreach (NativeArenaTransferBatchState batch in

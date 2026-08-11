@@ -380,10 +380,15 @@ public sealed class NativeArenaTransferBatchTests
             repositoryRoot,
             "Supprocom.NativeAllocationManagement",
             "NativeMemoryKernel.cs"));
+        string assemblySource = File.ReadAllText(Path.Combine(
+            repositoryRoot,
+            "Supprocom.NativeAllocationManagement",
+            "Properties",
+            "AssemblyInfo.cs"));
         string commonPath = GetSourceRange(
             kernelSource,
             "TryBeginArenaTransferBatchInitialization(",
-            "LeaseConcurrentBumpInitialized<T>");
+            "private NativeRegionAllocation LeaseBumpInitializedCore<T>(");
         string compactState = GetSourceRange(
             kernelSource,
             "internal sealed class NativeArenaTransferBatchState",
@@ -436,6 +441,34 @@ public sealed class NativeArenaTransferBatchTests
         Assert.DoesNotContain(
             "NativeOperationAdmission",
             commonPath,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "LeaseConcurrentBumpInitialized",
+            kernelSource,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "NativeArenaTransferLane",
+            kernelSource,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "ArenaTransferSlots",
+            kernelSource,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "PopArenaTransferFreeSlot",
+            kernelSource,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "PopArenaTransferRemoteSlot",
+            kernelSource,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "AdvanceArenaTransferHead",
+            kernelSource,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "VoxelChunkPipeline.NAM",
+            assemblySource,
             StringComparison.Ordinal);
         Assert.Contains(
             "Interlocked.CompareExchange",
