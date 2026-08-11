@@ -6,7 +6,7 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <IsPackable>true</IsPackable>
     <PackageId>Supprocom.NativeAllocationManagement</PackageId>
-    <Version>0.2.0</Version>
+    <Version>0.2.1</Version>
     <Authors>Supprocom</Authors>
     <Company>Supprocom</Company>
     <Description>Explicit C# owners for growable native builders, reusable typed pools, cross-thread transferable leases, lexical regions, and heterogeneous native arenas.</Description>

@@ -1716,7 +1716,7 @@ public sealed class VoxelSharedContractTests
         string guide = File.ReadAllText(
             Path.Combine(root, "docs", "getting-started.md"));
         Assert.Contains(
-            "Version=\"0.2.0\"",
+            "Version=\"0.2.1\"",
             guide,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -1760,7 +1760,7 @@ public sealed class VoxelSharedContractTests
                 "Supprocom.NativeAllocationManagement.csproj"));
 
         Assert.Contains(
-            "<Version>0.2.0</Version>",
+            "<Version>0.2.1</Version>",
             project,
             StringComparison.Ordinal);
         Assert.Contains(
