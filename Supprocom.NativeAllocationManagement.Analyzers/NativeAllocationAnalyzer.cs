@@ -273,6 +273,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         private readonly Dictionary<ISymbol, OwnerState> _owners = new(SymbolEqualityComparer.Default);
         private readonly Dictionary<ISymbol, HandleState> _handles = new(SymbolEqualityComparer.Default);
         private readonly Dictionary<ISymbol, TransferState> _transfers = new(SymbolEqualityComparer.Default);
+        private readonly Dictionary<ISymbol, bool> _provenWorkspaceFields =
+            new(SymbolEqualityComparer.Default);
         private readonly Dictionary<ISymbol, bool> _boundedTransferChannelProvenance =
             new(SymbolEqualityComparer.Default);
         private readonly Dictionary<string, LifecycleEffect> _lifecycleSummaries = new(StringComparer.Ordinal);
@@ -340,6 +342,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             RegisterTransferParameters(method);
             RegisterBuilderParameters(method);
             RegisterWorkspaceParameters(method);
+            RegisterWorkspaceOwnerFields(method);
 
             if (operationBlock is IMethodBodyOperation methodBody)
             {
@@ -442,6 +445,37 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     TransferState.CreateWorkspaceBorrow(
                         parameter,
                         syntax));
+            }
+        }
+
+        private void RegisterWorkspaceOwnerFields(
+            IMethodSymbol? method)
+        {
+            if (method is null || method.IsStatic)
+            {
+                return;
+            }
+
+            foreach (IFieldSymbol field in method.ContainingType
+                .GetMembers()
+                .OfType<IFieldSymbol>()
+                .Where(IsProvenWorkspaceOwnerField))
+            {
+                if (_transfers.ContainsKey(field))
+                {
+                    continue;
+                }
+
+                SyntaxNode syntax = field.DeclaringSyntaxReferences[0]
+                    .GetSyntax(_context.CancellationToken);
+                _transfers.Add(
+                    field,
+                    TransferState.CreateWorkspace(
+                        field,
+                        syntax,
+                        TransferStatus.Active,
+                        mustEnd: false,
+                        isUsing: false));
             }
         }
 
@@ -931,6 +965,36 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             if (block.BranchValue is not null)
             {
                 Visit(block.BranchValue);
+                ReportWorkspaceBranchReturn(
+                    block,
+                    block.BranchValue);
+            }
+        }
+
+        private void ReportWorkspaceBranchReturn(
+            BasicBlock block,
+            IOperation value)
+        {
+            if (block.FallThroughSuccessor?.Semantics
+                    != ControlFlowBranchSemantics.Return
+                || !IsNativeWorkspace(value.Type)
+                || IsWorkspaceFactoryOperation(value))
+            {
+                return;
+            }
+
+            if (GetWorkspace(value) is TransferState workspace)
+            {
+                ReportTransferCopy(
+                    workspace,
+                    value.Syntax,
+                    "the return value");
+            }
+            else
+            {
+                ReportUnknownWorkspaceCopy(
+                    value.Syntax,
+                    "the return value");
             }
         }
 
@@ -3380,6 +3444,18 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             string operationName)
         {
             Target target = FindTarget(operation);
+            if (target.Symbol is IFieldSymbol field
+                && IsProvenWorkspaceOwnerField(field))
+            {
+                _transfers[target.Symbol] = TransferState.CreateWorkspace(
+                    target.Symbol,
+                    operation.Syntax,
+                    TransferStatus.Active,
+                    mustEnd: false,
+                    isUsing: false);
+                return;
+            }
+
             if (target.Symbol is not ILocalSymbol
                 || !IsNativeWorkspace(GetSymbolType(target.Symbol)))
             {
@@ -3880,6 +3956,10 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 symbol,
                 out TransferState? existing))
             {
+                ReportCapturedWorkspaceField(
+                    operation,
+                    symbol,
+                    existing);
                 return existing.Kind is OwnershipKind.Workspace
                     or OwnershipKind.WorkspaceBorrow
                         ? existing
@@ -3890,7 +3970,13 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 symbol,
                 operation.Syntax);
             _transfers.Add(symbol, external);
-            if (symbol is not ILocalSymbol)
+            ReportCapturedWorkspaceField(
+                operation,
+                symbol,
+                external);
+            if (symbol is not ILocalSymbol
+                && (symbol is not IFieldSymbol field
+                    || !IsProvenWorkspaceOwnerField(field)))
             {
                 Report(
                     NativeAllocationDiagnosticDescriptors.WorkspaceAlias,
@@ -3900,6 +3986,174 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             }
 
             return external;
+        }
+
+        private void ReportCapturedWorkspaceField(
+            IOperation operation,
+            ISymbol symbol,
+            TransferState workspace)
+        {
+            if (symbol is not IFieldSymbol field
+                || !IsProvenWorkspaceOwnerField(field)
+                || !operation.Syntax.Ancestors().Any(candidate =>
+                    candidate is AnonymousFunctionExpressionSyntax
+                        or LocalFunctionStatementSyntax))
+            {
+                return;
+            }
+
+            ReportTransferCopy(
+                workspace,
+                operation.Syntax,
+                "a callback capture");
+        }
+
+        private bool IsProvenWorkspaceOwnerField(
+            IFieldSymbol field)
+        {
+            if (_provenWorkspaceFields.TryGetValue(
+                field,
+                out bool result))
+            {
+                return result;
+            }
+
+            result = IsProvenWorkspaceOwnerFieldCore(field);
+            _provenWorkspaceFields.Add(field, result);
+            return result;
+        }
+
+        private bool IsProvenWorkspaceOwnerFieldCore(
+            IFieldSymbol field)
+        {
+            if (field.IsStatic
+                || !field.IsReadOnly
+                || field.DeclaredAccessibility
+                    != Accessibility.Private
+                || !IsNativeWorkspace(field.Type)
+                || field.ContainingType.TypeKind != TypeKind.Class
+                || !field.ContainingType.IsSealed
+                || field.ContainingType.DeclaringSyntaxReferences.Length != 1
+                || !field.ContainingType.AllInterfaces.Any(candidate =>
+                    candidate.SpecialType
+                        == SpecialType.System_IDisposable)
+                || field.DeclaringSyntaxReferences.Length != 1
+                || field.DeclaringSyntaxReferences[0].GetSyntax()
+                    is not VariableDeclaratorSyntax variable
+                || variable.Initializer is null)
+            {
+                return false;
+            }
+
+            SemanticModel fieldModel = _context.Compilation
+                .GetSemanticModel(variable.SyntaxTree);
+            if (fieldModel.GetOperation(
+                    variable.Initializer.Value,
+                    _context.CancellationToken)
+                    is not IObjectCreationOperation creation
+                || !IsNativeWorkspace(creation.Type))
+            {
+                return false;
+            }
+
+            IMethodSymbol[] disposals = field.ContainingType
+                .GetMembers("Dispose")
+                .OfType<IMethodSymbol>()
+                .Where(method =>
+                    !method.IsStatic
+                    && !method.IsAsync
+                    && method.ReturnsVoid
+                    && method.Parameters.Length == 0
+                    && method.DeclaringSyntaxReferences.Length == 1)
+                .ToArray();
+            if (disposals.Length != 1)
+            {
+                return false;
+            }
+
+            IMethodSymbol disposal = disposals[0];
+            SyntaxNode syntax = disposal.DeclaringSyntaxReferences[0]
+                .GetSyntax();
+            SyntaxNode? body = syntax is MethodDeclarationSyntax declaration
+                ? (SyntaxNode?)declaration.Body
+                    ?? declaration.ExpressionBody?.Expression
+                : null;
+            if (body is null)
+            {
+                return false;
+            }
+
+            SemanticModel model = _context.Compilation.GetSemanticModel(
+                body.SyntaxTree);
+            if (model.GetOperation(
+                    body,
+                    _context.CancellationToken)
+                    is not { } operation)
+            {
+                return false;
+            }
+
+            IInvocationOperation[] releases = operation
+                .DescendantsAndSelf()
+                .OfType<IInvocationOperation>()
+                .Where(invocation =>
+                    invocation.TargetMethod.Name == "Dispose"
+                    && GetSymbol(Unwrap(invocation.Instance))
+                        is IFieldSymbol candidate
+                    && SymbolEqualityComparer.Default.Equals(
+                        candidate,
+                        field)
+                    && !HasNestedFunctionAncestor(
+                        invocation,
+                        operation))
+                .ToArray();
+            return releases.Length == 1
+                && IsDirectFirstDisposalStatement(
+                    syntax,
+                    releases[0].Syntax);
+        }
+
+        private static bool HasNestedFunctionAncestor(
+            IOperation operation,
+            IOperation boundary)
+        {
+            for (IOperation? current = operation.Parent;
+                current is not null
+                    && !ReferenceEquals(current, boundary);
+                current = current.Parent)
+            {
+                if (current is IAnonymousFunctionOperation
+                    or ILocalFunctionOperation)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool IsDirectFirstDisposalStatement(
+            SyntaxNode methodSyntax,
+            SyntaxNode invocationSyntax)
+        {
+            if (methodSyntax is not MethodDeclarationSyntax method)
+            {
+                return false;
+            }
+
+            if (method.ExpressionBody is not null)
+            {
+                return method.ExpressionBody.Expression.Span
+                    .Contains(invocationSyntax.Span);
+            }
+
+            StatementSyntax? statement = invocationSyntax
+                .AncestorsAndSelf()
+                .OfType<StatementSyntax>()
+                .FirstOrDefault();
+            return method.Body is { Statements.Count: > 0 } body
+                && ReferenceEquals(statement, body.Statements[0])
+                && statement is ExpressionStatementSyntax;
         }
 
         private TransferState? GetNativeOwnership(

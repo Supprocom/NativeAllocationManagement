@@ -511,6 +511,162 @@ public sealed class NativeWorkspaceAnalyzerTests
         Assert.Contains("NAM1036", NativeDiagnostics(diagnostics));
     }
 
+    [Fact]
+    public async Task SealedWorkerFieldWithDirectCleanupIsAccepted()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using System;
+            using Supprocom.NativeAllocationManagement;
+
+            public sealed class Worker : IDisposable
+            {
+                private readonly NativeWorkspace<int> workspace = new(
+                    preLease: 153_600);
+
+                public long Build(int seed)
+                {
+                    long result = 0;
+                    for (int build = 0; build < 1_179; build++)
+                    {
+                        result += workspace.Process(
+                            153_600,
+                            seed + build,
+                            static (values, value) =>
+                            {
+                                values.Fill(value);
+                                return (long)values[0] + values[^1];
+                            });
+                    }
+
+                    return result;
+                }
+
+                public void Dispose() => workspace.Dispose();
+            }
+            """);
+
+        AssertNoNativeDiagnostics(diagnostics);
+    }
+
+    [Fact]
+    public async Task WorkspaceFieldWithoutDirectCleanupIsRejected()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using System;
+            using Supprocom.NativeAllocationManagement;
+
+            public sealed class Worker : IDisposable
+            {
+                private readonly NativeWorkspace<int> workspace = new(
+                    preLease: 16);
+
+                public void Dispose()
+                {
+                }
+            }
+            """);
+
+        Assert.Contains("NAM1039", NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task StaticWorkspaceFieldIsRejected()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Worker
+            {
+                private static readonly NativeWorkspace<int> workspace =
+                    new(preLease: 16);
+            }
+            """);
+
+        Assert.Contains("NAM1039", NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task ProvenWorkspaceFieldCannotEscapeOrAlias()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using System;
+            using Supprocom.NativeAllocationManagement;
+
+            public sealed class Worker : IDisposable
+            {
+                private readonly NativeWorkspace<int> workspace = new(
+                    preLease: 16);
+
+                public NativeWorkspace<int> Expose() => workspace;
+
+                public void Alias()
+                {
+                    NativeWorkspace<int> copy = workspace;
+                    copy.Dispose();
+                }
+
+                public void Dispose() => workspace.Dispose();
+            }
+            """);
+
+        string[] ids = NativeDiagnostics(diagnostics);
+        Assert.True(
+            ids.Count(id => id == "NAM1036") >= 2,
+            string.Join(Environment.NewLine, diagnostics));
+    }
+
+    [Fact]
+    public async Task ProvenWorkspaceFieldCannotEnterNestedCallback()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using System;
+            using Supprocom.NativeAllocationManagement;
+
+            public sealed class Worker : IDisposable
+            {
+                private readonly NativeWorkspace<int> workspace = new(
+                    preLease: 16);
+
+                public void Capture()
+                {
+                    Action action = () => workspace.Reset();
+                    action();
+                }
+
+                public void Dispose() => workspace.Dispose();
+            }
+            """);
+
+        Assert.Contains("NAM1036", NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task ThreadLocalDisposalIsNotWorkspaceCleanup()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using System;
+            using System.Threading;
+            using Supprocom.NativeAllocationManagement;
+
+            public sealed class Worker : IDisposable
+            {
+                private readonly NativeWorkspace<int> workspace = new(
+                    preLease: 16);
+                private readonly ThreadLocal<int> values = new();
+
+                public void Dispose() => values.Dispose();
+            }
+            """);
+
+        Assert.Contains("NAM1039", NativeDiagnostics(diagnostics));
+    }
+
     private static Task<ImmutableArray<Diagnostic>> AnalyzeAsync(
         string source) =>
         AnalyzerContractTests.AnalyzeAsync(source);

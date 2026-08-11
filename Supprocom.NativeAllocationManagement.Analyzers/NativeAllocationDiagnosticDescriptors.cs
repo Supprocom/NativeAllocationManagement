@@ -166,7 +166,7 @@ internal static class NativeAllocationDiagnosticDescriptors
     internal static readonly DiagnosticDescriptor WorkspaceAlias = Create(
         "NAM1036",
         "Native workspace ownership cannot be copied",
-        "Native workspace '{0}' owns one persistent range. Keep one local binding instead of copying it to '{1}'.");
+        "Native workspace '{0}' owns one persistent range. Keep one local or proven worker field instead of copying it to '{1}'.");
 
     internal static readonly DiagnosticDescriptor InactiveWorkspaceUse = Create(
         "NAM1037",
@@ -180,8 +180,8 @@ internal static class NativeAllocationDiagnosticDescriptors
 
     internal static readonly DiagnosticDescriptor WorkspaceAcquisitionEscape = Create(
         "NAM1039",
-        "Native workspace acquisition requires one local owner",
-        "'{0}' must directly initialize a local NativeWorkspace<T>. It cannot be returned, passed, discarded, stored, or aggregated.");
+        "Native workspace acquisition requires one proven owner",
+        "'{0}' must directly initialize one local or one private readonly field in a sealed deterministic owner. It cannot escape that owner.");
 
     internal static readonly DiagnosticDescriptor UnsupportedWorkspaceParameter = Create(
         "NAM1040",

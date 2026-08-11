@@ -127,6 +127,12 @@ internal static class Program
             return await NativeWorkspaceStateBenchmark.RunCommandAsync(args);
         }
 
+        if (args is ["--native-workspace-worker", "--output", _])
+        {
+            return await NativeWorkspaceWorkerRegression.RunCommandAsync(
+                args[2]);
+        }
+
         if (args is ["--scoped-recycle-probe"])
         {
             Console.WriteLine(

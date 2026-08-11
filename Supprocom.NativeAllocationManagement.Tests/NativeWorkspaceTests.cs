@@ -142,8 +142,8 @@ public sealed class NativeWorkspaceTests
         workspace.Initialize(
             8,
             static writer => writer.Fill(13));
-        NativeWorkspaceState<int> state =
-            Assert.IsType<NativeWorkspaceState<int>>(
+        NativeWorkspace<int> state =
+            Assert.IsType<NativeWorkspace<int>>(
                 workspace.StateForTest);
 
         Exception? exception = RunOnThread(state.Reset);
@@ -151,7 +151,7 @@ public sealed class NativeWorkspaceTests
             Assert.IsType<InvalidOperationException>(exception);
         Assert.Contains("owning thread", invalid.Message);
 
-        exception = RunOnThread(state.Release);
+        exception = RunOnThread(state.Dispose);
         invalid = Assert.IsType<InvalidOperationException>(exception);
         Assert.Contains("owning thread", invalid.Message);
         Assert.Equal(
@@ -286,8 +286,8 @@ public sealed class NativeWorkspaceTests
         try
         {
             NativeWorkspace<int> workspace = new(preLease: 8);
-            NativeWorkspaceState<int> state =
-                Assert.IsType<NativeWorkspaceState<int>>(
+            NativeWorkspace<int> state =
+                Assert.IsType<NativeWorkspace<int>>(
                     workspace.StateForTest);
 
             workspace.Dispose();
@@ -356,6 +356,134 @@ public sealed class NativeWorkspaceTests
             Assert.Equal(1, metrics.AllocationCount);
             Assert.Equal(1, metrics.FreeCount);
             Assert.Equal(0, metrics.OutstandingNativeBytes);
+        }
+        finally
+        {
+            NativeMemoryTestHooks.Reset();
+        }
+    }
+
+    [Fact]
+    public void HeapWorkerReusesOneFixedBlockFor1179Builds()
+    {
+        NativeMemoryTestHooks.Reset();
+        try
+        {
+            using WorkspaceWorker worker = new();
+            long checksum = 0;
+            for (int build = 0; build < 1_179; build++)
+            {
+                checksum += worker.Build(build);
+            }
+
+            Assert.NotEqual(0, checksum);
+            NativeMemoryTestMetrics active =
+                NativeMemoryTestHooks.Snapshot();
+            Assert.Equal(1, active.AllocationCount);
+            Assert.Equal(0, active.FreeCount);
+            Assert.Equal(
+                153_600 * sizeof(int),
+                active.OutstandingNativeBytes);
+
+            worker.Dispose();
+            NativeMemoryTestMetrics released =
+                NativeMemoryTestHooks.Snapshot();
+            Assert.Equal(1, released.FreeCount);
+            Assert.Equal(0, released.OutstandingNativeBytes);
+        }
+        finally
+        {
+            NativeMemoryTestHooks.Reset();
+        }
+    }
+
+    [Fact]
+    public void ActiveCallbackRejectsOwnerOperations()
+    {
+        using NativeWorkspace<int> workspace = new(preLease: 8);
+
+        int sum = workspace.Process(
+            8,
+            workspace,
+            static (values, owner) =>
+            {
+                Assert.Throws<InvalidOperationException>(owner.Reset);
+                Assert.Throws<InvalidOperationException>(owner.Dispose);
+                Assert.Throws<InvalidOperationException>(() =>
+                    owner.Process(
+                        1,
+                        static nested => nested[0] = 1,
+                        static nested => nested[0]));
+                values.Fill(3);
+                return Sum(values);
+            });
+
+        Assert.Equal(24, sum);
+        workspace.Dispose();
+    }
+
+    [Fact]
+    public void ThreadLocalValuesRequireOwnerThreadDisposal()
+    {
+        using ThreadLocal<WorkspaceWorker> workers = new(
+            static () => new WorkspaceWorker(),
+            trackAllValues: true);
+        using ManualResetEventSlim created = new();
+        using ManualResetEventSlim release = new();
+        Exception? workerFailure = null;
+        Thread thread = new(() =>
+        {
+            try
+            {
+                _ = workers.Value!.Build(1);
+                created.Set();
+                release.Wait(TimeSpan.FromSeconds(5));
+                workers.Value.Dispose();
+            }
+            catch (Exception failure)
+            {
+                workerFailure = failure;
+            }
+        });
+        thread.Start();
+        Assert.True(created.Wait(TimeSpan.FromSeconds(5)));
+
+        WorkspaceWorker value = Assert.Single(workers.Values);
+        InvalidOperationException wrongThread = Assert.Throws<
+            InvalidOperationException>(value.Dispose);
+        Assert.Contains("owning thread", wrongThread.Message);
+
+        release.Set();
+        Assert.True(thread.Join(TimeSpan.FromSeconds(5)));
+        Assert.Null(workerFailure);
+    }
+
+    [Fact]
+    public void ThreadLocalDisposeDoesNotDisposeItsWorkspaceValue()
+    {
+        NativeMemoryTestHooks.Reset();
+        try
+        {
+            WorkspaceWorker? value;
+            using (ThreadLocal<WorkspaceWorker> workers = new(
+                static () => new WorkspaceWorker(),
+                trackAllValues: true))
+            {
+                value = workers.Value;
+                _ = value!.Build(1);
+                Assert.Equal(
+                    153_600 * sizeof(int),
+                    NativeMemoryTestHooks.Snapshot()
+                        .OutstandingNativeBytes);
+            }
+
+            Assert.Equal(
+                153_600 * sizeof(int),
+                NativeMemoryTestHooks.Snapshot().OutstandingNativeBytes);
+            value!.Dispose();
+            Assert.Equal(
+                0,
+                NativeMemoryTestHooks.Snapshot().OutstandingNativeBytes);
         }
         finally
         {
@@ -512,9 +640,9 @@ public sealed class NativeWorkspaceTests
 
     private static void ReleaseWorkspaceState(WeakReference state)
     {
-        NativeWorkspaceState<int> workspaceState =
-            Assert.IsType<NativeWorkspaceState<int>>(state.Target);
-        workspaceState.Release();
+        NativeWorkspace<int> workspaceState =
+            Assert.IsType<NativeWorkspace<int>>(state.Target);
+        workspaceState.Dispose();
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
@@ -534,7 +662,7 @@ public sealed class NativeWorkspaceTests
 
     private static void InitializeAndFail(
         object state) =>
-        ((NativeWorkspaceState<int>)state).Initialize(
+        ((NativeWorkspace<int>)state).Initialize(
             8,
             static writer =>
             {
@@ -546,7 +674,7 @@ public sealed class NativeWorkspaceTests
     private static void InitializeAndCancel(
         object state,
         CancellationTokenSource cancellation) =>
-        ((NativeWorkspaceState<int>)state).Initialize(
+        ((NativeWorkspace<int>)state).Initialize(
             8,
             writer =>
             {
@@ -556,15 +684,15 @@ public sealed class NativeWorkspaceTests
             cancellation.Token);
 
     private static int ReadState(object state) =>
-        ((NativeWorkspaceState<int>)state).Read(
+        ((NativeWorkspace<int>)state).Read(
             static view => view.Length);
 
     private static void AccessAndFail(object state) =>
-        ((NativeWorkspaceState<int>)state).Access(
+        ((NativeWorkspace<int>)state).Access(
             static _ => throw new InvalidOperationException("callback"));
 
     private static int RunStateProcess(object state, int value) =>
-        ((NativeWorkspaceState<int>)state).Process(
+        ((NativeWorkspace<int>)state).Process(
             8,
             value,
             static (values, fill) =>
@@ -575,7 +703,7 @@ public sealed class NativeWorkspaceTests
             default);
 
     private static int ProcessAndFail(object state) =>
-        ((NativeWorkspaceState<int>)state).Process<int>(
+        ((NativeWorkspace<int>)state).Process<int>(
             8,
             static values => values.Fill(19),
             static _ => throw new InvalidOperationException("reader"),
@@ -584,7 +712,7 @@ public sealed class NativeWorkspaceTests
     private static int ProcessAndCancel(
         object state,
         CancellationTokenSource cancellation) =>
-        ((NativeWorkspaceState<int>)state).Process(
+        ((NativeWorkspace<int>)state).Process(
             8,
             values =>
             {
@@ -595,7 +723,7 @@ public sealed class NativeWorkspaceTests
             cancellation.Token);
 
     private static int ProcessStateAndFail(object state) =>
-        ((NativeWorkspaceState<int>)state).Process<int, int>(
+        ((NativeWorkspace<int>)state).Process<int, int>(
             8,
             19,
             static (values, value) =>
@@ -608,7 +736,7 @@ public sealed class NativeWorkspaceTests
     private static int ProcessStateAndCancel(
         object state,
         CancellationTokenSource cancellation) =>
-        ((NativeWorkspaceState<int>)state).Process(
+        ((NativeWorkspace<int>)state).Process(
             8,
             cancellation,
             static (values, source) =>
@@ -656,4 +784,23 @@ public sealed class NativeWorkspaceTests
     private sealed record ProcessLifetimeState(
         WeakReference WorkspaceState,
         int Value);
+
+    private sealed class WorkspaceWorker : IDisposable
+    {
+        private readonly NativeWorkspace<int> _workspace = new(
+            preLease: 153_600);
+
+        internal long Build(int seed) => _workspace.Process(
+            153_600,
+            seed,
+            static (values, value) =>
+            {
+                values.Fill(value);
+                return (long)values[0]
+                    + values[^1]
+                    + values.Length;
+            });
+
+        public void Dispose() => _workspace.Dispose();
+    }
 }
