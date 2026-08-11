@@ -115,6 +115,27 @@ public readonly ref struct ConcurrentPooled<T>
         }
     }
 
+    /// <summary>Processes one bounded prefix with explicit caller state.</summary>
+    public TResult Process<TState, TResult>(
+        int length,
+        scoped in TState state,
+        NativeLeaseStateFunc<T, TState, TResult> callback)
+        where TState : allows ref struct
+    {
+        ArgumentNullException.ThrowIfNull(callback);
+        NativeOperationToken token = EnterOperation(nameof(Process));
+        try
+        {
+            return callback(
+                token.GetView<T>(length),
+                state);
+        }
+        finally
+        {
+            token.Dispose();
+        }
+    }
+
     /// <summary>Returns this synchronized lease exactly once.</summary>
     public void Dispose() =>
         GetKernel(nameof(Dispose)).ReturnLease(

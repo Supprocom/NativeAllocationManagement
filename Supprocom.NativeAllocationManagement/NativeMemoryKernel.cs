@@ -2890,6 +2890,20 @@ internal ref struct NativeOperationToken
 
     internal NativeLeaseView<T> GetView<T>() => new(_allocation);
 
+    internal NativeLeaseView<T> GetView<T>(int length)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(length);
+        if (length > _allocation.Length)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(length),
+                length,
+                "The prefix length exceeds the lease length.");
+        }
+
+        return new NativeLeaseView<T>(_allocation, length);
+    }
+
     internal T GetValue<T>(int index) => _allocation.GetValue<T>(index);
 
     internal void SetValue<T>(int index, T value) => _allocation.SetValue(index, value);

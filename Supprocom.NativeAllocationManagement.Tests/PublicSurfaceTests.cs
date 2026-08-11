@@ -30,6 +30,14 @@ public sealed class PublicSurfaceTests
         Assert.Null(typeof(NativeConcurrentArena).GetMethod(
             "ScratchTransferable"));
         Assert.Null(typeof(ConcurrentPooled<int>).GetProperty("Item"));
+        Assert.Contains(
+            typeof(ConcurrentPooled<int>).GetMethods(),
+            method => method.Name == "Process"
+                && method.GetGenericArguments().Length == 2
+                && method.GetParameters().Length == 3);
+        Assert.Contains(
+            assembly.GetTypes(),
+            type => type.Name == "NativeLeaseStateFunc`3");
         Assert.Null(typeof(ConcurrentArenaLease<int>).GetProperty("Item"));
         Assert.NotNull(typeof(NativeRegion).GetMethod("Lease"));
         Assert.NotNull(typeof(NativePool<int>).GetMethod("GetStatistics"));

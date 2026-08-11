@@ -14,7 +14,16 @@ public readonly ref struct NativeLeaseView<T>
     {
         _allocation = allocation;
         _directPointer = IntPtr.Zero;
-        _length = 0;
+        _length = -1;
+    }
+
+    internal NativeLeaseView(
+        NativeAllocation allocation,
+        int length)
+    {
+        _allocation = allocation;
+        _directPointer = IntPtr.Zero;
+        _length = length;
     }
 
     internal unsafe NativeLeaseView(
@@ -27,15 +36,23 @@ public readonly ref struct NativeLeaseView<T>
     }
 
     /// <summary>Gets the logical element count.</summary>
-    public int Length => _allocation?.Length ?? _length;
+    public int Length => _allocation is null
+        ? _length
+        : _length >= 0
+            ? _length
+            : _allocation.Length;
 
     /// <summary>Gets the physical capacity in elements.</summary>
-    public int Capacity => _allocation?.Capacity ?? _length;
+    public int Capacity => _allocation is null
+        ? _length
+        : _length >= 0
+            ? _length
+            : _allocation.Capacity;
 
     /// <summary>Gets a direct span for storage without managed references.</summary>
     public Span<T> AsSpan() => _allocation is null
         ? GetDirectSpan()
-        : _allocation.AsSpan<T>();
+        : _allocation.AsSpan<T>()[..Length];
 
     /// <summary>Reads or writes one value in the logical range.</summary>
     public T this[int index]
@@ -69,7 +86,22 @@ public readonly ref struct NativeLeaseView<T>
             return;
         }
 
-        _allocation.ClearValues();
+        if (_length < 0)
+        {
+            _allocation.ClearValues();
+            return;
+        }
+
+        if (_allocation.ReferenceRoots is null)
+        {
+            _allocation.AsSpan<T>()[.._length].Clear();
+            return;
+        }
+
+        for (int index = 0; index < _length; index++)
+        {
+            _allocation.SetValue(index, default(T)!);
+        }
     }
 
     /// <summary>Writes one value to the logical range.</summary>
@@ -81,7 +113,22 @@ public readonly ref struct NativeLeaseView<T>
             return;
         }
 
-        _allocation.Fill(value);
+        if (_length < 0)
+        {
+            _allocation.Fill(value);
+            return;
+        }
+
+        if (_allocation.ReferenceRoots is null)
+        {
+            _allocation.AsSpan<T>()[.._length].Fill(value);
+            return;
+        }
+
+        for (int index = 0; index < _length; index++)
+        {
+            _allocation.SetValue(index, value);
+        }
     }
 
     /// <summary>Copies an exact source range into this view.</summary>
@@ -119,7 +166,22 @@ public readonly ref struct NativeLeaseView<T>
             return;
         }
 
-        _allocation.CopyTo(destination);
+        if (_length < 0)
+        {
+            _allocation.CopyTo(destination);
+            return;
+        }
+
+        if (_allocation.ReferenceRoots is null)
+        {
+            _allocation.AsSpan<T>()[.._length].CopyTo(destination);
+            return;
+        }
+
+        for (int index = 0; index < _length; index++)
+        {
+            destination[index] = _allocation.GetValue<T>(index);
+        }
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

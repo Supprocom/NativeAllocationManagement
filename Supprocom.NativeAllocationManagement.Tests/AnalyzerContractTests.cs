@@ -1160,6 +1160,12 @@ public sealed class AnalyzerContractTests
                     stale.CopyTo(new int[2]);
                     stale.Access(static _ => { });
                     _ = stale.Read(static span => span[0]);
+                    int state = 0;
+                    _ = stale.Process(
+                        1,
+                        in state,
+                        static (span, current) =>
+                            span[0] + current);
                     stale.Dispose();
                     pool.Dispose();
                 }
@@ -1167,7 +1173,7 @@ public sealed class AnalyzerContractTests
             """);
 
         Assert.True(
-            NativeDiagnostics(diagnostics).Count(id => id == "NAM1004") >= 8,
+            NativeDiagnostics(diagnostics).Count(id => id == "NAM1004") >= 9,
             string.Join(", ", NativeDiagnostics(diagnostics)));
     }
 
@@ -2305,7 +2311,8 @@ public sealed class AnalyzerContractTests
         CompilationWithAnalyzers analyzed = compilation.WithAnalyzers(
             ImmutableArray.Create<DiagnosticAnalyzer>(
                 new NativeAllocationAnalyzer(),
-                new NativeBuilderWriteAnalyzer()));
+                new NativeBuilderWriteAnalyzer(),
+                new NativeLeaseStateAnalyzer()));
         return treatWarningsAsErrors
             ? await analyzed.GetAllDiagnosticsAsync()
             : await analyzed.GetAnalyzerDiagnosticsAsync();

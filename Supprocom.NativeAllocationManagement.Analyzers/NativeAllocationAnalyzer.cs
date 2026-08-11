@@ -2182,7 +2182,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     handle.Returned = true;
                 }
 
-                if (operation.TargetMethod.Name is "Access" or "Read")
+                if (operation.TargetMethod.Name is "Access" or "Read" or "Process")
                 {
                     borrowedOwner = handle.Owner;
                 }

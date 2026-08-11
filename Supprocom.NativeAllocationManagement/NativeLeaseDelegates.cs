@@ -6,6 +6,12 @@ public delegate void NativeLeaseAction<T>(scoped NativeLeaseView<T> view);
 /// <summary>Performs a bounded read while a NAM operation token is held.</summary>
 public delegate TResult NativeLeaseFunc<T, TResult>(scoped NativeLeaseView<T> view);
 
+/// <summary>Processes one bounded lease prefix with explicit caller state.</summary>
+public delegate TResult NativeLeaseStateFunc<T, TState, TResult>(
+    scoped NativeLeaseView<T> view,
+    scoped TState state)
+    where TState : allows ref struct;
+
 /// <summary>Initializes one bounded direct native span before publication.</summary>
 public delegate void NativeSpanInitializer<T>(scoped Span<T> values);
 
