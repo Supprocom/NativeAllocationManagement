@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Collections.Concurrent;
 using Supprocom.NativeAllocationManagement;
 
 namespace Supprocom.NativeAllocationManagement.Tests;
@@ -403,6 +404,384 @@ public sealed class NativePoolSimpleTests
         {
             selected.Dispose();
         }
+    }
+
+    [Fact]
+    public void RetiredPoolReleasesStorageOnTheCoordinatorThreadOnce()
+    {
+        NativeMemoryTestHooks.Reset();
+        NativePool<int> pool = new(
+            preLease: 16,
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        Pooled<int> lease = pool.Rent(
+            16,
+            static writer => writer.Fill(7));
+        lease.Dispose();
+        pool.Retire();
+
+        Exception? failure = null;
+        Thread coordinator = new(() =>
+        {
+            try
+            {
+                pool.ReleaseRetiredStorage();
+            }
+            catch (Exception exception)
+            {
+                failure = exception;
+            }
+        });
+        coordinator.Start();
+        Assert.True(coordinator.Join(TimeSpan.FromSeconds(5)));
+        Assert.Null(failure);
+
+        NativeMemoryTestMetrics released =
+            NativeMemoryTestHooks.Snapshot();
+        Assert.Equal(1, released.AllocationCount);
+        Assert.Equal(1, released.FreeCount);
+        Assert.Equal(0, released.OutstandingNativeBytes);
+        Assert.Throws<InvalidOperationException>(
+            pool.ReleaseRetiredStorage);
+        Assert.Equal(
+            released.FreeCount,
+            NativeMemoryTestHooks.Snapshot().FreeCount);
+    }
+
+    [Fact]
+    public void RetirementRejectsEachActiveWorkerState()
+    {
+        NativePool<int> pool = new(
+            preLease: 4,
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        InvalidOperationException? initializerFailure = null;
+        Pooled<int> lease = pool.Rent(
+            4,
+            writer =>
+            {
+                initializerFailure = Assert.Throws<InvalidOperationException>(
+                    pool.Retire);
+                writer.Fill(1);
+            });
+        Assert.NotNull(initializerFailure);
+
+        Assert.Throws<InvalidOperationException>(pool.Retire);
+        lease.Access(values =>
+        {
+            Assert.Equal(1, values[0]);
+            Assert.Throws<InvalidOperationException>(pool.Retire);
+        });
+
+        lease.Dispose();
+        pool.Retire();
+        pool.ReleaseRetiredStorage();
+    }
+
+    [Fact]
+    public void RetiredPoolRejectsWorkerOperationsAndOrdinaryDisposal()
+    {
+        NativePool<int> pool = new(
+            preLease: 4,
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        pool.Retire();
+
+        Assert.Throws<NativeAllocationDisposedException>(() => pool.Rent(
+            1,
+            static writer => writer.Write(1)));
+        Assert.Throws<NativeAllocationDisposedException>(
+            () => _ = pool.GetStatistics());
+        Assert.Throws<NativeAllocationDisposedException>(
+            () => _ = pool.TrimRetainedMemory());
+        Assert.Throws<NativeAllocationDisposedException>(pool.Retire);
+        Assert.Throws<InvalidOperationException>(pool.Dispose);
+
+        pool.ReleaseRetiredStorage();
+    }
+
+    [Fact]
+    public void RetiredCleanupRejectsMissingRetirement()
+    {
+        using NativePool<int> pool = new(
+            preLease: 4,
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+
+        Assert.Throws<InvalidOperationException>(
+            pool.ReleaseRetiredStorage);
+    }
+
+    [Fact]
+    public void OwnerBoundariesRejectTheWrongThread()
+    {
+        NativePool<int> pool = new(
+            preLease: 4,
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        ConcurrentQueue<Exception> failures = new();
+        Thread thread = new(() =>
+        {
+            Capture(() => _ = pool.GetStatistics());
+            Capture(() => _ = pool.TrimRetainedMemory());
+            Capture(pool.Retire);
+            Capture(pool.Dispose);
+
+            void Capture(Action action)
+            {
+                try
+                {
+                    action();
+                }
+                catch (Exception exception)
+                {
+                    failures.Enqueue(exception);
+                }
+            }
+        });
+        thread.Start();
+        Assert.True(thread.Join(TimeSpan.FromSeconds(5)));
+
+        Assert.Equal(4, failures.Count);
+        Assert.All(
+            failures,
+            static failure => Assert.IsType<
+                NativeAllocationStateException>(failure));
+        pool.Retire();
+        pool.ReleaseRetiredStorage();
+    }
+
+    [Fact]
+    public void ConcurrentCoordinatorCleanupFreesStorageOnce()
+    {
+        NativeMemoryTestHooks.Reset();
+        NativePool<int> pool = new(
+            preLease: 16,
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        pool.Retire();
+        ConcurrentQueue<Exception> failures = new();
+        Thread[] coordinators = Enumerable.Range(0, 2)
+            .Select(_ => new Thread(() =>
+            {
+                try
+                {
+                    pool.ReleaseRetiredStorage();
+                }
+                catch (Exception exception)
+                {
+                    failures.Enqueue(exception);
+                }
+            }))
+            .ToArray();
+        foreach (Thread coordinator in coordinators)
+        {
+            coordinator.Start();
+        }
+
+        foreach (Thread coordinator in coordinators)
+        {
+            Assert.True(coordinator.Join(TimeSpan.FromSeconds(5)));
+        }
+
+        Assert.Single(failures);
+        Assert.IsType<InvalidOperationException>(failures.Single());
+        NativeMemoryTestMetrics released =
+            NativeMemoryTestHooks.Snapshot();
+        Assert.Equal(1, released.FreeCount);
+        Assert.Equal(0, released.OutstandingNativeBytes);
+    }
+
+    [Fact]
+    public void ThreadLocalWorkersRetireBeforeCoordinatorCleanup()
+    {
+        const int workerCount = 24;
+        const int buildCount = 1_179;
+        NativeMemoryTestHooks.Reset();
+        using ThreadLocal<RetiredPoolWorker> workers = new(
+            static () => new RetiredPoolWorker(),
+            trackAllValues: true);
+        ConcurrentQueue<Exception> failures = new();
+        long checksum = 0;
+        Thread[] threads = new Thread[workerCount];
+        for (int workerIndex = 0; workerIndex < workerCount; workerIndex++)
+        {
+            int capturedIndex = workerIndex;
+            threads[workerIndex] = new Thread(() =>
+            {
+                try
+                {
+                    RetiredPoolWorker worker = workers.Value!;
+                    for (int build = capturedIndex;
+                        build < buildCount;
+                        build += workerCount)
+                    {
+                        Interlocked.Add(
+                            ref checksum,
+                            worker.Build());
+                    }
+
+                    worker.Retire();
+                }
+                catch (Exception exception)
+                {
+                    failures.Enqueue(exception);
+                }
+            });
+            threads[workerIndex].Start();
+        }
+
+        foreach (Thread thread in threads)
+        {
+            Assert.True(thread.Join(TimeSpan.FromSeconds(15)));
+        }
+
+        Assert.Empty(failures);
+        Assert.Equal(buildCount * 2L, checksum);
+        Assert.Equal(workerCount, workers.Values.Count);
+        foreach (RetiredPoolWorker worker in workers.Values)
+        {
+            worker.Dispose();
+        }
+
+        NativeMemoryTestMetrics released =
+            NativeMemoryTestHooks.Snapshot();
+        Assert.Equal(workerCount, released.AllocationCount);
+        Assert.Equal(workerCount, released.FreeCount);
+        Assert.Equal(0, released.OutstandingNativeBytes);
+    }
+
+    [Fact]
+    public void AbandonedRetiredPoolUsesFinalizationForEmergencyCleanup()
+    {
+        NativeMemoryTestHooks.Reset();
+        WeakReference abandoned = AbandonRetiredPool();
+
+        for (int attempt = 0;
+            attempt < 4 && abandoned.IsAlive;
+            attempt++)
+        {
+            GC.Collect(
+                2,
+                GCCollectionMode.Forced,
+                blocking: true,
+                compacting: true);
+            GC.WaitForPendingFinalizers();
+        }
+
+        Assert.False(abandoned.IsAlive);
+        NativeMemoryTestMetrics released =
+            NativeMemoryTestHooks.Snapshot();
+        Assert.Equal(1, released.AllocationCount);
+        Assert.Equal(1, released.FreeCount);
+        Assert.Equal(0, released.OutstandingNativeBytes);
+    }
+
+    [Fact]
+    public void PoolWorkerHotPathHasNoSynchronizationOrGeneralRecords()
+    {
+        string source = File.ReadAllText(Path.Combine(
+            FindRepositoryRoot(),
+            "Supprocom.NativeAllocationManagement",
+            "NativePoolKernel.cs"));
+        string rent = GetSourceRange(
+            source,
+            "internal Pooled<T> Rent(",
+            "internal IntPtr EnterBorrow(");
+        string access = GetSourceRange(
+            source,
+            "internal IntPtr EnterBorrow(",
+            "internal void ExitBorrow(");
+        string returned = GetSourceRange(
+            source,
+            "internal void Return(",
+            "internal NativeOwnerStatistics GetStatistics()");
+
+        foreach (string path in new[] { rent, access, returned })
+        {
+            Assert.DoesNotContain(
+                "lock (",
+                path,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain(
+                "Interlocked.",
+                path,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain(
+                "Dictionary<",
+                path,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain(
+                "NativeOperationAdmission",
+                path,
+                StringComparison.Ordinal);
+        }
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(
+        System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static WeakReference AbandonRetiredPool()
+    {
+        NativePool<int> pool = new(
+            preLease: 16,
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        pool.Retire();
+        return new WeakReference(pool);
+    }
+
+    private static string GetSourceRange(
+        string source,
+        string startMarker,
+        string endMarker)
+    {
+        int start = source.IndexOf(
+            startMarker,
+            StringComparison.Ordinal);
+        int end = source.IndexOf(
+            endMarker,
+            start,
+            StringComparison.Ordinal);
+        Assert.True(start >= 0);
+        Assert.True(end > start);
+        return source[start..end];
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        DirectoryInfo? directory = new(AppContext.BaseDirectory);
+        while (directory is not null
+            && !File.Exists(Path.Combine(
+                directory.FullName,
+                "Supprocom.NativeAllocationManagement.slnx")))
+        {
+            directory = directory.Parent;
+        }
+
+        return directory?.FullName
+            ?? throw new DirectoryNotFoundException(
+                "The repository root was not found.");
+    }
+
+    private sealed class RetiredPoolWorker : IDisposable
+    {
+        private const int Capacity = 153_600;
+        private readonly NativePool<short> _pool = new(
+            preLease: Capacity,
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+
+        internal int Build()
+        {
+            Pooled<short> lease = _pool.Rent(
+                Capacity,
+                static writer => writer.Fill(1));
+            try
+            {
+                return lease.Read(static values =>
+                    values[0] + values[values.Length - 1]);
+            }
+            finally
+            {
+                lease.Dispose();
+            }
+        }
+
+        internal void Retire() => _pool.Retire();
+
+        public void Dispose() => _pool.ReleaseRetiredStorage();
     }
 
     private sealed class MarkerException : Exception;

@@ -275,6 +275,9 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         private readonly Dictionary<ISymbol, TransferState> _transfers = new(SymbolEqualityComparer.Default);
         private readonly Dictionary<ISymbol, bool> _provenWorkspaceFields =
             new(SymbolEqualityComparer.Default);
+        private readonly Dictionary<ISymbol, bool>
+            _provenPoolRetirementFields =
+                new(SymbolEqualityComparer.Default);
         private readonly Dictionary<ISymbol, bool> _boundedTransferChannelProvenance =
             new(SymbolEqualityComparer.Default);
         private readonly Dictionary<string, LifecycleEffect> _lifecycleSummaries = new(StringComparer.Ordinal);
@@ -645,7 +648,9 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                         continue;
                     }
 
-                    if (owner.RequiresDeterministicReturn || owner.IsArena)
+                    if (owner.RequiresDeterministicReturn
+                        || owner.IsArena
+                        || owner.Retired)
                     {
                         Report(
                             NativeAllocationDiagnosticDescriptors.LifetimeEscape,
@@ -859,7 +864,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 .Where(owner => owner.Symbol is not null && exitingSymbols.Contains(owner.Symbol))
                 .ToArray())
             {
-                if (owner.RequiresDeterministicReturn
+                if ((owner.RequiresDeterministicReturn || owner.Retired)
                     && !owner.IsUsing
                     && !owner.IsRegion
                     && !IsOwnerEnded(owner)
@@ -965,9 +970,32 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             if (block.BranchValue is not null)
             {
                 Visit(block.BranchValue);
+                ReportOwnerBranchReturn(
+                    block,
+                    block.BranchValue);
                 ReportWorkspaceBranchReturn(
                     block,
                     block.BranchValue);
+            }
+        }
+
+        private void ReportOwnerBranchReturn(
+            BasicBlock block,
+            IOperation value)
+        {
+            if (block.FallThroughSuccessor?.Semantics
+                    != ControlFlowBranchSemantics.Return
+                || !IsOwnerType(value.Type)
+                || Unwrap(value) is IObjectCreationOperation)
+            {
+                return;
+            }
+
+            if (GetOwner(value) is OwnerState owner)
+            {
+                ReportOwnerTransfer(
+                    owner,
+                    new Target(null, value.Syntax));
             }
         }
 
@@ -1656,6 +1684,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
                     merged.Returned &= owner.Returned;
                     merged.Disposed &= owner.Disposed;
+                    merged.Retired &= owner.Retired;
                     merged.Unleased &= owner.Unleased;
                     merged.ScopedOwnerEligible &= owner.ScopedOwnerEligible;
                     merged.Ambiguous |= owner.Ambiguous;
@@ -1685,6 +1714,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
                 if (paths.Any(path => path.Owners.TryGetValue(symbol, out OwnerState? owner) && owner.Returned != merged.Returned)
                     || paths.Any(path => path.Owners.TryGetValue(symbol, out OwnerState? owner) && owner.Disposed != merged.Disposed)
+                    || paths.Any(path => path.Owners.TryGetValue(symbol, out OwnerState? owner) && owner.Retired != merged.Retired)
                     || paths.Any(path => path.Owners.TryGetValue(symbol, out OwnerState? owner) && owner.Unleased != merged.Unleased))
                 {
                     merged.Ambiguous = true;
@@ -1888,6 +1918,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         private static bool IsImplicitlyActiveOwner(OwnerState owner) =>
             !owner.Returned
             && !owner.Disposed
+            && !owner.Retired
             && !owner.Unleased
             && !owner.Ambiguous
             && owner.Generation == 0
@@ -1913,6 +1944,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             GenerationRelationKind relation = JoinGenerationRelations(states.Select(state => state.GenerationRelation));
             if (states.Any(state => state.Returned != first.Returned
                 || state.Disposed != first.Disposed
+                || state.Retired != first.Retired
                 || state.Unleased != first.Unleased))
             {
                 return GenerationRelationKind.Unknown;
@@ -2000,6 +2032,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 if (!right.Owners.TryGetValue(pair.Key, out OwnerState? other)
                     || pair.Value.Returned != other.Returned
                     || pair.Value.Disposed != other.Disposed
+                    || pair.Value.Retired != other.Retired
                     || pair.Value.Unleased != other.Unleased
                     || pair.Value.ScopedOwnerEligible != other.ScopedOwnerEligible
                     || pair.Value.Ambiguous != other.Ambiguous
@@ -4377,9 +4410,9 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             IArgumentOperation? destinationArgument =
                 GetDirectMoveDestinationArgument(move, current);
             bool safeOperationDestination = destinationArgument is
-                {
-                    Parameter: { RefKind: RefKind.None } parameter
-                }
+            {
+                Parameter: { RefKind: RefKind.None } parameter
+            }
                 && (HasExactTransferParameterDeclaration(parameter)
                     || IsProvenBoundedChannelHandoff(destinationArgument));
             if (!safeOperationDestination
@@ -5046,7 +5079,9 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 Report(NativeAllocationDiagnosticDescriptors.RegionMustBeUsing, operation.Syntax, target.Symbol.Name);
             }
 
-            if (requiresDeterministicReturn && target.Symbol is IFieldSymbol field && !HasFieldDisposalPath(field))
+            if (requiresDeterministicReturn
+                && target.Symbol is IFieldSymbol field
+                && !HasFieldLifetimePath(field))
             {
                 Report(NativeAllocationDiagnosticDescriptors.FieldDisposal, operation.Syntax, field.Name);
             }
@@ -5206,6 +5241,74 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 return;
             }
 
+            if (name == "Retire")
+            {
+                if (!IsNativePool(owner.Type)
+                    || !CheckOwnerActive(owner, syntax, name))
+                {
+                    return;
+                }
+
+                if (owner.Symbol is IFieldSymbol field
+                    && (!HasFieldRetirementPath(field)
+                        || !IsCurrentFieldRetirementMethod(
+                            field,
+                            "Retire")))
+                {
+                    Report(
+                        NativeAllocationDiagnosticDescriptors.FieldDisposal,
+                        syntax,
+                        owner.DisplayName);
+                    return;
+                }
+
+                GenerationReturnLiveness[] findings =
+                    FindGenerationReturnLiveness(owner);
+                ReportGenerationReturnLiveness(
+                    owner,
+                    name,
+                    syntax,
+                    findings);
+                if (findings.Length != 0)
+                {
+                    return;
+                }
+
+                owner.Retired = true;
+                owner.Returned = false;
+                owner.Ambiguous = false;
+                return;
+            }
+
+            if (name == "ReleaseRetiredStorage")
+            {
+                bool acceptedFieldRelease =
+                    owner.Symbol is IFieldSymbol field
+                    && HasFieldRetirementPath(field)
+                    && IsCurrentFieldRetirementMethod(
+                        field,
+                        "ReleaseRetiredStorage");
+                if (owner.Ambiguous
+                    || owner.GenerationRelation ==
+                        GenerationRelationKind.Unknown
+                    || owner.Disposed
+                    || (!owner.Retired && !acceptedFieldRelease))
+                {
+                    Report(
+                        NativeAllocationDiagnosticDescriptors.InvalidLifecycle,
+                        syntax,
+                        owner.DisplayName,
+                        name);
+                    return;
+                }
+
+                owner.Retired = false;
+                owner.Disposed = true;
+                owner.Returned = true;
+                owner.Ambiguous = false;
+                return;
+            }
+
             if (name is "ReturnMemoryToNativeMemory" or "ReturnMemoryToGarbageCollector"
                 or "ReleaseLeasesToNativeMemory" or "ReleaseLeasesToGarbageCollector"
                 or "Reset")
@@ -5318,7 +5421,11 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     return;
                 }
 
-                if (owner.Ambiguous || owner.GenerationRelation == GenerationRelationKind.Unknown || owner.Disposed)
+                if (owner.Ambiguous
+                    || owner.GenerationRelation ==
+                        GenerationRelationKind.Unknown
+                    || owner.Disposed
+                    || owner.Retired)
                 {
                     Report(NativeAllocationDiagnosticDescriptors.InvalidLifecycle, syntax, owner.DisplayName, name);
                     return;
@@ -5350,7 +5457,11 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     return;
                 }
 
-                if (owner.Ambiguous || owner.GenerationRelation == GenerationRelationKind.Unknown || owner.Disposed)
+                if (owner.Ambiguous
+                    || owner.GenerationRelation ==
+                        GenerationRelationKind.Unknown
+                    || owner.Disposed
+                    || owner.Retired)
                 {
                     Report(NativeAllocationDiagnosticDescriptors.InvalidLifecycle, syntax, owner.DisplayName, name);
                     return;
@@ -5442,7 +5553,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             SyntaxNode syntax,
             IEnumerable<GenerationReturnLiveness> findings)
         {
-            DiagnosticDescriptor descriptor = operation is "ReturnMemoryToNativeMemory" or "ReleaseLeasesToNativeMemory" or "Reset" or "RecycleScoped" or "Dispose"
+            DiagnosticDescriptor descriptor = operation is "ReturnMemoryToNativeMemory" or "ReleaseLeasesToNativeMemory" or "Reset" or "RecycleScoped" or "Dispose" or "Retire"
                 ? NativeAllocationDiagnosticDescriptors.GenerationReturnLiveValue
                 : NativeAllocationDiagnosticDescriptors.DeferredReturnLiveValue;
 
@@ -5463,14 +5574,14 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         {
             return kind switch
             {
-            GenerationLivenessKind.RootReference when operation is "ReturnMemoryToNativeMemory" or "ReleaseLeasesToNativeMemory" or "Reset" or "RecycleScoped" or "Dispose"
-                    => operation == "Dispose"
-                        ? "The root/reference would become stale when owner disposal ends the generation; end it before disposing the owner."
-                        : "The root/reference would become stale at the generation boundary; end it before deterministic native return.",
+                GenerationLivenessKind.RootReference when operation is "ReturnMemoryToNativeMemory" or "ReleaseLeasesToNativeMemory" or "Reset" or "RecycleScoped" or "Dispose" or "Retire"
+                        => operation == "Dispose"
+                            ? "The root/reference would become stale when owner disposal ends the generation; end it before disposing the owner."
+                            : "The root/reference would become stale at the generation boundary; end it before deterministic native return.",
                 GenerationLivenessKind.RootReference
                     => "The root/reference becomes stale immediately; it does not retain detached native storage.",
-            GenerationLivenessKind.ActiveBorrow when operation is "ReturnMemoryToNativeMemory" or "ReleaseLeasesToNativeMemory" or "Reset" or "RecycleScoped"
-                    => "An entered bounded operation still holds the generation; end the callback before deterministic native return.",
+                GenerationLivenessKind.ActiveBorrow when operation is "ReturnMemoryToNativeMemory" or "ReleaseLeasesToNativeMemory" or "Reset" or "RecycleScoped" or "Retire"
+                        => "An entered bounded operation still holds the generation; end the callback before deterministic native return.",
                 GenerationLivenessKind.ActiveBorrow when operation == "Dispose"
                     => "An entered bounded operation still holds the generation; end the callback before disposing the owner.",
                 GenerationLivenessKind.ActiveBorrow
@@ -5552,7 +5663,13 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
         private bool CheckOwnerActive(OwnerState owner, SyntaxNode syntax, string operation)
         {
-            if (owner.Ambiguous || owner.GenerationRelation == GenerationRelationKind.Unknown || owner.Disposed || owner.Returned || owner.Unleased)
+            if (owner.Ambiguous
+                || owner.GenerationRelation ==
+                    GenerationRelationKind.Unknown
+                || owner.Disposed
+                || owner.Retired
+                || owner.Returned
+                || owner.Unleased)
             {
                 Report(NativeAllocationDiagnosticDescriptors.InvalidLifecycle, syntax, owner.DisplayName, operation);
                 return false;
@@ -5714,7 +5831,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     && !owner.IsField
                     && !owner.IsUsing
                     && !owner.IsRegion
-                    && owner.RequiresDeterministicReturn
+                    && (owner.RequiresDeterministicReturn || owner.Retired)
                     && (!owner.Returned || owner.Ambiguous || owner.GenerationRelation == GenerationRelationKind.Unknown)
                     && (!owner.Disposed || owner.Ambiguous || owner.GenerationRelation == GenerationRelationKind.Unknown))
                 {
@@ -5779,7 +5896,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             field.IsReadOnly
             && !field.IsStatic
             && !IsNativeRegion(field.Type)
-            && HasFieldDisposalPath(field);
+            && HasFieldLifetimePath(field);
 
         private bool IsSymbolDeclaredInsideAnalysisRoot(ISymbol symbol)
         {
@@ -5836,6 +5953,172 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             }
 
             return handle;
+        }
+
+        private bool HasFieldLifetimePath(IFieldSymbol field) =>
+            HasFieldDisposalPath(field)
+            || HasFieldRetirementPath(field);
+
+        private bool HasFieldRetirementPath(IFieldSymbol field)
+        {
+            if (_provenPoolRetirementFields.TryGetValue(
+                    field,
+                    out bool cached))
+            {
+                return cached;
+            }
+
+            if (!IsNativePool(field.Type)
+                || field.IsStatic
+                || !field.IsReadOnly
+                || field.DeclaredAccessibility != Accessibility.Private
+                || !field.ContainingType.IsSealed
+                || !IsDirectFieldInitialization(field))
+            {
+                _provenPoolRetirementFields[field] = false;
+                return false;
+            }
+
+            IMethodSymbol? retire = GetFieldRetirementMethod(
+                field,
+                "Retire");
+            IMethodSymbol? release = GetFieldRetirementMethod(
+                field,
+                "ReleaseRetiredStorage");
+            bool result = retire is not null && release is not null;
+            _provenPoolRetirementFields[field] = result;
+            return result;
+        }
+
+        private bool IsCurrentFieldRetirementMethod(
+            IFieldSymbol field,
+            string operation)
+        {
+            IMethodSymbol? method = GetFieldRetirementMethod(
+                field,
+                operation);
+            return method is not null
+                && SymbolEqualityComparer.Default.Equals(
+                    method,
+                    _context.OwningSymbol);
+        }
+
+        private IMethodSymbol? GetFieldRetirementMethod(
+            IFieldSymbol field,
+            string operation)
+        {
+            if (operation == "Retire")
+            {
+                return field.ContainingType.GetMembers("Retire")
+                    .OfType<IMethodSymbol>()
+                    .FirstOrDefault(method =>
+                        IsExactRetirementBoundary(method)
+                        && MethodDirectlyCallsFieldOperation(
+                            method,
+                            field,
+                            operation));
+            }
+
+            INamedTypeSymbol? disposable =
+                _context.Compilation.GetTypeByMetadataName(
+                    "System.IDisposable");
+            IMethodSymbol? contract = disposable?
+                .GetMembers("Dispose")
+                .OfType<IMethodSymbol>()
+                .FirstOrDefault();
+            IMethodSymbol? implementation = contract is null
+                ? null
+                : field.ContainingType
+                    .FindImplementationForInterfaceMember(contract)
+                    as IMethodSymbol;
+            return implementation is not null
+                && IsExactRetirementBoundary(implementation)
+                && MethodDirectlyCallsFieldOperation(
+                    implementation,
+                    field,
+                    operation)
+                    ? implementation
+                    : null;
+        }
+
+        private static bool IsExactRetirementBoundary(
+            IMethodSymbol method) =>
+            !method.IsStatic
+            && !method.IsAsync
+            && !method.IsGenericMethod
+            && method.ReturnsVoid
+            && method.Parameters.Length == 0
+            && method.DeclaringSyntaxReferences.Length == 1;
+
+        private bool MethodDirectlyCallsFieldOperation(
+            IMethodSymbol method,
+            IFieldSymbol field,
+            string operation)
+        {
+            SyntaxNode declaration = method.DeclaringSyntaxReferences[0]
+                .GetSyntax(_context.CancellationToken);
+            if (declaration is not MethodDeclarationSyntax
+                {
+                    ExpressionBody: not null
+                }
+                && declaration is not MethodDeclarationSyntax
+                {
+                    Body.Statements.Count: 1
+                })
+            {
+                return false;
+            }
+
+            SemanticModel model = _context.Compilation.GetSemanticModel(
+                declaration.SyntaxTree);
+            IOperation? body = model.GetOperation(
+                declaration,
+                _context.CancellationToken);
+            if (body is null)
+            {
+                return false;
+            }
+
+            FieldInvocationWalker walker = new();
+            walker.Visit(body);
+            return walker.Invocations.Count(invocation =>
+                invocation.TargetMethod.Name == operation
+                && IsNativePool(
+                    invocation.TargetMethod.ContainingType)
+                && Unwrap(invocation.Instance)
+                    is IFieldReferenceOperation reference
+                && SymbolEqualityComparer.Default.Equals(
+                    reference.Field,
+                    field)) == 1;
+        }
+
+        private bool IsDirectFieldInitialization(IFieldSymbol field)
+        {
+            foreach (SyntaxReference reference in
+                field.DeclaringSyntaxReferences)
+            {
+                if (reference.GetSyntax(_context.CancellationToken)
+                        is not VariableDeclaratorSyntax
+                        {
+                            Initializer.Value: ExpressionSyntax value
+                        })
+                {
+                    continue;
+                }
+
+                SemanticModel model = _context.Compilation
+                    .GetSemanticModel(value.SyntaxTree);
+                if (Unwrap(model.GetOperation(
+                        value,
+                        _context.CancellationToken))
+                        is IObjectCreationOperation creation
+                    && IsNativePool(creation.Type))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private bool HasFieldDisposalPath(IFieldSymbol field)
@@ -7304,6 +7587,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             internal bool RequiresDeterministicReturn { get; }
             internal bool Returned { get; set; }
             internal bool Disposed { get; set; }
+            internal bool Retired { get; set; }
             internal bool Unleased { get; set; }
             internal bool ScopedOwnerEligible { get; set; }
             internal bool IsExternalReceiver { get; set; }
@@ -7332,6 +7616,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     RegionScope);
                 copy.Returned = Returned;
                 copy.Disposed = Disposed;
+                copy.Retired = Retired;
                 copy.Unleased = Unleased;
                 copy.ScopedOwnerEligible = ScopedOwnerEligible;
                 copy.IsExternalReceiver = IsExternalReceiver;

@@ -115,6 +115,13 @@ public sealed class NativePool<T> : IDisposable
         return _kernel.TrimRetainedMemory(bytes);
     }
 
+    /// <summary>Ends worker-thread use and converts this pool into cleanup-only authority.</summary>
+    public void Retire() => _kernel.Retire();
+
+    /// <summary>Releases one retired pool from a coordinator thread.</summary>
+    public void ReleaseRetiredStorage() =>
+        _kernel.ReleaseRetiredStorage();
+
     /// <summary>Closes the pool after all leases return.</summary>
     public void Dispose() => _kernel.Dispose();
 }

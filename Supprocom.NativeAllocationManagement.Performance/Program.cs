@@ -133,6 +133,12 @@ internal static class Program
                 args[2]);
         }
 
+        if (args is ["--native-pool-retirement", "--output", _])
+        {
+            return await NativePoolRetirementRegression.RunCommandAsync(
+                args[2]);
+        }
+
         if (args is ["--scoped-recycle-probe"])
         {
             Console.WriteLine(

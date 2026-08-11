@@ -23,6 +23,7 @@ internal sealed unsafe class NativePoolKernel<T>
     private int _returnedSlabIndex = -1;
     private int _returnedLogicalLength = -1;
     private int _liveLeaseCount;
+    private int _retirementState;
     private long _leaseTokenCounter;
     private long _requestedBytes;
     private long _retainedBytes;
@@ -235,9 +236,42 @@ internal sealed unsafe class NativePoolKernel<T>
         return released;
     }
 
+    internal void Retire()
+    {
+        ValidateOwner(nameof(NativePool<T>.Retire));
+        if (_liveLeaseCount != 0 || HasInFlightSlab())
+        {
+            ThrowLiveRetirementState();
+        }
+
+        _lifecycle = NativeOwnerLifecycle.Returned;
+        Volatile.Write(ref _retirementState, 1);
+    }
+
+    internal void ReleaseRetiredStorage()
+    {
+        int prior = Interlocked.CompareExchange(
+            ref _retirementState,
+            2,
+            1);
+        if (prior != 1)
+        {
+            ThrowInvalidRetiredCleanup(prior);
+        }
+
+        _lifecycle = NativeOwnerLifecycle.Disposed;
+        FreeAll();
+        GC.SuppressFinalize(this);
+    }
+
     internal void Dispose()
     {
         ValidateThread(nameof(Dispose));
+        if (Volatile.Read(ref _retirementState) != 0)
+        {
+            ThrowRetiredDispose();
+        }
+
         if (_lifecycle == NativeOwnerLifecycle.Disposed)
         {
             return;
@@ -257,6 +291,22 @@ internal sealed unsafe class NativePoolKernel<T>
         }
 
         MarkDetached();
+    }
+
+    private bool HasInFlightSlab()
+    {
+        for (int index = 0; index < _slabCount; index++)
+        {
+            ref Slab slab = ref _slabs[index];
+            if (slab.BorrowCount != 0
+                || slab.State is SlabState.Initializing
+                    or SlabState.Leased)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -530,6 +580,26 @@ internal sealed unsafe class NativePoolKernel<T>
     private static void ThrowLiveLease() =>
         throw new InvalidOperationException(
             "NativePool cannot dispose while a pooled lease is active.");
+
+    [DoesNotReturn]
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void ThrowLiveRetirementState() =>
+        throw new InvalidOperationException(
+            "NativePool cannot retire while a lease, initializer, or callback is active.");
+
+    [DoesNotReturn]
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void ThrowRetiredDispose() =>
+        throw new InvalidOperationException(
+            "NativePool.Dispose cannot release retired storage. Use ReleaseRetiredStorage on the coordinator thread.");
+
+    [DoesNotReturn]
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void ThrowInvalidRetiredCleanup(int state) =>
+        throw new InvalidOperationException(
+            state == 0
+                ? "NativePool must retire before coordinator cleanup."
+                : "NativePool retired storage was already released.");
 
     [DoesNotReturn]
     [MethodImpl(MethodImplOptions.NoInlining)]

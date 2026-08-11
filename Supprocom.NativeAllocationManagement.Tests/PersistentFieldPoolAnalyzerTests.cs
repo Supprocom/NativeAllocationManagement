@@ -245,6 +245,219 @@ public sealed class PersistentFieldPoolAnalyzerTests
         Assert.Contains("NAM1011", ids);
     }
 
+    [Fact]
+    public async Task RetiredFieldPoolSupportsWorkerAndCoordinatorPhases()
+    {
+        ImmutableArray<Diagnostic> diagnostics =
+            await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using System;
+            using System.Threading;
+            using Supprocom.NativeAllocationManagement;
+
+            public sealed class Worker : IDisposable
+            {
+                private readonly NativePool<short> pool = new(
+                    preLease: 153_600,
+                    returnMemoryOnDispose:
+                        NativeMemoryReturn.ToNativeMemory);
+
+                public int Build()
+                {
+                    Pooled<short> lease = pool.Rent(
+                        16,
+                        static writer => writer.Fill(1));
+                    try
+                    {
+                        return lease.Read(
+                            static values => values[0]);
+                    }
+                    finally
+                    {
+                        lease.Dispose();
+                    }
+                }
+
+                public void Retire() => pool.Retire();
+
+                public void Dispose() =>
+                    pool.ReleaseRetiredStorage();
+            }
+
+            public static class Coordinator
+            {
+                public static void Release(
+                    ThreadLocal<Worker> workers)
+                {
+                    foreach (Worker worker in workers.Values)
+                    {
+                        worker.Dispose();
+                    }
+
+                    workers.Dispose();
+                }
+            }
+            """);
+
+        AssertNoCompilerErrors(diagnostics);
+        Assert.True(
+            AnalyzerContractTests.NativeDiagnostics(diagnostics)
+                .Length == 0,
+            string.Join(Environment.NewLine, diagnostics));
+    }
+
+    [Fact]
+    public async Task RetirementRejectsLiveLeasesAndLaterDataUse()
+    {
+        ImmutableArray<Diagnostic> diagnostics =
+            await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Example
+            {
+                public static void Run()
+                {
+                    NativePool<int> pool = new();
+                    Pooled<int> lease = pool.Rent(
+                        4,
+                        static writer => writer.Fill(1));
+                    pool.Retire();
+                    lease.Dispose();
+                    pool.Retire();
+                    pool.Rent(
+                        1,
+                        static writer => writer.Write(1));
+                    pool.ReleaseRetiredStorage();
+                }
+            }
+            """);
+
+        AssertNoCompilerErrors(diagnostics);
+        string[] ids =
+            AnalyzerContractTests.NativeDiagnostics(diagnostics);
+        Assert.Contains("NAM1007", ids);
+        Assert.Contains("NAM1009", ids);
+    }
+
+    [Fact]
+    public async Task RetiredLocalRequiresFinalStorageCleanup()
+    {
+        ImmutableArray<Diagnostic> diagnostics =
+            await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Example
+            {
+                public static void Run()
+                {
+                    NativePool<int> pool = new();
+                    pool.Retire();
+                }
+            }
+            """);
+
+        AssertNoCompilerErrors(diagnostics);
+        Assert.Contains(
+            "NAM1003",
+            AnalyzerContractTests.NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task RetiredCleanupRequiresOneCompletedRetirement()
+    {
+        ImmutableArray<Diagnostic> diagnostics =
+            await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+
+            public static class Example
+            {
+                public static void Run()
+                {
+                    NativePool<int> early = new();
+                    early.ReleaseRetiredStorage();
+                    early.Dispose();
+
+                    NativePool<int> repeated = new();
+                    repeated.Retire();
+                    repeated.ReleaseRetiredStorage();
+                    repeated.ReleaseRetiredStorage();
+                }
+            }
+            """);
+
+        AssertNoCompilerErrors(diagnostics);
+        string[] ids =
+            AnalyzerContractTests.NativeDiagnostics(diagnostics);
+        Assert.True(
+            ids.Count(id => id == "NAM1009") >= 2,
+            string.Join(Environment.NewLine, diagnostics));
+    }
+
+    [Fact]
+    public async Task FieldRetirementRequiresExactCoordinatorCleanup()
+    {
+        ImmutableArray<Diagnostic> diagnostics =
+            await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using System;
+            using Supprocom.NativeAllocationManagement;
+
+            public sealed class Worker : IDisposable
+            {
+                private readonly NativePool<int> pool = new(
+                    returnMemoryOnDispose:
+                        NativeMemoryReturn.ToNativeMemory);
+
+                public NativePool<int> Publish() => pool;
+
+                public void Retire() => pool.Retire();
+
+                public void Dispose() => pool.Dispose();
+            }
+            """);
+
+        AssertNoCompilerErrors(diagnostics);
+        string[] ids =
+            AnalyzerContractTests.NativeDiagnostics(diagnostics);
+        Assert.Contains("NAM1001", ids);
+        Assert.Contains("NAM1015", ids);
+    }
+
+    [Fact]
+    public async Task ThreadLocalDisposalDoesNotReleaseItsWorkerValues()
+    {
+        ImmutableArray<Diagnostic> diagnostics =
+            await AnalyzerContractTests.AnalyzeAsync(
+            """
+            using System.Threading;
+            using Supprocom.NativeAllocationManagement;
+
+            public sealed class Worker
+            {
+                private readonly NativePool<int> pool = new(
+                    returnMemoryOnDispose:
+                        NativeMemoryReturn.ToNativeMemory);
+            }
+
+            public static class Coordinator
+            {
+                public static void Release(
+                    ThreadLocal<Worker> workers)
+                {
+                    workers.Dispose();
+                }
+            }
+            """);
+
+        AssertNoCompilerErrors(diagnostics);
+        Assert.Contains(
+            "NAM1015",
+            AnalyzerContractTests.NativeDiagnostics(diagnostics));
+    }
+
     private static void AssertNoCompilerErrors(
         ImmutableArray<Diagnostic> diagnostics)
     {
