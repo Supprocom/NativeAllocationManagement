@@ -1763,6 +1763,257 @@ public sealed class NativeBuilderAnalyzerTests
         Assert.Contains("NAM1046", NativeDiagnostics(diagnostics));
     }
 
+    [Fact]
+    public async Task CallbackLocalSpanAdapterAndScopedHelpersAreAccepted()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using System;
+            using Supprocom.NativeAllocationManagement;
+
+            public ref struct RectangleWriter
+            {
+                private Span<int> _values;
+
+                public RectangleWriter(Span<int> values)
+                {
+                    _values = values;
+                }
+
+                public void Set(int index, int value) =>
+                    _values[index] = value;
+
+                public int Get(int index) => _values[index];
+            }
+
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    using NativeBuilder<int> builder = new(preLease: 4);
+                    builder.Write(
+                        4,
+                        static writer =>
+                        {
+                            RectangleWriter adapter = new(
+                                writer.AsSpan());
+                            Fill(ref adapter);
+                            Verify(in adapter);
+                            writer.Commit(4);
+                        });
+                    NativeTransfer<int> transfer = builder.Complete();
+                    transfer.Dispose();
+                }
+
+                private static void Fill(
+                    scoped ref RectangleWriter adapter)
+                {
+                    for (int index = 0; index < 4; index++)
+                    {
+                        adapter.Set(index, index + 1);
+                    }
+                }
+
+                private static void Verify(
+                    scoped in RectangleWriter adapter)
+                {
+                    _ = adapter.Get(0);
+                }
+            }
+            """);
+
+        AssertNoNativeDiagnostics(diagnostics);
+    }
+
+    [Fact]
+    public async Task SpanAdapterRejectsConstructorSideEscape()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using System;
+            using Supprocom.NativeAllocationManagement;
+
+            public ref struct EscapingWriter
+            {
+                private Span<int> _values;
+
+                public EscapingWriter(Span<int> values)
+                {
+                    Inspect(values);
+                    _values = values;
+                }
+
+                private static void Inspect(Span<int> values)
+                {
+                }
+            }
+
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    using NativeBuilder<int> builder = new(preLease: 1);
+                    builder.Write(
+                        1,
+                        static writer =>
+                        {
+                            EscapingWriter adapter = new(
+                                writer.AsSpan());
+                            writer.Commit(0);
+                        });
+                    builder.Dispose();
+                }
+            }
+            """);
+
+        Assert.Contains("NAM1041", NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task SpanAdapterRejectsMemberViewEscape()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using System;
+            using Supprocom.NativeAllocationManagement;
+
+            public ref struct EscapingWriter
+            {
+                private Span<int> _values;
+
+                public EscapingWriter(Span<int> values)
+                {
+                    _values = values;
+                }
+
+                public Span<int> Expose() => _values;
+
+                public void Forward() => Store(_values);
+
+                private static void Store(Span<int> values)
+                {
+                }
+            }
+
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    using NativeBuilder<int> builder = new(preLease: 1);
+                    builder.Write(
+                        1,
+                        static writer =>
+                        {
+                            EscapingWriter adapter = new(
+                                writer.AsSpan());
+                            adapter.Forward();
+                            writer.Commit(0);
+                        });
+                    builder.Dispose();
+                }
+            }
+            """);
+
+        Assert.Contains("NAM1041", NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task SpanAdapterRejectsAliasesCaptureAndUnscopedForwarding()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using System;
+            using Supprocom.NativeAllocationManagement;
+
+            public ref struct RectangleWriter
+            {
+                private Span<int> _values;
+
+                public RectangleWriter(Span<int> values)
+                {
+                    _values = values;
+                }
+
+                public void Set(int index, int value) =>
+                    _values[index] = value;
+            }
+
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    using NativeBuilder<int> builder = new(preLease: 1);
+                    builder.Write(
+                        1,
+                        static writer =>
+                        {
+                            RectangleWriter adapter = new(
+                                writer.AsSpan());
+                            RectangleWriter alias = adapter;
+                            Forward(adapter);
+                            Action capture = () => adapter.Set(0, 1);
+                            capture();
+                            alias.Set(0, 2);
+                            writer.Commit(1);
+                        });
+                    builder.Dispose();
+                }
+
+                private static void Forward(RectangleWriter adapter)
+                {
+                }
+            }
+            """);
+
+        Assert.True(
+            NativeDiagnostics(diagnostics)
+                .Count(id => id == "NAM1041") >= 3,
+            string.Join(Environment.NewLine, diagnostics));
+    }
+
+    [Fact]
+    public async Task SpanAdapterRejectsNonlocalConstructionAndReturn()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using System;
+            using Supprocom.NativeAllocationManagement;
+
+            public ref struct RectangleWriter
+            {
+                private Span<int> _values;
+
+                public RectangleWriter(Span<int> values)
+                {
+                    _values = values;
+                }
+            }
+
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    using NativeBuilder<int> builder = new(preLease: 1);
+                    RectangleWriter outer = default;
+                    builder.Write(
+                        1,
+                        writer =>
+                        {
+                            outer = new RectangleWriter(writer.AsSpan());
+                            writer.Commit(0);
+                        });
+                    builder.Dispose();
+                }
+
+                private static RectangleWriter Return(
+                    scoped NativeBuilderWriter<int> writer) =>
+                    new(writer.AsSpan());
+            }
+            """);
+
+        Assert.Contains("NAM1041", NativeDiagnostics(diagnostics));
+    }
+
     private static Task<ImmutableArray<Diagnostic>> AnalyzeAsync(
         string source) =>
         AnalyzerContractTests.AnalyzeAsync(source);

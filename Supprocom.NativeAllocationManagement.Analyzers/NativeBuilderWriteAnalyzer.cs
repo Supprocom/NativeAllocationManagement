@@ -702,6 +702,7 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
 
         internal Symbols(Compilation compilation)
         {
+            Compilation = compilation;
             Builder = compilation.GetTypeByMetadataName(
                 Namespace + "NativeBuilder`1");
             IAssemblySymbol? runtimeAssembly =
@@ -728,6 +729,8 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
             BorrowStateAction = runtimeAssembly.GetTypeByMetadataName(
                 Namespace + "NativeBuilderBorrowStateAction`2");
         }
+
+        internal Compilation Compilation { get; }
 
         internal INamedTypeSymbol? Builder { get; }
 
@@ -954,6 +957,34 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
                 && isAuthority(declaration.Type);
         }
 
+        internal bool IsScopedAdapterForward(
+            IParameterSymbol? parameter,
+            ITypeSymbol adapterType)
+        {
+            if (parameter is null
+                || parameter.RefKind == RefKind.Out
+                || parameter.ScopedKind == ScopedKind.None
+                || !SymbolEqualityComparer.Default.Equals(
+                    parameter.Type,
+                    adapterType)
+                || parameter.ContainingSymbol
+                    is not IMethodSymbol method
+                || method.IsAsync
+                || method.DeclaringSyntaxReferences.Length != 1)
+            {
+                return false;
+            }
+
+            IParameterSymbol declaration =
+                method.OriginalDefinition.Parameters[
+                    parameter.Ordinal];
+            return declaration.RefKind != RefKind.Out
+                && declaration.ScopedKind != ScopedKind.None
+                && SymbolEqualityComparer.Default.Equals(
+                    declaration.Type,
+                    adapterType);
+        }
+
         internal static bool IsViewLike(ITypeSymbol? type)
         {
             if (type?.TypeKind == TypeKind.Pointer)
@@ -1076,6 +1107,9 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
         private readonly Action<Diagnostic> _report;
         private readonly HashSet<ILocalSymbol> _views =
             new(SymbolEqualityComparer.Default);
+        private readonly HashSet<ILocalSymbol> _adapters =
+            new(SymbolEqualityComparer.Default);
+        private readonly HashSet<TextSpan> _adapterArguments = [];
         private readonly HashSet<DiagnosticKey> _reported = [];
 
         internal WriterUsageWalker(
@@ -1104,7 +1138,19 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
             IVariableDeclaratorOperation operation)
         {
             IOperation? value = operation.Initializer?.Value;
-            if (IsViewDerived(value))
+            if (TryRegisterAdapter(operation, value))
+            {
+                _adapters.Add(operation.Symbol);
+            }
+            else if (ContainsAdapter(value))
+            {
+                Report(
+                    ViewEscape,
+                    operation.Syntax,
+                    AdapterName(value),
+                    "a local adapter alias");
+            }
+            else if (IsViewDerived(value))
             {
                 _views.Add(operation.Symbol);
             }
@@ -1115,7 +1161,15 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
         public override void VisitSimpleAssignment(
             ISimpleAssignmentOperation operation)
         {
-            if (IsViewDerived(operation.Value))
+            if (ContainsAdapter(operation.Value))
+            {
+                Report(
+                    ViewEscape,
+                    operation.Syntax,
+                    AdapterName(operation.Value),
+                    "an adapter assignment");
+            }
+            else if (IsViewDerived(operation.Value))
             {
                 if (operation.Target is ILocalReferenceOperation local)
                 {
@@ -1136,7 +1190,15 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
 
         public override void VisitReturn(IReturnOperation operation)
         {
-            if (IsViewDerived(operation.ReturnedValue))
+            if (ContainsAdapter(operation.ReturnedValue))
+            {
+                Report(
+                    ViewEscape,
+                    operation.Syntax,
+                    AdapterName(operation.ReturnedValue),
+                    "the callback return");
+            }
+            else if (IsViewDerived(operation.ReturnedValue))
             {
                 Report(
                     ViewEscape,
@@ -1151,6 +1213,7 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
         public override void VisitArgument(IArgumentOperation operation)
         {
             if (IsViewDerived(operation.Value)
+                && !_adapterArguments.Contains(operation.Syntax.Span)
                 && operation.Parameter?.ScopedKind
                     == ScopedKind.None)
             {
@@ -1165,8 +1228,33 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
                     ViewName(operation.Value),
                     destination);
             }
+            else if (ContainsAdapter(operation.Value)
+                && !IsScopedAdapterForward(operation))
+            {
+                Report(
+                    ViewEscape,
+                    operation.Syntax,
+                    AdapterName(operation.Value),
+                    "an unscoped adapter call");
+            }
 
             base.VisitArgument(operation);
+        }
+
+        public override void VisitLocalReference(
+            ILocalReferenceOperation operation)
+        {
+            if (_adapters.Contains(operation.Local)
+                && !IsPermittedAdapterUse(operation))
+            {
+                Report(
+                    ViewEscape,
+                    operation.Syntax,
+                    operation.Local.Name,
+                    "an adapter escape");
+            }
+
+            base.VisitLocalReference(operation);
         }
 
         public override void VisitParameterReference(
@@ -1268,7 +1356,8 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
             operation is IParameterReferenceOperation parameter
                 && IsWriter(parameter.Parameter)
             || operation is ILocalReferenceOperation local
-                && _views.Contains(local.Local);
+                && (_views.Contains(local.Local)
+                    || _adapters.Contains(local.Local));
 
         private bool IsViewDerived(IOperation? operation)
         {
@@ -1282,8 +1371,226 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
                 item is IParameterReferenceOperation parameter
                     && IsWriter(parameter.Parameter)
                 || item is ILocalReferenceOperation local
-                    && _views.Contains(local.Local));
+                    && (_views.Contains(local.Local)
+                        || _adapters.Contains(local.Local)));
         }
+
+        private bool TryRegisterAdapter(
+            IVariableDeclaratorOperation declaration,
+            IOperation? value)
+        {
+            IOperation? current = value;
+            while (current is IConversionOperation conversion
+                && conversion.IsImplicit)
+            {
+                current = conversion.Operand;
+            }
+
+            if (current is not IObjectCreationOperation creation
+                || creation.Type is not INamedTypeSymbol adapterType
+                || !adapterType.IsRefLikeType
+                || adapterType.DeclaringSyntaxReferences.Length != 1
+                || creation.Constructor is not { } constructor
+                || constructor.DeclaringSyntaxReferences.Length != 1
+                || !SymbolEqualityComparer.Default.Equals(
+                    declaration.Symbol.Type,
+                    adapterType))
+            {
+                return false;
+            }
+
+            IArgumentOperation[] viewArguments = creation.Arguments
+                .Where(argument => IsViewDerived(argument.Value))
+                .ToArray();
+            if (viewArguments.Length != 1
+                || viewArguments[0].Parameter is not { } viewParameter
+                || !ValidateAdapterConstructor(
+                    adapterType,
+                    constructor,
+                    viewParameter))
+            {
+                return false;
+            }
+
+            _adapterArguments.Add(viewArguments[0].Syntax.Span);
+            return true;
+        }
+
+        private bool ValidateAdapterConstructor(
+            INamedTypeSymbol adapterType,
+            IMethodSymbol constructor,
+            IParameterSymbol viewParameter)
+        {
+            IFieldSymbol[] viewFields = adapterType.GetMembers()
+                .OfType<IFieldSymbol>()
+                .Where(field =>
+                    !field.IsStatic
+                    && Symbols.IsViewLike(field.Type))
+                .ToArray();
+            if (viewFields.Length != 1
+                || !SymbolEqualityComparer.Default.Equals(
+                    viewFields[0].Type,
+                    viewParameter.Type))
+            {
+                return false;
+            }
+
+            SyntaxNode syntax = constructor
+                .DeclaringSyntaxReferences[0]
+                .GetSyntax();
+            SyntaxNode? body = syntax is ConstructorDeclarationSyntax declaration
+                ? (SyntaxNode?)declaration.Body
+                    ?? declaration.ExpressionBody?.Expression
+                : null;
+            if (body is null)
+            {
+                return false;
+            }
+
+            SemanticModel model = _symbols.Compilation.GetSemanticModel(
+                body.SyntaxTree);
+            if (model.GetOperation(body) is not { } operation)
+            {
+                return false;
+            }
+
+            AdapterConstructorWalker walker = new(
+                adapterType,
+                viewParameter,
+                viewFields[0]);
+            walker.Visit(operation);
+            return walker.IsValid
+                && ValidateAdapterMembers(
+                    adapterType,
+                    viewFields[0]);
+        }
+
+        private bool ValidateAdapterMembers(
+            INamedTypeSymbol adapterType,
+            IFieldSymbol viewField)
+        {
+            foreach (IMethodSymbol method in adapterType.GetMembers()
+                .OfType<IMethodSymbol>()
+                .Where(method =>
+                    !method.IsStatic
+                    && !method.IsImplicitlyDeclared
+                    && method.MethodKind
+                        is not MethodKind.Constructor
+                        and not MethodKind.StaticConstructor))
+            {
+                if (method.IsAsync
+                    || method.ReturnsByRef
+                    || method.ReturnsByRefReadonly
+                    || Symbols.IsViewLike(method.ReturnType)
+                    || SymbolEqualityComparer.Default.Equals(
+                        method.ReturnType,
+                        adapterType)
+                    || method.DeclaringSyntaxReferences.Length != 1)
+                {
+                    return false;
+                }
+
+                SyntaxNode syntax = method.DeclaringSyntaxReferences[0]
+                    .GetSyntax();
+                if (HasDirectYield(syntax)
+                    || syntax.DescendantNodes().Any(node =>
+                        node is PointerTypeSyntax
+                            or FixedStatementSyntax
+                            or UnsafeStatementSyntax))
+                {
+                    return false;
+                }
+
+                SyntaxNode? body = syntax switch
+                {
+                    BaseMethodDeclarationSyntax declaration =>
+                        (SyntaxNode?)declaration.Body
+                            ?? declaration.ExpressionBody?.Expression,
+                    AccessorDeclarationSyntax accessor =>
+                        (SyntaxNode?)accessor.Body
+                            ?? accessor.ExpressionBody?.Expression,
+                    _ => null
+                };
+                if (body is null)
+                {
+                    return false;
+                }
+
+                SemanticModel model = _symbols.Compilation.GetSemanticModel(
+                    body.SyntaxTree);
+                if (model.GetOperation(body) is not { } operation)
+                {
+                    return false;
+                }
+
+                AdapterMemberWalker walker = new(viewField);
+                walker.Visit(operation);
+                if (!walker.IsValid)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private bool IsScopedAdapterForward(
+            IArgumentOperation argument)
+        {
+            ILocalReferenceOperation? adapter = argument.Value
+                .DescendantsAndSelf()
+                .OfType<ILocalReferenceOperation>()
+                .FirstOrDefault(reference =>
+                    _adapters.Contains(reference.Local));
+            return adapter is not null
+                && _symbols.IsScopedAdapterForward(
+                    argument.Parameter,
+                    adapter.Local.Type);
+        }
+
+        private bool IsPermittedAdapterUse(
+            ILocalReferenceOperation reference)
+        {
+            IOperation? parent = reference.Parent;
+            while (parent is IConversionOperation conversion
+                && conversion.IsImplicit)
+            {
+                parent = parent.Parent;
+            }
+
+            if (parent is IArgumentOperation argument)
+            {
+                return IsScopedAdapterForward(argument);
+            }
+
+            if (parent is IFieldReferenceOperation field
+                && ReferenceEquals(field.Instance, reference)
+                || parent is IPropertyReferenceOperation property
+                && ReferenceEquals(property.Instance, reference))
+            {
+                return true;
+            }
+
+            return parent is IInvocationOperation invocation
+                && ReferenceEquals(invocation.Instance, reference)
+                && invocation.TargetMethod.DeclaringSyntaxReferences.Length == 1
+                && SymbolEqualityComparer.Default.Equals(
+                    invocation.TargetMethod.ContainingType,
+                    reference.Local.Type);
+        }
+
+        private bool ContainsAdapter(IOperation? operation) =>
+            operation?.DescendantsAndSelf().Any(item =>
+                item is ILocalReferenceOperation local
+                && _adapters.Contains(local.Local)) == true;
+
+        private string AdapterName(IOperation? operation) =>
+            operation?.DescendantsAndSelf()
+                .OfType<ILocalReferenceOperation>()
+                .FirstOrDefault(reference =>
+                    _adapters.Contains(reference.Local))?
+                .Local.Name
+            ?? "adapter";
 
         private bool IsWriter(IParameterSymbol parameter) =>
             _writers.Any(writer =>
@@ -1332,6 +1639,197 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
                     destination));
             }
         }
+    }
+
+    private sealed class AdapterConstructorWalker : OperationWalker
+    {
+        private readonly INamedTypeSymbol _adapterType;
+        private readonly IParameterSymbol _viewParameter;
+        private readonly IFieldSymbol _viewField;
+        private int _validAssignments;
+
+        internal AdapterConstructorWalker(
+            INamedTypeSymbol adapterType,
+            IParameterSymbol viewParameter,
+            IFieldSymbol viewField)
+        {
+            _adapterType = adapterType;
+            _viewParameter = viewParameter;
+            _viewField = viewField;
+        }
+
+        internal bool IsValid => _validAssignments == 1;
+
+        public override void VisitParameterReference(
+            IParameterReferenceOperation operation)
+        {
+            if (!SymbolEqualityComparer.Default.Equals(
+                    operation.Parameter,
+                    _viewParameter))
+            {
+                base.VisitParameterReference(operation);
+                return;
+            }
+
+            IOperation? parent = operation.Parent;
+            while (parent is IConversionOperation conversion
+                && conversion.IsImplicit)
+            {
+                parent = parent.Parent;
+            }
+
+            if (parent is ISimpleAssignmentOperation assignment
+                && ReferenceEquals(
+                    UnwrapValue(assignment.Value),
+                    operation)
+                && assignment.Target is IFieldReferenceOperation field
+                && SymbolEqualityComparer.Default.Equals(
+                    field.Field,
+                    _viewField)
+                && field.Instance is IInstanceReferenceOperation instance
+                && SymbolEqualityComparer.Default.Equals(
+                    instance.Type,
+                    _adapterType))
+            {
+                _validAssignments++;
+                return;
+            }
+
+            _validAssignments = int.MinValue;
+        }
+
+        private static IOperation UnwrapValue(IOperation value)
+        {
+            IOperation current = value;
+            while (current is IConversionOperation conversion
+                && conversion.IsImplicit)
+            {
+                current = conversion.Operand;
+            }
+
+            return current;
+        }
+    }
+
+    private sealed class AdapterMemberWalker : OperationWalker
+    {
+        private readonly IFieldSymbol _viewField;
+        private readonly HashSet<ILocalSymbol> _views =
+            new(SymbolEqualityComparer.Default);
+
+        internal AdapterMemberWalker(IFieldSymbol viewField)
+        {
+            _viewField = viewField;
+        }
+
+        internal bool IsValid { get; private set; } = true;
+
+        public override void VisitVariableDeclarator(
+            IVariableDeclaratorOperation operation)
+        {
+            if (IsDerived(operation.Initializer?.Value))
+            {
+                _views.Add(operation.Symbol);
+            }
+
+            base.VisitVariableDeclarator(operation);
+        }
+
+        public override void VisitSimpleAssignment(
+            ISimpleAssignmentOperation operation)
+        {
+            if (IsDerived(operation.Value))
+            {
+                if (operation.Target is ILocalReferenceOperation local)
+                {
+                    _views.Add(local.Local);
+                }
+                else
+                {
+                    IsValid = false;
+                }
+            }
+
+            base.VisitSimpleAssignment(operation);
+        }
+
+        public override void VisitReturn(IReturnOperation operation)
+        {
+            if (IsDerived(operation.ReturnedValue))
+            {
+                IsValid = false;
+            }
+
+            base.VisitReturn(operation);
+        }
+
+        public override void VisitArgument(IArgumentOperation operation)
+        {
+            if (IsDerived(operation.Value)
+                && operation.Parameter?.ScopedKind == ScopedKind.None)
+            {
+                IsValid = false;
+            }
+
+            base.VisitArgument(operation);
+        }
+
+        public override void VisitConversion(
+            IConversionOperation operation)
+        {
+            if (IsDerived(operation.Operand)
+                && !Symbols.IsViewLike(operation.Type))
+            {
+                IsValid = false;
+            }
+
+            base.VisitConversion(operation);
+        }
+
+        public override void VisitAnonymousFunction(
+            IAnonymousFunctionOperation operation)
+        {
+            if (ContainsTrackedReference(operation.Body))
+            {
+                IsValid = false;
+                return;
+            }
+
+            base.VisitAnonymousFunction(operation);
+        }
+
+        public override void VisitLocalFunction(
+            ILocalFunctionOperation operation)
+        {
+            if (operation.Body is { } body
+                && ContainsTrackedReference(body))
+            {
+                IsValid = false;
+                return;
+            }
+
+            base.VisitLocalFunction(operation);
+        }
+
+        private bool IsDerived(IOperation? operation)
+        {
+            if (operation is null
+                || !Symbols.IsViewLike(operation.Type))
+            {
+                return false;
+            }
+
+            return ContainsTrackedReference(operation);
+        }
+
+        private bool ContainsTrackedReference(IOperation operation) =>
+            operation.DescendantsAndSelf().Any(item =>
+                item is IFieldReferenceOperation field
+                    && SymbolEqualityComparer.Default.Equals(
+                        field.Field,
+                        _viewField)
+                || item is ILocalReferenceOperation local
+                    && _views.Contains(local.Local));
     }
 
     private sealed class StateUsageWalker : OperationWalker
