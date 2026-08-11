@@ -27,11 +27,11 @@ public sealed class NativeBuilderBenchmarkTests
         NativeBuilderBenchmarkOptions options = CreateOptions();
 
         NativeBuilderWorkerEvidence managed =
-            await NativeBuilderBenchmark.RunWorkerAsync(
+            await NativeBuilderBenchmark.RunIsolatedWorkerAsync(
                 NativeBuilderBenchmarkImplementation.ManagedList,
                 options);
         NativeBuilderWorkerEvidence native =
-            await NativeBuilderBenchmark.RunWorkerAsync(
+            await NativeBuilderBenchmark.RunIsolatedWorkerAsync(
                 NativeBuilderBenchmarkImplementation.NativeBuilder,
                 options);
 

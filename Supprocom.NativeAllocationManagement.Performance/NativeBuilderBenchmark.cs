@@ -805,14 +805,14 @@ internal static class NativeBuilderBenchmark
         * 1_000d
         / Stopwatch.Frequency;
 
-    private static async Task<NativeBuilderWorkerEvidence>
+    internal static async Task<NativeBuilderWorkerEvidence>
         RunIsolatedWorkerAsync(
             NativeBuilderBenchmarkImplementation implementation,
             NativeBuilderBenchmarkOptions options)
     {
-        string processPath = Environment.ProcessPath
-            ?? throw new InvalidOperationException(
-                "The performance process path is not available.");
+        string processPath =
+            Environment.GetEnvironmentVariable("DOTNET_HOST_PATH")
+            ?? "dotnet";
         using Process process = new();
         process.StartInfo = new ProcessStartInfo
         {
@@ -822,14 +822,8 @@ internal static class NativeBuilderBenchmark
             UseShellExecute = false,
             CreateNoWindow = true
         };
-        if (string.Equals(
-            Path.GetFileNameWithoutExtension(processPath),
-            "dotnet",
-            StringComparison.OrdinalIgnoreCase))
-        {
-            process.StartInfo.ArgumentList.Add(
-                typeof(NativeBuilderBenchmark).Assembly.Location);
-        }
+        process.StartInfo.ArgumentList.Add(
+            typeof(NativeBuilderBenchmark).Assembly.Location);
 
         AddWorkerArguments(
             process.StartInfo.ArgumentList,
