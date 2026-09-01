@@ -703,9 +703,16 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
         internal Symbols(Compilation compilation)
         {
             Compilation = compilation;
-            MemoryMarshal = compilation.GetTypeByMetadataName(
+            IAssemblySymbol? coreLibrary = compilation
+                .GetSpecialType(SpecialType.System_Object)
+                .ContainingAssembly;
+            MemoryMarshal = GetTrustedFrameworkType(
+                compilation,
+                coreLibrary,
                 "System.Runtime.InteropServices.MemoryMarshal");
-            Span = compilation.GetTypeByMetadataName(
+            Span = GetTrustedFrameworkType(
+                compilation,
+                coreLibrary,
                 "System.Span`1");
             Builder = compilation.GetTypeByMetadataName(
                 Namespace + "NativeBuilder`1");
@@ -915,8 +922,10 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
             }
 
             IMethodSymbol method = invocation.TargetMethod;
+            IMethodSymbol definition = method.OriginalDefinition;
             return MemoryMarshal is not null
                 && Span is not null
+                && IsTrustedFrameworkMethod(definition)
                 && method.IsStatic
                 && method.ReturnsVoid
                 && method.Name == "Write"
@@ -933,6 +942,43 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
                 && SymbolEqualityComparer.Default.Equals(
                     method.Parameters[1].Type,
                     method.TypeArguments[0]);
+        }
+
+        private bool IsTrustedFrameworkMethod(
+            IMethodSymbol method) =>
+            MemoryMarshal is not null
+            && method.DeclaringSyntaxReferences.Length == 0
+            && !method.Locations.Any(location => location.IsInSource)
+            && SymbolEqualityComparer.Default.Equals(
+                method.ContainingAssembly,
+                MemoryMarshal.ContainingAssembly)
+            && !SymbolEqualityComparer.Default.Equals(
+                method.ContainingAssembly,
+                Compilation.Assembly);
+
+        private static INamedTypeSymbol? GetTrustedFrameworkType(
+            Compilation compilation,
+            IAssemblySymbol? coreLibrary,
+            string metadataName)
+        {
+            if (coreLibrary is null
+                || SymbolEqualityComparer.Default.Equals(
+                    coreLibrary,
+                    compilation.Assembly))
+            {
+                return null;
+            }
+
+            INamedTypeSymbol? type = coreLibrary
+                .GetTypeByMetadataName(metadataName);
+            return type is not null
+                && type.DeclaringSyntaxReferences.Length == 0
+                && !type.Locations.Any(location => location.IsInSource)
+                && SymbolEqualityComparer.Default.Equals(
+                    type.ContainingAssembly,
+                    coreLibrary)
+                ? type
+                : null;
         }
 
         internal bool IsScopedInForward(

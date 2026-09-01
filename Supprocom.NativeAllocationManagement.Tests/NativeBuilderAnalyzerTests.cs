@@ -1821,6 +1821,79 @@ public sealed class NativeBuilderAnalyzerTests
     }
 
     [Fact]
+    public async Task SourceDeclaredMemoryMarshalWriteIsRejected()
+    {
+        const string Source =
+            """
+            using System;
+            using System.Runtime.InteropServices;
+            using Supprocom.NativeAllocationManagement;
+
+            namespace System.Runtime.InteropServices
+            {
+                public static class MemoryMarshal
+                {
+                    public static void Write<T>(
+                        Span<byte> destination,
+                        in T value)
+                        where T : struct
+                    {
+                    }
+                }
+            }
+
+            public readonly record struct State(long Value);
+
+            public ref struct Adapter
+            {
+                private Span<byte> _bytes;
+
+                public Adapter(Span<byte> bytes)
+                {
+                    _bytes = bytes;
+                }
+
+                public void Write(scoped in State value) =>
+                    MemoryMarshal.Write(_bytes, in value);
+            }
+
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    const int ByteCount = sizeof(long);
+                    using NativeBuilder<byte> builder = new(
+                        preLease: ByteCount);
+                    State state = new(17);
+                    builder.Write(
+                        ByteCount,
+                        in state,
+                        static (
+                            scoped NativeBuilderWriter<byte> writer,
+                            scoped in State current) =>
+                        {
+                            Adapter adapter = new(writer.AsSpan());
+                            adapter.Write(in current);
+                            writer.Commit(ByteCount);
+                        });
+                }
+            }
+            """;
+
+        ImmutableArray<Diagnostic> compilerDiagnostics =
+            AnalyzerContractTests.Compile(Source);
+        ImmutableArray<Diagnostic> analyzerDiagnostics =
+            await AnalyzeAsync(Source);
+
+        Assert.Contains(
+            compilerDiagnostics,
+            diagnostic => diagnostic.Id == "CS0436");
+        Assert.Contains(
+            "NAM1041",
+            NativeDiagnostics(analyzerDiagnostics));
+    }
+
+    [Fact]
     public async Task MemoryMarshalWriteAuthorityRejectsIndirection()
     {
         ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
