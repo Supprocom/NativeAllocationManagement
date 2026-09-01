@@ -703,6 +703,10 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
         internal Symbols(Compilation compilation)
         {
             Compilation = compilation;
+            MemoryMarshal = compilation.GetTypeByMetadataName(
+                "System.Runtime.InteropServices.MemoryMarshal");
+            Span = compilation.GetTypeByMetadataName(
+                "System.Span`1");
             Builder = compilation.GetTypeByMetadataName(
                 Namespace + "NativeBuilder`1");
             IAssemblySymbol? runtimeAssembly =
@@ -733,6 +737,10 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
         internal Compilation Compilation { get; }
 
         internal INamedTypeSymbol? Builder { get; }
+
+        private INamedTypeSymbol? MemoryMarshal { get; }
+
+        private INamedTypeSymbol? Span { get; }
 
         internal INamedTypeSymbol? Writer { get; }
 
@@ -896,6 +904,36 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
                 type,
                 new HashSet<ITypeSymbol>(
                     SymbolEqualityComparer.Default));
+
+        internal bool IsMemoryMarshalWriteDestination(
+            IArgumentOperation argument)
+        {
+            if (argument.Parameter?.Ordinal != 0
+                || argument.Parent is not IInvocationOperation invocation)
+            {
+                return false;
+            }
+
+            IMethodSymbol method = invocation.TargetMethod;
+            return MemoryMarshal is not null
+                && Span is not null
+                && method.IsStatic
+                && method.ReturnsVoid
+                && method.Name == "Write"
+                && method.Arity == 1
+                && method.Parameters.Length == 2
+                && Is(method.ContainingType, MemoryMarshal)
+                && method.Parameters[0].RefKind == RefKind.None
+                && method.Parameters[0].Type is INamedTypeSymbol destination
+                && Is(destination, Span)
+                && destination.TypeArguments.Length == 1
+                && destination.TypeArguments[0].SpecialType
+                    == SpecialType.System_Byte
+                && method.Parameters[1].RefKind == RefKind.In
+                && SymbolEqualityComparer.Default.Equals(
+                    method.Parameters[1].Type,
+                    method.TypeArguments[0]);
+        }
 
         internal bool IsScopedInForward(
             IParameterSymbol? parameter,
@@ -1523,7 +1561,9 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
                     return false;
                 }
 
-                AdapterMemberWalker walker = new(viewField);
+                AdapterMemberWalker walker = new(
+                    _symbols,
+                    viewField);
                 walker.Visit(operation);
                 if (!walker.IsValid)
                 {
@@ -1713,12 +1753,16 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
 
     private sealed class AdapterMemberWalker : OperationWalker
     {
+        private readonly Symbols _symbols;
         private readonly IFieldSymbol _viewField;
         private readonly HashSet<ILocalSymbol> _views =
             new(SymbolEqualityComparer.Default);
 
-        internal AdapterMemberWalker(IFieldSymbol viewField)
+        internal AdapterMemberWalker(
+            Symbols symbols,
+            IFieldSymbol viewField)
         {
+            _symbols = symbols;
             _viewField = viewField;
         }
 
@@ -1766,7 +1810,8 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
         public override void VisitArgument(IArgumentOperation operation)
         {
             if (IsDerived(operation.Value)
-                && operation.Parameter?.ScopedKind == ScopedKind.None)
+                && operation.Parameter?.ScopedKind == ScopedKind.None
+                && !_symbols.IsMemoryMarshalWriteDestination(operation))
             {
                 IsValid = false;
             }

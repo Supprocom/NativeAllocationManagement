@@ -1764,6 +1764,338 @@ public sealed class NativeBuilderAnalyzerTests
     }
 
     [Fact]
+    public async Task CallbackLocalByteAdapterCanUseMemoryMarshalWrite()
+    {
+        const string Source =
+            """
+            using System;
+            using System.Runtime.InteropServices;
+            using Supprocom.NativeAllocationManagement;
+
+            public readonly record struct State(long Value);
+
+            public ref struct Adapter
+            {
+                private Span<byte> _bytes;
+
+                public Adapter(Span<byte> bytes)
+                {
+                    _bytes = bytes;
+                }
+
+                public void Write(scoped in State value) =>
+                    MemoryMarshal.Write(_bytes, in value);
+            }
+
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    const int ByteCount = sizeof(long);
+                    using NativeBuilder<byte> builder = new(
+                        preLease: ByteCount);
+                    State state = new(17);
+                    builder.Write(
+                        ByteCount,
+                        in state,
+                        static (
+                            scoped NativeBuilderWriter<byte> writer,
+                            scoped in State current) =>
+                        {
+                            Adapter adapter = new(writer.AsSpan());
+                            adapter.Write(in current);
+                            writer.Commit(ByteCount);
+                        });
+                    NativeTransfer<byte> transfer = builder.Complete();
+                    transfer.Dispose();
+                }
+            }
+            """;
+
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(Source);
+
+        Assert.DoesNotContain(
+            AnalyzerContractTests.Compile(Source),
+            diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+        AssertNoNativeDiagnostics(diagnostics);
+    }
+
+    [Fact]
+    public async Task MemoryMarshalWriteAuthorityRejectsIndirection()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using System;
+            using System.Runtime.InteropServices;
+            using Supprocom.NativeAllocationManagement;
+
+            public readonly record struct State(long Value);
+
+            public delegate void StoredWrite(
+                Span<byte> bytes,
+                in State value);
+
+            public ref struct HelperAdapter
+            {
+                private Span<byte> _bytes;
+
+                public HelperAdapter(Span<byte> bytes)
+                {
+                    _bytes = bytes;
+                }
+
+                public void Write(scoped in State value) =>
+                    Forward(_bytes, in value);
+
+                private static void Forward(
+                    Span<byte> bytes,
+                    in State value) =>
+                    MemoryMarshal.Write(bytes, in value);
+            }
+
+            public ref struct DelegateAdapter
+            {
+                private Span<byte> _bytes;
+
+                public DelegateAdapter(Span<byte> bytes)
+                {
+                    _bytes = bytes;
+                }
+
+                public void Write(scoped in State value)
+                {
+                    StoredWrite action = MemoryMarshal.Write;
+                    action(_bytes, in value);
+                }
+            }
+
+            public ref struct ImpostorAdapter
+            {
+                private Span<byte> _bytes;
+
+                public ImpostorAdapter(Span<byte> bytes)
+                {
+                    _bytes = bytes;
+                }
+
+                public void Write(scoped in State value) =>
+                    Impostor.Write(_bytes, in value);
+            }
+
+            public static class Impostor
+            {
+                public static void Write<T>(
+                    Span<byte> bytes,
+                    in T value)
+                    where T : struct
+                {
+                }
+            }
+
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    const int ByteCount = sizeof(long);
+                    State state = new(17);
+
+                    using NativeBuilder<byte> first = new(
+                        preLease: ByteCount);
+                    first.Write(
+                        ByteCount,
+                        in state,
+                        static (
+                            scoped NativeBuilderWriter<byte> writer,
+                            scoped in State current) =>
+                        {
+                            HelperAdapter adapter = new(writer.AsSpan());
+                            adapter.Write(in current);
+                            writer.Commit(ByteCount);
+                        });
+
+                    using NativeBuilder<byte> second = new(
+                        preLease: ByteCount);
+                    second.Write(
+                        ByteCount,
+                        in state,
+                        static (
+                            scoped NativeBuilderWriter<byte> writer,
+                            scoped in State current) =>
+                        {
+                            DelegateAdapter adapter = new(writer.AsSpan());
+                            adapter.Write(in current);
+                            writer.Commit(ByteCount);
+                        });
+
+                    using NativeBuilder<byte> third = new(
+                        preLease: ByteCount);
+                    third.Write(
+                        ByteCount,
+                        in state,
+                        static (
+                            scoped NativeBuilderWriter<byte> writer,
+                            scoped in State current) =>
+                        {
+                            ImpostorAdapter adapter = new(writer.AsSpan());
+                            adapter.Write(in current);
+                            writer.Commit(ByteCount);
+                        });
+                }
+            }
+            """);
+
+        Assert.True(
+            NativeDiagnostics(diagnostics)
+                .Count(id => id == "NAM1041") >= 3,
+            string.Join(Environment.NewLine, diagnostics));
+    }
+
+    [Fact]
+    public async Task MemoryMarshalWriteDoesNotAuthorizeAdapterEscape()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using System;
+            using System.Runtime.InteropServices;
+            using Supprocom.NativeAllocationManagement;
+
+            public readonly record struct State(long Value);
+
+            public ref struct EscapingAdapter
+            {
+                private Span<byte> _bytes;
+
+                public EscapingAdapter(Span<byte> bytes)
+                {
+                    _bytes = bytes;
+                }
+
+                public void Write(scoped in State value) =>
+                    MemoryMarshal.Write(_bytes, in value);
+
+                public Span<byte> Expose() => _bytes;
+            }
+
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    const int ByteCount = sizeof(long);
+                    using NativeBuilder<byte> builder = new(
+                        preLease: ByteCount);
+                    State state = new(17);
+                    builder.Write(
+                        ByteCount,
+                        in state,
+                        static (
+                            scoped NativeBuilderWriter<byte> writer,
+                            scoped in State current) =>
+                        {
+                            EscapingAdapter adapter = new(
+                                writer.AsSpan());
+                            adapter.Write(in current);
+                            Retain(adapter.Expose());
+                            writer.Commit(ByteCount);
+                        });
+                }
+
+                private static void Retain(Span<byte> bytes)
+                {
+                }
+            }
+            """);
+
+        Assert.Contains("NAM1041", NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task MemoryMarshalAdapterRejectsBoxingAndAsyncUse()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using System;
+            using System.Runtime.InteropServices;
+            using System.Threading.Tasks;
+            using Supprocom.NativeAllocationManagement;
+
+            public readonly record struct State(long Value);
+
+            public ref struct BoxingAdapter
+            {
+                private Span<byte> _bytes;
+
+                public BoxingAdapter(Span<byte> bytes)
+                {
+                    _bytes = bytes;
+                }
+
+                public void Write(scoped in State value) =>
+                    MemoryMarshal.Write(_bytes, in value);
+            }
+
+            public ref struct AsyncAdapter
+            {
+                private Span<byte> _bytes;
+
+                public AsyncAdapter(Span<byte> bytes)
+                {
+                    _bytes = bytes;
+                }
+
+                public async void Write(scoped in State value)
+                {
+                    await Task.Yield();
+                    MemoryMarshal.Write(_bytes, in value);
+                }
+            }
+
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    const int ByteCount = sizeof(long);
+                    State state = new(17);
+
+                    using NativeBuilder<byte> first = new(
+                        preLease: ByteCount);
+                    first.Write(
+                        ByteCount,
+                        in state,
+                        static (
+                            scoped NativeBuilderWriter<byte> writer,
+                            scoped in State current) =>
+                        {
+                            BoxingAdapter adapter = new(writer.AsSpan());
+                            object boxed = adapter;
+                            _ = boxed;
+                            adapter.Write(in current);
+                            writer.Commit(ByteCount);
+                        });
+
+                    using NativeBuilder<byte> second = new(
+                        preLease: ByteCount);
+                    second.Write(
+                        ByteCount,
+                        in state,
+                        static (
+                            scoped NativeBuilderWriter<byte> writer,
+                            scoped in State current) =>
+                        {
+                            AsyncAdapter adapter = new(writer.AsSpan());
+                            adapter.Write(in current);
+                            writer.Commit(ByteCount);
+                        });
+                }
+            }
+            """);
+
+        Assert.True(
+            NativeDiagnostics(diagnostics)
+                .Count(id => id == "NAM1041") >= 2,
+            string.Join(Environment.NewLine, diagnostics));
+    }
+
+    [Fact]
     public async Task CallbackLocalSpanAdapterAndScopedHelpersAreAccepted()
     {
         ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
