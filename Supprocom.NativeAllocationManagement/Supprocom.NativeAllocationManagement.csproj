@@ -6,7 +6,7 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <IsPackable>true</IsPackable>
     <PackageId>Supprocom.NativeAllocationManagement</PackageId>
-    <Version>0.2.1</Version>
+    <Version>0.2.2</Version>
     <Authors>Supprocom</Authors>
     <Company>Supprocom</Company>
     <Description>Explicit C# owners for growable native builders, reusable typed pools, cross-thread transferable leases, lexical regions, and heterogeneous native arenas.</Description>
@@ -14,7 +14,7 @@
     <PackageLicenseExpression>AGPL-3.0-only</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageTags>native-memory;native-builder;memory-pool;native-transfer;cross-thread;native-region;native-arena;roslyn-analyzer;scoped-recycling</PackageTags>
-    <PackageReleaseNotes>Specialize Region, Arena, and Pool hot paths. Add bounded builder writes, reusable workspaces, and stricter ownership analysis.</PackageReleaseNotes>
+    <PackageReleaseNotes>Correct callback-local NativeBuilder adapters that use synchronous MemoryMarshal.Write while retaining fail-closed view escape analysis.</PackageReleaseNotes>
     <PackageOutputPath>$(MSBuildThisFileDirectory)..\artifacts\packages\</PackageOutputPath>
   </PropertyGroup>
 
