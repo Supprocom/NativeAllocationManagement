@@ -46,4 +46,5 @@ evidence.
 ## License
 
 This project uses the GNU Affero General Public License, version 3 only. See
-[LICENSE.md](LICENSE.md) for the complete terms and project-specific source offer.
+[LICENSE](LICENSE) for the complete terms. See [NOTICE](NOTICE) for the project
+notice and source offer.

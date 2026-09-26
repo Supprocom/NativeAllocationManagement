@@ -1685,7 +1685,7 @@ public sealed class VoxelSharedContractTests
     {
         string root = FindRepositoryRoot();
         string license = File.ReadAllText(
-            Path.Combine(root, "LICENSE.md"));
+            Path.Combine(root, "LICENSE"));
         string readme = File.ReadAllText(
             Path.Combine(root, "README.md"));
 

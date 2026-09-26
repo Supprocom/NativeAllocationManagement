@@ -21,7 +21,8 @@
   <ItemGroup>
     <ProjectReference Include="..\Supprocom.NativeAllocationManagement.Analyzers\Supprocom.NativeAllocationManagement.Analyzers.csproj" ReferenceOutputAssembly="false" />
     <None Include="..\README.md" Pack="true" PackagePath="README.md" />
-    <None Include="..\LICENSE.md" Pack="true" PackagePath="LICENSE.md" />
+    <None Include="..\LICENSE" Pack="true" PackagePath="LICENSE" />
+    <None Include="..\NOTICE" Pack="true" PackagePath="NOTICE" />
   </ItemGroup>
 
   <Target Name="BuildBundledAnalyzer" BeforeTargets="Build;_IntermediatePack">
