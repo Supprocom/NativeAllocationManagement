@@ -111,7 +111,7 @@ public sealed class NativeTransferAnalyzerTests
             }
             """);
 
-        Assert.Contains("NAM1022", AnalyzerContractTests.NativeDiagnostics(diagnostics));
+        Assert.Contains("NAM1022", AnalyzerContractTests.NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -137,7 +137,7 @@ public sealed class NativeTransferAnalyzerTests
             }
             """);
 
-        Assert.Contains("NAM1023", AnalyzerContractTests.NativeDiagnostics(diagnostics));
+        Assert.Contains("NAM1023", AnalyzerContractTests.NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -161,7 +161,7 @@ public sealed class NativeTransferAnalyzerTests
             }
             """);
 
-        Assert.Contains("NAM1021", AnalyzerContractTests.NativeDiagnostics(diagnostics));
+        Assert.Contains("NAM1021", AnalyzerContractTests.NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -189,8 +189,8 @@ public sealed class NativeTransferAnalyzerTests
             """);
 
         string[] ids = AnalyzerContractTests.NativeDiagnostics(diagnostics);
-        Assert.Contains("NAM1021", ids);
-        Assert.Contains("NAM1022", ids);
+        Assert.Contains("NAM1021", ids, StringComparer.Ordinal);
+        Assert.Contains("NAM1022", ids, StringComparer.Ordinal);
     }
 
     [Fact]
@@ -214,7 +214,7 @@ public sealed class NativeTransferAnalyzerTests
             }
             """);
 
-        Assert.Contains("NAM1022", AnalyzerContractTests.NativeDiagnostics(diagnostics));
+        Assert.Contains("NAM1022", AnalyzerContractTests.NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -237,7 +237,7 @@ public sealed class NativeTransferAnalyzerTests
             }
             """);
 
-        Assert.Contains("NAM1023", AnalyzerContractTests.NativeDiagnostics(diagnostics));
+        Assert.Contains("NAM1023", AnalyzerContractTests.NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -264,7 +264,7 @@ public sealed class NativeTransferAnalyzerTests
             }
             """);
 
-        Assert.Contains("NAM1021", AnalyzerContractTests.NativeDiagnostics(diagnostics));
+        Assert.Contains("NAM1021", AnalyzerContractTests.NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -288,7 +288,7 @@ public sealed class NativeTransferAnalyzerTests
             }
             """);
 
-        Assert.Contains("NAM1026", AnalyzerContractTests.NativeDiagnostics(diagnostics));
+        Assert.Contains("NAM1026", AnalyzerContractTests.NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -311,7 +311,7 @@ public sealed class NativeTransferAnalyzerTests
             }
             """);
 
-        Assert.Contains("NAM1025", AnalyzerContractTests.NativeDiagnostics(diagnostics));
+        Assert.Contains("NAM1025", AnalyzerContractTests.NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -406,7 +406,7 @@ public sealed class NativeTransferAnalyzerTests
             }
             """);
 
-        Assert.Contains("NAM1022", AnalyzerContractTests.NativeDiagnostics(diagnostics));
+        Assert.Contains("NAM1022", AnalyzerContractTests.NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -598,7 +598,7 @@ public sealed class NativeTransferAnalyzerTests
 
         Assert.Contains(
             "NAM1025",
-            AnalyzerContractTests.NativeDiagnostics(diagnostics));
+            AnalyzerContractTests.NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -626,8 +626,7 @@ public sealed class NativeTransferAnalyzerTests
     [InlineData("Property")]
     public async Task MoveToUntypedStorageIsRejected(string destination)
     {
-        string member = destination == "Field"
-            ? "public object? Value;"
+        string member = string.Equals(destination, "Field", StringComparison.Ordinal) ? "public object? Value;"
             : "public object? Value { get; set; }";
         ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
             $$"""
@@ -654,7 +653,7 @@ public sealed class NativeTransferAnalyzerTests
 
         Assert.Contains(
             "NAM1025",
-            AnalyzerContractTests.NativeDiagnostics(diagnostics));
+            AnalyzerContractTests.NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 
     [Theory]
@@ -680,7 +679,7 @@ public sealed class NativeTransferAnalyzerTests
 
         Assert.Contains(
             "NAM1025",
-            AnalyzerContractTests.NativeDiagnostics(diagnostics));
+            AnalyzerContractTests.NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -705,7 +704,7 @@ public sealed class NativeTransferAnalyzerTests
 
         Assert.Contains(
             "NAM1025",
-            AnalyzerContractTests.NativeDiagnostics(diagnostics));
+            AnalyzerContractTests.NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -732,7 +731,7 @@ public sealed class NativeTransferAnalyzerTests
 
         Assert.Contains(
             "NAM1025",
-            AnalyzerContractTests.NativeDiagnostics(diagnostics));
+            AnalyzerContractTests.NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -755,7 +754,7 @@ public sealed class NativeTransferAnalyzerTests
 
         Assert.Contains(
             "NAM1025",
-            AnalyzerContractTests.NativeDiagnostics(diagnostics));
+            AnalyzerContractTests.NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -780,7 +779,7 @@ public sealed class NativeTransferAnalyzerTests
 
         Assert.Contains(
             "NAM1025",
-            AnalyzerContractTests.NativeDiagnostics(diagnostics));
+            AnalyzerContractTests.NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -803,7 +802,7 @@ public sealed class NativeTransferAnalyzerTests
 
         Assert.Contains(
             "NAM1025",
-            AnalyzerContractTests.NativeDiagnostics(diagnostics));
+            AnalyzerContractTests.NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -829,7 +828,7 @@ public sealed class NativeTransferAnalyzerTests
 
         Assert.Contains(
             "NAM1025",
-            AnalyzerContractTests.NativeDiagnostics(diagnostics));
+            AnalyzerContractTests.NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -855,7 +854,7 @@ public sealed class NativeTransferAnalyzerTests
 
         Assert.Contains(
             "NAM1025",
-            AnalyzerContractTests.NativeDiagnostics(diagnostics));
+            AnalyzerContractTests.NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -880,7 +879,7 @@ public sealed class NativeTransferAnalyzerTests
 
         Assert.Contains(
             "NAM1025",
-            AnalyzerContractTests.NativeDiagnostics(diagnostics));
+            AnalyzerContractTests.NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -907,7 +906,7 @@ public sealed class NativeTransferAnalyzerTests
 
         Assert.Contains(
             "NAM1025",
-            AnalyzerContractTests.NativeDiagnostics(diagnostics));
+            AnalyzerContractTests.NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -992,7 +991,7 @@ public sealed class NativeTransferAnalyzerTests
 
         Assert.Contains(
             "NAM1025",
-            AnalyzerContractTests.NativeDiagnostics(diagnostics));
+            AnalyzerContractTests.NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -1128,7 +1127,7 @@ public sealed class NativeTransferAnalyzerTests
 
         Assert.Contains(
             "NAM1025",
-            AnalyzerContractTests.NativeDiagnostics(diagnostics));
+            AnalyzerContractTests.NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -1289,7 +1288,7 @@ public sealed class NativeTransferAnalyzerTests
 
         Assert.Contains(
             "NAM1025",
-            AnalyzerContractTests.NativeDiagnostics(diagnostics));
+            AnalyzerContractTests.NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -1429,7 +1428,7 @@ public sealed class NativeTransferAnalyzerTests
 
         Assert.Contains(
             "NAM1022",
-            AnalyzerContractTests.NativeDiagnostics(diagnostics));
+            AnalyzerContractTests.NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -1458,7 +1457,7 @@ public sealed class NativeTransferAnalyzerTests
 
         Assert.Contains(
             "NAM1025",
-            AnalyzerContractTests.NativeDiagnostics(diagnostics));
+            AnalyzerContractTests.NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -1485,7 +1484,7 @@ public sealed class NativeTransferAnalyzerTests
 
         Assert.Contains(
             "NAM1022",
-            AnalyzerContractTests.NativeDiagnostics(diagnostics));
+            AnalyzerContractTests.NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -1516,7 +1515,7 @@ public sealed class NativeTransferAnalyzerTests
 
         Assert.Contains(
             "NAM1022",
-            AnalyzerContractTests.NativeDiagnostics(diagnostics));
+            AnalyzerContractTests.NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -1541,7 +1540,7 @@ public sealed class NativeTransferAnalyzerTests
 
         Assert.Contains(
             "NAM1027",
-            AnalyzerContractTests.NativeDiagnostics(diagnostics));
+            AnalyzerContractTests.NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -1602,7 +1601,7 @@ public sealed class NativeTransferAnalyzerTests
 
         Assert.Contains(
             "NAM1025",
-            AnalyzerContractTests.NativeDiagnostics(diagnostics));
+            AnalyzerContractTests.NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -1631,7 +1630,7 @@ public sealed class NativeTransferAnalyzerTests
 
         Assert.Contains(
             "NAM1025",
-            AnalyzerContractTests.NativeDiagnostics(diagnostics));
+            AnalyzerContractTests.NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -1660,8 +1659,8 @@ public sealed class NativeTransferAnalyzerTests
             """);
 
         string[] ids = AnalyzerContractTests.NativeDiagnostics(diagnostics);
-        Assert.Contains("NAM1027", ids);
-        Assert.Contains("NAM1025", ids);
+        Assert.Contains("NAM1027", ids, StringComparer.Ordinal);
+        Assert.Contains("NAM1025", ids, StringComparer.Ordinal);
     }
 
     [Fact]
@@ -1683,7 +1682,7 @@ public sealed class NativeTransferAnalyzerTests
 
         Assert.Contains(
             "NAM1027",
-            AnalyzerContractTests.NativeDiagnostics(diagnostics));
+            AnalyzerContractTests.NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -1705,7 +1704,7 @@ public sealed class NativeTransferAnalyzerTests
 
         Assert.Contains(
             "NAM1027",
-            AnalyzerContractTests.NativeDiagnostics(diagnostics));
+            AnalyzerContractTests.NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -1727,7 +1726,7 @@ public sealed class NativeTransferAnalyzerTests
 
         Assert.Contains(
             "NAM1027",
-            AnalyzerContractTests.NativeDiagnostics(diagnostics));
+            AnalyzerContractTests.NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -1749,7 +1748,7 @@ public sealed class NativeTransferAnalyzerTests
 
         Assert.Contains(
             "NAM1027",
-            AnalyzerContractTests.NativeDiagnostics(diagnostics));
+            AnalyzerContractTests.NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -1853,6 +1852,6 @@ public sealed class NativeTransferAnalyzerTests
 
         Assert.Contains(
             "NAM1025",
-            AnalyzerContractTests.NativeDiagnostics(diagnostics));
+            AnalyzerContractTests.NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 }

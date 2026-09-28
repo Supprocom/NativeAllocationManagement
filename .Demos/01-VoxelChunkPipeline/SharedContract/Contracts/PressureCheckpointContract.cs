@@ -99,7 +99,10 @@ public static class AtomicPressureArtifactFile
             $".{Path.GetFileName(fullPath)}.{Guid.NewGuid():N}.tmp");
         try
         {
-            await using (FileStream stream = new(
+            // The explicit FileStream binding is required throughout the durable-write scope.
+#pragma warning disable CA2007
+            await using (FileStream stream = new FileStream(
+#pragma warning restore CA2007
                 temporaryPath,
                 FileMode.CreateNew,
                 FileAccess.Write,
@@ -111,9 +114,12 @@ public static class AtomicPressureArtifactFile
                     stream,
                     value,
                     serializerOptions ?? VoxelJson.Options,
-                    cancellationToken);
-                await stream.FlushAsync(cancellationToken);
+                    cancellationToken).ConfigureAwait(false);
+                await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+                // Flush(true) is the durability boundary before the atomic rename.
+#pragma warning disable CA1849
                 stream.Flush(flushToDisk: true);
+#pragma warning restore CA1849
             }
 
             File.Move(temporaryPath, fullPath, overwrite: true);

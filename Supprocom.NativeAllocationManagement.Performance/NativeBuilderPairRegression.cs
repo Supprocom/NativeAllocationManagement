@@ -22,7 +22,7 @@ internal static class NativeBuilderPairRegression
 
     internal static async Task<int> RunCommandAsync(string[] args)
     {
-        if (args[0] == "--native-builder-pair-worker")
+        if (string.Equals(args[0], "--native-builder-pair-worker", StringComparison.Ordinal))
         {
             CompositeBuilderImplementation implementation = Enum.Parse<
                 CompositeBuilderImplementation>(
@@ -42,7 +42,7 @@ internal static class NativeBuilderPairRegression
                     : 3;
         }
 
-        CompositeBuilderReport report = await RunPairedAsync();
+        CompositeBuilderReport report = await RunPairedAsync().ConfigureAwait(false);
         string json = JsonSerializer.Serialize(report, JsonOptions);
         string? output = ReadOptionalOption(args, "--output");
         if (output is not null)
@@ -54,7 +54,7 @@ internal static class NativeBuilderPairRegression
                 Directory.CreateDirectory(directory);
             }
 
-            await File.WriteAllTextAsync(fullPath, json);
+            await File.WriteAllTextAsync(fullPath, json).ConfigureAwait(false);
         }
 
         Console.WriteLine(json);
@@ -77,13 +77,13 @@ internal static class NativeBuilderPairRegression
             CompositeBuilderImplementation first =
                 GetFirstImplementation(sampleIndex);
             CompositeBuilderWorkerEvidence firstEvidence =
-                await RunIsolatedWorkerAsync(first);
+                await RunIsolatedWorkerAsync(first).ConfigureAwait(false);
             CompositeBuilderImplementation second = first
                 == CompositeBuilderImplementation.ManagedStaging
                     ? CompositeBuilderImplementation.CompositeBorrow
                     : CompositeBuilderImplementation.ManagedStaging;
             CompositeBuilderWorkerEvidence secondEvidence =
-                await RunIsolatedWorkerAsync(second);
+                await RunIsolatedWorkerAsync(second).ConfigureAwait(false);
             CompositeBuilderWorkerEvidence managed = first
                 == CompositeBuilderImplementation.ManagedStaging
                     ? firstEvidence
@@ -116,8 +116,8 @@ internal static class NativeBuilderPairRegression
         bool parity = pairs.All(static pair =>
             pair.ManagedStaging.ExactParity
             && pair.CompositeBorrow.ExactParity
-            && pair.ManagedStaging.OutputSha256
-                == pair.CompositeBorrow.OutputSha256);
+            && string.Equals(pair.ManagedStaging.OutputSha256
+, pair.CompositeBorrow.OutputSha256, StringComparison.Ordinal));
         bool balanced = pairs.Count(static pair =>
                 pair.FirstImplementation
                     == CompositeBuilderImplementation.ManagedStaging)
@@ -147,8 +147,8 @@ internal static class NativeBuilderPairRegression
             && pair.CompositeBorrow.ChunkCount == ChunkCount);
         bool binaryIdentity = pairs.All(static pair =>
             pair.ManagedStaging.SourceCommit.Length == 40
-            && pair.ManagedStaging.SourceCommit
-                == pair.CompositeBorrow.SourceCommit);
+            && string.Equals(pair.ManagedStaging.SourceCommit
+, pair.CompositeBorrow.SourceCommit, StringComparison.Ordinal));
         bool gatePassed = EvaluateGate(
             parity,
             balanced,
@@ -551,8 +551,8 @@ internal static class NativeBuilderPairRegression
     private static bool ProbeFailureCleanup()
     {
         NativeMemoryTestHooks.Reset();
-        NativeBuilder<int> first = new(preLease: 1);
-        NativeBuilder<int> second = new(preLease: 1);
+        using NativeBuilder<int> first = new(preLease: 1);
+        using NativeBuilder<int> second = new(preLease: 1);
         try
         {
             first.Borrow(
@@ -581,8 +581,8 @@ internal static class NativeBuilderPairRegression
     private static bool ProbeCancellationCleanup()
     {
         NativeMemoryTestHooks.Reset();
-        NativeBuilder<int> first = new(preLease: 1);
-        NativeBuilder<int> second = new(preLease: 1);
+        using NativeBuilder<int> first = new(preLease: 1);
+        using NativeBuilder<int> second = new(preLease: 1);
         using CancellationTokenSource cancellation = new();
         try
         {
@@ -647,15 +647,15 @@ internal static class NativeBuilderPairRegression
         Task exitTask = process.WaitForExitAsync();
         if (await Task.WhenAny(
                 exitTask,
-                Task.Delay(TimeSpan.FromSeconds(60))) != exitTask)
+                Task.Delay(TimeSpan.FromSeconds(60))).ConfigureAwait(false) != exitTask)
         {
             process.Kill(entireProcessTree: true);
             throw new TimeoutException(
                 "The composite builder benchmark worker exceeded 60 seconds.");
         }
 
-        string output = await outputTask;
-        string error = await errorTask;
+        string output = await outputTask.ConfigureAwait(false);
+        string error = await errorTask.ConfigureAwait(false);
         if (process.ExitCode != 0)
         {
             throw new InvalidOperationException(
@@ -675,7 +675,7 @@ internal static class NativeBuilderPairRegression
         if (managed.OpaqueWords != composite.OpaqueWords
             || managed.TransparentWords != composite.TransparentWords
             || managed.ChunkCount != composite.ChunkCount
-            || managed.OutputSha256 != composite.OutputSha256)
+            || !string.Equals(managed.OutputSha256, composite.OutputSha256, StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
                 "The composite builder benchmark pair used different work or output.");
@@ -705,7 +705,7 @@ internal static class NativeBuilderPairRegression
         string name) =>
         ReadOptionalOption(args, name)
         ?? throw new ArgumentException(
-            $"Missing required option {name}.");
+            $"Missing required option {name}.", nameof(args));
 
     private static string? ReadOptionalOption(
         string[] args,
@@ -713,7 +713,7 @@ internal static class NativeBuilderPairRegression
     {
         for (int index = 0; index < args.Length - 1; index++)
         {
-            if (args[index] == name)
+            if (string.Equals(args[index], name, StringComparison.Ordinal))
             {
                 return args[index + 1];
             }

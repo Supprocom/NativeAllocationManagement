@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace Supprocom.NativeAllocationManagement.Tests;
 
@@ -149,11 +150,11 @@ public sealed class NativeWorkspaceTests
         Exception? exception = RunOnThread(state.Reset);
         InvalidOperationException invalid =
             Assert.IsType<InvalidOperationException>(exception);
-        Assert.Contains("owning thread", invalid.Message);
+        Assert.Contains("owning thread", invalid.Message, StringComparison.Ordinal);
 
         exception = RunOnThread(state.Dispose);
         invalid = Assert.IsType<InvalidOperationException>(exception);
-        Assert.Contains("owning thread", invalid.Message);
+        Assert.Contains("owning thread", invalid.Message, StringComparison.Ordinal);
         Assert.Equal(
             104,
             workspace.Read(static view => Sum(view.AsSpan())));
@@ -192,7 +193,7 @@ public sealed class NativeWorkspaceTests
             InvalidOperationException>(() => RunStateProcess(
                 state,
                 19));
-        Assert.Contains("requires Reset", exception.Message);
+        Assert.Contains("requires Reset", exception.Message, StringComparison.Ordinal);
         Assert.Equal(
             136,
             workspace.Read(static view => Sum(view.AsSpan())));
@@ -423,6 +424,7 @@ public sealed class NativeWorkspaceTests
     }
 
     [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The test intentionally captures arbitrary callback or worker failures for lifecycle assertions.")]
     public void ThreadLocalValuesRequireOwnerThreadDisposal()
     {
         using ThreadLocal<WorkspaceWorker> workers = new(
@@ -448,10 +450,10 @@ public sealed class NativeWorkspaceTests
         thread.Start();
         Assert.True(created.Wait(TimeSpan.FromSeconds(5)));
 
-        WorkspaceWorker value = Assert.Single(workers.Values);
+        WorkspaceWorker value = SingleExpected(workers.Values);
         InvalidOperationException wrongThread = Assert.Throws<
             InvalidOperationException>(value.Dispose);
-        Assert.Contains("owning thread", wrongThread.Message);
+        Assert.Contains("owning thread", wrongThread.Message, StringComparison.Ordinal);
 
         release.Set();
         Assert.True(thread.Join(TimeSpan.FromSeconds(5)));
@@ -513,6 +515,7 @@ public sealed class NativeWorkspaceTests
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000", Justification = "The workspace is intentionally left for finalization after the forced-collection liveness probe.")]
     private static WeakReference InitializeWithForcedCollection()
     {
         NativeWorkspace<int> workspace = new(preLease: 8);
@@ -532,6 +535,7 @@ public sealed class NativeWorkspaceTests
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000", Justification = "The workspace is intentionally left for finalization after the forced-collection liveness probe.")]
     private static WeakReference AccessAndReadWithForcedCollections()
     {
         NativeWorkspace<int> workspace = new(preLease: 8);
@@ -558,6 +562,7 @@ public sealed class NativeWorkspaceTests
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000", Justification = "The workspace is intentionally left for finalization after the forced-collection liveness probe.")]
     private static WeakReference ProcessWithForcedCollections()
     {
         NativeWorkspace<int> workspace = new(preLease: 8);
@@ -583,6 +588,7 @@ public sealed class NativeWorkspaceTests
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000", Justification = "The workspace is intentionally left for finalization after the forced-collection liveness probe.")]
     private static WeakReference ProcessWithStateAndForcedCollection()
     {
         NativeWorkspace<int> workspace = new(preLease: 8);
@@ -646,6 +652,7 @@ public sealed class NativeWorkspaceTests
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000", Justification = "The test intentionally abandons the workspace to exercise emergency finalization.")]
     private static WeakReference CreateAbandonedWorkspace()
     {
         NativeWorkspace<int> workspace = new(preLease: 8);
@@ -747,6 +754,7 @@ public sealed class NativeWorkspaceTests
             },
             cancellation.Token);
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The test intentionally captures arbitrary callback or worker failures for lifecycle assertions.")]
     private static Exception? RunOnThread(ThreadStart action)
     {
         Exception? exception = null;
@@ -769,7 +777,7 @@ public sealed class NativeWorkspaceTests
     private static int Sum(ReadOnlySpan<int> values)
     {
         int result = 0;
-        foreach (int value in values)
+        foreach (ref readonly int value in values)
         {
             result += value;
         }
@@ -777,6 +785,7 @@ public sealed class NativeWorkspaceTests
         return result;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
     private readonly record struct ProcessState(
         int Value,
         int Addend);

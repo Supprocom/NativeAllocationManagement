@@ -66,6 +66,8 @@ public sealed record ConcurrentArenaWorkerEvidence(
     bool ServerGc,
     bool ExactParity);
 
+// Arrays are the persisted benchmark evidence schema and preserve order.
+#pragma warning disable CA1819
 public sealed record ConcurrentArenaPairEvidence(
     int SampleIndex,
     ConcurrentArenaBenchmarkImplementation[] ImplementationOrder,
@@ -76,6 +78,7 @@ public sealed record ConcurrentArenaPairEvidence(
     double ManagedToConcurrentArenaSpeedup,
     double NativePoolToConcurrentArenaSpeedup,
     double ShardedToConcurrentArenaSpeedup);
+#pragma warning restore CA1819
 
 public sealed record ConcurrentArenaComparisonEvidence(
     ConcurrentArenaBenchmarkImplementation Baseline,
@@ -84,6 +87,8 @@ public sealed record ConcurrentArenaComparisonEvidence(
     double MeanPairedSpeedup,
     double PairedSpeedupConfidenceLower95);
 
+// Arrays are the persisted benchmark evidence schema and preserve order.
+#pragma warning disable CA1819
 public sealed record ConcurrentArenaBenchmarkReport(
     ConcurrentArenaBenchmarkOptions Options,
     ConcurrentArenaPairEvidence[] Pairs,
@@ -98,3 +103,4 @@ public sealed record ConcurrentArenaBenchmarkReport(
     bool PerformanceAdvantage,
     double TotalElapsedMilliseconds,
     DateTimeOffset CreatedUtc);
+#pragma warning restore CA1819

@@ -32,12 +32,11 @@ public sealed class PublicSurfaceTests
         Assert.Null(typeof(ConcurrentPooled<int>).GetProperty("Item"));
         Assert.Contains(
             typeof(ConcurrentPooled<int>).GetMethods(),
-            method => method.Name == "Process"
-                && method.GetGenericArguments().Length == 2
+            method => string.Equals(method.Name, "Process", StringComparison.Ordinal) && method.GetGenericArguments().Length == 2
                 && method.GetParameters().Length == 3);
         Assert.Contains(
             assembly.GetTypes(),
-            type => type.Name == "NativeLeaseStateFunc`3");
+            type => string.Equals(type.Name, "NativeLeaseStateFunc`3", StringComparison.Ordinal));
         Assert.Null(typeof(ConcurrentArenaLease<int>).GetProperty("Item"));
         Assert.NotNull(typeof(NativeRegion).GetMethod("Lease"));
         Assert.NotNull(typeof(NativePool<int>).GetMethod("GetStatistics"));
@@ -45,19 +44,19 @@ public sealed class PublicSurfaceTests
         Assert.NotNull(typeof(NativeRegion).GetMethod("GetStatistics"));
         Assert.DoesNotContain(
             typeof(NativeRegion).GetMethods(BindingFlags.Public | BindingFlags.Instance),
-            method => method.Name == "Allocate");
+            method => string.Equals(method.Name, "Allocate", StringComparison.Ordinal));
         Assert.Contains(
             typeof(NativeLeaseOperations).GetMethods(),
-            method => method.Name == "Access" && method.GetGenericArguments().Length == 5);
+            method => string.Equals(method.Name, "Access", StringComparison.Ordinal) && method.GetGenericArguments().Length == 5);
         Assert.DoesNotContain(
             typeof(NativeLeaseOperations).GetMethods(),
-            method => method.Name == "Access" && method.GetGenericArguments().Length == 1);
+            method => string.Equals(method.Name, "Access", StringComparison.Ordinal) && method.GetGenericArguments().Length == 1);
         Assert.Contains(
             assembly.GetTypes(),
-            type => type.Name == "NativeLeaseQuintupleAction`5");
+            type => string.Equals(type.Name, "NativeLeaseQuintupleAction`5", StringComparison.Ordinal));
         Assert.DoesNotContain(
             assembly.GetTypes(),
-            type => type.Name == "NativeLeaseUnaryAction`1");
+            type => string.Equals(type.Name, "NativeLeaseUnaryAction`1", StringComparison.Ordinal));
         Assert.DoesNotContain(
             assembly.GetTypes(),
             type => type.Name.Contains("Mesh", StringComparison.OrdinalIgnoreCase));
@@ -81,7 +80,7 @@ public sealed class PublicSurfaceTests
         ];
         foreach (string forbidden in forbiddenTypes)
         {
-            Assert.DoesNotContain(assembly.GetTypes(), type => type.Name == forbidden);
+            Assert.DoesNotContain(assembly.GetTypes(), type => string.Equals(type.Name, forbidden, StringComparison.Ordinal));
         }
 
         ConstructorInfo[] poolConstructors =
@@ -108,14 +107,14 @@ public sealed class PublicSurfaceTests
         Assert.Equal("preAllocateBytes", combinedParameters[1].Name);
         Assert.Contains(
             combinedParameters,
-            parameter => parameter.Name == "returnMemoryOnDispose");
+            parameter => string.Equals(parameter.Name, "returnMemoryOnDispose", StringComparison.Ordinal));
         Assert.DoesNotContain(
             combinedParameters,
-            parameter => parameter.Name == "doNotLeaseOnDeclaration");
+            parameter => string.Equals(parameter.Name, "doNotLeaseOnDeclaration", StringComparison.Ordinal));
         Assert.DoesNotContain(
             poolConstructors.SelectMany(
                 constructor => constructor.GetParameters()),
-            parameter => parameter.Name == "initialCapacity");
+            parameter => string.Equals(parameter.Name, "initialCapacity", StringComparison.Ordinal));
         ConstructorInfo[] concurrentPoolConstructors =
             typeof(NativeConcurrentPool<int>).GetConstructors();
         Assert.Equal(2, concurrentPoolConstructors.Length);
@@ -123,15 +122,15 @@ public sealed class PublicSurfaceTests
             concurrentPoolConstructors,
             constructor => Assert.Contains(
                 constructor.GetParameters(),
-                parameter => parameter.Name == "doNotLeaseOnDeclaration"));
+                parameter => string.Equals(parameter.Name, "doNotLeaseOnDeclaration", StringComparison.Ordinal)));
         ConstructorInfo builderConstructor =
-            Assert.Single(typeof(NativeBuilder<int>).GetConstructors());
+            SingleExpected(typeof(NativeBuilder<int>).GetConstructors());
         Assert.Equal(
             "preLease",
-            Assert.Single(builderConstructor.GetParameters()).Name);
+            SingleExpected(builderConstructor.GetParameters()).Name);
         Assert.DoesNotContain(
             builderConstructor.GetParameters(),
-            parameter => parameter.Name == "initialCapacity");
+            parameter => string.Equals(parameter.Name, "initialCapacity", StringComparison.Ordinal));
         FieldInfo[] builderFields = typeof(NativeBuilder<int>).GetFields(
             BindingFlags.Instance | BindingFlags.NonPublic);
         Assert.DoesNotContain(
@@ -143,37 +142,37 @@ public sealed class PublicSurfaceTests
         Assert.Equal(4, borrowFields.Length);
         Assert.Equal(
             typeof(NativeBuilder<int>),
-            Assert.Single(
+            SingleExpected(
                 borrowFields,
-                static field => field.Name == "_builder").FieldType);
+                static field => string.Equals(field.Name, "_builder", StringComparison.Ordinal)).FieldType);
         Assert.Equal(
             typeof(IntPtr).MakeByRefType(),
-            Assert.Single(
+            SingleExpected(
                 borrowFields,
-                static field => field.Name == "_address").FieldType);
+                static field => string.Equals(field.Name, "_address", StringComparison.Ordinal)).FieldType);
         Assert.Equal(
             typeof(int).MakeByRefType(),
-            Assert.Single(
+            SingleExpected(
                 borrowFields,
-                static field => field.Name == "_count").FieldType);
+                static field => string.Equals(field.Name, "_count", StringComparison.Ordinal)).FieldType);
         Assert.Equal(
             typeof(int).MakeByRefType(),
-            Assert.Single(
+            SingleExpected(
                 borrowFields,
-                static field => field.Name == "_capacity").FieldType);
+                static field => string.Equals(field.Name, "_capacity", StringComparison.Ordinal)).FieldType);
         Assert.DoesNotContain(
             borrowFields,
             static field => field.Name is "_borrowEpoch"
                 or "_activeBorrowAuthority");
-        ConstructorInfo arenaConstructor = Assert.Single(typeof(NativeArena).GetConstructors());
-        Assert.Contains(arenaConstructor.GetParameters(), parameter => parameter.Name == "returnMemoryOnDispose");
+        ConstructorInfo arenaConstructor = SingleExpected(typeof(NativeArena).GetConstructors());
+        Assert.Contains(arenaConstructor.GetParameters(), parameter => string.Equals(parameter.Name, "returnMemoryOnDispose", StringComparison.Ordinal));
         Assert.DoesNotContain(
             arenaConstructor.GetParameters(),
-            parameter => parameter.Name == "doNotLeaseOnDeclaration");
-        ConstructorInfo concurrentArenaConstructor = Assert.Single(
+            parameter => string.Equals(parameter.Name, "doNotLeaseOnDeclaration", StringComparison.Ordinal));
+        ConstructorInfo concurrentArenaConstructor = SingleExpected(
             typeof(NativeConcurrentArena).GetConstructors());
         Assert.Contains(
             concurrentArenaConstructor.GetParameters(),
-            parameter => parameter.Name == "doNotLeaseOnDeclaration");
+            parameter => string.Equals(parameter.Name, "doNotLeaseOnDeclaration", StringComparison.Ordinal));
     }
 }

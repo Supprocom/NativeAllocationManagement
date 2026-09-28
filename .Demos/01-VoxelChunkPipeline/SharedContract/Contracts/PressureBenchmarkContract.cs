@@ -220,11 +220,18 @@ public static class PressureOutcomePolicy
     {
         ArgumentNullException.ThrowIfNull(safeOutcomes);
         ArgumentNullException.ThrowIfNull(namOutcomes);
-        if (safeOutcomes.Count == 0
-            || safeOutcomes.Count != namOutcomes.Count)
+        if (safeOutcomes.Count == 0)
         {
             throw new ArgumentException(
-                "The outcome policy requires equal nonempty outcome sets.");
+                "The outcome policy requires nonempty outcome sets.",
+                nameof(safeOutcomes));
+        }
+
+        if (safeOutcomes.Count != namOutcomes.Count)
+        {
+            throw new ArgumentException(
+                "The outcome policy requires equal outcome sets.",
+                nameof(namOutcomes));
         }
 
         bool safeOutputIncorrect = safeOutcomes.Contains(

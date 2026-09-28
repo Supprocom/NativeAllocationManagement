@@ -49,7 +49,7 @@ internal sealed class WindowsHostProcessorSampler : IDisposable
     {
         await Task.Delay(
             TimeSpan.FromSeconds(1),
-            cancellationToken);
+            cancellationToken).ConfigureAwait(false);
         ThrowIfFailed(
             PdhCollectQueryData(_query),
             "collect processor data");
@@ -113,6 +113,7 @@ internal sealed class WindowsHostProcessorSampler : IDisposable
         internal readonly double DoubleValue;
     }
 
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     [DllImport(
         "pdh.dll",
         EntryPoint = "PdhOpenQueryW",
@@ -122,6 +123,7 @@ internal sealed class WindowsHostProcessorSampler : IDisposable
         IntPtr userData,
         out IntPtr query);
 
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     [DllImport(
         "pdh.dll",
         EntryPoint = "PdhAddEnglishCounterW",
@@ -132,10 +134,12 @@ internal sealed class WindowsHostProcessorSampler : IDisposable
         IntPtr userData,
         out IntPtr counter);
 
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     [DllImport("pdh.dll")]
     private static extern uint PdhCollectQueryData(
         IntPtr query);
 
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     [DllImport("pdh.dll")]
     private static extern uint PdhGetFormattedCounterValue(
         IntPtr counter,
@@ -143,6 +147,7 @@ internal sealed class WindowsHostProcessorSampler : IDisposable
         out uint counterType,
         out PdhFormattedCounterValue value);
 
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     [DllImport("pdh.dll")]
     private static extern uint PdhCloseQuery(IntPtr query);
 }

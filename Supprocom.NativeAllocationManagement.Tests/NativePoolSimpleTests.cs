@@ -25,7 +25,7 @@ public sealed class NativePoolSimpleTests
                 lease.Read(static view =>
                 {
                     int sum = 0;
-                    foreach (int value in view.AsSpan())
+                    foreach (ref int value in view.AsSpan())
                     {
                         sum += value;
                     }
@@ -115,7 +115,7 @@ public sealed class NativePoolSimpleTests
                 second.Read(static view =>
                 {
                     int sum = 0;
-                    foreach (int value in view.AsSpan())
+                    foreach (ref int value in view.AsSpan())
                     {
                         sum += value;
                     }
@@ -195,7 +195,7 @@ public sealed class NativePoolSimpleTests
                 {
                     values.Fill(value);
                     int sum = 0;
-                    foreach (int item in values)
+                    foreach (ref int item in values)
                     {
                         sum += item;
                     }
@@ -300,6 +300,7 @@ public sealed class NativePoolSimpleTests
     }
 
     [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The test intentionally captures arbitrary callback or worker failures for lifecycle assertions.")]
     public void CrossThreadUseFailsClosed()
     {
         using NativePool<int> pool = new(
@@ -407,6 +408,8 @@ public sealed class NativePoolSimpleTests
     }
 
     [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The test intentionally captures arbitrary callback or worker failures for lifecycle assertions.")]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000", Justification = "Retire transfers cleanup to ReleaseRetiredStorage on the coordinator thread.")]
     public void RetiredPoolReleasesStorageOnTheCoordinatorThreadOnce()
     {
         NativeMemoryTestHooks.Reset();
@@ -448,6 +451,7 @@ public sealed class NativePoolSimpleTests
     }
 
     [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000", Justification = "The retired pool is released through ReleaseRetiredStorage, not ordinary Dispose.")]
     public void RetirementRejectsEachActiveWorkerState()
     {
         NativePool<int> pool = new(
@@ -477,6 +481,7 @@ public sealed class NativePoolSimpleTests
     }
 
     [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000", Justification = "The test requires ordinary Dispose to fail on a retired pool; ReleaseRetiredStorage owns cleanup.")]
     public void RetiredPoolRejectsWorkerOperationsAndOrdinaryDisposal()
     {
         NativePool<int> pool = new(
@@ -509,6 +514,8 @@ public sealed class NativePoolSimpleTests
     }
 
     [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The test intentionally captures arbitrary callback or worker failures for lifecycle assertions.")]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000", Justification = "Retired pool storage is released on the owning coordinator thread.")]
     public void OwnerBoundariesRejectTheWrongThread()
     {
         NativePool<int> pool = new(
@@ -547,6 +554,8 @@ public sealed class NativePoolSimpleTests
     }
 
     [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The test intentionally captures arbitrary callback or worker failures for lifecycle assertions.")]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000", Justification = "ReleaseRetiredStorage is the required concurrent cleanup path for a retired pool.")]
     public void ConcurrentCoordinatorCleanupFreesStorageOnce()
     {
         NativeMemoryTestHooks.Reset();
@@ -578,8 +587,8 @@ public sealed class NativePoolSimpleTests
             Assert.True(coordinator.Join(TimeSpan.FromSeconds(5)));
         }
 
-        Assert.Single(failures);
-        Assert.IsType<InvalidOperationException>(failures.Single());
+        SingleExpected(failures);
+        Assert.IsType<InvalidOperationException>(SingleExpected(failures));
         NativeMemoryTestMetrics released =
             NativeMemoryTestHooks.Snapshot();
         Assert.Equal(1, released.FreeCount);
@@ -587,6 +596,7 @@ public sealed class NativePoolSimpleTests
     }
 
     [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The test intentionally captures arbitrary callback or worker failures for lifecycle assertions.")]
     public void ThreadLocalWorkersRetireBeforeCoordinatorCleanup()
     {
         const int workerCount = 24;
@@ -714,6 +724,7 @@ public sealed class NativePoolSimpleTests
 
     [System.Runtime.CompilerServices.MethodImpl(
         System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000", Justification = "The test intentionally abandons a retired pool to exercise emergency finalization.")]
     private static WeakReference AbandonRetiredPool()
     {
         NativePool<int> pool = new(
@@ -741,27 +752,17 @@ public sealed class NativePoolSimpleTests
     }
 
     private static string FindRepositoryRoot()
-    {
-        DirectoryInfo? directory = new(AppContext.BaseDirectory);
-        while (directory is not null
-            && !File.Exists(Path.Combine(
-                directory.FullName,
-                "Supprocom.NativeAllocationManagement.slnx")))
-        {
-            directory = directory.Parent;
-        }
-
-        return directory?.FullName
-            ?? throw new DirectoryNotFoundException(
-                "The repository root was not found.");
-    }
+        => RepositoryTestPaths.Root;
 
     private sealed class RetiredPoolWorker : IDisposable
     {
         private const int Capacity = 153_600;
+        // Retirement transfers cleanup to ReleaseRetiredStorage in Dispose().
+#pragma warning disable CA2213
         private readonly NativePool<short> _pool = new(
             preLease: Capacity,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+#pragma warning restore CA2213
 
         internal int Build()
         {
@@ -784,7 +785,22 @@ public sealed class NativePoolSimpleTests
         public void Dispose() => _pool.ReleaseRetiredStorage();
     }
 
-    private sealed class MarkerException : Exception;
+    private sealed class MarkerException : Exception
+    {
+        public MarkerException()
+        {
+        }
+
+        public MarkerException(string message)
+            : base(message)
+        {
+        }
+
+        public MarkerException(string message, Exception innerException)
+            : base(message, innerException)
+        {
+        }
+    }
 
     private static void AssertAccessIsReturned(Pooled<int> lease)
     {

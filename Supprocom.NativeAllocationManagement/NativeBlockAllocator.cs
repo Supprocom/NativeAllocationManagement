@@ -34,7 +34,10 @@ internal static unsafe class NativeBlockAllocator
             memory = NativeMemory.Alloc(byteLength);
             if (memory == null)
             {
+                // NativeMemory.Alloc reports allocation failure with a null pointer.
+#pragma warning disable CA2201
                 throw new OutOfMemoryException();
+#pragma warning restore CA2201
             }
 
             long metricsEpoch =
@@ -103,7 +106,10 @@ internal static unsafe class NativeBlockAllocator
                 byteLength);
             if (memory == null)
             {
+                // NativeMemory.Realloc reports allocation failure with a null pointer.
+#pragma warning disable CA2201
                 throw new OutOfMemoryException();
+#pragma warning restore CA2201
             }
         }
         catch (OutOfMemoryException exception)
@@ -132,6 +138,7 @@ internal static unsafe class NativeBlockAllocator
             metricsEpoch);
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "This boundary captures any failure to preserve cleanup and report the original error.")]
     internal static void Free(NativeBlock block)
     {
         if (block.Pointer == IntPtr.Zero)
@@ -177,6 +184,7 @@ internal static unsafe class NativeBlockAllocator
     }
 }
 
+[System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
 internal readonly record struct NativeBlock(
     IntPtr Pointer,
     nuint ByteLength,

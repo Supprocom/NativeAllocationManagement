@@ -94,7 +94,7 @@ public sealed class NativePoolBorrowAnalyzerTests
             """);
 
         Assert.True(
-            AnalyzerContractTests.NativeDiagnostics(diagnostics).Count(id => id == "NAM1001") >= 4,
+            AnalyzerContractTests.NativeDiagnostics(diagnostics).Count(id => string.Equals(id, "NAM1001", StringComparison.Ordinal)) >= 4,
             string.Join(Environment.NewLine, diagnostics));
     }
 
@@ -145,7 +145,7 @@ public sealed class NativePoolBorrowAnalyzerTests
             """);
 
         Assert.True(
-            AnalyzerContractTests.NativeDiagnostics(diagnostics).Count(id => id == "NAM1001") >= 4,
+            AnalyzerContractTests.NativeDiagnostics(diagnostics).Count(id => string.Equals(id, "NAM1001", StringComparison.Ordinal)) >= 4,
             string.Join(Environment.NewLine, diagnostics));
     }
 
@@ -179,7 +179,7 @@ public sealed class NativePoolBorrowAnalyzerTests
             """);
 
         Assert.True(
-            AnalyzerContractTests.NativeDiagnostics(diagnostics).Count(id => id == "NAM1001") >= 4,
+            AnalyzerContractTests.NativeDiagnostics(diagnostics).Count(id => string.Equals(id, "NAM1001", StringComparison.Ordinal)) >= 4,
             string.Join(Environment.NewLine, diagnostics));
     }
 }

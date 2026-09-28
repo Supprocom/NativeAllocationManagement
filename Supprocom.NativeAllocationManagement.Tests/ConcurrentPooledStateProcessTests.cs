@@ -64,7 +64,7 @@ public sealed class ConcurrentPooledStateProcessTests
         int entries = 0;
         NativeMemoryTestHooks.SetOperationEntered(operation =>
         {
-            if (operation == nameof(ConcurrentPooled<int>.Process))
+            if (string.Equals(operation, nameof(ConcurrentPooled<int>.Process), StringComparison.Ordinal))
             {
                 entries++;
             }
@@ -291,7 +291,7 @@ public sealed class ConcurrentPooledStateProcessTests
         NativeMemoryTestHooks.SetOperationEnteredWithAllocation(
             (operation, kernel, generation, allocationId) =>
             {
-                if (operation == nameof(ConcurrentPooled<int>.Process))
+                if (string.Equals(operation, nameof(ConcurrentPooled<int>.Process), StringComparison.Ordinal))
                 {
                     failure = Assert.Throws<NativeAllocationInUseException>(() =>
                         kernel.ReturnLease(generation, allocationId));
@@ -319,8 +319,8 @@ public sealed class ConcurrentPooledStateProcessTests
     {
         NativeConcurrentPool<int> pool = new(
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        ManualResetEventSlim entered = new();
-        ManualResetEventSlim release = new();
+        using ManualResetEventSlim entered = new();
+        using ManualResetEventSlim release = new();
         ProcessWaitState state = new(entered, release);
 
         Task worker = Task.Run(() =>
@@ -351,7 +351,7 @@ public sealed class ConcurrentPooledStateProcessTests
             Assert.True(entered.Wait(TimeSpan.FromSeconds(10)));
             Assert.Throws<NativeAllocationInUseException>(pool.Dispose);
             release.Set();
-            await worker;
+            await worker.ConfigureAwait(true);
             using ConcurrentPooled<int> next = pool.Rent(
                 1,
                 static writer => writer.Fill(17));

@@ -139,9 +139,8 @@ public readonly record struct CgroupMemorySnapshot(
             "/sys/fs/cgroup",
             "/sys/fs/cgroup/memory"
         ];
-        for (int index = 0; index < candidates.Length; index++)
+        foreach (string candidate in candidates)
         {
-            string candidate = candidates[index];
             if (File.Exists(Path.Combine(candidate, "memory.current"))
                 || File.Exists(Path.Combine(candidate, "memory.usage_in_bytes")))
             {
@@ -159,7 +158,7 @@ public readonly record struct CgroupMemorySnapshot(
             string text = File.ReadAllText(path).Trim();
             return text is "" or "max"
                 ? 0
-                : long.TryParse(text, out long value) && value >= 0
+                : long.TryParse(text, System.Globalization.CultureInfo.InvariantCulture, out long value) && value >= 0
                     ? value
                     : 0;
         }
@@ -193,32 +192,32 @@ public readonly record struct CgroupMemorySnapshot(
             foreach (string line in File.ReadLines(path))
             {
                 string[] parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                if (parts.Length != 2 || !long.TryParse(parts[1], out long value))
+                if (parts.Length != 2 || !long.TryParse(parts[1], System.Globalization.CultureInfo.InvariantCulture, out long value))
                 {
                     continue;
                 }
 
-                if (parts[0] == "low")
+                if (string.Equals(parts[0], "low", StringComparison.Ordinal))
                 {
                     low = value;
                 }
-                else if (parts[0] == "high")
+                else if (string.Equals(parts[0], "high", StringComparison.Ordinal))
                 {
                     high = value;
                 }
-                else if (parts[0] == "max")
+                else if (string.Equals(parts[0], "max", StringComparison.Ordinal))
                 {
                     max = value;
                 }
-                else if (parts[0] == "oom")
+                else if (string.Equals(parts[0], "oom", StringComparison.Ordinal))
                 {
                     oom = value;
                 }
-                else if (parts[0] == "oom_kill")
+                else if (string.Equals(parts[0], "oom_kill", StringComparison.Ordinal))
                 {
                     oomKill = value;
                 }
-                else if (parts[0] == "oom_group_kill")
+                else if (string.Equals(parts[0], "oom_group_kill", StringComparison.Ordinal))
                 {
                     oomGroupKill = value;
                 }
@@ -252,24 +251,24 @@ public readonly record struct CgroupMemorySnapshot(
             foreach (string line in File.ReadLines(path))
             {
                 string[] parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                if (parts.Length != 2 || !long.TryParse(parts[1], out long value))
+                if (parts.Length != 2 || !long.TryParse(parts[1], System.Globalization.CultureInfo.InvariantCulture, out long value))
                 {
                     continue;
                 }
 
-                if (parts[0] == "anon")
+                if (string.Equals(parts[0], "anon", StringComparison.Ordinal))
                 {
                     anon = value;
                 }
-                else if (parts[0] == "file")
+                else if (string.Equals(parts[0], "file", StringComparison.Ordinal))
                 {
                     file = value;
                 }
-                else if (parts[0] == "pgfault")
+                else if (string.Equals(parts[0], "pgfault", StringComparison.Ordinal))
                 {
                     pageFaults = value;
                 }
-                else if (parts[0] == "pgmajfault")
+                else if (string.Equals(parts[0], "pgmajfault", StringComparison.Ordinal))
                 {
                     majorPageFaults = value;
                 }
@@ -301,8 +300,7 @@ public readonly record struct CgroupMemorySnapshot(
                     ' ',
                     StringSplitOptions.RemoveEmptyEntries);
                 if (parts.Length == 2
-                    && parts[0] == counterName
-                    && long.TryParse(parts[1], out long value)
+                    && string.Equals(parts[0], counterName, StringComparison.Ordinal) && long.TryParse(parts[1], System.Globalization.CultureInfo.InvariantCulture, out long value)
                     && value >= 0)
                 {
                     return value;

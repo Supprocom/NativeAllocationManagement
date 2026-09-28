@@ -289,7 +289,7 @@ public sealed class NativeWorkspaceAnalyzerTests
             }
             """);
 
-        Assert.Contains("NAM1036", NativeDiagnostics(diagnostics));
+        Assert.Contains("NAM1036", NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -315,7 +315,7 @@ public sealed class NativeWorkspaceAnalyzerTests
             }
             """);
 
-        Assert.Contains("NAM1038", NativeDiagnostics(diagnostics));
+        Assert.Contains("NAM1038", NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -341,7 +341,7 @@ public sealed class NativeWorkspaceAnalyzerTests
         Assert.Equal(
             2,
             NativeDiagnostics(diagnostics).Count(
-                id => id == "NAM1037"));
+                id => string.Equals(id, "NAM1037", StringComparison.Ordinal)));
     }
 
     [Fact]
@@ -376,7 +376,7 @@ public sealed class NativeWorkspaceAnalyzerTests
         Assert.Equal(
             3,
             NativeDiagnostics(diagnostics).Count(
-                id => id == "NAM1039"));
+                id => string.Equals(id, "NAM1039", StringComparison.Ordinal)));
     }
 
     [Theory]
@@ -399,7 +399,7 @@ public sealed class NativeWorkspaceAnalyzerTests
             }
             """);
 
-        Assert.Contains("NAM1040", NativeDiagnostics(diagnostics));
+        Assert.Contains("NAM1040", NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -422,8 +422,8 @@ public sealed class NativeWorkspaceAnalyzerTests
             """);
 
         string[] ids = NativeDiagnostics(diagnostics);
-        Assert.Contains("NAM1036", ids);
-        Assert.Contains("NAM1037", ids);
+        Assert.Contains("NAM1036", ids, StringComparer.Ordinal);
+        Assert.Contains("NAM1037", ids, StringComparer.Ordinal);
     }
 
     [Fact]
@@ -447,7 +447,7 @@ public sealed class NativeWorkspaceAnalyzerTests
             }
             """);
 
-        Assert.Contains("NAM1036", NativeDiagnostics(diagnostics));
+        Assert.Contains("NAM1036", NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -484,8 +484,8 @@ public sealed class NativeWorkspaceAnalyzerTests
             """);
 
         string[] ids = NativeDiagnostics(diagnostics);
-        Assert.Contains("NAM1036", ids);
-        Assert.Contains("NAM1038", ids);
+        Assert.Contains("NAM1036", ids, StringComparer.Ordinal);
+        Assert.Contains("NAM1038", ids, StringComparer.Ordinal);
     }
 
     [Fact]
@@ -508,7 +508,7 @@ public sealed class NativeWorkspaceAnalyzerTests
             }
             """);
 
-        Assert.Contains("NAM1036", NativeDiagnostics(diagnostics));
+        Assert.Contains("NAM1036", NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -568,7 +568,7 @@ public sealed class NativeWorkspaceAnalyzerTests
             }
             """);
 
-        Assert.Contains("NAM1039", NativeDiagnostics(diagnostics));
+        Assert.Contains("NAM1039", NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -585,7 +585,7 @@ public sealed class NativeWorkspaceAnalyzerTests
             }
             """);
 
-        Assert.Contains("NAM1039", NativeDiagnostics(diagnostics));
+        Assert.Contains("NAM1039", NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -615,7 +615,7 @@ public sealed class NativeWorkspaceAnalyzerTests
 
         string[] ids = NativeDiagnostics(diagnostics);
         Assert.True(
-            ids.Count(id => id == "NAM1036") >= 2,
+            ids.Count(id => string.Equals(id, "NAM1036", StringComparison.Ordinal)) >= 2,
             string.Join(Environment.NewLine, diagnostics));
     }
 
@@ -642,7 +642,7 @@ public sealed class NativeWorkspaceAnalyzerTests
             }
             """);
 
-        Assert.Contains("NAM1036", NativeDiagnostics(diagnostics));
+        Assert.Contains("NAM1036", NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -664,7 +664,7 @@ public sealed class NativeWorkspaceAnalyzerTests
             }
             """);
 
-        Assert.Contains("NAM1039", NativeDiagnostics(diagnostics));
+        Assert.Contains("NAM1039", NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 
     private static Task<ImmutableArray<Diagnostic>> AnalyzeAsync(

@@ -1,8 +1,10 @@
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Text.Json.Serialization;
 
 namespace Supprocom.NativeAllocationManagement.Demos.VoxelChunkPipeline.SharedContract;
 
+[StructLayout(LayoutKind.Sequential)]
 public readonly record struct VoxelWorkloadOptions(
     int Seed,
     int ChunkCount,
@@ -25,6 +27,7 @@ public readonly record struct VoxelWorkloadOptions(
 
     public static VoxelWorkloadOptions Parse(IReadOnlyList<string> args)
     {
+        ArgumentNullException.ThrowIfNull(args);
         VoxelWorkloadOptions options = Default;
         for (int index = 0; index < args.Count; index++)
         {
@@ -70,8 +73,10 @@ public readonly record struct BlockTypeDescriptor(
     int StageMask,
     int FrequencyWeight);
 
+[StructLayout(LayoutKind.Sequential)]
 public readonly record struct CellCoordinate(int X, int Y, int Z);
 
+[StructLayout(LayoutKind.Sequential)]
 public readonly record struct CanonicalInputCell(
     int ChunkId,
     int CellIndex,
@@ -109,7 +114,10 @@ public readonly struct CanonicalInputContract : IEquatable<CanonicalInputContrac
 
     public VoxelWorkloadOptions Options { get; }
 
+    // Arrays are part of the immutable snapshot serialization shape.
+#pragma warning disable CA1819
     public BlockTypeDescriptor[] Registry { get; }
+#pragma warning restore CA1819
 
     public long CellCount { get; }
 
@@ -123,7 +131,10 @@ public readonly struct CanonicalInputContract : IEquatable<CanonicalInputContrac
     public long ChunkOrderHash { get; }
 
     /// <summary>Complete pre-mutation cells when correctness mode requests materialized input; null in timed pressure runs.</summary>
+    // Arrays are part of the immutable snapshot serialization shape.
+#pragma warning disable CA1819
     public CanonicalInputCell[]? Cells { get; }
+#pragma warning restore CA1819
 
     /// <summary>SHA-256 over the complete canonical input contract and every measured cell.</summary>
     public string StrongHash { get; }
@@ -137,8 +148,7 @@ public readonly struct CanonicalInputContract : IEquatable<CanonicalInputContrac
         && CellValueByteHash == other.CellValueByteHash
         && ByteHash == other.ByteHash
         && ChunkOrderHash == other.ChunkOrderHash
-        && StrongHash == other.StrongHash
-        && Observed == other.Observed
+        && string.Equals(StrongHash, other.StrongHash, StringComparison.Ordinal) && Observed == other.Observed
         && (Cells ?? Array.Empty<CanonicalInputCell>()).AsSpan()
             .SequenceEqual((other.Cells ?? Array.Empty<CanonicalInputCell>()).AsSpan())
         && (Registry ?? Array.Empty<BlockTypeDescriptor>()).AsSpan()
@@ -161,24 +171,29 @@ public readonly struct CanonicalInputContract : IEquatable<CanonicalInputContrac
         hash.Add(CellValueByteHash);
         hash.Add(ByteHash);
         hash.Add(ChunkOrderHash);
-        hash.Add(StrongHash);
+        hash.Add(StrongHash, StringComparer.Ordinal);
         hash.Add(Observed);
         BlockTypeDescriptor[] registry = Registry ?? Array.Empty<BlockTypeDescriptor>();
-        for (int index = 0; index < registry.Length; index++)
+        foreach (BlockTypeDescriptor descriptor in registry)
         {
-            hash.Add(registry[index]);
+            hash.Add(descriptor);
         }
 
         return hash.ToHashCode();
     }
 }
 
+// Fixture cells are serialized as an ordered array.
+#pragma warning disable CA1819
 public readonly record struct CanonicalInputFixture(
     int Seed,
     int ChunkId,
     CanonicalInputCell[] Cells,
     long ExpectedByteHash);
+#pragma warning restore CA1819
 
+// Fixture cells are serialized as an ordered array.
+#pragma warning disable CA1819
 public readonly record struct HandAuthoredInputFixture(
     int Seed,
     int ChunkId,
@@ -187,6 +202,7 @@ public readonly record struct HandAuthoredInputFixture(
     int Depth,
     CanonicalInputCell[] Cells,
     long ExpectedByteHash);
+#pragma warning restore CA1819
 
 public enum SectionRepresentationKind
 {

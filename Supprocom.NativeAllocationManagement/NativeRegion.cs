@@ -32,7 +32,10 @@ public readonly ref struct NativeRegion
         _kernel?.Lifecycle
         ?? NativeOwnerLifecycle.Uninitialized;
 
+    // Compatibility probe retains the per-owner instance shape.
+#pragma warning disable CA1822
     internal int CurrentAllocationRecordCountForTest => 0;
+#pragma warning restore CA1822
 
     /// <summary>Gets the current Region storage statistics.</summary>
     public NativeOwnerStatistics GetStatistics() =>

@@ -16,12 +16,14 @@ public readonly record struct PressureOutputEvidence(
     int TransparentSliceLength,
     int TransparentUploadLength);
 
+[System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
 public readonly record struct PressureChunkPlanEntry(
     int ChunkId,
     long LogicalDemandBytes,
     long EstimatedWorkUnits,
     PressureChunkShape Shape);
 
+[System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
 public readonly record struct GpuStageShape(
     int Stage160Count,
     int Stage168Count,
@@ -163,6 +165,7 @@ public readonly record struct GpuStageShape(
     }
 }
 
+[System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
 public readonly record struct PressureChunkShape(
     int OpaqueRecordCount,
     int TransparentRecordCount,
@@ -498,10 +501,17 @@ public static class PressureWorkContract
         Span<VoxelCell> cells,
         Span<SectionSummary> sectionSummaries)
     {
-        if (cells.Length != VoxelMath.CellsPerChunk
-            || sectionSummaries.Length != VoxelMath.SectionsPerChunk)
+        if (cells.Length != VoxelMath.CellsPerChunk)
         {
-            throw new ArgumentException("Pressure shape buffers do not cover one canonical chunk.");
+            throw new ArgumentException(
+                "The cell buffer does not cover one canonical chunk.", nameof(cells));
+        }
+
+        if (sectionSummaries.Length != VoxelMath.SectionsPerChunk)
+        {
+            throw new ArgumentException(
+                "The section summary buffer does not cover one canonical chunk.",
+                nameof(sectionSummaries));
         }
 
         int opaqueRecords = 0;
@@ -815,13 +825,11 @@ public static class PressureWorkContract
         int expectedMaskWords = 0;
         if (buildTransparentMasks)
         {
-            for (int sectionIndex = 0;
-                sectionIndex < summaries.Length;
-                sectionIndex++)
+            foreach (ref readonly var sectionIndexValue in summaries)
             {
                 expectedMaskWords = checked(
                     expectedMaskWords
-                    + summaries[sectionIndex].TransparentIds
+                    + sectionIndexValue.TransparentIds
                         * VoxelMath.TransparentMaskWordsPerId);
             }
 
@@ -974,12 +982,25 @@ public static class PressureWorkContract
             ref valueCursor,
             ref wordCursor,
             ref stateCursor);
-        if (values.Length != valueCursor - valueStart
-            || words.Length != wordCursor - wordStart
-            || states.Length != stateCursor - stateStart)
+        if (values.Length != valueCursor - valueStart)
         {
             throw new ArgumentException(
-                "The section output ranges do not match the classified representation.");
+                "The value range does not match the classified representation.",
+                nameof(values));
+        }
+
+        if (words.Length != wordCursor - wordStart)
+        {
+            throw new ArgumentException(
+                "The word range does not match the classified representation.",
+                nameof(words));
+        }
+
+        if (states.Length != stateCursor - stateStart)
+        {
+            throw new ArgumentException(
+                "The state range does not match the classified representation.",
+                nameof(states));
         }
 
         SectionPrerenderDescriptor relative = RebaseSectionLayout(
@@ -1116,27 +1137,27 @@ public static class PressureWorkContract
         hash.AddString("voxel-section-prerender-v1");
         hash.AddInt32(chunkId);
         hash.AddInt32(descriptors.Length);
-        for (int index = 0; index < descriptors.Length; index++)
+        foreach (ref readonly var indexValue in descriptors)
         {
-            AddSectionDescriptor(hash, descriptors[index]);
+            AddSectionDescriptor(hash, indexValue);
         }
 
         hash.AddInt32(values.Length);
-        for (int index = 0; index < values.Length; index++)
+        foreach (ref readonly var indexValue in values)
         {
-            hash.AddUInt16(values[index]);
+            hash.AddUInt16(indexValue);
         }
 
         hash.AddInt32(words.Length);
-        for (int index = 0; index < words.Length; index++)
+        foreach (ref readonly var indexValue in words)
         {
-            hash.AddInt32(unchecked((int)words[index]));
+            hash.AddInt32(unchecked((int)indexValue));
         }
 
         hash.AddInt32(states.Length);
-        for (int index = 0; index < states.Length; index++)
+        foreach (ref readonly var indexValue in states)
         {
-            hash.AddInt64(unchecked((long)states[index]));
+            hash.AddInt64(unchecked((long)indexValue));
         }
 
         return hash.Complete();
@@ -1238,7 +1259,7 @@ public static class PressureWorkContract
         hash.AddString("voxel-transparent-masks-v1");
         hash.AddInt32(chunkId);
         hash.AddInt32(masks.Length);
-        foreach (ulong value in masks)
+        foreach (ref readonly ulong value in masks)
         {
             hash.AddInt64(unchecked((long)value));
         }
@@ -1364,12 +1385,10 @@ public static class PressureWorkContract
         int sliceCount = 0;
         int enabledStageBytes = 0;
         Span<int> stageCursors = stackalloc int[5];
-        for (int recordIndex = 0;
-            recordIndex < records.Length;
-            recordIndex++)
+        foreach (ref readonly var recordIndexValue in records)
         {
             ref readonly FaceRecord record =
-                ref records[recordIndex];
+                ref recordIndexValue;
             int stageClass = StageClassIndex(record.StageBytes);
             int payloadSeed = unchecked(
                 seed
@@ -1484,12 +1503,10 @@ public static class PressureWorkContract
         ref Vertex vertexBase = ref MemoryMarshal.GetReference(vertices);
         ref int indexBase = ref MemoryMarshal.GetReference(indices);
         ref PayloadSlice sliceBase = ref MemoryMarshal.GetReference(slices);
-        for (int recordIndex = 0;
-            recordIndex < records.Length;
-            recordIndex++)
+        foreach (ref readonly var recordIndexValue in records)
         {
             ref readonly FaceRecord record =
-                ref records[recordIndex];
+                ref recordIndexValue;
             int stageClass = StageClassIndex(
                 record.StageBytes);
             int x = record.CellIndex % VoxelMath.ChunkDimension;
@@ -1592,9 +1609,9 @@ public static class PressureWorkContract
             stackalloc int[VoxelMath.IndicesPerFace];
         Span<byte> faceUpload =
             stackalloc byte[MaximumPressureStageBytesPerFace];
-        for (int recordIndex = 0; recordIndex < records.Length; recordIndex++)
+        foreach (ref readonly var recordIndexValue in records)
         {
-            ref readonly FaceRecord record = ref records[recordIndex];
+            ref readonly FaceRecord record = ref recordIndexValue;
             int payloadSeed = unchecked(
                 seed
                 + record.CellIndex * 11
@@ -1986,9 +2003,9 @@ public static class PressureWorkContract
         ReadOnlySpan<PayloadSlice> slices)
     {
         int length = 0;
-        for (int index = 0; index < slices.Length; index++)
+        foreach (ref readonly var indexValue in slices)
         {
-            length = checked(length + slices[index].Length);
+            length = checked(length + indexValue.Length);
         }
 
         return length;
@@ -1999,9 +2016,9 @@ public static class PressureWorkContract
         GpuStageBuffers stages)
     {
         Span<int> cursors = stackalloc int[5];
-        for (int index = 0; index < slices.Length; index++)
+        foreach (ref readonly var indexValue in slices)
         {
-            PayloadSlice slice = slices[index];
+            PayloadSlice slice = indexValue;
             BlockTypeDescriptor type =
                 VoxelMath.BlockTypeForId(slice.BlockId);
             int stageBytes = PressureStageBytes(type);
@@ -2150,12 +2167,10 @@ public static class PressureWorkContract
         int stageBytes)
     {
         long stageLength = 0;
-        for (int recordIndex = 0;
-            recordIndex < records.Length;
-            recordIndex++)
+        foreach (ref readonly var recordIndexValue in records)
         {
             ref readonly FaceRecord record =
-                ref records[recordIndex];
+                ref recordIndexValue;
             if (record.StageBytes == stageBytes)
             {
                 stageLength = checked(
@@ -2170,12 +2185,10 @@ public static class PressureWorkContract
             stackalloc byte[MaximumPressureStageBytesPerFace];
         zeroPadding.Clear();
         int faceOffset = 0;
-        for (int recordIndex = 0;
-            recordIndex < records.Length;
-            recordIndex++)
+        foreach (ref readonly var recordIndexValue in records)
         {
             ref readonly FaceRecord record =
-                ref records[recordIndex];
+                ref recordIndexValue;
             int payloadSeed = unchecked(
                 seed
                 + record.CellIndex * 11
@@ -2293,6 +2306,7 @@ public static class PressureWorkContract
 
     public static string ComputeProfileEvidenceHash(IReadOnlyList<PressureChunkEvidence> chunks)
     {
+        ArgumentNullException.ThrowIfNull(chunks);
         using CanonicalHashAccumulator hash = new();
         hash.AddString("voxel-pressure-evidence-v2");
         hash.AddInt32(chunks.Count);
@@ -2367,33 +2381,59 @@ public static class PressureWorkContract
         ReadOnlySpan<uint> words,
         ReadOnlySpan<ulong> states)
     {
-        if (cells.Length != VoxelMath.CellsPerChunk
-            || summaries.Length != VoxelMath.SectionsPerChunk
-            || descriptors.Length != VoxelMath.SectionsPerChunk)
+        if (cells.Length != VoxelMath.CellsPerChunk)
         {
             throw new ArgumentException(
-                "Section representation ranges must cover one complete canonical chunk.");
+                "The cell range must cover one complete canonical chunk.",
+                nameof(cells));
+        }
+
+        if (summaries.Length != VoxelMath.SectionsPerChunk)
+        {
+            throw new ArgumentException(
+                "The summary range must cover one complete canonical chunk.",
+                nameof(summaries));
+        }
+
+        if (descriptors.Length != VoxelMath.SectionsPerChunk)
+        {
+            throw new ArgumentException(
+                "The descriptor range must cover one complete canonical chunk.",
+                nameof(descriptors));
         }
 
         int expectedValues = 0;
         int expectedWords = 0;
         int expectedStates = 0;
-        for (int section = 0; section < summaries.Length; section++)
+        foreach (ref readonly var sectionValue in summaries)
         {
             expectedValues = checked(
-                expectedValues + SectionValueCount(summaries[section]));
+                expectedValues + SectionValueCount(sectionValue));
             expectedWords = checked(
-                expectedWords + SectionWordCount(summaries[section]));
+                expectedWords + SectionWordCount(sectionValue));
             expectedStates = checked(
-                expectedStates + SectionStateWordCount(summaries[section]));
+                expectedStates + SectionStateWordCount(sectionValue));
         }
 
-        if (values.Length != expectedValues
-            || words.Length != expectedWords
-            || states.Length != expectedStates)
+        if (values.Length != expectedValues)
         {
             throw new ArgumentException(
-                "Section representation backing ranges do not match the classified layouts.");
+                "The value backing range does not match the classified layouts.",
+                nameof(values));
+        }
+
+        if (words.Length != expectedWords)
+        {
+            throw new ArgumentException(
+                "The word backing range does not match the classified layouts.",
+                nameof(words));
+        }
+
+        if (states.Length != expectedStates)
+        {
+            throw new ArgumentException(
+                "The state backing range does not match the classified layouts.",
+                nameof(states));
         }
     }
 
@@ -2891,11 +2931,9 @@ public static class PressureWorkContract
                     descriptor.TransparentTileOffset,
                     descriptor.TransparentTileLength);
         int tileCursor = 0;
-        for (int paletteIndex = 0;
-            paletteIndex < expectedPalette.Length;
-            paletteIndex++)
+        foreach (ref readonly var paletteIndexValue in expectedPalette)
         {
-            ushort blockId = expectedPalette[paletteIndex];
+            ushort blockId = paletteIndexValue;
             if (!VoxelMath.TransparentById[blockId])
             {
                 continue;
@@ -3281,7 +3319,7 @@ public static class PressureWorkContract
         uint hash = BeginSectionContentTag(descriptor);
         if (descriptor.ValueLength > 0)
         {
-            foreach (ushort value in values.Slice(
+            foreach (ref readonly ushort value in values.Slice(
                 descriptor.ValueOffset,
                 descriptor.ValueLength))
             {
@@ -3291,7 +3329,7 @@ public static class PressureWorkContract
 
         if (descriptor.PackedWordLength > 0)
         {
-            foreach (uint value in words.Slice(
+            foreach (ref readonly uint value in words.Slice(
                 descriptor.PackedWordOffset,
                 descriptor.PackedWordLength))
             {
@@ -3301,7 +3339,7 @@ public static class PressureWorkContract
 
         if (descriptor.TransparentTileLength > 0)
         {
-            foreach (uint value in words.Slice(
+            foreach (ref readonly uint value in words.Slice(
                 descriptor.TransparentTileOffset,
                 descriptor.TransparentTileLength))
             {
@@ -3312,7 +3350,7 @@ public static class PressureWorkContract
         int stateLength = SectionStateLength(descriptor);
         if (stateLength > 0)
         {
-            foreach (ulong value in states.Slice(
+            foreach (ref readonly ulong value in states.Slice(
                 FirstStateOffset(descriptor),
                 stateLength))
             {
@@ -3370,7 +3408,7 @@ public static class PressureWorkContract
     {
         if (typeof(T) == typeof(ushort))
         {
-            foreach (ushort value in MemoryMarshal.Cast<T, ushort>(values))
+            foreach (ref readonly ushort value in MemoryMarshal.Cast<T, ushort>(values))
             {
                 hash = Mix(hash, value);
             }
@@ -3380,7 +3418,7 @@ public static class PressureWorkContract
 
         if (typeof(T) == typeof(uint))
         {
-            foreach (uint value in MemoryMarshal.Cast<T, uint>(values))
+            foreach (ref readonly uint value in MemoryMarshal.Cast<T, uint>(values))
             {
                 hash = Mix(hash, value);
             }
@@ -3390,7 +3428,7 @@ public static class PressureWorkContract
 
         if (typeof(T) == typeof(ulong))
         {
-            foreach (ulong value in MemoryMarshal.Cast<T, ulong>(values))
+            foreach (ref readonly ulong value in MemoryMarshal.Cast<T, ulong>(values))
             {
                 hash = Mix(hash, unchecked((uint)value));
                 hash = Mix(hash, unchecked((uint)(value >> 32)));
@@ -3477,9 +3515,9 @@ public static class PressureWorkContract
     {
         int vertexCursor = 0;
         int indexCursor = 0;
-        for (int recordIndex = 0; recordIndex < records.Length; recordIndex++)
+        foreach (ref readonly var recordIndexValue in records)
         {
-            ref readonly FaceRecord record = ref records[recordIndex];
+            ref readonly FaceRecord record = ref recordIndexValue;
             for (int face = 0; face < VoxelMath.FacesPerCell; face++)
             {
                 if ((record.Mask & (1 << face)) == 0)
@@ -3530,9 +3568,9 @@ public static class PressureWorkContract
         int vertexCursor = 0;
         int sliceCursor = 0;
         Span<int> stageCursors = stackalloc int[5];
-        for (int recordIndex = 0; recordIndex < records.Length; recordIndex++)
+        foreach (ref readonly var recordIndexValue in records)
         {
-            ref readonly FaceRecord record = ref records[recordIndex];
+            ref readonly FaceRecord record = ref recordIndexValue;
             for (int face = 0; face < VoxelMath.FacesPerCell; face++)
             {
                 if ((record.Mask & (1 << face)) == 0)
@@ -3645,12 +3683,10 @@ public static class PressureWorkContract
     {
         int sliceCursor = 0;
         Span<int> stageCursors = stackalloc int[5];
-        for (int recordIndex = 0;
-            recordIndex < records.Length;
-            recordIndex++)
+        foreach (ref readonly var recordIndexValue in records)
         {
             ref readonly FaceRecord record =
-                ref records[recordIndex];
+                ref recordIndexValue;
             int payloadSeed = unchecked(
                 seed
                 + record.CellIndex * 11
@@ -3976,7 +4012,7 @@ public static class PressureWorkContract
             return;
         }
 
-        foreach (Vertex value in values)
+        foreach (ref readonly Vertex value in values)
         {
             WriteInt32(destination, ref offset, value.X);
             WriteInt32(destination, ref offset, value.Y);
@@ -4001,7 +4037,7 @@ public static class PressureWorkContract
             return;
         }
 
-        foreach (int value in values)
+        foreach (ref readonly int value in values)
         {
             WriteInt32(destination, ref offset, value);
         }

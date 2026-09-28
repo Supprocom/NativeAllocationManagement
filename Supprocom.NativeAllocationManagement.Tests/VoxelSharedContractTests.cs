@@ -8,6 +8,8 @@ namespace Supprocom.NativeAllocationManagement.Tests;
 
 public sealed class VoxelSharedContractTests
 {
+    private static readonly int[] ExpectedCorners = [0, 1, 2, 3];
+
     [VoxelDemonstrationFact]
     public void PressureProfilesUseFourWarmupsAndFreshContainers()
     {
@@ -39,11 +41,11 @@ public sealed class VoxelSharedContractTests
             harness,
             StringComparison.Ordinal);
         Assert.Contains(
-            "await safe.DisposeAsync();",
+            "await safe.DisposeAsync().ConfigureAwait(false);",
             harness,
             StringComparison.Ordinal);
         Assert.Contains(
-            "await nam.DisposeAsync();",
+            "await nam.DisposeAsync().ConfigureAwait(false);",
             harness,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -163,7 +165,7 @@ public sealed class VoxelSharedContractTests
             Unsafe.SizeOf<SectionPrerenderDescriptor>());
         Assert.DoesNotContain(
             assembly.GetTypes(),
-            type => type.Name == "NativeFaceOutput");
+            type => string.Equals(type.Name, "NativeFaceOutput", StringComparison.Ordinal));
     }
 
     [VoxelDemonstrationFact]
@@ -493,15 +495,15 @@ public sealed class VoxelSharedContractTests
             "startTick = tick;",
             processingReady,
             StringComparison.Ordinal);
-        int beginProcessing = pressureHarness.IndexOf(
-            "PressureCommandKind.BeginProcessing",
-            StringComparison.Ordinal);
         int sendBegin = pressureHarness.IndexOf(
             "WriteLineAsync(",
             startTick,
             StringComparison.Ordinal);
         Assert.True(processingReady >= 0);
-        Assert.True(beginProcessing >= 0);
+        Assert.Contains(
+            "PressureCommandKind.BeginProcessing",
+            pressureHarness,
+            StringComparison.Ordinal);
         Assert.True(startTick > processingReady);
         Assert.True(sendBegin > startTick);
         Assert.DoesNotContain(
@@ -560,7 +562,7 @@ public sealed class VoxelSharedContractTests
         Assert.Equal(
             2,
             pressureHarness.Split(
-                "await checkpointWriter.WriteFinalReportAsync(report);",
+                "await checkpointWriter.WriteFinalReportAsync(report).ConfigureAwait(false);",
                 StringSplitOptions.None).Length - 1);
 
         string runner = File.ReadAllText(
@@ -722,13 +724,13 @@ public sealed class VoxelSharedContractTests
             samples.Count(
                 sample =>
                     sample.Position == 0
-                    && sample.Implementation == "SafeCSharp"));
+                    && string.Equals(sample.Implementation, "SafeCSharp", StringComparison.Ordinal)));
         Assert.Equal(
             3,
             samples.Count(
                 sample =>
                     sample.Position == 0
-                    && sample.Implementation == "NAM"));
+                    && string.Equals(sample.Implementation, "NAM", StringComparison.Ordinal)));
 
         samples[0] = samples[0] with
         {
@@ -1281,15 +1283,15 @@ public sealed class VoxelSharedContractTests
                 UpdatedUtc = DateTime.UnixEpoch.AddSeconds(2)
             };
 
-            await AtomicPressureArtifactFile.WriteJsonAsync(path, first);
-            await AtomicPressureArtifactFile.WriteJsonAsync(path, second);
+            await AtomicPressureArtifactFile.WriteJsonAsync(path, first).ConfigureAwait(false);
+            await AtomicPressureArtifactFile.WriteJsonAsync(path, second).ConfigureAwait(false);
 
             PressureMatrixCheckpoint roundTrip =
                 JsonSerializer.Deserialize<PressureMatrixCheckpoint>(
-                    await File.ReadAllTextAsync(path),
+                    await File.ReadAllTextAsync(path).ConfigureAwait(false),
                     VoxelJson.Options);
             Assert.Equal(2, roundTrip.Sequence);
-            Assert.Single(Directory.EnumerateFiles(directory));
+            SingleExpected(Directory.EnumerateFiles(directory));
             Assert.Empty(
                 Directory.EnumerateFiles(directory, "*.tmp"));
         }
@@ -1382,7 +1384,7 @@ public sealed class VoxelSharedContractTests
         Assert.Equal(
             "SafeCSharp",
             roundTrip.CurrentPair?.SafeObservation?.Implementation);
-        PressureWorkerCheckpoint active = Assert.Single(
+        PressureWorkerCheckpoint active = SingleExpected(
             roundTrip.ActiveWorkers);
         Assert.Equal(10, active.CurrentRequestOrdinal);
         Assert.True(active.IsAlive);
@@ -1439,24 +1441,24 @@ public sealed class VoxelSharedContractTests
 
             await AtomicPressureArtifactFile.WriteJsonAsync(
                 path,
-                checkpoint);
+                checkpoint).ConfigureAwait(false);
 
             PressureMatrixCheckpoint recovered =
                 JsonSerializer.Deserialize<PressureMatrixCheckpoint>(
-                    await File.ReadAllTextAsync(path),
+                    await File.ReadAllTextAsync(path).ConfigureAwait(false),
                     VoxelJson.Options);
             Assert.Equal("commit", recovered.GitCommit);
             Assert.Equal("image", recovered.ImageId);
-            Assert.Single(recovered.BinaryIdentities);
-            Assert.Single(
+            SingleExpected(recovered.BinaryIdentities);
+            SingleExpected(
                 recovered.CurrentProfile?.CompletedPairs ?? []);
-            Assert.Single(
+            SingleExpected(
                 recovered.CurrentProfile?.Initializations ?? []);
             Assert.Equal(
                 "docker run safe",
-                Assert.Single(recovered.Commands));
+                SingleExpected(recovered.Commands));
             Assert.True(
-                Assert.Single(
+                SingleExpected(
                     recovered.CompletedLifecycles)
                     .ContainerAbsentAfterDisposal);
         }
@@ -1477,7 +1479,7 @@ public sealed class VoxelSharedContractTests
                 CreatePressureCheckpoint(sequence: 6);
             await AtomicPressureArtifactFile.WriteJsonAsync(
                 path,
-                checkpoint);
+                checkpoint).ConfigureAwait(false);
             PressurePairedStatistics statistics = new(
                 SampleCount: 6,
                 MeanSpeedup: 1.9769,
@@ -1551,9 +1553,9 @@ public sealed class VoxelSharedContractTests
                 250,
                 1000);
 
-            await AtomicPressureArtifactFile.WriteJsonAsync(path, report);
+            await AtomicPressureArtifactFile.WriteJsonAsync(path, report).ConfigureAwait(false);
 
-            string json = await File.ReadAllTextAsync(path);
+            string json = await File.ReadAllTextAsync(path).ConfigureAwait(false);
             PressureMatrixGateFailureReport roundTrip =
                 JsonSerializer.Deserialize<PressureMatrixGateFailureReport>(
                     json,
@@ -1565,8 +1567,8 @@ public sealed class VoxelSharedContractTests
             Assert.True(roundTrip.Cleanup.LifecycleCountPassed);
             Assert.True(roundTrip.Cleanup.EveryContainerAbsent);
             Assert.Equal(2, roundTrip.Commands.Count);
-            Assert.Single(roundTrip.WorkerLifecycles);
-            Assert.Single(roundTrip.BinaryIdentities);
+            SingleExpected(roundTrip.WorkerLifecycles);
+            SingleExpected(roundTrip.BinaryIdentities);
             Assert.Equal(
                 1000,
                 roundTrip.PreservedCurrentProfile?.ProfilePercent);
@@ -1583,7 +1585,7 @@ public sealed class VoxelSharedContractTests
         }
     }
 
-    [VoxelDemonstrationFact]
+    [VoxelPowerShellFact]
     public void WrapperTimeoutValidationRejectsUnsafeBounds()
     {
         string root = FindRepositoryRoot();
@@ -1684,18 +1686,18 @@ public sealed class VoxelSharedContractTests
     public void ReleaseDocumentsUseTheDesignatedContactAndAbsoluteGuideLink()
     {
         string root = FindRepositoryRoot();
-        string license = File.ReadAllText(
-            Path.Combine(root, "LICENSE"));
+        string notice = File.ReadAllText(
+            Path.Combine(root, "NOTICE"));
         string readme = File.ReadAllText(
             Path.Combine(root, "README.md"));
 
         Assert.Contains(
             "Contact: supprocom@mkn8rn.com",
-            license,
+            notice,
             StringComparison.Ordinal);
         Assert.DoesNotContain(
             "Contact: mkn8rn@hotmail.com",
-            license,
+            notice,
             StringComparison.Ordinal);
         Assert.Contains(
             "[voxel-guide]: https://github.com/Supprocom/"
@@ -1716,7 +1718,7 @@ public sealed class VoxelSharedContractTests
         string guide = File.ReadAllText(
             Path.Combine(root, "docs", "getting-started.md"));
         Assert.Contains(
-            "Version=\"0.2.2\"",
+            "Version=\"0.2.3\"",
             guide,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -1750,7 +1752,7 @@ public sealed class VoxelSharedContractTests
     }
 
     [Fact]
-    public void PackageMetadataUsesCurrentMinorVersion()
+    public void PackageMetadataUsesCurrentPatchVersion()
     {
         string root = FindRepositoryRoot();
         string project = File.ReadAllText(
@@ -1760,19 +1762,19 @@ public sealed class VoxelSharedContractTests
                 "Supprocom.NativeAllocationManagement.csproj"));
 
         Assert.Contains(
-            "<Version>0.2.2</Version>",
+            "<Version>0.2.3</Version>",
             project,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Specialize Region, Arena, and Pool hot paths.",
+            "Strengthen bundled ownership analysis",
             project,
             StringComparison.Ordinal);
         Assert.Contains(
-            "bounded builder writes",
+            "native cleanup",
             project,
             StringComparison.Ordinal);
         Assert.Contains(
-            "reusable workspaces",
+            "zero-warning Release analyzer gate",
             project,
             StringComparison.Ordinal);
     }
@@ -1834,7 +1836,7 @@ public sealed class VoxelSharedContractTests
                 true,
                 true,
                 true),
-            new Dictionary<string, string>(),
+            new Dictionary<string, string>(StringComparer.Ordinal),
             [],
             []);
 
@@ -1850,7 +1852,7 @@ public sealed class VoxelSharedContractTests
         Assert.Equal(4, roundTrip.Verification.Initialization.WarmupPasses);
         Assert.Equal(capBytes * 10, roundTrip.Verification.Initialization.WarmupCumulativeDemandBytes);
         Assert.Equal(capBytes * 100, roundTrip.Verification.RequestedCumulativeDemandBytes);
-        PressureBinaryIdentity identity = Assert.Single(
+        PressureBinaryIdentity identity = SingleExpected(
             roundTrip.BinaryIdentities);
         Assert.Equal("Harness", identity.Component);
         Assert.Equal("HASH", identity.Sha256);
@@ -2143,9 +2145,9 @@ public sealed class VoxelSharedContractTests
         CanonicalInputCell[] cells = Assert.IsType<CanonicalInputCell[]>(contract.Cells);
         Assert.Equal(contract.CellCount, cells.LongLength);
         long cellHash = 17;
-        for (int index = 0; index < cells.Length; index++)
+        foreach (CanonicalInputCell cell in cells)
         {
-            cellHash = VoxelMath.DigestCanonicalInputCell(cellHash, cells[index]);
+            cellHash = VoxelMath.DigestCanonicalInputCell(cellHash, cell);
         }
         Assert.Equal(contract.CellValueByteHash, cellHash);
         Assert.Equal(0, cells[0].CellIndex);
@@ -2220,7 +2222,7 @@ public sealed class VoxelSharedContractTests
             fixture.TransparentSlices,
             changedUpload);
         Assert.Equal(64, original.Length);
-        Assert.NotEqual(original, changed);
+        Assert.NotEqual(original, changed, StringComparer.Ordinal);
     }
 
     [VoxelDemonstrationFact]
@@ -2235,8 +2237,8 @@ public sealed class VoxelSharedContractTests
         Assert.Equal(24, fixture.TransparentIndices.Length);
         Assert.Equal(4, fixture.TransparentSlices.Length);
         Assert.True(fixture.TransparentUpload.Length > 512);
-        Assert.Equal(new[] { 0, 1, 2, 3 }, fixture.OpaqueVertices.Select(value => value.Corner).Distinct().OrderBy(value => value));
-        Assert.Equal(new[] { 0, 1, 2, 3 }, fixture.TransparentVertices.Select(value => value.Corner).Distinct().OrderBy(value => value));
+        Assert.Equal(ExpectedCorners, fixture.OpaqueVertices.Select(value => value.Corner).Distinct().OrderBy(value => value));
+        Assert.Equal(ExpectedCorners, fixture.TransparentVertices.Select(value => value.Corner).Distinct().OrderBy(value => value));
         Assert.Contains(fixture.OpaqueSlices, slice => slice.Alignment > 1 && slice.Length > slice.Alignment);
         Assert.Contains(fixture.TransparentSlices, slice => slice.StageMask != 0 && slice.BlockId > 255);
     }
@@ -2901,7 +2903,7 @@ public sealed class VoxelSharedContractTests
         masks[0] ^= 1;
         Assert.NotEqual(
             maskHash,
-            PressureWorkContract.HashTransparentMasks(chunkId, masks));
+            PressureWorkContract.HashTransparentMasks(chunkId, masks), StringComparer.Ordinal);
     }
 
     [VoxelDemonstrationFact]
@@ -3295,7 +3297,7 @@ public sealed class VoxelSharedContractTests
             int indices = 0;
             Dictionary<int, int> sliceBuckets = [];
             Dictionary<int, int> uploadBuckets = [];
-            foreach (PressureChunkShape shape in shapes.Slice(start, depth))
+            foreach (ref readonly PressureChunkShape shape in shapes.Slice(start, depth))
             {
                 records += Math.Max(1, shape.RecordCount);
                 masks += Math.Max(1, shape.TransparentMaskWords);
@@ -3527,16 +3529,16 @@ public sealed class VoxelSharedContractTests
         PressureRequestDiagnostics diagnostics = new([worker]);
 
         Assert.Equal("source-hash", restored.WorkingTreeSourceSha256);
-        Assert.Single(restored.Traces);
+        SingleExpected(restored.Traces);
         Assert.Equal("NAM-10", restored.Traces[0].Label);
         Assert.Equal(
             "Safe-12",
             restored.HostGateFailure?.TraceLabel);
-        Assert.Equal("docker run", Assert.Single(restored.Commands));
-        Assert.Single(
+        Assert.Equal("docker run", SingleExpected(restored.Commands));
+        SingleExpected(
             restored.HostGateFailure?.HostGate.Samples
                 ?? []);
-        Assert.Single(diagnostics.Workers);
+        SingleExpected(diagnostics.Workers);
         Assert.Same(
             typeof(FaceRecord).Assembly,
             diagnostics.GetType().Assembly);
@@ -3643,7 +3645,7 @@ public sealed class VoxelSharedContractTests
             safeProgram,
             StringComparison.Ordinal);
         Assert.Contains(
-            "implementation == \"NAM\"",
+            "string.Equals(implementation, \"NAM\", StringComparison.Ordinal)",
             harness,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -3705,7 +3707,7 @@ public sealed class VoxelSharedContractTests
             harness,
             StringComparison.Ordinal);
         Assert.Contains(
-            "await worker.DisposeAsync();",
+            "await worker.DisposeAsync().ConfigureAwait(false);",
             harness,
             StringComparison.Ordinal);
     }
@@ -3803,6 +3805,7 @@ public sealed class VoxelSharedContractTests
         Directory.Delete(directory);
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "VSTHRD002", Justification = "This synchronous subprocess fixture drains both streams after the child has exited, without a synchronization context.")]
     private static (
         int ExitCode,
         string StandardOutput,
@@ -3866,18 +3869,31 @@ public sealed class VoxelSharedContractTests
     }
 
     private static string FindRepositoryRoot()
-    {
-        DirectoryInfo? directory = new(AppContext.BaseDirectory);
-        while (directory is not null)
-        {
-            if (File.Exists(Path.Combine(directory.FullName, "Supprocom.NativeAllocationManagement.slnx")))
-            {
-                return directory.FullName;
-            }
+        => RepositoryTestPaths.Root;
+}
 
-            directory = directory.Parent;
+[AttributeUsage(AttributeTargets.Method)]
+internal sealed class VoxelPowerShellFactAttribute : FactAttribute
+{
+    public VoxelPowerShellFactAttribute()
+    {
+        if (!VoxelDemonstration.IsEnabled)
+        {
+            Skip = VoxelDemonstration.SkipMessage;
+            return;
         }
 
-        throw new DirectoryNotFoundException("Could not find the repository root.");
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        string? searchPath = Environment.GetEnvironmentVariable("PATH");
+        if (searchPath is null || !searchPath
+                .Split(Path.PathSeparator)
+                .Any(static directory => File.Exists(Path.Combine(directory, "pwsh"))))
+        {
+            Skip = "PowerShell (pwsh) is required for the wrapper script validation.";
+        }
     }
 }

@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Runtime.Loader;
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -22,6 +23,12 @@ internal static class PoolBinaryComparison
     private const string ProbeTypeName =
         "Supprocom.NativeAllocationManagement.Performance.PoolExactHeadProbe";
 
+    private static readonly JsonSerializerOptions ReportJsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        WriteIndented = true
+    };
+
     internal static int RunCommand(string[] args)
     {
         string baselinePath = ReadRequiredOption(args, "--baseline");
@@ -43,11 +50,7 @@ internal static class PoolBinaryComparison
             measuredIterations);
         string json = JsonSerializer.Serialize(
             report,
-            new JsonSerializerOptions
-            {
-                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                WriteIndented = true
-            });
+            ReportJsonOptions);
         string? outputPath = ReadOptionalOption(args, "--output");
         if (outputPath is not null)
         {
@@ -85,23 +88,29 @@ internal static class PoolBinaryComparison
             warmupIterations);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
             measuredIterations);
-        if (warmupIterations % SubBatchCount != 0
-            || measuredIterations % SubBatchCount != 0)
+        if (warmupIterations % SubBatchCount != 0)
         {
             throw new ArgumentException(
-                "Iteration counts must be divisible by 64.");
+                "The warmup iteration count must be divisible by 64.",
+                nameof(warmupIterations));
+        }
+
+        if (measuredIterations % SubBatchCount != 0)
+        {
+            throw new ArgumentException(
+                "The measured iteration count must be divisible by 64.",
+                nameof(measuredIterations));
         }
 
         using var calibrationLeft = new ProbeAssemblyHost(baselinePath);
         using var calibrationRight = new ProbeAssemblyHost(baselinePath);
         using var baseline = new ProbeAssemblyHost(baselinePath);
         using var candidate = new ProbeAssemblyHost(candidatePath);
-        bool harnessIdentity = baseline.PerformanceSha256
-            == candidate.PerformanceSha256;
-        bool runtimeIdentity = calibrationLeft.RuntimeSha256
-                == calibrationRight.RuntimeSha256
-            && calibrationLeft.RuntimeSha256
-                == baseline.RuntimeSha256;
+        bool harnessIdentity = string.Equals(baseline.PerformanceSha256
+, candidate.PerformanceSha256, StringComparison.Ordinal);
+        bool runtimeIdentity = string.Equals(calibrationLeft.RuntimeSha256
+, calibrationRight.RuntimeSha256, StringComparison.Ordinal) && string.Equals(calibrationLeft.RuntimeSha256
+, baseline.RuntimeSha256, StringComparison.Ordinal);
 
         ProbeAssemblyHost[] preparationOrder =
         [
@@ -413,7 +422,7 @@ internal static class PoolBinaryComparison
             : PoolBinaryVariant.Baseline;
 
     private static PoolExactHeadProbeReport Aggregate(
-        IReadOnlyList<PoolExactHeadProbeReport> results)
+        PoolExactHeadProbeReport[] results)
     {
         int warmupIterations = results.Sum(static item =>
             item.WarmupIterations);
@@ -748,7 +757,7 @@ internal static class PoolBinaryComparison
     {
         for (int index = 0; index < args.Length - 1; index++)
         {
-            if (args[index] == name)
+            if (string.Equals(args[index], name, StringComparison.Ordinal))
             {
                 return args[index + 1];
             }
@@ -955,6 +964,7 @@ internal readonly record struct PoolBinaryPairEvidence(
     double BaselineToCandidateSpeedup,
     double BaselineToCandidateProcessorSpeedup);
 
+[StructLayout(LayoutKind.Sequential)]
 internal readonly record struct PoolBinaryPreparationEvidence(
     int Sequence,
     PoolBinaryHost Host,

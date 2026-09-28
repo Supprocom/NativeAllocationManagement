@@ -49,6 +49,8 @@ public sealed record VoxelHandoffPairEvidence(
     VoxelHandoffWorkerEvidence Native,
     double ManagedToNativeSpeedup);
 
+// The pair array is the persisted benchmark evidence schema.
+#pragma warning disable CA1819
 public sealed record VoxelHandoffBenchmarkReport(
     VoxelHandoffBenchmarkOptions Options,
     VoxelHandoffPairEvidence[] Pairs,
@@ -63,3 +65,4 @@ public sealed record VoxelHandoffBenchmarkReport(
     bool PerformanceAdvantage,
     double TotalElapsedMilliseconds,
     DateTimeOffset CreatedUtc);
+#pragma warning restore CA1819

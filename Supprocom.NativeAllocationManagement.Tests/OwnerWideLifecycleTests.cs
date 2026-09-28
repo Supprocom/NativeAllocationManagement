@@ -8,7 +8,7 @@ public sealed class OwnerWideLifecycleTests
     public async Task PoolStrictReturnRejectsRetiredOperationsAndThenReleasesEveryGeneration()
     {
         NativeMemoryTestHooks.Reset();
-        NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         BusyGenerationSet busy = StartBusyPoolGenerations(pool, 2);
         long generationBeforeReturn = pool.GenerationCounterForTest;
 
@@ -49,7 +49,7 @@ public sealed class OwnerWideLifecycleTests
     public async Task ArenaStrictReturnRejectsRetiredOperationsAndThenReleasesEveryGeneration()
     {
         NativeMemoryTestHooks.Reset();
-        NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         BusyGenerationSet busy = StartBusyArenaGenerations(arena, 2);
 
         try
@@ -237,11 +237,11 @@ public sealed class OwnerWideLifecycleTests
     public async Task PoolMultipleDetachedGenerationsDoNotBlockFreshTransitions()
     {
         NativeMemoryTestHooks.Reset();
-        NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         List<NativeGenerationOwner> retainedOwners = [];
         NativeMemoryTestHooks.SetOperationEnteredWithGenerationOwner((operation, owner) =>
         {
-            if (operation == nameof(ConcurrentPooled<int>.Access))
+            if (string.Equals(operation, nameof(ConcurrentPooled<int>.Access), StringComparison.Ordinal))
             {
                 retainedOwners.Add(owner);
             }
@@ -249,8 +249,8 @@ public sealed class OwnerWideLifecycleTests
         long detachedBytesAfterFinalization = -1;
 
         BusyGenerationSet first = StartBusyPoolGenerations(pool, 1);
-        ManualResetEventSlim secondAllow = new();
-        ManualResetEventSlim secondEntered = new();
+        using ManualResetEventSlim secondAllow = new();
+        using ManualResetEventSlim secondEntered = new();
         Task<Exception?>? secondWorker = null;
 
         try
@@ -270,7 +270,7 @@ public sealed class OwnerWideLifecycleTests
             long freeBeforeDrain = NativeMemoryTestHooks.Snapshot().FreeCount;
 
             secondAllow.Set();
-            Assert.Null(await secondWorker);
+            Assert.Null(await secondWorker.ConfigureAwait(true));
             await ReleaseBusyAsync(first, [0]);
             Assert.Equal(freeBeforeDrain, NativeMemoryTestHooks.Snapshot().FreeCount);
         }
@@ -280,7 +280,7 @@ public sealed class OwnerWideLifecycleTests
             await FinishBusyAsync(first);
             if (secondWorker is not null)
             {
-                _ = await secondWorker;
+                _ = await secondWorker.ConfigureAwait(true);
             }
 
             retainedOwners.Clear();
@@ -298,11 +298,11 @@ public sealed class OwnerWideLifecycleTests
     public async Task ArenaMultipleDetachedGenerationsDoNotBlockFreshTransitions()
     {
         NativeMemoryTestHooks.Reset();
-        NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         List<NativeGenerationOwner> retainedOwners = [];
         NativeMemoryTestHooks.SetOperationEnteredWithGenerationOwner((operation, owner) =>
         {
-            if (operation == nameof(ConcurrentArenaLease<int>.Access))
+            if (string.Equals(operation, nameof(ConcurrentArenaLease<int>.Access), StringComparison.Ordinal))
             {
                 retainedOwners.Add(owner);
             }
@@ -310,8 +310,8 @@ public sealed class OwnerWideLifecycleTests
         long detachedBytesAfterFinalization = -1;
 
         BusyGenerationSet first = StartBusyArenaGenerations(arena, 1);
-        ManualResetEventSlim secondAllow = new();
-        ManualResetEventSlim secondEntered = new();
+        using ManualResetEventSlim secondAllow = new();
+        using ManualResetEventSlim secondEntered = new();
         Task<Exception?>? secondWorker = null;
 
         try
@@ -331,7 +331,7 @@ public sealed class OwnerWideLifecycleTests
             long freeBeforeDrain = NativeMemoryTestHooks.Snapshot().FreeCount;
 
             secondAllow.Set();
-            Assert.Null(await secondWorker);
+            Assert.Null(await secondWorker.ConfigureAwait(true));
             await ReleaseBusyAsync(first, [0]);
             Assert.Equal(freeBeforeDrain, NativeMemoryTestHooks.Snapshot().FreeCount);
         }
@@ -341,7 +341,7 @@ public sealed class OwnerWideLifecycleTests
             await FinishBusyAsync(first);
             if (secondWorker is not null)
             {
-                _ = await secondWorker;
+                _ = await secondWorker.ConfigureAwait(true);
             }
 
             retainedOwners.Clear();
@@ -363,7 +363,7 @@ public sealed class OwnerWideLifecycleTests
         NativeGenerationOwner? retainedOwner = null;
         NativeMemoryTestHooks.SetOperationEnteredWithGenerationOwner((operation, owner) =>
         {
-            if (operation == nameof(ConcurrentPooled<int>.Access))
+            if (string.Equals(operation, nameof(ConcurrentPooled<int>.Access), StringComparison.Ordinal))
             {
                 retainedOwner = owner;
             }
@@ -381,7 +381,7 @@ public sealed class OwnerWideLifecycleTests
             NativeMemoryTestHooks.FailAfterCommitBoundary(1);
             busy.Allows[0].Set();
             NativeAllocationQuarantinedException failure =
-                Assert.IsType<NativeAllocationQuarantinedException>(await busy.Workers[0]);
+                Assert.IsType<NativeAllocationQuarantinedException>(await busy.Workers[0].ConfigureAwait(true));
             Assert.Equal("clear", failure.Boundary);
             Assert.Equal(0, pool.RetiredGenerationCountForTest);
             Assert.Equal(0, pool.QuarantinedGenerationCountForTest);
@@ -415,7 +415,7 @@ public sealed class OwnerWideLifecycleTests
         NativeGenerationOwner? retainedOwner = null;
         NativeMemoryTestHooks.SetOperationEnteredWithGenerationOwner((operation, owner) =>
         {
-            if (operation == nameof(ConcurrentArenaLease<int>.Access))
+            if (string.Equals(operation, nameof(ConcurrentArenaLease<int>.Access), StringComparison.Ordinal))
             {
                 retainedOwner = owner;
             }
@@ -433,7 +433,7 @@ public sealed class OwnerWideLifecycleTests
             NativeMemoryTestHooks.FailAfterCommitBoundary(1);
             busy.Allows[0].Set();
             NativeAllocationQuarantinedException failure =
-                Assert.IsType<NativeAllocationQuarantinedException>(await busy.Workers[0]);
+                Assert.IsType<NativeAllocationQuarantinedException>(await busy.Workers[0].ConfigureAwait(true));
             Assert.Equal("clear", failure.Boundary);
             Assert.Equal(0, arena.RetiredGenerationCountForTest);
             Assert.Equal(0, arena.QuarantinedGenerationCountForTest);
@@ -465,7 +465,7 @@ public sealed class OwnerWideLifecycleTests
         foreach (NativeMemoryReturn policy in Enum.GetValues<NativeMemoryReturn>())
         {
             NativeMemoryTestHooks.Reset();
-            NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: policy);
+            using NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: policy);
             BusyGenerationSet busy = StartBusyPoolGenerations(pool, 2);
 
             try
@@ -499,7 +499,7 @@ public sealed class OwnerWideLifecycleTests
         foreach (NativeMemoryReturn policy in Enum.GetValues<NativeMemoryReturn>())
         {
             NativeMemoryTestHooks.Reset();
-            NativeConcurrentArena arena = new(returnMemoryOnDispose: policy);
+            using NativeConcurrentArena arena = new(returnMemoryOnDispose: policy);
             BusyGenerationSet busy = StartBusyArenaGenerations(arena, 2);
 
             try
@@ -533,7 +533,7 @@ public sealed class OwnerWideLifecycleTests
         foreach (NativeMemoryReturn policy in Enum.GetValues<NativeMemoryReturn>())
         {
             NativeMemoryTestHooks.Reset();
-            NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: policy);
+            using NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: policy);
             BusyGenerationSet busy = StartBusyPoolGenerations(pool, 1);
 
             try
@@ -542,7 +542,7 @@ public sealed class OwnerWideLifecycleTests
                 NativeMemoryTestHooks.FailAfterCommitBoundary(1);
                 busy.Allows[0].Set();
                 NativeAllocationQuarantinedException failure =
-                    Assert.IsType<NativeAllocationQuarantinedException>(await busy.Workers[0]);
+                    Assert.IsType<NativeAllocationQuarantinedException>(await busy.Workers[0].ConfigureAwait(true));
                 Assert.Equal("clear", failure.Boundary);
                 Assert.Equal(1, pool.QuarantinedGenerationCountForTest);
                 long freeBeforeReturn = NativeMemoryTestHooks.Snapshot().FreeCount;
@@ -582,7 +582,7 @@ public sealed class OwnerWideLifecycleTests
         foreach (NativeMemoryReturn policy in Enum.GetValues<NativeMemoryReturn>())
         {
             NativeMemoryTestHooks.Reset();
-            NativeConcurrentArena arena = new(returnMemoryOnDispose: policy);
+            using NativeConcurrentArena arena = new(returnMemoryOnDispose: policy);
             BusyGenerationSet busy = StartBusyArenaGenerations(arena, 1);
 
             try
@@ -591,7 +591,7 @@ public sealed class OwnerWideLifecycleTests
                 NativeMemoryTestHooks.FailAfterCommitBoundary(1);
                 busy.Allows[0].Set();
                 NativeAllocationQuarantinedException failure =
-                    Assert.IsType<NativeAllocationQuarantinedException>(await busy.Workers[0]);
+                    Assert.IsType<NativeAllocationQuarantinedException>(await busy.Workers[0].ConfigureAwait(true));
                 Assert.Equal("clear", failure.Boundary);
                 Assert.Equal(1, arena.QuarantinedGenerationCountForTest);
                 long freeBeforeReturn = NativeMemoryTestHooks.Snapshot().FreeCount;
@@ -638,7 +638,7 @@ public sealed class OwnerWideLifecycleTests
             WaitForEntry(busy);
             NativeMemoryTestHooks.FailAfterCommitBoundary(1);
             busy.Allows[0].Set();
-            _ = Assert.IsType<NativeAllocationQuarantinedException>(await busy.Workers[0]);
+            _ = Assert.IsType<NativeAllocationQuarantinedException>(await busy.Workers[0].ConfigureAwait(true));
             long freeBeforeHandoff = NativeMemoryTestHooks.Snapshot().FreeCount;
 
             pool.ReturnMemoryToGarbageCollector();
@@ -677,7 +677,7 @@ public sealed class OwnerWideLifecycleTests
             WaitForEntry(busy);
             NativeMemoryTestHooks.FailAfterCommitBoundary(1);
             busy.Allows[0].Set();
-            _ = Assert.IsType<NativeAllocationQuarantinedException>(await busy.Workers[0]);
+            _ = Assert.IsType<NativeAllocationQuarantinedException>(await busy.Workers[0].ConfigureAwait(true));
             long freeBeforeHandoff = NativeMemoryTestHooks.Snapshot().FreeCount;
 
             arena.ReturnMemoryToGarbageCollector();
@@ -762,10 +762,11 @@ public sealed class OwnerWideLifecycleTests
         foreach (int index in order)
         {
             busy.Allows[index].Set();
-            Assert.Null(await busy.Workers[index]);
+            Assert.Null(await busy.Workers[index].ConfigureAwait(true));
         }
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The test intentionally captures arbitrary callback or worker failures for lifecycle assertions.")]
     private static async Task FinishBusyAsync(BusyGenerationSet busy)
     {
         for (int index = 0; index < busy.Allows.Length; index++)
@@ -779,7 +780,7 @@ public sealed class OwnerWideLifecycleTests
             {
                 try
                 {
-                    _ = await worker;
+                    _ = await worker.ConfigureAwait(true);
                 }
                 catch
                 {
@@ -788,6 +789,7 @@ public sealed class OwnerWideLifecycleTests
         }
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The test intentionally captures arbitrary callback or worker failures for lifecycle assertions.")]
     private static Exception? HoldBusyPoolLease(
         NativeConcurrentPool<int> pool,
         int length,
@@ -812,6 +814,7 @@ public sealed class OwnerWideLifecycleTests
         }
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The test intentionally captures arbitrary callback or worker failures for lifecycle assertions.")]
     private static Exception? HoldBusyArenaLease(
         NativeConcurrentArena arena,
         int length,

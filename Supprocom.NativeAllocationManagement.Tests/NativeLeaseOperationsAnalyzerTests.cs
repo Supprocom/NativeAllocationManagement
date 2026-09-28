@@ -70,7 +70,7 @@ public sealed class NativeLeaseOperationsAnalyzerTests
             """);
 
         string[] ids = AnalyzerContractTests.NativeDiagnostics(diagnostics);
-        Assert.Contains("NAM1003", ids);
+        Assert.Contains("NAM1003", ids, StringComparer.Ordinal);
     }
 
     [Fact]
@@ -97,7 +97,7 @@ public sealed class NativeLeaseOperationsAnalyzerTests
                 }
             }
             """);
-        Assert.Contains("NAM1020", AnalyzerContractTests.NativeDiagnostics(missing));
+        Assert.Contains("NAM1020", AnalyzerContractTests.NativeDiagnostics(missing), StringComparer.Ordinal);
 
         ImmutableArray<Diagnostic> premature = await AnalyzerContractTests.AnalyzeAsync(
             """
@@ -114,7 +114,7 @@ public sealed class NativeLeaseOperationsAnalyzerTests
                 }
             }
             """);
-        Assert.Contains("NAM1007", AnalyzerContractTests.NativeDiagnostics(premature));
+        Assert.Contains("NAM1007", AnalyzerContractTests.NativeDiagnostics(premature), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -139,7 +139,7 @@ public sealed class NativeLeaseOperationsAnalyzerTests
             """);
 
         string[] ids = AnalyzerContractTests.NativeDiagnostics(diagnostics);
-        Assert.Contains("NAM1016", ids);
+        Assert.Contains("NAM1016", ids, StringComparer.Ordinal);
     }
 
     [Fact]
@@ -166,7 +166,7 @@ public sealed class NativeLeaseOperationsAnalyzerTests
                 }
             }
             """);
-        Assert.Contains("NAM1020", AnalyzerContractTests.NativeDiagnostics(branch));
+        Assert.Contains("NAM1020", AnalyzerContractTests.NativeDiagnostics(branch), StringComparer.Ordinal);
 
         ImmutableArray<Diagnostic> exceptional = await AnalyzerContractTests.AnalyzeAsync(
             """
@@ -198,10 +198,10 @@ public sealed class NativeLeaseOperationsAnalyzerTests
             .Where(item => item.Id is "NAM1007" or "NAM1020")
             .ToArray();
         Assert.Equal(2, exceptionalNative.Length);
-        Diagnostic live = exceptionalNative.Single(item => item.Id == "NAM1007");
-        Assert.Contains("pool.RecycleScoped", live.Location.SourceTree!.GetText().ToString(live.Location.SourceSpan));
+        Diagnostic live = SingleExpected(exceptionalNative.Where(item => string.Equals(item.Id, "NAM1007", StringComparison.Ordinal)));
+        Assert.Contains("pool.RecycleScoped", (await live.Location.SourceTree!.GetTextAsync()).ToString(live.Location.SourceSpan), StringComparison.Ordinal);
         Assert.Contains("value", live.Properties["NAM.Provenance"]!, StringComparison.Ordinal);
-        Diagnostic missing = exceptionalNative.Single(item => item.Id == "NAM1020");
+        Diagnostic missing = SingleExpected(exceptionalNative.Where(item => string.Equals(item.Id, "NAM1020", StringComparison.Ordinal)));
         Assert.Equal("NAM1020", missing.Properties["NAM.DiagnosticId"]);
         Assert.Contains("pool", missing.Properties["NAM.Provenance"]!, StringComparison.Ordinal);
 
@@ -223,7 +223,7 @@ public sealed class NativeLeaseOperationsAnalyzerTests
                 }
             }
             """);
-        Assert.Contains("NAM1007", AnalyzerContractTests.NativeDiagnostics(premature));
+        Assert.Contains("NAM1007", AnalyzerContractTests.NativeDiagnostics(premature), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -296,7 +296,7 @@ public sealed class NativeLeaseOperationsAnalyzerTests
             }
             """);
 
-        Assert.Contains("NAM1020", AnalyzerContractTests.NativeDiagnostics(diagnostics));
+        Assert.Contains("NAM1020", AnalyzerContractTests.NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -332,7 +332,7 @@ public sealed class NativeLeaseOperationsAnalyzerTests
             }
             """);
 
-        Assert.Contains("NAM1020", AnalyzerContractTests.NativeDiagnostics(diagnostics));
+        Assert.Contains("NAM1020", AnalyzerContractTests.NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -363,11 +363,11 @@ public sealed class NativeLeaseOperationsAnalyzerTests
             """);
 
         Assert.True(
-            diagnostics.Any(item => item.Id == "NAM1007"),
+            diagnostics.Any(item => string.Equals(item.Id, "NAM1007", StringComparison.Ordinal)),
             string.Join(Environment.NewLine, diagnostics.Select(item => item.ToString())));
-        Diagnostic diagnostic = diagnostics.First(item => item.Id == "NAM1007");
-        Assert.Contains("outer", diagnostic.GetMessage(), StringComparison.Ordinal);
-        Assert.Contains("RecycleScoped", diagnostic.GetMessage(), StringComparison.Ordinal);
+        Diagnostic diagnostic = diagnostics.First(item => string.Equals(item.Id, "NAM1007", StringComparison.Ordinal));
+        Assert.Contains("outer", diagnostic.GetMessage(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal);
+        Assert.Contains("RecycleScoped", diagnostic.GetMessage(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal);
         Assert.Equal(16, diagnostic.Location.GetLineSpan().StartLinePosition.Line);
     }
 
@@ -399,11 +399,11 @@ public sealed class NativeLeaseOperationsAnalyzerTests
             """);
 
         Assert.True(
-            diagnostics.Count(item => item.Id == "NAM1020") == 1,
+            diagnostics.Count(item => string.Equals(item.Id, "NAM1020", StringComparison.Ordinal)) == 1,
             string.Join(Environment.NewLine, diagnostics.Select(item => item.ToString())));
-        Diagnostic diagnostic = diagnostics.First(item => item.Id == "NAM1020");
-        Assert.Contains("pool", diagnostic.GetMessage(), StringComparison.Ordinal);
-        Assert.DoesNotContain(diagnostics, item => item.Id == "NAM1007");
+        Diagnostic diagnostic = diagnostics.First(item => string.Equals(item.Id, "NAM1020", StringComparison.Ordinal));
+        Assert.Contains("pool", diagnostic.GetMessage(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal);
+        Assert.DoesNotContain(diagnostics, item => string.Equals(item.Id, "NAM1007", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -438,13 +438,13 @@ public sealed class NativeLeaseOperationsAnalyzerTests
                 }
                 """);
 
-            Diagnostic[] missing = diagnostics.Where(item => item.Id == "NAM1020").ToArray();
+            Diagnostic[] missing = diagnostics.Where(item => string.Equals(item.Id, "NAM1020", StringComparison.Ordinal)).ToArray();
             Assert.True(missing.Length == 1, string.Join(Environment.NewLine, diagnostics));
-            Assert.Contains("pool", missing[0].GetMessage(), StringComparison.Ordinal);
+            Assert.Contains("pool", missing[0].GetMessage(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal);
             Assert.Equal("NAM1020", missing[0].Properties["NAM.DiagnosticId"]);
             Assert.Equal("Scoped native storage is not recycled on every exit", missing[0].Properties["NAM.Operation"]);
-            Assert.Contains("pool", missing[0].Properties["NAM.Provenance"]!);
-            Assert.Contains("pool.LeaseScoped", missing[0].Location.SourceTree!.GetText().ToString(missing[0].Location.SourceSpan));
+            Assert.Contains("pool", missing[0].Properties["NAM.Provenance"]!, StringComparison.Ordinal);
+            Assert.Contains("pool.LeaseScoped", (await missing[0].Location.SourceTree!.GetTextAsync()).ToString(missing[0].Location.SourceSpan), StringComparison.Ordinal);
         }
     }
 
@@ -486,13 +486,13 @@ public sealed class NativeLeaseOperationsAnalyzerTests
             }
             """);
 
-        Diagnostic[] liveRoot = diagnostics.Where(item => item.Id == "NAM1007").ToArray();
+        Diagnostic[] liveRoot = diagnostics.Where(item => string.Equals(item.Id, "NAM1007", StringComparison.Ordinal)).ToArray();
         Assert.True(liveRoot.Length == 1, string.Join(Environment.NewLine, diagnostics));
-        Assert.Contains("value", liveRoot[0].GetMessage(), StringComparison.Ordinal);
+        Assert.Contains("value", liveRoot[0].GetMessage(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal);
         Assert.Equal("NAM1007", liveRoot[0].Properties["NAM.DiagnosticId"]);
         Assert.Equal("Native return has live generation state", liveRoot[0].Properties["NAM.Operation"]);
-        Assert.Contains("value", liveRoot[0].Properties["NAM.Provenance"]!);
-        Assert.Contains("pool.RecycleScoped", liveRoot[0].Location.SourceTree!.GetText().ToString(liveRoot[0].Location.SourceSpan));
+        Assert.Contains("value", liveRoot[0].Properties["NAM.Provenance"]!, StringComparison.Ordinal);
+        Assert.Contains("pool.RecycleScoped", (await liveRoot[0].Location.SourceTree!.GetTextAsync()).ToString(liveRoot[0].Location.SourceSpan), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -587,8 +587,8 @@ public sealed class NativeLeaseOperationsAnalyzerTests
             }
             """);
 
-        Diagnostic[] catchMissing = catchFilter.Where(item => item.Id == "NAM1020").ToArray();
-        Assert.Single(catchMissing);
+        Diagnostic[] catchMissing = catchFilter.Where(item => string.Equals(item.Id, "NAM1020", StringComparison.Ordinal)).ToArray();
+        SingleExpected(catchMissing);
         Assert.Contains("pool", catchMissing[0].Properties["NAM.Provenance"]!, StringComparison.OrdinalIgnoreCase);
 
         ImmutableArray<Diagnostic> nestedFinally = await AnalyzerContractTests.AnalyzeAsync(
@@ -621,9 +621,9 @@ public sealed class NativeLeaseOperationsAnalyzerTests
             }
             """);
 
-        Diagnostic[] nestedMissing = nestedFinally.Where(item => item.Id == "NAM1020").ToArray();
-        Assert.Single(nestedMissing);
-        Assert.Contains("pool", nestedMissing[0].Properties["NAM.Provenance"]!);
+        Diagnostic[] nestedMissing = nestedFinally.Where(item => string.Equals(item.Id, "NAM1020", StringComparison.Ordinal)).ToArray();
+        SingleExpected(nestedMissing);
+        Assert.Contains("pool", nestedMissing[0].Properties["NAM.Provenance"]!, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -656,15 +656,15 @@ public sealed class NativeLeaseOperationsAnalyzerTests
             }
             """);
 
-        Diagnostic[] missing = diagnostics.Where(item => item.Id == "NAM1020").ToArray();
-        Assert.Single(missing);
+        Diagnostic[] missing = diagnostics.Where(item => string.Equals(item.Id, "NAM1020", StringComparison.Ordinal)).ToArray();
+        SingleExpected(missing);
         Assert.Equal("NAM1020", missing[0].Properties["NAM.DiagnosticId"]);
         Assert.Equal("Scoped native storage is not recycled on every exit", missing[0].Properties["NAM.Operation"]);
-        Assert.Contains("pool", missing[0].Properties["NAM.Provenance"]!);
-        Diagnostic[] ambiguous = diagnostics.Where(item => item.Id == "NAM1007").ToArray();
-        Assert.Single(ambiguous);
+        Assert.Contains("pool", missing[0].Properties["NAM.Provenance"]!, StringComparison.Ordinal);
+        Diagnostic[] ambiguous = diagnostics.Where(item => string.Equals(item.Id, "NAM1007", StringComparison.Ordinal)).ToArray();
+        SingleExpected(ambiguous);
         Assert.Equal("NAM1007", ambiguous[0].Properties["NAM.DiagnosticId"]);
-        Assert.Contains("ambiguous scoped allocation", ambiguous[0].Properties["NAM.Provenance"]!);
+        Assert.Contains("ambiguous scoped allocation", ambiguous[0].Properties["NAM.Provenance"]!, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -727,14 +727,15 @@ public sealed class NativeLeaseOperationsAnalyzerTests
             }
             """);
 
-        Diagnostic[] live = diagnostics.Where(item => item.Id == "NAM1007").ToArray();
-        Assert.Single(live);
-        Assert.Contains("pool.RecycleScoped", live[0].Location.SourceTree!.GetText().ToString(live[0].Location.SourceSpan));
+        Diagnostic[] live = diagnostics.Where(item => string.Equals(item.Id, "NAM1007", StringComparison.Ordinal)).ToArray();
+        SingleExpected(live);
+        Assert.Contains("pool.RecycleScoped", (await live[0].Location.SourceTree!.GetTextAsync()).ToString(live[0].Location.SourceSpan), StringComparison.Ordinal);
         Assert.Equal("NAM1007", live[0].Properties["NAM.DiagnosticId"]);
         Assert.Contains("pool", live[0].Properties["NAM.Provenance"]!, StringComparison.Ordinal);
     }
 
     [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1861", Justification = "The expected diagnostic IDs are a one-shot test assertion.")]
     public async Task FinallyStableReportingPreservesNonRecycleDiagnostics()
     {
         ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
@@ -757,13 +758,13 @@ public sealed class NativeLeaseOperationsAnalyzerTests
             }
             """);
 
-        Diagnostic[] native = diagnostics.Where(item => item.Id == "NAM1009").ToArray();
-        Assert.Single(native);
+        Diagnostic[] native = diagnostics.Where(item => string.Equals(item.Id, "NAM1009", StringComparison.Ordinal)).ToArray();
+        SingleExpected(native);
         Assert.Equal(new[] { "NAM1009" }, native.Select(item => item.Id).ToArray());
-        Assert.Contains("pool.Rent", native[0].Location.SourceTree!.GetText().ToString(native[0].Location.SourceSpan));
+        Assert.Contains("pool.Rent", (await native[0].Location.SourceTree!.GetTextAsync()).ToString(native[0].Location.SourceSpan), StringComparison.Ordinal);
         Assert.Equal("NAM1009", native[0].Properties["NAM.DiagnosticId"]);
         Assert.Contains("pool", native[0].Properties["NAM.Provenance"]!, StringComparison.Ordinal);
-        Assert.Single(AnalyzerContractTests.NativeDiagnostics(diagnostics));
+        SingleExpected(AnalyzerContractTests.NativeDiagnostics(diagnostics));
     }
 
     [Fact]

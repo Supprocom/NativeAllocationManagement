@@ -2,6 +2,7 @@ using System.Buffers;
 using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using Microsoft.CodeAnalysis;
@@ -70,40 +71,40 @@ internal static class Program
         if (args.Length != 0
             && args[0] is "--voxel-handoff" or "--voxel-handoff-worker")
         {
-            return await VoxelHandoffBenchmark.RunCommandAsync(args);
+            return await VoxelHandoffBenchmark.RunCommandAsync(args).ConfigureAwait(false);
         }
 
         if (args.Length != 0
             && args[0] is "--native-builder" or "--native-builder-worker")
         {
-            return await NativeBuilderBenchmark.RunCommandAsync(args);
+            return await NativeBuilderBenchmark.RunCommandAsync(args).ConfigureAwait(false);
         }
 
         if (args.Length != 0
             && args[0] is "--native-builder-write"
                 or "--native-builder-write-worker")
         {
-            return await NativeBuilderWriteRegression.RunCommandAsync(args);
+            return await NativeBuilderWriteRegression.RunCommandAsync(args).ConfigureAwait(false);
         }
 
         if (args.Length != 0
             && args[0] is "--native-builder-pair"
                 or "--native-builder-pair-worker")
         {
-            return await NativeBuilderPairRegression.RunCommandAsync(args);
+            return await NativeBuilderPairRegression.RunCommandAsync(args).ConfigureAwait(false);
         }
 
         if (args.Length != 0
             && args[0] is "--native-builder-state"
                 or "--native-builder-state-worker")
         {
-            return await NativeBuilderStateRegression.RunCommandAsync(args);
+            return await NativeBuilderStateRegression.RunCommandAsync(args).ConfigureAwait(false);
         }
 
         if (args.Length != 0
             && args[0] is "--pooled-regression" or "--pooled-regression-worker")
         {
-            return await PooledPerformanceRegression.RunCommandAsync(args);
+            return await PooledPerformanceRegression.RunCommandAsync(args).ConfigureAwait(false);
         }
 
         if (args is ["--pool-size-class-probe"])
@@ -114,7 +115,7 @@ internal static class Program
         }
 
         if (args.Length != 0
-            && args[0] == "--pool-binary-comparison")
+            && string.Equals(args[0], "--pool-binary-comparison", StringComparison.Ordinal))
         {
             return PoolBinaryComparison.RunCommand(args);
         }
@@ -124,19 +125,19 @@ internal static class Program
                 or "--native-workspace-state-worker"
                 or "--native-workspace-state-pair-worker")
         {
-            return await NativeWorkspaceStateBenchmark.RunCommandAsync(args);
+            return await NativeWorkspaceStateBenchmark.RunCommandAsync(args).ConfigureAwait(false);
         }
 
         if (args is ["--native-workspace-worker", "--output", _])
         {
             return await NativeWorkspaceWorkerRegression.RunCommandAsync(
-                args[2]);
+                args[2]).ConfigureAwait(false);
         }
 
         if (args is ["--native-pool-retirement", "--output", _])
         {
             return await NativePoolRetirementRegression.RunCommandAsync(
-                args[2]);
+                args[2]).ConfigureAwait(false);
         }
 
         if (args is ["--scoped-recycle-probe"])
@@ -190,12 +191,14 @@ internal static class Program
             return 0;
         }
 
+        // These literals define an invariant Markdown evidence format, not localized UI text.
+#pragma warning disable CA1303
         Console.WriteLine("# NativeAllocationManagement V1 performance evidence");
         Console.WriteLine();
         Console.WriteLine("Analyzer measurements retain a representative eight-project graph. Workload measurements run one workload per child process so GC, LOH, resident-memory, and native baselines are isolated.");
         Console.WriteLine();
 
-        AnalyzerEvidence analyzer = await MeasureAnalyzerAsync();
+        AnalyzerEvidence analyzer = await MeasureAnalyzerAsync().ConfigureAwait(false);
         Console.WriteLine("## Analyzer measurements");
         Console.WriteLine();
         Console.WriteLine("| case | elapsedMs | allocatedBytes | diagnostics | projects analyzed | operation blocks | cancellation |");
@@ -211,9 +214,10 @@ internal static class Program
         Console.WriteLine();
         Console.WriteLine("| workload | elapsedMs | throughputPerSecond | managedAllocatedBytes | gen0 | gen1 | gen2 | lohSizeBeforeForcedGc | lohSizeAfterForcedGc | lohSizeDeltaAfterForcedGc | nativeBytesBefore | peakNativeBytes | peakRetainedNativeBytes | peakRetiredNativeBytes | trimmedNativeBytes | finalRetainedNativeBytes | finalRetiredNativeBytes | finalNativeBytes | directBoundaryNs | accessBoundaryNs | readBoundaryNs | callbackBodyNs | boundaryMinusBodyNs | peakResidentBytes |");
         Console.WriteLine("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
+#pragma warning restore CA1303
         foreach (string workloadName in WorkloadNames)
         {
-            WorkloadEvidence workload = await MeasureIsolatedWorkloadAsync(workloadName);
+            WorkloadEvidence workload = await MeasureIsolatedWorkloadAsync(workloadName).ConfigureAwait(false);
             Console.WriteLine($"| {workload.Name} | {workload.ElapsedMs:F2} | {workload.ThroughputPerSecond:F2} | {workload.ManagedAllocatedBytes} | {workload.Gen0Collections} | {workload.Gen1Collections} | {workload.Gen2Collections} | {workload.LohSizeBeforeForcedGc} | {workload.LohSizeAfterForcedGc} | {workload.LohSizeDeltaAfterForcedGc} | {workload.NativeBytesBefore} | {workload.PeakNativeBytes} | {workload.PeakRetainedNativeBytes} | {workload.PeakRetiredNativeBytes} | {workload.TrimmedNativeBytes} | {workload.FinalRetainedNativeBytes} | {workload.FinalRetiredNativeBytes} | {workload.FinalNativeBytes} | {workload.DirectBoundaryNanoseconds:F2} | {workload.AccessBoundaryNanoseconds:F2} | {workload.ReadBoundaryNanoseconds:F2} | {workload.CallbackBodyNanoseconds:F2} | {workload.BoundaryMinusBodyNanoseconds:F2} | {workload.PeakResidentBytes} |");
         }
 
@@ -229,7 +233,7 @@ internal static class Program
         long coldAllocatedBefore = GC.GetTotalAllocatedBytes(precise: true);
         Stopwatch coldClock = Stopwatch.StartNew();
         ProjectAnalysis[] coldResults = await Task.WhenAll(
-            solution.Projects.Select(project => AnalyzeProjectAsync(project, CancellationToken.None)));
+            solution.Projects.Select(project => AnalyzeProjectAsync(project, CancellationToken.None))).ConfigureAwait(false);
         coldClock.Stop();
         long coldAllocated = GC.GetTotalAllocatedBytes(precise: true) - coldAllocatedBefore;
         int fullOperationBlocks = coldResults.Sum(result => result.OperationBlocks);
@@ -253,7 +257,7 @@ internal static class Program
                 continue;
             }
 
-            ProjectAnalysis analyzed = await AnalyzeProjectAsync(project, CancellationToken.None);
+            ProjectAnalysis analyzed = await AnalyzeProjectAsync(project, CancellationToken.None).ConfigureAwait(false);
             cache.Store(analyzed);
             aggregateResults.Add(analyzed);
             reanalyzedProjects.Add(project.Id);
@@ -280,13 +284,13 @@ internal static class Program
             throw new InvalidOperationException("The retained incremental cache did not produce the expected identity and aggregate counts.");
         }
 
-        CancellationTokenSource cancellation = new();
-        cancellation.Cancel();
+        using CancellationTokenSource cancellation = new();
+        await cancellation.CancelAsync().ConfigureAwait(false);
         Stopwatch cancellationClock = Stopwatch.StartNew();
         bool cancellationObserved;
         try
         {
-            _ = await AnalyzeAsync(changedProject.Compilation, cancellation.Token);
+            _ = await AnalyzeAsync(changedProject.Compilation, cancellation.Token).ConfigureAwait(false);
             cancellationObserved = false;
         }
         catch (OperationCanceledException)
@@ -321,7 +325,7 @@ internal static class Program
         CancellationToken cancellationToken)
     {
         OperationBlockCounterAnalyzer counter = new();
-        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(project.Compilation, cancellationToken, counter);
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(project.Compilation, cancellationToken, counter).ConfigureAwait(false);
         return new ProjectAnalysis(project.Id, project.Compilation, diagnostics, counter.Count);
     }
 
@@ -337,7 +341,7 @@ internal static class Program
             .. additionalAnalyzers
         ];
         CompilationWithAnalyzers analyzed = compilation.WithAnalyzers(ImmutableArray.CreateRange(analyzers));
-        return await analyzed.GetAnalyzerDiagnosticsAsync(cancellationToken);
+        return await analyzed.GetAnalyzerDiagnosticsAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private static RepresentativeSolution CreateRepresentativeSolution()
@@ -416,17 +420,17 @@ internal static class Program
     {
         StringBuilder source = new();
         source.AppendLine("using Supprocom.NativeAllocationManagement;");
-        source.AppendLine($"public static class CorpusProject{project} {{");
+        source.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"public static class CorpusProject{project} {{");
         for (int method = 0; method < MethodsPerProject; method++)
         {
             if (method < 2)
             {
                 int value = editHeavyMethod && method == 0 ? 1 : 0;
-                source.AppendLine($"public static void Method{method}() {{ NativePool<int> pool = new(); Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!)); value.Access(static view => view[0] = {value}); value.Dispose(); pool.Dispose(); }}");
+                source.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"public static void Method{method}() {{ NativePool<int> pool = new(); Pooled<int> value = pool.Rent(1, static writer => writer.Fill(default!)); value.Access(static view => view[0] = {value}); value.Dispose(); pool.Dispose(); }}");
             }
             else
             {
-                source.AppendLine($"public static int Method{method}() => {project} + {method};");
+                source.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"public static int Method{method}() => {project} + {method};");
             }
         }
 
@@ -470,14 +474,14 @@ internal static class Program
         Task<string> outputTask = process.StandardOutput.ReadToEndAsync();
         Task<string> errorTask = process.StandardError.ReadToEndAsync();
         Task exitTask = process.WaitForExitAsync();
-        if (await Task.WhenAny(exitTask, Task.Delay(TimeSpan.FromSeconds(90))) != exitTask)
+        if (await Task.WhenAny(exitTask, Task.Delay(TimeSpan.FromSeconds(90))).ConfigureAwait(false) != exitTask)
         {
             process.Kill(entireProcessTree: true);
             throw new TimeoutException($"Isolated workload '{workloadName}' exceeded the 90 second limit.");
         }
 
-        string output = await outputTask;
-        string error = await errorTask;
+        string output = await outputTask.ConfigureAwait(false);
+        string error = await errorTask.ConfigureAwait(false);
         if (process.ExitCode != 0)
         {
             throw new InvalidOperationException($"Isolated workload '{workloadName}' failed with exit code {process.ExitCode}: {error}");
@@ -508,7 +512,7 @@ internal static class Program
         long peakResident = Process.GetCurrentProcess().WorkingSet64;
         NativeMemoryTestMetrics initialNative = NativeMemoryTestHooks.Snapshot();
         CallbackMeasurement callback = new(peakResident, initialNative.OutstandingNativeBytes);
-        if (name == "native-arena")
+        if (string.Equals(name, "native-arena", StringComparison.Ordinal))
         {
             RunNativeArenaSpikeEvidence(callback);
         }
@@ -1365,6 +1369,7 @@ internal static class Program
         internal IReadOnlyList<ProjectModel> Projects { get; }
     }
 
+    [StructLayout(LayoutKind.Sequential)]
     private readonly struct Coordinate
     {
         internal int X { get; init; }
@@ -1372,6 +1377,7 @@ internal static class Program
         internal int Y { get; init; }
     }
 
+    [StructLayout(LayoutKind.Sequential)]
     private readonly struct Voxel
     {
         internal long Value { get; init; }
@@ -1483,6 +1489,8 @@ internal static class Program
         double WallNanoseconds,
         int Sink);
 
+    // This analyzer is instantiated only inside the benchmark, not shipped as a compiler extension.
+#pragma warning disable RS1001, RS1036, RS1041, RS2008
     [DiagnosticAnalyzer(LanguageNames.CSharp)]
     private sealed class OperationBlockCounterAnalyzer : DiagnosticAnalyzer
     {
@@ -1507,4 +1515,5 @@ internal static class Program
             context.RegisterOperationBlockAction(_ => Interlocked.Increment(ref _count));
         }
     }
+#pragma warning restore RS1001, RS1036, RS1041, RS2008
 }

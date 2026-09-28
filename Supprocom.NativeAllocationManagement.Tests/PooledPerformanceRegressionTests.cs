@@ -2,7 +2,7 @@ using Supprocom.NativeAllocationManagement.Performance;
 
 namespace Supprocom.NativeAllocationManagement.Tests;
 
-[Collection(PerformanceRegressionCollection.Name)]
+[Collection(PerformanceRegressionGroup.Name)]
 public sealed class PooledPerformanceRegressionTests
 {
     [Fact]

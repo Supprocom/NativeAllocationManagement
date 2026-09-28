@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 
 namespace Supprocom.NativeAllocationManagement.Performance;
 
@@ -64,6 +65,7 @@ internal static class PoolSizeClassProbe
     }
 }
 
+[StructLayout(LayoutKind.Sequential)]
 internal readonly record struct PoolSizeClassProbeReport(
     int WarmupIterations,
     int MeasuredIterations,

@@ -12,6 +12,8 @@ public sealed class NativePool<T> : IDisposable
     internal int CurrentAllocationRecordCountForTest =>
         _kernel.LiveLeaseCount;
 
+    // Zero-valued compatibility probes are intentionally read from an owner instance.
+#pragma warning disable CA1822
     internal int CurrentInitializationCountForTest => 0;
 
     internal int CurrentGenerationActiveOperationsForTest => 0;
@@ -45,6 +47,7 @@ public sealed class NativePool<T> : IDisposable
     internal long GenerationCounterForTest => 0;
 
     internal long[] CurrentSegmentOrdinalsForTest => [];
+#pragma warning restore CA1822
 
     internal void SetScopeEpochForTest(long value) =>
         throw new NotSupportedException(

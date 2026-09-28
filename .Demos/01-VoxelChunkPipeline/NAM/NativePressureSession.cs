@@ -63,6 +63,7 @@ internal sealed class NativePressureSession :
                 (long)preferred.RequiredPhaseArenaCapacity));
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "VSTHRD002", Justification = "This synchronous protocol entry point waits on a dedicated worker without a synchronization context.")]
     public PressureProfileResult Run(
         PressureProfileRequest request,
         Action<PressureProgress> reportProgress) =>
@@ -70,6 +71,7 @@ internal sealed class NativePressureSession :
             request,
             reportProgress).GetAwaiter().GetResult();
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "VSTHRD003", Justification = "The returned completion task is created and completed by this session's own worker queue.")]
     public Task<PressureProfileResult> QueueAsync(
         PressureProfileRequest request,
         Action<PressureProgress> reportProgress)
@@ -83,11 +85,12 @@ internal sealed class NativePressureSession :
         return item.Completion.Task;
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The worker captures arbitrary callback and allocation failures to complete the queued request and preserve protocol evidence.")]
     private void WorkerLoop()
     {
         try
         {
-            using NativeArena phaseArena = new(
+            using NativeConcurrentArena phaseArena = new(
                 preAllocateBytes: 0,
                 NativeMemoryReturn.ToNativeMemory);
             {
@@ -131,15 +134,15 @@ internal sealed class NativePressureSession :
                         "The planned phase-arena reservation did not complete.");
                 }
 
-                ArenaLease<VoxelCell> persistentCells =
+                ConcurrentArenaLease<VoxelCell> persistentCells =
                     phaseArena.Scratch<VoxelCell>(
                         outputCapacity.CellCapacity,
                         static writer => writer.Fill(default!));
-                ArenaLease<FaceRecord> persistentFaces =
+                ConcurrentArenaLease<FaceRecord> persistentFaces =
                     phaseArena.Scratch<FaceRecord>(
                         outputCapacity.FaceCapacity,
                         static writer => writer.Fill(default!));
-                ArenaLease<byte> persistentPayloadPatterns =
+                ConcurrentArenaLease<byte> persistentPayloadPatterns =
                     phaseArena.Scratch<byte>(
                         PressureWorkContract.PayloadPatternTableBytes,
                         static writer => writer.Write(
@@ -158,8 +161,7 @@ internal sealed class NativePressureSession :
                         Action<PressureProgress> reportProgress = item.ReportProgress;
                         if (request.RetentionDepth > PressureWorkContract.DefaultRetentionDepth)
                         {
-                            throw new ArgumentOutOfRangeException(
-                                nameof(request),
+                            throw new InvalidOperationException(
                                 $"The predeclared native batch supports at most "
                                 + $"{PressureWorkContract.DefaultRetentionDepth} chunks.");
                         }
@@ -170,9 +172,10 @@ internal sealed class NativePressureSession :
                                 : new PressurePhaseRecorder();
                         PressureAllocatorDiagnosticSnapshot
                             allocatorBefore =
-                                CaptureAllocatorDiagnostic(
-                                    phaseArena,
-                                    request.Diagnostic is not null);
+                                request.Diagnostic is null
+                                    ? default
+                                    : CaptureAllocatorDiagnostic(
+                                        phaseArena.GetStatistics());
                         PressureRuntimeSnapshot before = PressureRuntimeSnapshot.Capture();
                         NativeMemoryStatistics nativeBefore = NativeMemoryDiagnostics.Snapshot();
                         NativeOwnerStatistics[] ownerBefore =
@@ -229,22 +232,22 @@ internal sealed class NativePressureSession :
                                 {
                                     phaseStart =
                                         phaseRecorder?.Start() ?? 0;
-                                    scoped ArenaLease<
+                                    scoped ConcurrentArenaLease<
                                         SectionPrerenderDescriptor>
                                         sectionDescriptors;
-                                    scoped ArenaLease<ushort>
+                                    scoped ConcurrentArenaLease<ushort>
                                         sectionValues;
-                                    scoped ArenaLease<uint>
+                                    scoped ConcurrentArenaLease<uint>
                                         sectionWords;
-                                    scoped ArenaLease<ulong>
+                                    scoped ConcurrentArenaLease<ulong>
                                         sectionStates;
-                                    scoped ArenaLease<ulong>
+                                    scoped ConcurrentArenaLease<ulong>
                                         sectionMasks;
-                                    scoped ArenaLease<byte>
+                                    scoped ConcurrentArenaLease<byte>
                                         firstMaskMarker;
-                                    scoped ArenaLease<byte>
+                                    scoped ConcurrentArenaLease<byte>
                                         secondMaskMarker;
-                                    scoped ArenaLease<byte>
+                                    scoped ConcurrentArenaLease<byte>
                                         thirdMaskMarker;
                                     NativeLeaseOperations
                                         .InitializeScoped(
@@ -328,13 +331,13 @@ internal sealed class NativePressureSession :
                                 {
                                     phaseStart =
                                         phaseRecorder?.Start() ?? 0;
-                                    scoped ArenaLease<Vertex>
+                                    scoped ConcurrentArenaLease<Vertex>
                                         vertices;
-                                    scoped ArenaLease<int>
+                                    scoped ConcurrentArenaLease<int>
                                         indices;
-                                    scoped ArenaLease<PayloadSlice>
+                                    scoped ConcurrentArenaLease<PayloadSlice>
                                         slices;
-                                    scoped ArenaLease<byte>
+                                    scoped ConcurrentArenaLease<byte>
                                         aliasMarker;
                                     NativeLeaseOperations.InitializeScoped(
                                         persistentFaces,
@@ -412,9 +415,10 @@ internal sealed class NativePressureSession :
 
                         PressureAllocatorDiagnosticSnapshot
                             allocatorAfterProcessing =
-                                CaptureAllocatorDiagnostic(
-                                    phaseArena,
-                                    request.Diagnostic is not null);
+                                request.Diagnostic is null
+                                    ? default
+                                    : CaptureAllocatorDiagnostic(
+                                        phaseArena.GetStatistics());
                         reportProgress(new PressureProgress(
                             Implementation,
                             request.ProfilePercent,
@@ -429,7 +433,7 @@ internal sealed class NativePressureSession :
                         [
                             phaseArena.GetStatistics()
                         ];
-                        IReadOnlyList<NativeOwnerProfile> owners = BuildOwnerProfiles(
+                        List<NativeOwnerProfile> owners = BuildOwnerProfiles(
                             ownerBefore,
                             ownerAfter,
                             [
@@ -473,9 +477,10 @@ internal sealed class NativePressureSession :
                             resetStart);
                         PressureAllocatorDiagnosticSnapshot
                             allocatorAfterReset =
-                                CaptureAllocatorDiagnostic(
-                                    phaseArena,
-                                    request.Diagnostic is not null);
+                                request.Diagnostic is null
+                                    ? default
+                                    : CaptureAllocatorDiagnostic(
+                                        phaseArena.GetStatistics());
                         PressureRequestDiagnostics? diagnostics =
                             CreateRequestDiagnostics(
                                 request,
@@ -623,41 +628,35 @@ internal sealed class NativePressureSession :
 
     private static PressureAllocatorDiagnosticSnapshot
         CaptureAllocatorDiagnostic(
-            NativeArena arena,
-            bool enabled)
+            NativeOwnerStatistics snapshot)
     {
-        if (!enabled)
-        {
-            return default;
-        }
-
-        NativeOwnerDiagnosticSnapshot snapshot =
-            arena.CaptureDiagnosticSnapshot();
+        // The demo consumes only public owner statistics. Internal allocation
+        // records and epochs remain private to the runtime and report zero here.
         return new PressureAllocatorDiagnosticSnapshot(
             true,
             snapshot.Lifecycle.ToString(),
             snapshot.Generation,
-            snapshot.ScopeEpoch,
-            snapshot.MetricsEpoch,
-            snapshot.ActiveRecords,
-            snapshot.ScopedRecords,
-            snapshot.ReferenceRoots,
-            snapshot.OrdinaryTraversalIndex,
-            snapshot.ScopedTraversalIndex,
-            snapshot.RetainedSegmentCount,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            snapshot.SegmentCount,
             snapshot.AvailableSegmentCount,
-            snapshot.RetiredGenerationCount,
+            0,
             snapshot.RetiredSegmentCount,
             snapshot.RetiredBytes,
-            snapshot.QuarantinedGenerationCount,
-            snapshot.QuarantinedSegmentCount,
-            snapshot.CurrentGenerationQuarantined);
+            0,
+            0,
+            false);
     }
 
     private PressureSessionState ResetLogicalState(
         PressureProfileRequest request,
         NativeProfileState state,
-        NativeArena phaseArena,
+        NativeConcurrentArena phaseArena,
         OutputCapacityPlan outputCapacity,
         long persistentAllocationBytes)
     {
@@ -696,6 +695,7 @@ internal sealed class NativePressureSession :
             PressureRuntimeSnapshot.Capture());
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA2201", Justification = "This is an explicit memory-budget admission failure that the worker reports as OutOfMemory.")]
     private static OutputCapacityPlan CreateNativeCapacityPlan(
         PressureProfileRequest request,
         out int retentionDepth)
@@ -723,9 +723,9 @@ internal sealed class NativePressureSession :
             "One canonical native chunk exceeds its worker memory budget.");
     }
 
-    private static IReadOnlyList<NativeOwnerProfile> BuildOwnerProfiles(
-        IReadOnlyList<NativeOwnerStatistics> before,
-        IReadOnlyList<NativeOwnerStatistics> after,
+    private static List<NativeOwnerProfile> BuildOwnerProfiles(
+        NativeOwnerStatistics[] before,
+        NativeOwnerStatistics[] after,
         IReadOnlyList<long> peakRequests)
     {
         string[] names =
@@ -1403,6 +1403,7 @@ internal sealed class NativePressureSession :
             }
         }
 
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "HLQ013", Justification = "The batch index is required to replace the corresponding array slot with its evidence hash.")]
         private void RecordMasks(
             scoped NativeLeaseView<ulong> masks)
         {
@@ -1424,6 +1425,7 @@ internal sealed class NativePressureSession :
             }
         }
 
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "HLQ013", Justification = "Indexed batch offsets select and initialize the matching output slices.")]
         private void InitializePack(
             scoped NativeLeaseView<FaceRecord> faces,
             scoped Span<Vertex> allVertices,
@@ -1480,6 +1482,7 @@ internal sealed class NativePressureSession :
             }
         }
 
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "HLQ013", Justification = "The batch index identifies the slot that receives completed output evidence.")]
         private void CompletePack(
             scoped NativeLeaseView<FaceRecord> faces,
             scoped NativeLeaseView<byte> payloadPatterns,
@@ -1546,6 +1549,7 @@ internal sealed class NativePressureSession :
                 CompletedLogicalBytes + BatchDemand);
         }
 
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "HLQ013", Justification = "The batch index identifies each retained slot and its mapped output ranges.")]
         private void CompleteScatterHandoff(
             scoped Span<FaceRecord> allFaces,
             scoped ReadOnlySpan<byte> payloadPatterns,

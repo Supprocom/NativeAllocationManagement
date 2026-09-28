@@ -119,6 +119,7 @@ internal sealed class PersistentMapWorkers : IDisposable
         _complete.Dispose();
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "This boundary captures any failure to preserve cleanup and report the original error.")]
     private void RunWorker(
         int workerIndex,
         CountdownEvent ready)

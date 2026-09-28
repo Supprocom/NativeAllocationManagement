@@ -42,7 +42,7 @@ internal static class PooledPerformanceRegression
     internal static async Task<int> RunCommandAsync(string[] args)
     {
         PooledRegressionOptions options = ParseOptions(args);
-        if (args[0] == "--pooled-regression-worker")
+        if (string.Equals(args[0], "--pooled-regression-worker", StringComparison.Ordinal))
         {
             PooledRegressionImplementation implementation = Enum.Parse<
                 PooledRegressionImplementation>(
@@ -57,7 +57,7 @@ internal static class PooledPerformanceRegression
             return evidence.ExactParity ? 0 : 3;
         }
 
-        PooledRegressionReport report = await RunPairedAsync(options);
+        PooledRegressionReport report = await RunPairedAsync(options).ConfigureAwait(false);
         string json = JsonSerializer.Serialize(report, IndentedJson);
         string? outputPath = ReadOptionalOption(args, "--output");
         if (outputPath is not null)
@@ -69,7 +69,7 @@ internal static class PooledPerformanceRegression
                 Directory.CreateDirectory(directory);
             }
 
-            await File.WriteAllTextAsync(fullPath, json);
+            await File.WriteAllTextAsync(fullPath, json).ConfigureAwait(false);
         }
 
         Console.WriteLine(json);
@@ -94,13 +94,13 @@ internal static class PooledPerformanceRegression
             PooledRegressionImplementation first =
                 GetFirstImplementation(sampleIndex);
             PooledRegressionWorkerEvidence firstEvidence =
-                await RunIsolatedWorkerAsync(first, options);
+                await RunIsolatedWorkerAsync(first, options).ConfigureAwait(false);
             PooledRegressionImplementation second =
                 first == PooledRegressionImplementation.ArrayPool
                     ? PooledRegressionImplementation.Pooled
                     : PooledRegressionImplementation.ArrayPool;
             PooledRegressionWorkerEvidence secondEvidence =
-                await RunIsolatedWorkerAsync(second, options);
+                await RunIsolatedWorkerAsync(second, options).ConfigureAwait(false);
             PooledRegressionWorkerEvidence managed =
                 first == PooledRegressionImplementation.ArrayPool
                     ? firstEvidence
@@ -133,9 +133,8 @@ internal static class PooledPerformanceRegression
         bool parity = pairs.All(static pair =>
             pair.ArrayPool.ExactParity
             && pair.Pooled.ExactParity
-            && pair.ArrayPool.OutputSha256
-                == pair.Pooled.OutputSha256
-            && pair.ArrayPool.Checksum == pair.Pooled.Checksum
+            && string.Equals(pair.ArrayPool.OutputSha256
+, pair.Pooled.OutputSha256, StringComparison.Ordinal) && pair.ArrayPool.Checksum == pair.Pooled.Checksum
             && pair.ArrayPool.LogicalBytes
                 == pair.Pooled.LogicalBytes);
         bool balanced = pairs.Count(static pair =>
@@ -224,7 +223,7 @@ internal static class PooledPerformanceRegression
         Stopwatch verificationClock = Stopwatch.StartNew();
         string outputHash = execution.VerifyExact();
         verificationClock.Stop();
-        bool exactParity = outputHash == expectedHash;
+        bool exactParity = string.Equals(outputHash, expectedHash, StringComparison.Ordinal);
 
         Stopwatch warmupClock = Stopwatch.StartNew();
         execution.Prepare();
@@ -384,15 +383,15 @@ internal static class PooledPerformanceRegression
         Task exitTask = process.WaitForExitAsync();
         if (await Task.WhenAny(
                 exitTask,
-                Task.Delay(TimeSpan.FromSeconds(60))) != exitTask)
+                Task.Delay(TimeSpan.FromSeconds(60))).ConfigureAwait(false) != exitTask)
         {
             process.Kill(entireProcessTree: true);
             throw new TimeoutException(
                 "The benchmark worker exceeded 60 seconds.");
         }
 
-        string output = await outputTask;
-        string error = await errorTask;
+        string output = await outputTask.ConfigureAwait(false);
+        string error = await errorTask.ConfigureAwait(false);
         if (process.ExitCode != 0)
         {
             throw new InvalidOperationException(
@@ -415,8 +414,7 @@ internal static class PooledPerformanceRegression
     {
         if (!managed.ExactParity
             || !native.ExactParity
-            || managed.OutputSha256 != native.OutputSha256
-            || managed.Checksum != native.Checksum
+            || !string.Equals(managed.OutputSha256, native.OutputSha256, StringComparison.Ordinal) || managed.Checksum != native.Checksum
             || managed.LogicalBytes != native.LogicalBytes)
         {
             throw new InvalidDataException(
@@ -501,21 +499,21 @@ internal static class PooledPerformanceRegression
         PooledRegressionOptions options)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
-            options.Iterations);
+            options.Iterations, nameof(options));
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
-            options.WarmupIterations);
+            options.WarmupIterations, nameof(options));
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
-            options.SampleCount);
+            options.SampleCount, nameof(options));
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
-            options.WorkerCount);
+            options.WorkerCount, nameof(options));
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
-            options.ChunkCount);
+            options.ChunkCount, nameof(options));
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
-            options.OpaquePlaneLength);
+            options.OpaquePlaneLength, nameof(options));
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
-            options.TransparentPlaneLength);
+            options.TransparentPlaneLength, nameof(options));
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
-            options.MaximumPlanes);
+            options.MaximumPlanes, nameof(options));
         if ((options.SampleCount & 1) != 0)
         {
             throw new ArgumentException(
@@ -565,7 +563,7 @@ internal static class PooledPerformanceRegression
     {
         for (int index = 0; index < args.Length - 1; index++)
         {
-            if (args[index] == name)
+            if (string.Equals(args[index], name, StringComparison.Ordinal))
             {
                 return args[index + 1];
             }
@@ -771,6 +769,7 @@ internal static class PooledPerformanceRegression
             _done.Dispose();
         }
 
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "Worker failure must be captured and signaled to the coordinator.")]
         private void RunWorker(int index)
         {
             BoundaryWorker worker = _workers[index];
@@ -1374,9 +1373,8 @@ internal static class PooledPerformanceRegression
             int end)
         {
             long checksum = 0;
-            for (int index = start; index < end; index++)
+            foreach (ref BoundaryShape shape in Shapes.AsSpan(start, end - start))
             {
-                BoundaryShape shape = Shapes[index];
                 if (shape.OpaquePlanes != 0)
                 {
                     checksum = unchecked(
@@ -1447,11 +1445,17 @@ internal static class PooledPerformanceRegression
                 return;
             }
 
-            if (length == 0
-                || planes > checked(length * maximumPlanes))
+            if (length == 0)
             {
                 throw new ArgumentException(
-                    "The plane count exceeds its chunk range.");
+                    "A nonempty plane set requires a nonempty chunk range.",
+                    nameof(length));
+            }
+
+            if (planes > checked(length * maximumPlanes))
+            {
+                throw new ArgumentException(
+                    "The plane count exceeds its chunk range.", nameof(planes));
             }
 
             int full = planes / maximumPlanes;
@@ -1701,6 +1705,7 @@ internal enum PooledRegressionImplementation
     Pooled
 }
 
+[StructLayout(LayoutKind.Sequential)]
 internal readonly record struct PooledRegressionOptions(
     int Iterations,
     int WarmupIterations,
@@ -1769,6 +1774,7 @@ internal readonly record struct PooledRegressionReport(
     double TotalElapsedMilliseconds,
     DateTimeOffset RecordedAtUtc);
 
+[StructLayout(LayoutKind.Sequential)]
 internal readonly record struct BoundaryShape(
     int OpaquePlanes,
     int TransparentPlanes);

@@ -1,3 +1,5 @@
+using System.Runtime.InteropServices;
+
 namespace Supprocom.NativeAllocationManagement.Demos.VoxelChunkPipeline.SharedContract;
 
 public enum CompilationOutcome
@@ -22,6 +24,7 @@ public readonly record struct CompilationSample(
     string StandardOutputTail,
     string StandardErrorTail);
 
+[StructLayout(LayoutKind.Sequential)]
 public readonly record struct CompilationCompilerDiagnostics(
     double? SafeStandardDeviationMilliseconds,
     double? NamStandardDeviationMilliseconds,
@@ -116,7 +119,7 @@ public static class CompilationGatePolicy
             && samples.Count(
             static sample =>
                 sample.Position == 0
-                && sample.Implementation == "SafeCSharp")
+                && string.Equals(sample.Implementation, "SafeCSharp", StringComparison.Ordinal))
             == measuredPairCount / 2;
     }
 

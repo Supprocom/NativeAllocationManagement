@@ -30,7 +30,7 @@ public sealed class NativeTransferTests
                 static view =>
                 {
                     int sum = 0;
-                    foreach (int value in view.AsSpan())
+                    foreach (ref int value in view.AsSpan())
                     {
                         sum += value;
                     }
@@ -44,6 +44,7 @@ public sealed class NativeTransferTests
     }
 
     [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The test intentionally captures arbitrary callback or worker failures for lifecycle assertions.")]
     public void BoundedChannelTransfersTheLeaseAcrossThreads()
     {
         using NativeConcurrentPool<uint> pool = new(
@@ -69,13 +70,16 @@ public sealed class NativeTransferTests
                     NativeTransfer<uint> inbound = channel.Reader
                         .ReadAsync()
                         .AsTask()
+                        // This dedicated receiver thread has no synchronization context.
+#pragma warning disable VSTHRD002
                         .GetAwaiter()
                         .GetResult();
+#pragma warning restore VSTHRD002
                     inbound.Access(
                         view =>
                         {
                             Span<uint> values = view.AsSpan();
-                            foreach (uint value in values)
+                            foreach (ref uint value in values)
                             {
                                 sum += value;
                             }
@@ -112,7 +116,7 @@ public sealed class NativeTransferTests
             Second = original
         };
         original = null;
-        Barrier start = new(3);
+        using Barrier start = new(3);
         ConcurrentBag<NativeTransfer<int>> destinations = [];
         ConcurrentBag<Exception> failures = [];
 
@@ -133,9 +137,9 @@ public sealed class NativeTransferTests
 
         Assert.Null(holder.First);
         Assert.Null(holder.Second);
-        NativeTransfer<int> destination = Assert.Single(destinations);
+        NativeTransfer<int> destination = SingleExpected(destinations);
         Assert.IsType<InvalidOperationException>(
-            Assert.Single(failures));
+            SingleExpected(failures));
         Assert.Equal(
             37,
             destination.Read(static view => view.AsSpan()[0]));
@@ -169,7 +173,7 @@ public sealed class NativeTransferTests
             () => NativeTransfer<int>.Move(ref source));
         Assert.Null(source);
         release.Set();
-        await access;
+        await access.ConfigureAwait(true);
 
         Assert.Throws<ObjectDisposedException>(
             () => alias.Access(static _ => { }));
@@ -242,12 +246,12 @@ public sealed class NativeTransferTests
         NativeTransfer<int> second =
             NativeTransfer<int>.Move(ref secondSource);
         using CancellationTokenSource cancellation = new();
-        cancellation.Cancel();
+        await cancellation.CancelAsync();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
             async () => await channel.Writer.WriteAsync(
                 second,
-                cancellation.Token));
+                cancellation.Token).ConfigureAwait(true));
         second.Dispose();
         NativeTransfer<int> received = await channel.Reader.ReadAsync();
         received.Dispose();
@@ -281,7 +285,7 @@ public sealed class NativeTransferTests
         Assert.Throws<NativeAllocationInUseException>(
             () => pool.Dispose());
         release.Set();
-        await access;
+        await access.ConfigureAwait(true);
 
         pool.Dispose();
         Assert.Throws<NativeAllocationDisposedException>(
@@ -327,6 +331,7 @@ public sealed class NativeTransferTests
     }
 
     [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The test intentionally captures arbitrary callback or worker failures for lifecycle assertions.")]
     public async Task OwnerDisposalWinningMoveRacePublishesNoDestination()
     {
         NativeMemoryTestHooks.Reset();
@@ -341,7 +346,7 @@ public sealed class NativeTransferTests
         NativeMemoryTestHooks.SetBeforeOperationEntry(
             operation =>
             {
-                if (operation != "NativeTransfer.Move")
+                if (!string.Equals(operation, "NativeTransfer.Move", StringComparison.Ordinal))
                 {
                     return;
                 }
@@ -369,7 +374,7 @@ public sealed class NativeTransferTests
             Assert.True(moveReachedOwner.Wait(TimeSpan.FromSeconds(5)));
             pool.Dispose();
             releaseMove.Set();
-            await move;
+            await move.ConfigureAwait(true);
         }
         finally
         {
@@ -405,6 +410,7 @@ public sealed class NativeTransferTests
         Assert.Equal(0, pool.CurrentAllocationRecordCountForTest);
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The test intentionally captures arbitrary callback or worker failures for lifecycle assertions.")]
     private static void MoveForRace<T>(
         Barrier start,
         ref NativeTransfer<T>? source,
@@ -449,7 +455,22 @@ public sealed class NativeTransferTests
         internal NativeTransfer<T>? Second;
     }
 
-    private sealed class TransferMarkerException : Exception;
+    private sealed class TransferMarkerException : Exception
+    {
+        public TransferMarkerException()
+        {
+        }
+
+        public TransferMarkerException(string message)
+            : base(message)
+        {
+        }
+
+        public TransferMarkerException(string message, Exception innerException)
+            : base(message, innerException)
+        {
+        }
+    }
 
     private sealed unsafe class AlignedTestBuffer : SafeBuffer
     {
@@ -461,7 +482,10 @@ public sealed class NativeTransferTests
                 NativeSegment.Alignment);
             if (pointer is null)
             {
+                // Test SafeBuffer mirrors AlignedAlloc's null-on-failure contract.
+#pragma warning disable CA2201
                 throw new OutOfMemoryException();
+#pragma warning restore CA2201
             }
 
             SetHandle((nint)pointer);

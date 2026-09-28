@@ -254,6 +254,7 @@ internal sealed unsafe class NativeArenaKernel
         Close();
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA1816", Justification = "Closing the native arena deterministically disarms its emergency finalizer.")]
     private void Close()
     {
         _lifecycle = NativeOwnerLifecycle.Disposed;
@@ -477,7 +478,10 @@ internal sealed unsafe class NativeArenaKernel
                 SegmentAlignment);
             if (memory == null)
             {
+                // AlignedAlloc reports native allocation failure with a null pointer.
+#pragma warning disable CA2201
                 throw new OutOfMemoryException();
+#pragma warning restore CA2201
             }
 
             ArenaSegmentHeader* segment =
@@ -835,6 +839,8 @@ internal sealed unsafe class NativeArenaKernel
             allocationId: 0,
             _lifecycle);
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "MA0055", Justification = "Emergency native-memory cleanup supplements mandatory deterministic disposal.")]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "An emergency finalizer must never let cleanup exceptions terminate the process.")]
     ~NativeArenaKernel()
     {
         try
@@ -846,6 +852,7 @@ internal sealed unsafe class NativeArenaKernel
         }
     }
 
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
     private struct ArenaLane
     {
         internal ArenaSegmentHeader* First;

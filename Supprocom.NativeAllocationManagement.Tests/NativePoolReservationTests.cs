@@ -8,13 +8,13 @@ public sealed class NativePoolReservationTests
     public void ConstructorsExposePreLeaseAndRawPreallocation()
     {
         Type poolType = typeof(NativePool<int>);
-        System.Reflection.ConstructorInfo typed = Assert.Single(
+        System.Reflection.ConstructorInfo typed = SingleExpected(
             poolType.GetConstructors(),
             constructor =>
                 constructor.GetParameters().Length == 2);
         Assert.Equal("preLease", typed.GetParameters()[0].Name);
 
-        System.Reflection.ConstructorInfo combined = Assert.Single(
+        System.Reflection.ConstructorInfo combined = SingleExpected(
             poolType.GetConstructors(),
             constructor =>
                 constructor.GetParameters().Length == 3);
@@ -25,7 +25,7 @@ public sealed class NativePoolReservationTests
         Assert.DoesNotContain(
             poolType.GetConstructors()
                 .SelectMany(constructor => constructor.GetParameters()),
-            parameter => parameter.Name == "initialCapacity");
+            parameter => string.Equals(parameter.Name, "initialCapacity", StringComparison.Ordinal));
     }
 
     [Fact]

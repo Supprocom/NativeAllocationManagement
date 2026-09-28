@@ -69,6 +69,8 @@ public sealed record NativeBuilderPairEvidence(
     NativeBuilderWorkerEvidence Native,
     double ManagedToNativeSpeedup);
 
+// The pair array is the persisted benchmark evidence schema.
+#pragma warning disable CA1819
 public sealed record NativeBuilderBenchmarkReport(
     NativeBuilderBenchmarkOptions Options,
     NativeBuilderPairEvidence[] Pairs,
@@ -87,3 +89,4 @@ public sealed record NativeBuilderBenchmarkReport(
     bool PerformanceAdvantage,
     double TotalElapsedMilliseconds,
     DateTimeOffset CreatedUtc);
+#pragma warning restore CA1819

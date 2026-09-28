@@ -220,8 +220,10 @@ internal struct NativeBumpInitializationGroupBuffer
     private NativeBumpInitialization _element0;
 }
 
+[System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
 internal readonly record struct NativeHandleMetadata(int Length, int Capacity);
 
+[System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
 internal readonly record struct NativeMemoryTestMetrics(
     long AllocationCount,
     long ZeroedAllocationCount,
@@ -242,6 +244,7 @@ internal readonly record struct NativeMemoryTestMetrics(
 }
 
 /// <summary>Reports physical native storage observed by the NAM runtime.</summary>
+[System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
 public readonly record struct NativeMemoryStatistics(
     long OutstandingNativeBytes,
     long PeakOutstandingNativeBytes,
@@ -262,6 +265,7 @@ public readonly record struct NativeMemoryStatistics(
 /// Growth slack is therefore derived only while a request is live; retained idle
 /// capacity must not be interpreted as geometric growth slack.
 /// </remarks>
+[System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
 public readonly record struct NativeOwnerStatistics(
     NativeOwnerLifecycle Lifecycle,
     long Generation,
@@ -327,6 +331,7 @@ internal static class NativeMemoryTestHooks
         }
     }
 
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
     private readonly record struct NativeHotMetricsSnapshot(
         long BumpTraversalVisitCount,
         long ReusedNativeSegmentCount,
@@ -1033,6 +1038,8 @@ internal sealed class NativeSegment
         NativeMemoryTestHooks.RecordFree(ByteLength, Volatile.Read(ref _detached) != 0, _metricsEpoch);
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "MA0055", Justification = "Emergency native-memory cleanup supplements mandatory deterministic disposal.")]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "An emergency finalizer must never let cleanup exceptions terminate the process.")]
     ~NativeSegment()
     {
         try
@@ -1072,7 +1079,7 @@ internal sealed class NativeSlab
 /// </summary>
 internal sealed class NativeReferenceRootTable
 {
-    private readonly object _gate = new();
+    private readonly Lock _gate = new();
     private readonly Dictionary<long, object?> _roots = [];
     private readonly Stack<long> _availableIds = [];
     private long _nextId;
@@ -1255,10 +1262,7 @@ internal sealed class NativeReferenceRootTable
     {
         ArgumentOutOfRangeException.ThrowIfNegative(index);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(slotCount);
-        if (index >= slotCount)
-        {
-            throw new ArgumentOutOfRangeException(nameof(index));
-        }
+        ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(index, slotCount);
 
         nuint stride = (nuint)IntPtr.Size;
         nuint totalBytes = checked((nuint)slotCount * stride);
@@ -1801,9 +1805,9 @@ internal sealed class NativeArenaTransferBatchState
     {
         get
         {
-            for (int index = 0; index < _slots.Length; index++)
+            foreach (ref NativeArenaTransferBatchSlot indexValue in _slots.AsSpan())
             {
-                if (ReadLifecycle(ref _slots[index])
+                if (ReadLifecycle(ref indexValue)
                     == NativeAllocationLifecycle.Initializing)
                 {
                     return true;
@@ -1819,11 +1823,11 @@ internal sealed class NativeArenaTransferBatchState
         get
         {
             int count = 0;
-            for (int index = 0; index < _slots.Length; index++)
+            foreach (ref NativeArenaTransferBatchSlot indexValue in _slots.AsSpan())
             {
                 count = checked(
                     count + GetOperationCount(
-                        Volatile.Read(ref _slots[index].State)));
+                        Volatile.Read(ref indexValue.State)));
             }
 
             return count;
@@ -1835,9 +1839,9 @@ internal sealed class NativeArenaTransferBatchState
     internal int CountActiveRecords()
     {
         int count = 0;
-        for (int index = 0; index < _slots.Length; index++)
+        foreach (ref NativeArenaTransferBatchSlot indexValue in _slots.AsSpan())
         {
-            if (ReadLifecycle(ref _slots[index])
+            if (ReadLifecycle(ref indexValue)
                 != NativeAllocationLifecycle.Returned)
             {
                 count++;
@@ -2071,10 +2075,10 @@ internal sealed class NativeArenaTransferBatchState
     internal void Invalidate()
     {
         Volatile.Write(ref _valid, 0);
-        for (int index = 0; index < _slots.Length; index++)
+        foreach (ref NativeArenaTransferBatchSlot indexValue in _slots.AsSpan())
         {
             ref NativeArenaTransferBatchSlot slot =
-                ref _slots[index];
+                ref indexValue;
             while (true)
             {
                 long observed = Volatile.Read(ref slot.State);
@@ -2176,7 +2180,7 @@ internal sealed class NativeArenaTransferBatchState
 
 internal sealed class NativeGenerationOwner
 {
-    private readonly object _gate = new();
+    private readonly Lock _gate = new();
     private List<NativeSegment>? _segments = [];
     private int _released;
     private int _detached;
@@ -2251,6 +2255,7 @@ internal sealed class NativeGenerationOwner
                 return;
             }
 
+#pragma warning disable HLQ012 // Retain the enumerator's mutation checks during ownership cleanup; a span removes them.
             foreach (NativeSegment segment in _segments)
             {
                 if (segment.MarkDetached())
@@ -2260,11 +2265,13 @@ internal sealed class NativeGenerationOwner
                         segment.MetricsEpoch);
                 }
             }
+#pragma warning restore HLQ012
         }
 
         NativeMemoryTestHooks.RecordDetachedGeneration(_metricsEpoch);
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA1816", Justification = "Explicit generation release disarms the emergency finalizer.")]
     internal void ReleaseToNative()
     {
         lock (_gate)
@@ -2278,16 +2285,20 @@ internal sealed class NativeGenerationOwner
             _segments = null;
             if (segments is not null)
             {
+#pragma warning disable HLQ012 // Retain the enumerator's mutation checks during ownership cleanup; a span removes them.
                 foreach (NativeSegment segment in segments)
                 {
                     segment.FreeNow();
                 }
+#pragma warning restore HLQ012
             }
         }
 
         GC.SuppressFinalize(this);
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "MA0055", Justification = "Emergency native-memory cleanup supplements mandatory deterministic disposal.")]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "An emergency finalizer must never let cleanup exceptions terminate the process.")]
     ~NativeGenerationOwner()
     {
         try
@@ -2579,7 +2590,8 @@ internal sealed class NativeGeneration
     }
 
     internal List<NativeArenaTransferBatchState>
-        ArenaTransferBatches { get; } = [];
+        ArenaTransferBatches
+    { get; } = [];
 
     internal NativeArenaTransferBatchState[] ArenaTransferBatchSnapshot =>
         Volatile.Read(ref _arenaTransferBatchSnapshot);
@@ -2976,6 +2988,8 @@ internal struct NativeMultiOwnerOperationMap
 
 internal ref struct NativeMultiOwnerOperationToken
 {
+    // Each active token is disposed by the indexed switch in Dispose().
+#pragma warning disable CA2213
     private NativeCompositeOperationToken _group0;
     private NativeCompositeOperationToken _group1;
     private NativeCompositeOperationToken _group2;
@@ -2984,6 +2998,7 @@ internal ref struct NativeMultiOwnerOperationToken
     private NativeCompositeOperationToken _group5;
     private NativeCompositeOperationToken _group6;
     private NativeCompositeOperationToken _group7;
+#pragma warning restore CA2213
     private NativeMultiOwnerOperationMap _groupByEntry;
     private NativeMultiOwnerOperationMap _indexByEntry;
     private int _groupCount;
@@ -3233,17 +3248,22 @@ internal sealed class NativeOwnerKernel
                 + current.FastArenaRequestedBytes);
 
             long retainedBytes = 0;
+#pragma warning disable HLQ012 // Retain the enumerator's mutation checks during ownership cleanup; a span removes them.
             foreach (NativeSlab slab in current.Slabs)
             {
                 retainedBytes = checked(retainedBytes + (long)slab.Segment.ByteLength);
             }
+#pragma warning restore HLQ012
 
+#pragma warning disable HLQ012 // Retain the enumerator's mutation checks during ownership cleanup; a span removes them.
             foreach (NativeBumpSegment bump in current.BumpSegments)
             {
                 retainedBytes = checked(retainedBytes + (long)bump.Segment.ByteLength);
             }
+#pragma warning restore HLQ012
 
             int availableSegmentCount = current.AvailableSlabs.Count;
+#pragma warning disable HLQ012 // Retain the enumerator's mutation checks during ownership cleanup; a span removes them.
             foreach (NativeBumpSegment bump in current.BumpSegments)
             {
                 if (bump.IsCompletelyIdle)
@@ -3251,6 +3271,7 @@ internal sealed class NativeOwnerKernel
                     availableSegmentCount++;
                 }
             }
+#pragma warning restore HLQ012
 
             return new(
                 _lifecycle,
@@ -3297,6 +3318,7 @@ internal sealed class NativeOwnerKernel
                 current?.AvailableSlabs.Count ?? 0;
             if (current is not null)
             {
+#pragma warning disable HLQ012 // Retain the enumerator's mutation checks during ownership cleanup; a span removes them.
                 foreach (NativeBumpSegment bump
                     in current.BumpSegments)
                 {
@@ -3305,9 +3327,11 @@ internal sealed class NativeOwnerKernel
                         availableSegmentCount++;
                     }
                 }
+#pragma warning restore HLQ012
             }
 
             int quarantinedSegments = 0;
+#pragma warning disable HLQ012 // Retain the enumerator's mutation checks during ownership cleanup; a span removes them.
             foreach (NativeGeneration generation
                 in _quarantinedGenerations)
             {
@@ -3315,6 +3339,7 @@ internal sealed class NativeOwnerKernel
                     quarantinedSegments
                     + generation.RetiredSegmentCount);
             }
+#pragma warning restore HLQ012
 
             return new NativeOwnerDiagnosticSnapshot(
                 _lifecycle,
@@ -3348,15 +3373,19 @@ internal sealed class NativeOwnerKernel
     private long SumRetiredBytesLocked()
     {
         long total = 0;
+#pragma warning disable HLQ012 // Retain the enumerator's mutation checks during ownership cleanup; a span removes them.
         foreach (NativeGeneration generation in _retiredGenerations)
         {
             total = checked(total + generation.RetiredNativeBytes);
         }
+#pragma warning restore HLQ012
 
+#pragma warning disable HLQ012 // Retain the enumerator's mutation checks during ownership cleanup; a span removes them.
         foreach (NativeGeneration generation in _quarantinedGenerations)
         {
             total = checked(total + generation.RetiredNativeBytes);
         }
+#pragma warning restore HLQ012
 
         return total;
     }
@@ -3364,15 +3393,19 @@ internal sealed class NativeOwnerKernel
     private int CountRetiredSegmentsLocked()
     {
         int total = 0;
+#pragma warning disable HLQ012 // Retain the enumerator's mutation checks during ownership cleanup; a span removes them.
         foreach (NativeGeneration generation in _retiredGenerations)
         {
             total = checked(total + generation.RetiredSegmentCount);
         }
+#pragma warning restore HLQ012
 
+#pragma warning disable HLQ012 // Retain the enumerator's mutation checks during ownership cleanup; a span removes them.
         foreach (NativeGeneration generation in _quarantinedGenerations)
         {
             total = checked(total + generation.RetiredSegmentCount);
         }
+#pragma warning restore HLQ012
 
         return total;
     }
@@ -3477,10 +3510,12 @@ internal sealed class NativeOwnerKernel
         lock (_gate)
         {
             int count = 0;
+#pragma warning disable HLQ012 // Retain the enumerator's mutation checks during ownership cleanup; a span removes them.
             foreach (NativeGeneration generation in _quarantinedGenerations)
             {
                 count = checked(count + generation.RetiredSegmentCount);
             }
+#pragma warning restore HLQ012
 
             return count;
         }
@@ -3556,6 +3591,7 @@ internal sealed class NativeOwnerKernel
                 }
             }
 
+#pragma warning disable HLQ012 // Retain the enumerator's mutation checks during ownership cleanup; a span removes them.
             foreach (NativeBumpSegment segment in generation.ScopedTouchedSegments)
             {
                 if (segment.PendingScopeEpoch >= 0)
@@ -3563,6 +3599,7 @@ internal sealed class NativeOwnerKernel
                     segment.PendingScopeEpoch = value;
                 }
             }
+#pragma warning restore HLQ012
         }
     }
 
@@ -4636,6 +4673,7 @@ internal sealed class NativeOwnerKernel
                 }
             }
 
+#pragma warning disable HLQ012 // Retain the enumerator's mutation checks during ownership cleanup; a span removes them.
             foreach (NativeBumpSegment candidate in
                 generation.BumpSegments)
             {
@@ -4664,6 +4702,7 @@ internal sealed class NativeOwnerKernel
                 createdSegment = null;
                 return candidate;
             }
+#pragma warning restore HLQ012
 
             nuint segmentBytes = ChooseBumpSegmentBytes(
                 generation,
@@ -5104,6 +5143,7 @@ internal sealed class NativeOwnerKernel
         nuint alignment,
         out nuint offset)
     {
+#pragma warning disable HLQ012 // Retain the enumerator's mutation checks during ownership cleanup; a span removes them.
         foreach (NativeBumpSegment candidate in
             generation.BumpSegments)
         {
@@ -5131,6 +5171,7 @@ internal sealed class NativeOwnerKernel
             offset = candidateOffset;
             return candidate;
         }
+#pragma warning restore HLQ012
 
         nuint segmentBytes = Math.Max(
             RequiredFreshBumpBytes(totalBytes, alignment),
@@ -5305,6 +5346,7 @@ internal sealed class NativeOwnerKernel
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822", Justification = "The batch transition remains an operation on its owner capability.")]
     internal void AbortArenaTransferBatchInitialization(
         NativeArenaTransferBatchState batch,
         int slotIndex,
@@ -5457,6 +5499,7 @@ internal sealed class NativeOwnerKernel
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822", Justification = "The batch return remains an operation on its owner capability.")]
     internal void ReturnArenaTransferBatchLease(
         NativeArenaTransferBatchState batch,
         int slotIndex,
@@ -7315,6 +7358,7 @@ internal sealed class NativeOwnerKernel
                 generation.ArenaCompositeAllocations;
             if (materialized is not null)
             {
+#pragma warning disable HLQ012 // Retain the enumerator's mutation checks during ownership cleanup; a span removes them.
                 foreach (NativeAllocation candidate in
                     materialized)
                 {
@@ -7335,6 +7379,7 @@ internal sealed class NativeOwnerKernel
                         return candidate;
                     }
                 }
+#pragma warning restore HLQ012
             }
 
             NativeBumpSegment? bumpSegment = null;
@@ -7395,6 +7440,7 @@ internal sealed class NativeOwnerKernel
             string operation)
     {
         nuint address = (nuint)pointer;
+#pragma warning disable HLQ012 // Retain the enumerator's mutation checks during ownership cleanup; a span removes them.
         foreach (NativeBumpSegment candidate in
             generation.BumpSegments)
         {
@@ -7412,6 +7458,7 @@ internal sealed class NativeOwnerKernel
                 return (candidate, offset);
             }
         }
+#pragma warning restore HLQ012
 
         throw new NativeAllocationStateException(
             "The Arena scratch range does not belong to an active segment.",
@@ -7729,14 +7776,14 @@ internal sealed class NativeOwnerKernel
 
         try
         {
-            for (int index = 0; index < allocationIds.Length; index++)
+            foreach (ref readonly var indexValue in allocationIds)
             {
                 NativeMemoryTestHooks.NotifyOperationEntered(
                     operation,
                     this,
                     generation.Owner,
                     generationNumber,
-                    allocationIds[index]);
+                    indexValue);
             }
         }
         catch
@@ -8207,6 +8254,7 @@ internal sealed class NativeOwnerKernel
 
                 RecordArenaScopedReclaimedRanges(generation);
 
+#pragma warning disable HLQ012 // Retain the enumerator's mutation checks during ownership cleanup; a span removes them.
                 foreach (NativeAllocation allocation in
                     generation.ScopedCleanupPending)
                 {
@@ -8225,7 +8273,9 @@ internal sealed class NativeOwnerKernel
                             allocation.Slab);
                     }
                 }
+#pragma warning restore HLQ012
 
+#pragma warning disable HLQ012 // Retain the enumerator's mutation checks during ownership cleanup; a span removes them.
                 foreach (NativeBumpSegment segment in
                     generation.ScopedTouchedSegments)
                 {
@@ -8242,6 +8292,7 @@ internal sealed class NativeOwnerKernel
 
                     segment.ClearPendingScopeRange();
                 }
+#pragma warning restore HLQ012
 
                 generation.ScopedCleanupPending.Clear();
                 RecycleArenaCompositeAllocationsLocked(
@@ -8279,6 +8330,7 @@ internal sealed class NativeOwnerKernel
 
         int rangeCount = 0;
         nuint rangeBytes = 0;
+#pragma warning disable HLQ012 // Retain the enumerator's mutation checks during ownership cleanup; a span removes them.
         foreach (NativeBumpSegment segment in
             generation.ScopedTouchedSegments)
         {
@@ -8303,6 +8355,7 @@ internal sealed class NativeOwnerKernel
             rangeCount = checked(rangeCount + 1);
             rangeBytes = checked(rangeBytes + reusedBytes);
         }
+#pragma warning restore HLQ012
 
         if (rangeCount != 0)
         {
@@ -8580,6 +8633,7 @@ internal sealed class NativeOwnerKernel
         }
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA1816", Justification = "Internal owner-kernel disposal disarms its emergency finalizer; the outer owner exposes IDisposable.")]
     internal void Dispose()
     {
         lock (_gate)
@@ -8820,7 +8874,7 @@ internal sealed class NativeOwnerKernel
         }
     }
 
-    private NativeSlab? TakeSmallestAvailableSlabLocked(NativeGeneration generation, int length)
+    private static NativeSlab? TakeSmallestAvailableSlabLocked(NativeGeneration generation, int length)
     {
         NativeSlab? best = null;
         int bestIndex = -1;
@@ -8876,7 +8930,7 @@ internal sealed class NativeOwnerKernel
         return allocation;
     }
 
-    private NativeBumpSegment? FindBumpSpaceLocked(NativeGeneration generation, nuint byteLength, nuint alignment, bool scoped)
+    private static NativeBumpSegment? FindBumpSpaceLocked(NativeGeneration generation, nuint byteLength, nuint alignment, bool scoped)
     {
         if (generation.BumpSegments.Count == 0)
         {
@@ -8964,7 +9018,7 @@ internal sealed class NativeOwnerKernel
         generation.ScopedBumpTraversalIndex = generation.BumpSegments.Count - 1;
     }
 
-    private long BeginScopedLocked(NativeGeneration generation)
+    private static long BeginScopedLocked(NativeGeneration generation)
     {
         if (!generation.ScopedBaselineActive)
         {
@@ -8993,10 +9047,12 @@ internal sealed class NativeOwnerKernel
 
     private static void ClearScopedRangesLocked(NativeGeneration generation)
     {
+#pragma warning disable HLQ012 // Retain the enumerator's mutation checks during ownership cleanup; a span removes them.
         foreach (NativeBumpSegment segment in generation.ScopedTouchedSegments)
         {
             segment.ClearPendingScopeRange();
         }
+#pragma warning restore HLQ012
 
         generation.ScopedTouchedSegments.Clear();
     }
@@ -9463,7 +9519,7 @@ internal sealed class NativeOwnerKernel
         }
     }
 
-    private void TransferSegmentLocked(NativeGeneration source, NativeGeneration destination, NativeSegment segment)
+    private static void TransferSegmentLocked(NativeGeneration source, NativeGeneration destination, NativeSegment segment)
     {
         destination.Owner.AddSegment(segment);
         source.Owner.RemoveSegment(segment);
@@ -9548,7 +9604,7 @@ internal sealed class NativeOwnerKernel
     private static long GetSegmentOrdinal(NativeAllocation allocation) =>
         allocation.Slab?.AllocationOrdinal ?? allocation.BumpSegment?.AllocationOrdinal ?? 0;
 
-    private void InvalidateGenerationLocked(NativeGeneration generation)
+    private static void InvalidateGenerationLocked(NativeGeneration generation)
     {
         foreach (NativeAllocation allocation in generation.Allocations.Values)
         {
@@ -9649,7 +9705,7 @@ internal sealed class NativeOwnerKernel
         && (!allocation.IsScoped
             || allocation.ScopeEpoch == generation.ScopeEpoch);
 
-    private void ClearAllocationStorage(NativeAllocation allocation)
+    private static void ClearAllocationStorage(NativeAllocation allocation)
     {
         ClearReferenceStorage(allocation);
     }
@@ -9662,7 +9718,7 @@ internal sealed class NativeOwnerKernel
         }
     }
 
-    private void ClearAllocationStorageReserved(NativeAllocation allocation)
+    private static void ClearAllocationStorageReserved(NativeAllocation allocation)
     {
         if (allocation.ReferenceRoots is not null)
         {
@@ -9754,6 +9810,7 @@ internal sealed class NativeOwnerKernel
     {
         int slabs = newlyRetiredSlabs.Length;
         int bumps = newlyRetiredBumps.Length;
+#pragma warning disable HLQ012 // Retain the enumerator's mutation checks during ownership cleanup; a span removes them.
         foreach (NativeGeneration retired in _retiredGenerations)
         {
             if (retired.MemoryDetached)
@@ -9764,6 +9821,7 @@ internal sealed class NativeOwnerKernel
             slabs = checked(slabs + retired.RetiredSlabs.Length);
             bumps = checked(bumps + retired.RetiredBumps.Length);
         }
+#pragma warning restore HLQ012
 
         return (slabs, bumps);
     }
@@ -9804,7 +9862,7 @@ internal sealed class NativeOwnerKernel
     private static bool WillClear(NativeAllocation allocation, bool skipActiveOperations) =>
         !skipActiveOperations || allocation.ActiveOperations == 0;
 
-    private void PrepareGenerationClearLocked(
+    private static void PrepareGenerationClearLocked(
         NativeGeneration generation,
         bool skipActiveOperations)
     {
@@ -9837,6 +9895,7 @@ internal sealed class NativeOwnerKernel
         int slots = 0;
         int availableSlabs = 0;
         int referenceClearCount = 0;
+#pragma warning disable HLQ012 // Retain the enumerator's mutation checks during ownership cleanup; a span removes them.
         foreach (NativeAllocation allocation in
             generation.ScopedCleanupPending)
         {
@@ -9857,6 +9916,7 @@ internal sealed class NativeOwnerKernel
                 availableSlabs++;
             }
         }
+#pragma warning restore HLQ012
 
         generation.ReferenceRoots.ReserveForClear(slots);
         if (availableSlabs != 0)
@@ -9910,7 +9970,7 @@ internal sealed class NativeOwnerKernel
         }
     }
 
-    private void ClearGenerationAllocationsLocked(NativeGeneration generation, bool skipActiveOperations)
+    private static void ClearGenerationAllocationsLocked(NativeGeneration generation, bool skipActiveOperations)
     {
         foreach (NativeAllocation allocation in generation.Allocations.Values)
         {
@@ -9933,6 +9993,7 @@ internal sealed class NativeOwnerKernel
             count = checked(count + CountClearableAllocations(_current, skipActiveOperations));
         }
 
+#pragma warning disable HLQ012 // Retain the enumerator's mutation checks during ownership cleanup; a span removes them.
         foreach (NativeGeneration generation in _retiredGenerations)
         {
             if (generation.MemoryDetached)
@@ -9942,7 +10003,9 @@ internal sealed class NativeOwnerKernel
 
             count = checked(count + CountClearableAllocations(generation, skipActiveOperations));
         }
+#pragma warning restore HLQ012
 
+#pragma warning disable HLQ012 // Retain the enumerator's mutation checks during ownership cleanup; a span removes them.
         foreach (NativeGeneration generation in _quarantinedGenerations)
         {
             if (generation.MemoryDetached)
@@ -9952,6 +10015,7 @@ internal sealed class NativeOwnerKernel
 
             count = checked(count + CountClearableAllocations(generation, skipActiveOperations));
         }
+#pragma warning restore HLQ012
 
         return count;
     }
@@ -9963,6 +10027,7 @@ internal sealed class NativeOwnerKernel
             PrepareGenerationClearLocked(_current, skipActiveOperations);
         }
 
+#pragma warning disable HLQ012 // Retain the enumerator's mutation checks during ownership cleanup; a span removes them.
         foreach (NativeGeneration generation in _retiredGenerations)
         {
             if (generation.MemoryDetached)
@@ -9972,7 +10037,9 @@ internal sealed class NativeOwnerKernel
 
             PrepareGenerationClearLocked(generation, skipActiveOperations);
         }
+#pragma warning restore HLQ012
 
+#pragma warning disable HLQ012 // Retain the enumerator's mutation checks during ownership cleanup; a span removes them.
         foreach (NativeGeneration generation in _quarantinedGenerations)
         {
             if (generation.MemoryDetached)
@@ -9982,6 +10049,7 @@ internal sealed class NativeOwnerKernel
 
             PrepareGenerationClearLocked(generation, skipActiveOperations);
         }
+#pragma warning restore HLQ012
     }
 
     private void ClearOwnerWideAllocationsLocked(bool skipActiveOperations)
@@ -9991,6 +10059,7 @@ internal sealed class NativeOwnerKernel
             ClearGenerationAllocationsLocked(_current, skipActiveOperations);
         }
 
+#pragma warning disable HLQ012 // Retain the enumerator's mutation checks during ownership cleanup; a span removes them.
         foreach (NativeGeneration generation in _retiredGenerations)
         {
             if (generation.MemoryDetached)
@@ -10000,7 +10069,9 @@ internal sealed class NativeOwnerKernel
 
             ClearGenerationAllocationsLocked(generation, skipActiveOperations);
         }
+#pragma warning restore HLQ012
 
+#pragma warning disable HLQ012 // Retain the enumerator's mutation checks during ownership cleanup; a span removes them.
         foreach (NativeGeneration generation in _quarantinedGenerations)
         {
             if (generation.MemoryDetached)
@@ -10010,6 +10081,7 @@ internal sealed class NativeOwnerKernel
 
             ClearGenerationAllocationsLocked(generation, skipActiveOperations);
         }
+#pragma warning restore HLQ012
     }
 
     private void InvalidateOwnerWideGenerationsLocked()
@@ -10019,6 +10091,7 @@ internal sealed class NativeOwnerKernel
             InvalidateGenerationLocked(_current);
         }
 
+#pragma warning disable HLQ012 // Retain the enumerator's mutation checks during ownership cleanup; a span removes them.
         foreach (NativeGeneration generation in _retiredGenerations)
         {
             if (generation.MemoryDetached)
@@ -10028,7 +10101,9 @@ internal sealed class NativeOwnerKernel
 
             InvalidateGenerationLocked(generation);
         }
+#pragma warning restore HLQ012
 
+#pragma warning disable HLQ012 // Retain the enumerator's mutation checks during ownership cleanup; a span removes them.
         foreach (NativeGeneration generation in _quarantinedGenerations)
         {
             if (generation.MemoryDetached)
@@ -10038,6 +10113,7 @@ internal sealed class NativeOwnerKernel
 
             InvalidateGenerationLocked(generation);
         }
+#pragma warning restore HLQ012
     }
 
     private void ReleaseOwnerWideStorageLocked()
@@ -10047,6 +10123,7 @@ internal sealed class NativeOwnerKernel
             ReleaseGenerationStorageLocked(_current);
         }
 
+#pragma warning disable HLQ012 // Retain the enumerator's mutation checks during ownership cleanup; a span removes them.
         foreach (NativeGeneration generation in _retiredGenerations)
         {
             if (generation.MemoryDetached)
@@ -10056,7 +10133,9 @@ internal sealed class NativeOwnerKernel
 
             ReleaseGenerationStorageLocked(generation);
         }
+#pragma warning restore HLQ012
 
+#pragma warning disable HLQ012 // Retain the enumerator's mutation checks during ownership cleanup; a span removes them.
         foreach (NativeGeneration generation in _quarantinedGenerations)
         {
             if (generation.MemoryDetached)
@@ -10066,6 +10145,7 @@ internal sealed class NativeOwnerKernel
 
             ReleaseGenerationStorageLocked(generation);
         }
+#pragma warning restore HLQ012
     }
 
     private static void ReleaseGenerationStorageLocked(NativeGeneration generation)
@@ -10090,6 +10170,7 @@ internal sealed class NativeOwnerKernel
             _current.Owner.Detach();
         }
 
+#pragma warning disable HLQ012 // Retain the enumerator's mutation checks during ownership cleanup; a span removes them.
         foreach (NativeGeneration generation in _retiredGenerations)
         {
             generation.MemoryDetached = true;
@@ -10103,7 +10184,9 @@ internal sealed class NativeOwnerKernel
                 generation.RetiredNativeBytes = 0;
             }
         }
+#pragma warning restore HLQ012
 
+#pragma warning disable HLQ012 // Retain the enumerator's mutation checks during ownership cleanup; a span removes them.
         foreach (NativeGeneration generation in _quarantinedGenerations)
         {
             generation.MemoryDetached = true;
@@ -10117,12 +10200,13 @@ internal sealed class NativeOwnerKernel
                 generation.RetiredNativeBytes = 0;
             }
         }
+#pragma warning restore HLQ012
 
         _retiredGenerations.Clear();
         _quarantinedGenerations.Clear();
     }
 
-    private void EnsureNoInjectedClearFailureLocked(string operation, bool afterStateChange = false)
+    private static void EnsureNoInjectedClearFailureLocked(string operation, bool afterStateChange = false)
     {
         if (NativeMemoryTestHooks.ConsumeForcedClearFailure())
         {
@@ -10218,6 +10302,7 @@ internal sealed class NativeOwnerKernel
     private static nuint GetBusySegmentBytes(NativeGeneration generation)
     {
         nuint total = 0;
+#pragma warning disable HLQ012 // Retain the enumerator's mutation checks during ownership cleanup; a span removes them.
         foreach (NativeSlab slab in generation.Slabs)
         {
             if (IsSegmentBusy(generation, slab))
@@ -10225,7 +10310,9 @@ internal sealed class NativeOwnerKernel
                 total = checked(total + slab.Segment.ByteLength);
             }
         }
+#pragma warning restore HLQ012
 
+#pragma warning disable HLQ012 // Retain the enumerator's mutation checks during ownership cleanup; a span removes them.
         foreach (NativeBumpSegment bump in generation.BumpSegments)
         {
             if (IsSegmentBusy(generation, bump))
@@ -10233,6 +10320,7 @@ internal sealed class NativeOwnerKernel
                 total = checked(total + bump.Segment.ByteLength);
             }
         }
+#pragma warning restore HLQ012
 
         return total;
     }
@@ -10241,15 +10329,19 @@ internal sealed class NativeOwnerKernel
         NativeGeneration generation)
     {
         nuint total = 0;
+#pragma warning disable HLQ012 // Retain the enumerator's mutation checks during ownership cleanup; a span removes them.
         foreach (NativeSlab slab in generation.Slabs)
         {
             total = checked(total + slab.Segment.ByteLength);
         }
+#pragma warning restore HLQ012
 
+#pragma warning disable HLQ012 // Retain the enumerator's mutation checks during ownership cleanup; a span removes them.
         foreach (NativeBumpSegment bump in generation.BumpSegments)
         {
             total = checked(total + bump.Segment.ByteLength);
         }
+#pragma warning restore HLQ012
 
         return total;
     }
@@ -10326,7 +10418,7 @@ internal sealed class NativeOwnerKernel
 
     private static nuint AlignDown(nuint value, nuint alignment) => value - value % alignment;
 
-    private NativeAllocation RentAllocationLocked(
+    private static NativeAllocation RentAllocationLocked(
         NativeGeneration generation,
         long id,
         NativeSlab? slab,
@@ -10444,6 +10536,7 @@ internal sealed class NativeOwnerKernel
             ref leaseReturnsInProgress,
             ref busyGenerationCount,
             ref firstBusyGeneration);
+#pragma warning disable HLQ012 // Retain the enumerator's mutation checks during ownership cleanup; a span removes them.
         foreach (NativeGeneration generation in _retiredGenerations)
         {
             if (generation.MemoryDetached)
@@ -10458,7 +10551,9 @@ internal sealed class NativeOwnerKernel
                 ref busyGenerationCount,
                 ref firstBusyGeneration);
         }
+#pragma warning restore HLQ012
 
+#pragma warning disable HLQ012 // Retain the enumerator's mutation checks during ownership cleanup; a span removes them.
         foreach (NativeGeneration generation in _quarantinedGenerations)
         {
             if (generation.MemoryDetached)
@@ -10473,17 +10568,18 @@ internal sealed class NativeOwnerKernel
                 ref busyGenerationCount,
                 ref firstBusyGeneration);
         }
+#pragma warning restore HLQ012
 
         NativeGeneration? arenaHazard = Volatile.Read(
             ref _arenaFastHazardGeneration);
         bool activeArenaHazard = arenaHazard is
-            { MemoryDetached: false };
+        { MemoryDetached: false };
         NativeGeneration? arenaInitializer =
             HasArenaFastInitializer()
                 ? _arenaFastGeneration ?? _current
                 : null;
         bool activeArenaInitializer = arenaInitializer is
-            { MemoryDetached: false };
+        { MemoryDetached: false };
         if (activeArenaHazard)
         {
             activeOperations = checked(
@@ -10597,6 +10693,7 @@ internal sealed class NativeOwnerKernel
         }
     }
 
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
     private readonly record struct OwnerWideActivity(
         int ActiveOperations,
         int LeaseReturnsInProgress,
@@ -10636,6 +10733,7 @@ internal sealed class NativeOwnerKernel
             allocationId,
             _lifecycle);
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "This boundary captures any failure to preserve cleanup and report the original error.")]
     private void DisposeFromFinalizer()
     {
         NativeGeneration? generation;
@@ -10658,6 +10756,7 @@ internal sealed class NativeOwnerKernel
                 generation.Owner.ReleaseToNative();
             }
 
+#pragma warning disable HLQ012 // Retain the enumerator's mutation checks during ownership cleanup; a span removes them.
             foreach (NativeGeneration retired in _retiredGenerations)
             {
                 if (!retired.MemoryDetached)
@@ -10665,7 +10764,9 @@ internal sealed class NativeOwnerKernel
                     retired.Owner.ReleaseToNative();
                 }
             }
+#pragma warning restore HLQ012
 
+#pragma warning disable HLQ012 // Retain the enumerator's mutation checks during ownership cleanup; a span removes them.
             foreach (NativeGeneration quarantined in _quarantinedGenerations)
             {
                 if (!quarantined.MemoryDetached)
@@ -10673,11 +10774,13 @@ internal sealed class NativeOwnerKernel
                     quarantined.Owner.ReleaseToNative();
                 }
             }
+#pragma warning restore HLQ012
         }
         catch
         {
         }
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "MA0055", Justification = "Emergency native-memory cleanup supplements mandatory deterministic disposal.")]
     ~NativeOwnerKernel() => DisposeFromFinalizer();
 }

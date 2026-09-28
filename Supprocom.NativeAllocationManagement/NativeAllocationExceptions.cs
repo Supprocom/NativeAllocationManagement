@@ -3,6 +3,7 @@ namespace Supprocom.NativeAllocationManagement;
 /// <summary>
 /// Base exception for a native owner or derived handle lifecycle failure.
 /// </summary>
+[System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1032", Justification = "Only the runtime may create lifecycle exceptions; each requires exact ownership metadata.")]
 public class NativeAllocationException : InvalidOperationException
 {
     internal NativeAllocationException(
@@ -59,6 +60,7 @@ public class NativeAllocationException : InvalidOperationException
 }
 
 /// <summary>Raised when a default-initialized owner-shaped value is used.</summary>
+[System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1032", Justification = "Only the runtime may create lifecycle exceptions; each requires exact ownership metadata.")]
 public sealed class NativeAllocationUninitializedException : NativeAllocationException
 {
     internal NativeAllocationUninitializedException(string valueKind, string operation)
@@ -76,6 +78,7 @@ public sealed class NativeAllocationUninitializedException : NativeAllocationExc
 }
 
 /// <summary>Raised when an owner or derived handle belongs to a returned generation.</summary>
+[System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1032", Justification = "Only the runtime may create lifecycle exceptions; each requires exact ownership metadata.")]
 public sealed class NativeAllocationReturnedException : NativeAllocationException
 {
     internal NativeAllocationReturnedException(
@@ -93,6 +96,7 @@ public sealed class NativeAllocationReturnedException : NativeAllocationExceptio
 }
 
 /// <summary>Raised when an owner is permanently disposed.</summary>
+[System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1032", Justification = "Only the runtime may create lifecycle exceptions; each requires exact ownership metadata.")]
 public sealed class NativeAllocationDisposedException : NativeAllocationException
 {
     internal NativeAllocationDisposedException(
@@ -110,6 +114,7 @@ public sealed class NativeAllocationDisposedException : NativeAllocationExceptio
 }
 
 /// <summary>Raised when a lifecycle transition loses the active-operation safety gate.</summary>
+[System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1032", Justification = "Only the runtime may create lifecycle exceptions; each requires exact ownership metadata.")]
 public sealed class NativeAllocationInUseException : NativeAllocationException
 {
     internal NativeAllocationInUseException(
@@ -143,6 +148,7 @@ public sealed class NativeAllocationInUseException : NativeAllocationException
 /// storage with the active owner. The storage remains quarantined and cannot be
 /// reused until its owner is disposed or finalized.
 /// </summary>
+[System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1032", Justification = "Only the runtime may create lifecycle exceptions; each requires exact ownership metadata.")]
 public sealed class NativeAllocationQuarantinedException : NativeAllocationException
 {
     internal NativeAllocationQuarantinedException(
@@ -180,6 +186,7 @@ public sealed class NativeAllocationQuarantinedException : NativeAllocationExcep
 }
 
 /// <summary>Raised when an operation is incompatible with the owner's current lifecycle state.</summary>
+[System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1032", Justification = "Only the runtime may create lifecycle exceptions; each requires exact ownership metadata.")]
 public sealed class NativeAllocationStateException : NativeAllocationException
 {
     internal NativeAllocationStateException(
@@ -197,6 +204,7 @@ public sealed class NativeAllocationStateException : NativeAllocationException
 }
 
 /// <summary>Raised when a native segment cannot be allocated.</summary>
+[System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1032", Justification = "Only the runtime may create lifecycle exceptions; each requires exact ownership metadata.")]
 public sealed class NativeAllocationFailedException : NativeAllocationException
 {
     internal NativeAllocationFailedException(

@@ -25,7 +25,10 @@ public sealed class NativeArena : IDisposable
     internal NativeOwnerLifecycle CurrentLifecycle =>
         _kernel.Lifecycle;
 
+    // Compatibility probe retains the per-owner instance shape.
+#pragma warning disable CA1822
     internal int CurrentAllocationRecordCountForTest => 0;
+#pragma warning restore CA1822
 
     /// <summary>Gets the current Arena storage statistics.</summary>
     public NativeOwnerStatistics GetStatistics() =>
@@ -217,17 +220,23 @@ public readonly ref struct ArenaLease<T>
 
     [DoesNotReturn]
     [MethodImpl(MethodImplOptions.NoInlining)]
+    // This cold helper reports the public caller's source argument.
+#pragma warning disable MA0015
     private static void ThrowSourceLength() =>
         throw new ArgumentException(
             "The source length must equal the arena logical length.",
             "source");
+#pragma warning restore MA0015
 
     [DoesNotReturn]
     [MethodImpl(MethodImplOptions.NoInlining)]
+    // This cold helper reports the public caller's destination argument.
+#pragma warning disable MA0015
     private static void ThrowDestinationLength() =>
         throw new ArgumentException(
             "The destination must contain the complete arena range.",
             "destination");
+#pragma warning restore MA0015
 }
 
 internal readonly ref struct ArenaBorrow<T>

@@ -398,7 +398,7 @@ internal static class AllocatorPerformanceRegression
     {
         ReadOnlySpan<byte> bytes = MemoryMarshal.AsBytes(values);
         ulong hash = 14_695_981_039_346_656_037UL;
-        foreach (byte value in bytes)
+        foreach (ref readonly byte value in bytes)
         {
             hash ^= value;
             hash *= 1_099_511_628_211UL;

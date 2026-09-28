@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 
 namespace Supprocom.NativeAllocationManagement.Demos.VoxelChunkPipeline.SharedContract;
@@ -68,7 +69,10 @@ public readonly record struct PressureProfileRequest(
     bool Warmup = false,
     PressureExecutionMode ExecutionMode =
         PressureExecutionMode.Verification,
+    // PlannedChunks is a serialized ordered plan, not a mutable collection API.
+#pragma warning disable CA1819
     PressureChunkPlanEntry[]? PlannedChunks = null,
+#pragma warning restore CA1819
     long RequestOrdinal = 0,
     PressureDiagnosticRequest? Diagnostic = null)
 {
@@ -92,9 +96,12 @@ public readonly record struct PressureProfileRequest(
             || ProgressEveryChunks <= 0
             || RequestOrdinal < 0)
         {
+            // Validate() checks object state rather than a method parameter.
+#pragma warning disable MA0015
             throw new ArgumentOutOfRangeException(
                 nameof(PressureProfileRequest),
                 "Pressure profile sizes, deadline, retention, and progress cadence must be positive.");
+#pragma warning restore MA0015
         }
 
         if (PlannedChunks is null)
@@ -109,9 +116,12 @@ public readonly record struct PressureProfileRequest(
                     || chunk.LogicalDemandBytes <= 0
                     || chunk.EstimatedWorkUnits <= 0))
         {
+            // The invalid value is a serialized member, not a Validate() parameter.
+#pragma warning disable MA0015
             throw new ArgumentOutOfRangeException(
                 nameof(PlannedChunks),
                 "A planned chunk sequence contains an invalid chunk.");
+#pragma warning restore MA0015
         }
     }
 
@@ -382,9 +392,9 @@ public static class PressureStateFingerprint
         unchecked
         {
             ulong hash = 14_695_981_039_346_656_037;
-            for (int index = 0; index < values.Length; index++)
+            foreach (long value in values)
             {
-                hash ^= (ulong)values[index];
+                hash ^= (ulong)value;
                 hash *= 1_099_511_628_211;
             }
 
@@ -421,6 +431,7 @@ public interface IQueuedPressureProfileSession :
         Action<PressureProgress> reportProgress);
 }
 
+[StructLayout(LayoutKind.Sequential)]
 public readonly record struct PressureWorkerCapacity(
     long MinimumRetainedBytes,
     long SafetyReserveBytes,
@@ -434,6 +445,7 @@ public interface IPressureWorkerCapacityPlanner
 
 public static class PressureProtocolServer
 {
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "This boundary captures any failure to preserve cleanup and report the original error.")]
     public static int Run(IPressureProfileSession session)
     {
         ArgumentNullException.ThrowIfNull(session);

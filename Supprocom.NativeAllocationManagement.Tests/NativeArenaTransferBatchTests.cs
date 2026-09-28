@@ -138,7 +138,7 @@ public sealed class NativeArenaTransferBatchTests
         Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
         Assert.Throws<InvalidOperationException>(alias.Dispose);
         release.Set();
-        Assert.Equal(31, await access);
+        Assert.Equal(31, await access.ConfigureAwait(true));
         Assert.Equal(31, lease.Read(static view => view[0]));
 
         lease.Dispose();
@@ -178,7 +178,7 @@ public sealed class NativeArenaTransferBatchTests
             Assert.Throws<NativeAllocationInUseException>(arena.Dispose);
             Assert.Equal(NativeOwnerLifecycle.Active, arena.CurrentLifecycle);
             release.Set();
-            Assert.Equal(47, await access);
+            Assert.Equal(47, await access.ConfigureAwait(true));
             lease.Dispose();
             arena.Dispose();
             Assert.Equal(
@@ -257,7 +257,7 @@ public sealed class NativeArenaTransferBatchTests
             static writer => writer.Fill(71));
         Assert.Equal(71, local.Read(static view => view[7]));
         release.Set();
-        await initialize;
+        await initialize.ConfigureAwait(true);
         Assert.Equal(0, arena.CurrentAllocationRecordCountForTest);
         Assert.Equal(
             0,
@@ -294,7 +294,7 @@ public sealed class NativeArenaTransferBatchTests
         Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
         arena.ReleaseLeasesToGarbageCollector();
         release.Set();
-        Assert.Equal(53, await access);
+        Assert.Equal(53, await access.ConfigureAwait(true));
         Assert.Throws<NativeAllocationReturnedException>(
             () => lease.Read(static view => view[0]));
         lease.Dispose();
@@ -529,18 +529,5 @@ public sealed class NativeArenaTransferBatchTests
     }
 
     private static string FindRepositoryRoot()
-    {
-        DirectoryInfo? directory = new(AppContext.BaseDirectory);
-        while (directory is not null
-            && !File.Exists(Path.Combine(
-                directory.FullName,
-                "Supprocom.NativeAllocationManagement.slnx")))
-        {
-            directory = directory.Parent;
-        }
-
-        return directory?.FullName
-            ?? throw new DirectoryNotFoundException(
-                "The repository root was not found.");
-    }
+        => RepositoryTestPaths.Root;
 }

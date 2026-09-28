@@ -5,7 +5,7 @@
     <RootNamespace>Supprocom.NativeAllocationManagement.Performance</RootNamespace>
     <AssemblyName>Supprocom.NativeAllocationManagement.Performance</AssemblyName>
     <IsPackable>false</IsPackable>
-    <NoWarn>$(NoWarn);CS1591;RS1036;RS1041;RS2008</NoWarn>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
   </PropertyGroup>
 
   <ItemGroup>

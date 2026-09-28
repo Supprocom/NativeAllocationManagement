@@ -38,6 +38,11 @@ public sealed class NativeLeaseStateAnalyzer : DiagnosticAnalyzer
     /// <inheritdoc />
     public override void Initialize(AnalysisContext context)
     {
+        if (context is null)
+        {
+            throw new ArgumentNullException(nameof(context));
+        }
+
         context.EnableConcurrentExecution();
         context.ConfigureGeneratedCodeAnalysis(
             GeneratedCodeAnalysisFlags.None);
@@ -203,7 +208,10 @@ public sealed class NativeLeaseStateAnalyzer : DiagnosticAnalyzer
                 ?? [],
             _ => []
         };
+        // Roslyn syntax queries can produce no callback despite CA1508's local-flow inference.
+#pragma warning disable CA1508
         if (callback is null || parameters.Length != 2)
+#pragma warning restore CA1508
         {
             return;
         }
@@ -233,7 +241,7 @@ public sealed class NativeLeaseStateAnalyzer : DiagnosticAnalyzer
                             ? SymbolEqualityComparer.Default.Equals(
                                 parameter,
                                 referenced)
-                            : identifier.Identifier.ValueText == name;
+                            : string.Equals(identifier.Identifier.ValueText, name, StringComparison.Ordinal);
                     });
                 if (!captured)
                 {
@@ -309,7 +317,7 @@ public sealed class NativeLeaseStateAnalyzer : DiagnosticAnalyzer
             GenericNameSyntax generic => generic,
             _ => null
         };
-        return name?.Identifier.ValueText == "Process";
+        return string.Equals(name?.Identifier.ValueText, "Process", StringComparison.Ordinal);
     }
 
     private static bool IsDirectStaticCallback(
@@ -548,9 +556,7 @@ public sealed class NativeLeaseStateAnalyzer : DiagnosticAnalyzer
             && StateCallback is not null
             && LeaseView is not null;
 
-        internal bool IsLeaseStateProcess(IMethodSymbol method) =>
-            method.Name == "Process"
-            && Is(method.ContainingType, ConcurrentPooled)
+        internal bool IsLeaseStateProcess(IMethodSymbol method) => string.Equals(method.Name, "Process", StringComparison.Ordinal) && Is(method.ContainingType, ConcurrentPooled)
             && method.Parameters.Length == 3
             && method.Parameters[0].Type.SpecialType
                 == SpecialType.System_Int32
@@ -580,13 +586,14 @@ public sealed class NativeLeaseStateAnalyzer : DiagnosticAnalyzer
                 or "System.ReadOnlySpan<T>";
         }
 
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822", Justification = "Symbol queries remain on the per-compilation Symbols facade.")]
         internal bool IsOwnerBearingState(ITypeSymbol type) =>
             IsOwnerBearingState(
                 type,
                 new HashSet<ITypeSymbol>(
                     SymbolEqualityComparer.Default));
 
-        private bool IsOwnerBearingState(
+        private static bool IsOwnerBearingState(
             ITypeSymbol type,
             HashSet<ITypeSymbol> visited)
         {
@@ -651,8 +658,8 @@ public sealed class NativeLeaseStateAnalyzer : DiagnosticAnalyzer
         private static bool IsNamOwnershipType(
             INamedTypeSymbol type)
         {
-            if (type.ContainingNamespace.ToDisplayString()
-                != "Supprocom.NativeAllocationManagement")
+            if (!string.Equals(type.ContainingNamespace.ToDisplayString()
+, "Supprocom.NativeAllocationManagement", StringComparison.Ordinal))
             {
                 return false;
             }
@@ -1238,9 +1245,7 @@ public sealed class NativeLeaseStateAnalyzer : DiagnosticAnalyzer
 
         private int Length { get; }
 
-        public bool Equals(DiagnosticKey other) =>
-            Id == other.Id
-            && ReferenceEquals(Tree, other.Tree)
+        public bool Equals(DiagnosticKey other) => string.Equals(Id, other.Id, StringComparison.Ordinal) && ReferenceEquals(Tree, other.Tree)
             && Start == other.Start
             && Length == other.Length;
 
@@ -1251,7 +1256,7 @@ public sealed class NativeLeaseStateAnalyzer : DiagnosticAnalyzer
         {
             unchecked
             {
-                int hash = Id.GetHashCode();
+                int hash = StringComparer.Ordinal.GetHashCode(Id);
                 hash = (hash * 397) ^ Tree.GetHashCode();
                 hash = (hash * 397) ^ Start;
                 return (hash * 397) ^ Length;

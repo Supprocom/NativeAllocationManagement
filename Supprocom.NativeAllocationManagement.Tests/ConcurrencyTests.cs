@@ -8,11 +8,11 @@ public sealed class ConcurrencyTests
     public async Task ReturnFailsAfterAnOperationTokenWinsAndLeavesGenerationUsable()
     {
         NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        ManualResetEventSlim entered = new();
-        ManualResetEventSlim release = new();
+        using ManualResetEventSlim entered = new();
+        using ManualResetEventSlim release = new();
         NativeMemoryTestHooks.SetOperationEntered(operation =>
         {
-            if (operation == nameof(ConcurrentPooled<int>.Access))
+            if (string.Equals(operation, nameof(ConcurrentPooled<int>.Access), StringComparison.Ordinal))
             {
                 entered.Set();
                 release.Wait(TimeSpan.FromSeconds(10));
@@ -33,7 +33,7 @@ public sealed class ConcurrencyTests
             Assert.Contains("No lease was invalidated", exception.Message, StringComparison.OrdinalIgnoreCase);
             Assert.Equal(NativeOwnerLifecycle.Active, exception.CurrentLifecycle);
             release.Set();
-            await worker;
+            await worker.ConfigureAwait(true);
 
             ConcurrentPooled<int> usable = pool.Rent(1, static writer => writer.Fill(default!));
             Assert.Equal(0, usable.Read(__namIndexedView => __namIndexedView[0]));
@@ -58,11 +58,11 @@ public sealed class ConcurrencyTests
         NativeConcurrentPool<int> pool = new(
             preLease: 1,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        ManualResetEventSlim entered = new();
-        ManualResetEventSlim release = new();
+        using ManualResetEventSlim entered = new();
+        using ManualResetEventSlim release = new();
         NativeMemoryTestHooks.SetOperationEntered(operation =>
         {
-            if (operation == nameof(ConcurrentPooled<int>.Access))
+            if (string.Equals(operation, nameof(ConcurrentPooled<int>.Access), StringComparison.Ordinal))
             {
                 entered.Set();
                 release.Wait(TimeSpan.FromSeconds(10));
@@ -101,7 +101,7 @@ public sealed class ConcurrencyTests
             current.Dispose();
 
             release.Set();
-            await worker;
+            await worker.ConfigureAwait(true);
 
             for (int attempt = 0;
                 attempt < 3 && NativeMemoryTestHooks.Snapshot().DetachedNativeBytes != 0;
@@ -138,14 +138,15 @@ public sealed class ConcurrencyTests
     }
 
     [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The test intentionally captures arbitrary callback or worker failures for lifecycle assertions.")]
     public async Task IndividualLeaseDisposalDoesNotReuseAStagingSlabDuringActiveAccess()
     {
         NativeConcurrentPool<int> pool = new();
-        ManualResetEventSlim entered = new();
+        using ManualResetEventSlim entered = new();
         NativeAllocationInUseException? returnException = null;
         NativeMemoryTestHooks.SetOperationEnteredWithAllocation((operation, kernel, generation, allocationId) =>
         {
-            if (operation == nameof(ConcurrentPooled<int>.Access))
+            if (string.Equals(operation, nameof(ConcurrentPooled<int>.Access), StringComparison.Ordinal))
             {
                 entered.Set();
                 try
@@ -180,7 +181,7 @@ public sealed class ConcurrencyTests
             });
 
             Assert.True(entered.Wait(TimeSpan.FromSeconds(10)));
-            Assert.Null(await worker);
+            Assert.Null(await worker.ConfigureAwait(true));
             Assert.NotNull(returnException);
             ConcurrentPooled<int> reused = pool.Rent(2, static writer => writer.Fill(default!));
             Assert.Equal(0, reused.Read(__namIndexedView => __namIndexedView[0]));

@@ -114,6 +114,7 @@ public sealed class NativeBuilderBenchmarkTests
     }
 
     [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1861", Justification = "The one-shot statistical fixture stays local to its assertion.")]
     public void ConfidenceLowerUsesEveryPairedObservation()
     {
         double lower = PairedBenchmarkStatistics.ConfidenceLower95(

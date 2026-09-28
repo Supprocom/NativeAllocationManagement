@@ -114,6 +114,7 @@ internal sealed class WindowsProcessLifetimeJob : IDisposable
         internal UIntPtr PeakJobMemoryUsed;
     }
 
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     [DllImport(
         "kernel32.dll",
         EntryPoint = "CreateJobObjectW",
@@ -123,6 +124,7 @@ internal sealed class WindowsProcessLifetimeJob : IDisposable
         IntPtr jobAttributes,
         string? name);
 
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     [DllImport(
         "kernel32.dll",
         SetLastError = true)]
@@ -133,6 +135,7 @@ internal sealed class WindowsProcessLifetimeJob : IDisposable
         ref JobObjectExtendedLimitInformation information,
         int informationLength);
 
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     [DllImport(
         "kernel32.dll",
         SetLastError = true)]

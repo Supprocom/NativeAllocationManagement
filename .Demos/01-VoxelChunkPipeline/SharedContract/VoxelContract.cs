@@ -54,6 +54,7 @@ public sealed class CanonicalHashAccumulator : IDisposable
 
     public void AddString(string value)
     {
+        ArgumentNullException.ThrowIfNull(value);
         bool ascii = true;
         for (int index = 0; index < value.Length; index++)
         {
@@ -119,9 +120,9 @@ public sealed class CanonicalHashAccumulator : IDisposable
             return;
         }
 
-        for (int index = 0; index < values.Length; index++)
+        foreach (ref readonly Vertex value in values)
         {
-            AddVertex(values[index]);
+            AddVertex(value);
         }
     }
 
@@ -133,9 +134,9 @@ public sealed class CanonicalHashAccumulator : IDisposable
             return;
         }
 
-        for (int index = 0; index < values.Length; index++)
+        foreach (ref readonly int value in values)
         {
-            AddInt32(values[index]);
+            AddInt32(value);
         }
     }
 
@@ -147,9 +148,9 @@ public sealed class CanonicalHashAccumulator : IDisposable
             return;
         }
 
-        for (int index = 0; index < values.Length; index++)
+        foreach (ref readonly PayloadSlice value in values)
         {
-            AddPayloadSlice(values[index]);
+            AddPayloadSlice(value);
         }
     }
 
@@ -646,9 +647,9 @@ public static class VoxelMath
         long hash = 17;
         hash = DigestInt32(hash, seed);
         hash = DigestInt32(hash, chunkId);
-        for (int index = 0; index < cells.Length; index++)
+        foreach (ref readonly CanonicalInputCell cell in cells)
         {
-            hash = DigestCanonicalInputCell(hash, cells[index]);
+            hash = DigestCanonicalInputCell(hash, cell);
         }
 
         return hash;
@@ -729,9 +730,8 @@ public static class VoxelMath
         long cellValueHash = 17;
         long chunkOrderHash = 17;
         long legacyHash = 17;
-        for (int index = 0; index < ordered.Length; index++)
+        foreach (ChunkOutputSummary chunk in ordered)
         {
-            ChunkOutputSummary chunk = ordered[index];
             strong.AddInt32(chunk.ChunkId);
             strong.AddInt64(chunk.InputCellCount);
             strong.AddString(chunk.StrongInputHash);
@@ -743,9 +743,8 @@ public static class VoxelMath
                 continue;
             }
 
-            for (int cell = 0; cell < observed.Length; cell++)
+            foreach (CanonicalInputCell value in observed)
             {
-                CanonicalInputCell value = observed[cell];
                 cells!.Add(value);
                 cellValueHash = DigestCanonicalInputCell(cellValueHash, value);
                 chunkOrderHash = DigestInt32(chunkOrderHash, value.ChunkId);
@@ -777,9 +776,8 @@ public static class VoxelMath
         hash.AddInt32(options.Iterations);
         hash.AddInt32(options.WarmupChunksPerWorker);
         hash.AddInt32(BlockTypes.Length);
-        for (int index = 0; index < BlockTypes.Length; index++)
+        foreach (BlockTypeDescriptor type in BlockTypes)
         {
-            BlockTypeDescriptor type = BlockTypes[index];
             hash.AddInt32(type.Id);
             hash.AddString(type.Name);
             hash.AddInt32(type.PayloadBytes);
@@ -801,9 +799,9 @@ public static class VoxelMath
         hash.AddInt32(seed);
         hash.AddInt32(chunkId);
         hash.AddInt32(cells.Length);
-        for (int index = 0; index < cells.Length; index++)
+        foreach (ref readonly CanonicalInputCell cell in cells)
         {
-            hash.AddCanonicalInputCell(cells[index]);
+            hash.AddCanonicalInputCell(cell);
         }
 
         return hash.Complete();
@@ -812,9 +810,8 @@ public static class VoxelMath
     public static long ComputeRegistryHash()
     {
         long registryHash = 17;
-        for (int index = 0; index < BlockTypes.Length; index++)
+        foreach (BlockTypeDescriptor type in BlockTypes)
         {
-            BlockTypeDescriptor type = BlockTypes[index];
             registryHash = DigestInt32(registryHash, type.Id);
             byte[] name = Encoding.UTF8.GetBytes(type.Name);
             registryHash = DigestInt32(registryHash, name.Length);
@@ -898,9 +895,9 @@ public static class VoxelMath
 
     public static long DigestBytes(long state, ReadOnlySpan<byte> bytes)
     {
-        for (int index = 0; index < bytes.Length; index++)
+        foreach (ref readonly byte value in bytes)
         {
-            state = DigestStep(state, bytes[index]);
+            state = DigestStep(state, value);
         }
 
         return state;
@@ -924,9 +921,8 @@ public static class VoxelMath
         ReadOnlySpan<byte> upload)
     {
         state = DigestInt32(state, vertices.Length);
-        for (int index = 0; index < vertices.Length; index++)
+        foreach (ref readonly Vertex value in vertices)
         {
-            Vertex value = vertices[index];
             state = DigestInt32(state, value.X);
             state = DigestInt32(state, value.Y);
             state = DigestInt32(state, value.Z);
@@ -936,15 +932,14 @@ public static class VoxelMath
         }
 
         state = DigestInt32(state, indices.Length);
-        for (int index = 0; index < indices.Length; index++)
+        foreach (ref readonly int indexValue in indices)
         {
-            state = DigestInt32(state, indices[index]);
+            state = DigestInt32(state, indexValue);
         }
 
         state = DigestInt32(state, slices.Length);
-        for (int index = 0; index < slices.Length; index++)
+        foreach (ref readonly PayloadSlice value in slices)
         {
-            PayloadSlice value = slices[index];
             state = DigestInt32(state, value.Offset);
             state = DigestInt32(state, value.Length);
             state = DigestInt32(state, value.Alignment);
@@ -1005,9 +1000,8 @@ public static class VoxelMath
             .OrderBy(static value => value.ChunkId)
             .ToArray();
         hash.AddInt32(ordered.Length);
-        for (int index = 0; index < ordered.Length; index++)
+        foreach (ChunkOutputSummary chunk in ordered)
         {
-            ChunkOutputSummary chunk = ordered[index];
             hash.AddInt32(chunk.ChunkId);
             hash.AddInt64(chunk.ByteHash);
             hash.AddString(chunk.StrongOutputHash);
@@ -1573,9 +1567,8 @@ public static class VoxelMath
     private static bool[] CreateTransparentById()
     {
         bool[] lookup = new bool[ushort.MaxValue + 1];
-        for (int index = 0; index < BlockTypes.Length; index++)
+        foreach (BlockTypeDescriptor type in BlockTypes)
         {
-            BlockTypeDescriptor type = BlockTypes[index];
             lookup[type.Id] = type.Id != AirBlockId && type.SolidThreshold < 0;
         }
 

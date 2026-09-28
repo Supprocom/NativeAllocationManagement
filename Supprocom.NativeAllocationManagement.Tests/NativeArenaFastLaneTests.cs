@@ -379,6 +379,7 @@ public sealed class NativeArenaFastLaneTests
             CaptureRead(lease));
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The test intentionally captures arbitrary callback or worker failures for lifecycle assertions.")]
     private static Exception CaptureRead<T>(ArenaLease<T> lease)
         where T : unmanaged
     {

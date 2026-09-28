@@ -1,0 +1,13 @@
+#nullable enable
+override Supprocom.NativeAllocationManagement.Analyzers.NativeAllocationAnalyzer.Initialize(Microsoft.CodeAnalysis.Diagnostics.AnalysisContext! context) -> void
+override Supprocom.NativeAllocationManagement.Analyzers.NativeAllocationAnalyzer.SupportedDiagnostics.get -> System.Collections.Immutable.ImmutableArray<Microsoft.CodeAnalysis.DiagnosticDescriptor!>
+override Supprocom.NativeAllocationManagement.Analyzers.NativeBuilderWriteAnalyzer.Initialize(Microsoft.CodeAnalysis.Diagnostics.AnalysisContext! context) -> void
+override Supprocom.NativeAllocationManagement.Analyzers.NativeBuilderWriteAnalyzer.SupportedDiagnostics.get -> System.Collections.Immutable.ImmutableArray<Microsoft.CodeAnalysis.DiagnosticDescriptor!>
+override Supprocom.NativeAllocationManagement.Analyzers.NativeLeaseStateAnalyzer.Initialize(Microsoft.CodeAnalysis.Diagnostics.AnalysisContext! context) -> void
+override Supprocom.NativeAllocationManagement.Analyzers.NativeLeaseStateAnalyzer.SupportedDiagnostics.get -> System.Collections.Immutable.ImmutableArray<Microsoft.CodeAnalysis.DiagnosticDescriptor!>
+Supprocom.NativeAllocationManagement.Analyzers.NativeAllocationAnalyzer
+Supprocom.NativeAllocationManagement.Analyzers.NativeAllocationAnalyzer.NativeAllocationAnalyzer() -> void
+Supprocom.NativeAllocationManagement.Analyzers.NativeBuilderWriteAnalyzer
+Supprocom.NativeAllocationManagement.Analyzers.NativeBuilderWriteAnalyzer.NativeBuilderWriteAnalyzer() -> void
+Supprocom.NativeAllocationManagement.Analyzers.NativeLeaseStateAnalyzer
+Supprocom.NativeAllocationManagement.Analyzers.NativeLeaseStateAnalyzer.NativeLeaseStateAnalyzer() -> void

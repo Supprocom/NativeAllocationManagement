@@ -46,8 +46,7 @@ public sealed class ArenaAnalyzerContractTests
 
         Assert.Contains(
             diagnostics,
-            diagnostic => diagnostic.Id == "NAM1007"
-                && diagnostic.Severity == DiagnosticSeverity.Error);
+            diagnostic => string.Equals(diagnostic.Id, "NAM1007", StringComparison.Ordinal) && diagnostic.Severity == DiagnosticSeverity.Error);
     }
 
     [Fact]
@@ -86,7 +85,7 @@ public sealed class ArenaAnalyzerContractTests
             """);
         Assert.Contains(
             invalid,
-            diagnostic => diagnostic.Id == "NAM1007");
+            diagnostic => string.Equals(diagnostic.Id, "NAM1007", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -106,8 +105,8 @@ public sealed class ArenaAnalyzerContractTests
                 }
             }
             """);
-        Assert.DoesNotContain("NAM1018", AnalyzerContractTests.NativeDiagnostics(valid));
-        Assert.DoesNotContain("NAM1020", AnalyzerContractTests.NativeDiagnostics(valid));
+        Assert.DoesNotContain("NAM1018", AnalyzerContractTests.NativeDiagnostics(valid), StringComparer.Ordinal);
+        Assert.DoesNotContain("NAM1020", AnalyzerContractTests.NativeDiagnostics(valid), StringComparer.Ordinal);
 
         ImmutableArray<Diagnostic> missing = await AnalyzerContractTests.AnalyzeAsync(
             """
@@ -121,7 +120,7 @@ public sealed class ArenaAnalyzerContractTests
                 }
             }
             """);
-        Assert.Contains("NAM1020", AnalyzerContractTests.NativeDiagnostics(missing));
+        Assert.Contains("NAM1020", AnalyzerContractTests.NativeDiagnostics(missing), StringComparer.Ordinal);
 
         ImmutableArray<Diagnostic> ordinary = await AnalyzerContractTests.AnalyzeAsync(
             """
@@ -137,7 +136,7 @@ public sealed class ArenaAnalyzerContractTests
                 }
             }
             """);
-        Assert.Contains("NAM1019", AnalyzerContractTests.NativeDiagnostics(ordinary));
+        Assert.Contains("NAM1019", AnalyzerContractTests.NativeDiagnostics(ordinary), StringComparer.Ordinal);
 
         ImmutableArray<Diagnostic> escaped = await AnalyzerContractTests.AnalyzeAsync(
             """
@@ -148,7 +147,7 @@ public sealed class ArenaAnalyzerContractTests
                     => arena.ScratchScoped<int>(2, static writer => writer.Fill(default!));
             }
             """);
-        Assert.Contains("NAM1018", AnalyzerContractTests.NativeDiagnostics(escaped));
+        Assert.Contains("NAM1018", AnalyzerContractTests.NativeDiagnostics(escaped), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -235,7 +234,7 @@ public sealed class ArenaAnalyzerContractTests
                 }
             }
             """);
-        Assert.Contains("NAM1009", AnalyzerContractTests.NativeDiagnostics(diagnostics));
+        Assert.Contains("NAM1009", AnalyzerContractTests.NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -272,8 +271,8 @@ public sealed class ArenaAnalyzerContractTests
             }
             """);
         string[] invalidIds = AnalyzerContractTests.NativeDiagnostics(invalid);
-        Assert.Contains("NAM1018", invalidIds);
-        Assert.DoesNotContain("NAM1003", invalidIds);
+        Assert.Contains("NAM1018", invalidIds, StringComparer.Ordinal);
+        Assert.DoesNotContain("NAM1003", invalidIds, StringComparer.Ordinal);
     }
 
     [Fact]
@@ -299,7 +298,7 @@ public sealed class ArenaAnalyzerContractTests
                 }
             }
             """);
-        Assert.DoesNotContain("NAM1020", AnalyzerContractTests.NativeDiagnostics(finallyDiagnostics));
+        Assert.DoesNotContain("NAM1020", AnalyzerContractTests.NativeDiagnostics(finallyDiagnostics), StringComparer.Ordinal);
 
         ImmutableArray<Diagnostic> partial = await AnalyzerContractTests.AnalyzeAsync(
             """
@@ -315,7 +314,7 @@ public sealed class ArenaAnalyzerContractTests
                 }
             }
             """);
-        Assert.Contains("NAM1007", AnalyzerContractTests.NativeDiagnostics(partial));
+        Assert.Contains("NAM1007", AnalyzerContractTests.NativeDiagnostics(partial), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -339,7 +338,7 @@ public sealed class ArenaAnalyzerContractTests
             }
             """);
 
-        Diagnostic error = Assert.Single(diagnostics.Where(diagnostic => diagnostic.Id == "NAM1007"));
+        Diagnostic error = SingleExpected(diagnostics.Where(diagnostic => string.Equals(diagnostic.Id, "NAM1007", StringComparison.Ordinal)));
         Assert.Equal(DiagnosticSeverity.Error, error.Severity);
         Assert.Equal("arena -> ambiguous scoped allocation", error.Properties["NAM.Provenance"]);
     }
@@ -382,7 +381,7 @@ public sealed class ArenaAnalyzerContractTests
             }
             """);
 
-        Diagnostic error = Assert.Single(diagnostics.Where(diagnostic => diagnostic.Id == "NAM1007"));
+        Diagnostic error = SingleExpected(diagnostics.Where(diagnostic => string.Equals(diagnostic.Id, "NAM1007", StringComparison.Ordinal)));
         Assert.Equal(DiagnosticSeverity.Error, error.Severity);
         Assert.Equal("pool -> value -> scoped callback", error.Properties["NAM.Provenance"]);
     }
@@ -403,9 +402,9 @@ public sealed class ArenaAnalyzerContractTests
             }
             """);
         string[] parameterIds = AnalyzerContractTests.NativeDiagnostics(parameter);
-        Assert.Contains("NAM1018", parameterIds);
-        Assert.Contains("NAM1007", parameterIds);
-        Assert.DoesNotContain("NAM1019", parameterIds);
+        Assert.Contains("NAM1018", parameterIds, StringComparer.Ordinal);
+        Assert.Contains("NAM1007", parameterIds, StringComparer.Ordinal);
+        Assert.DoesNotContain("NAM1019", parameterIds, StringComparer.Ordinal);
 
         ImmutableArray<Diagnostic> field = await AnalyzerContractTests.AnalyzeAsync(
             """
@@ -421,9 +420,9 @@ public sealed class ArenaAnalyzerContractTests
             }
             """);
         string[] fieldIds = AnalyzerContractTests.NativeDiagnostics(field);
-        Assert.Contains("NAM1018", fieldIds);
-        Assert.Contains("NAM1007", fieldIds);
-        Assert.DoesNotContain("NAM1019", fieldIds);
+        Assert.Contains("NAM1018", fieldIds, StringComparer.Ordinal);
+        Assert.Contains("NAM1007", fieldIds, StringComparer.Ordinal);
+        Assert.DoesNotContain("NAM1019", fieldIds, StringComparer.Ordinal);
 
         ImmutableArray<Diagnostic> alias = await AnalyzerContractTests.AnalyzeAsync(
             """
@@ -441,8 +440,8 @@ public sealed class ArenaAnalyzerContractTests
             }
             """);
         string[] aliasIds = AnalyzerContractTests.NativeDiagnostics(alias);
-        Assert.Contains("NAM1018", aliasIds);
-        Assert.Contains("NAM1007", aliasIds);
+        Assert.Contains("NAM1018", aliasIds, StringComparer.Ordinal);
+        Assert.Contains("NAM1007", aliasIds, StringComparer.Ordinal);
 
         ImmutableArray<Diagnostic> capture = await AnalyzerContractTests.AnalyzeAsync(
             """
@@ -464,7 +463,7 @@ public sealed class ArenaAnalyzerContractTests
             }
             """);
         string[] captureIds = AnalyzerContractTests.NativeDiagnostics(capture);
-        Assert.Contains("NAM1018", captureIds);
-        Assert.Contains("NAM1007", captureIds);
+        Assert.Contains("NAM1018", captureIds, StringComparer.Ordinal);
+        Assert.Contains("NAM1007", captureIds, StringComparer.Ordinal);
     }
 }

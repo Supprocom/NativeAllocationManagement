@@ -188,7 +188,7 @@ public sealed class ConcurrentPooledStateAnalyzerTests
 
         Assert.True(
             NativeDiagnostics(diagnostics)
-                .Count(id => id == "NAM1047") >= 4,
+                .Count(id => string.Equals(id, "NAM1047", StringComparison.Ordinal)) >= 4,
             string.Join(Environment.NewLine, diagnostics));
     }
 
@@ -241,7 +241,7 @@ public sealed class ConcurrentPooledStateAnalyzerTests
 
         Assert.True(
             NativeDiagnostics(diagnostics)
-                .Count(id => id == "NAM1047") >= 2,
+                .Count(id => string.Equals(id, "NAM1047", StringComparison.Ordinal)) >= 2,
             string.Join(Environment.NewLine, diagnostics));
     }
 
@@ -287,7 +287,7 @@ public sealed class ConcurrentPooledStateAnalyzerTests
 
         Assert.True(
             NativeDiagnostics(diagnostics)
-                .Count(id => id == "NAM1048") >= 3,
+                .Count(id => string.Equals(id, "NAM1048", StringComparison.Ordinal)) >= 3,
             string.Join(Environment.NewLine, diagnostics));
     }
 
@@ -334,7 +334,7 @@ public sealed class ConcurrentPooledStateAnalyzerTests
 
         Assert.True(
             NativeDiagnostics(diagnostics)
-                .Count(id => id == "NAM1049") >= 4,
+                .Count(id => string.Equals(id, "NAM1049", StringComparison.Ordinal)) >= 4,
             string.Join(Environment.NewLine, diagnostics));
     }
 
@@ -380,7 +380,7 @@ public sealed class ConcurrentPooledStateAnalyzerTests
 
         Assert.True(
             NativeDiagnostics(diagnostics)
-                .Count(id => id == "NAM1024") >= 3,
+                .Count(id => string.Equals(id, "NAM1024", StringComparison.Ordinal)) >= 3,
             string.Join(Environment.NewLine, diagnostics));
     }
 
@@ -417,8 +417,8 @@ public sealed class ConcurrentPooledStateAnalyzerTests
             """);
 
         string[] ids = NativeDiagnostics(diagnostics);
-        Assert.Contains("NAM1049", ids);
-        Assert.Contains("NAM1024", ids);
+        Assert.Contains("NAM1049", ids, StringComparer.Ordinal);
+        Assert.Contains("NAM1024", ids, StringComparer.Ordinal);
     }
 
     [Fact]
@@ -461,8 +461,8 @@ public sealed class ConcurrentPooledStateAnalyzerTests
             """);
 
         string[] ids = NativeDiagnostics(diagnostics);
-        Assert.Contains("NAM1049", ids);
-        Assert.Contains("NAM1024", ids);
+        Assert.Contains("NAM1049", ids, StringComparer.Ordinal);
+        Assert.Contains("NAM1024", ids, StringComparer.Ordinal);
     }
 
     private static Task<ImmutableArray<Diagnostic>> AnalyzeAsync(

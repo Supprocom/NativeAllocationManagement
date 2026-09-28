@@ -31,6 +31,8 @@ public sealed class NativeBuilderStateRegressionTests
         foreach (StateBuilderImplementation implementation
             in Enum.GetValues<StateBuilderImplementation>())
         {
+            // Position is the field under test across each three-item order.
+#pragma warning disable HLQ013
             for (int position = 0; position < 3; position++)
             {
                 Assert.Equal(
@@ -38,6 +40,7 @@ public sealed class NativeBuilderStateRegressionTests
                     orders.Count(order =>
                         order[position] == implementation));
             }
+#pragma warning restore HLQ013
         }
     }
 

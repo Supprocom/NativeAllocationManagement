@@ -189,11 +189,11 @@ public sealed class MechanismRegressionTests
     {
         NativeMemoryTestHooks.Reset();
         NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        ManualResetEventSlim entered = new();
-        ManualResetEventSlim allowCallback = new();
+        using ManualResetEventSlim entered = new();
+        using ManualResetEventSlim allowCallback = new();
         NativeMemoryTestHooks.SetOperationEntered(operation =>
         {
-            if (operation == nameof(ConcurrentPooled<int>.Access))
+            if (string.Equals(operation, nameof(ConcurrentPooled<int>.Access), StringComparison.Ordinal))
             {
                 entered.Set();
             }
@@ -215,7 +215,7 @@ public sealed class MechanismRegressionTests
             Assert.Equal(NativeOwnerLifecycle.Active, pool.CurrentLifecycle);
 
             allowCallback.Set();
-            Assert.Equal(91, await worker);
+            Assert.Equal(91, await worker.ConfigureAwait(true));
             Assert.Equal(1, pool.CurrentAllocationRecordCountForTest);
             pool.ReleaseLeasesToGarbageCollector();
             Assert.Equal(NativeOwnerLifecycle.Active, pool.CurrentLifecycle);
@@ -372,11 +372,11 @@ public sealed class MechanismRegressionTests
     {
         NativeMemoryTestHooks.Reset();
         NativeConcurrentPool<int> pool = new(preLease: 1, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        ManualResetEventSlim entered = new();
-        ManualResetEventSlim allowCallback = new();
+        using ManualResetEventSlim entered = new();
+        using ManualResetEventSlim allowCallback = new();
         NativeMemoryTestHooks.SetOperationEntered(operation =>
         {
-            if (operation == nameof(ConcurrentPooled<int>.Access))
+            if (string.Equals(operation, nameof(ConcurrentPooled<int>.Access), StringComparison.Ordinal))
             {
                 entered.Set();
             }
@@ -401,7 +401,7 @@ public sealed class MechanismRegressionTests
             Assert.True(entered.Wait(TimeSpan.FromSeconds(10)));
             pool.ReleaseLeasesToGarbageCollector();
             allowCallback.Set();
-            Assert.Equal(42, await worker);
+            Assert.Equal(42, await worker.ConfigureAwait(true));
             pool.Dispose();
         }
         finally
@@ -417,11 +417,11 @@ public sealed class MechanismRegressionTests
     {
         NativeMemoryTestHooks.Reset();
         NativeConcurrentPool<int> pool = new(preLease: 1, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        ManualResetEventSlim entered = new();
-        ManualResetEventSlim allowCallback = new();
+        using ManualResetEventSlim entered = new();
+        using ManualResetEventSlim allowCallback = new();
         NativeMemoryTestHooks.SetOperationEntered(operation =>
         {
-            if (operation == nameof(ConcurrentPooled<int>.Access))
+            if (string.Equals(operation, nameof(ConcurrentPooled<int>.Access), StringComparison.Ordinal))
             {
                 entered.Set();
             }
@@ -447,7 +447,7 @@ public sealed class MechanismRegressionTests
             pool.ReturnMemoryToGarbageCollector();
             Assert.Equal(NativeOwnerLifecycle.Returned, pool.CurrentLifecycle);
             allowCallback.Set();
-            Assert.Equal(73, await worker);
+            Assert.Equal(73, await worker.ConfigureAwait(true));
             pool.Dispose();
         }
         finally
@@ -463,12 +463,12 @@ public sealed class MechanismRegressionTests
     {
         NativeMemoryTestHooks.Reset();
         NativeConcurrentPool<int> pool = new(preLease: 1, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        ManualResetEventSlim entered = new();
-        ManualResetEventSlim allowCallback = new();
+        using ManualResetEventSlim entered = new();
+        using ManualResetEventSlim allowCallback = new();
         NativeGenerationOwner? retainedOwner = null;
         NativeMemoryTestHooks.SetOperationEnteredWithGenerationOwner((operation, owner) =>
         {
-            if (operation == nameof(ConcurrentPooled<int>.Access))
+            if (string.Equals(operation, nameof(ConcurrentPooled<int>.Access), StringComparison.Ordinal))
             {
                 retainedOwner = owner;
                 entered.Set();
@@ -487,7 +487,7 @@ public sealed class MechanismRegressionTests
             pool.ReturnMemoryToGarbageCollector();
             long freeAfterReturn = NativeMemoryTestHooks.Snapshot().FreeCount;
             allowCallback.Set();
-            await worker;
+            await worker.ConfigureAwait(true);
             Assert.Equal(freeAfterReturn, NativeMemoryTestHooks.Snapshot().FreeCount);
 
             WeakReference weakOwner = ReleaseStrongOwner(ref retainedOwner);
@@ -511,11 +511,11 @@ public sealed class MechanismRegressionTests
     {
         NativeMemoryTestHooks.Reset();
         NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        ManualResetEventSlim entered = new();
-        ManualResetEventSlim allowCallback = new();
+        using ManualResetEventSlim entered = new();
+        using ManualResetEventSlim allowCallback = new();
         NativeMemoryTestHooks.SetOperationEntered(operation =>
         {
-            if (operation == nameof(ConcurrentArenaLease<byte>.Access))
+            if (string.Equals(operation, nameof(ConcurrentArenaLease<byte>.Access), StringComparison.Ordinal))
             {
                 entered.Set();
             }
@@ -534,7 +534,7 @@ public sealed class MechanismRegressionTests
             arena.ReleaseLeasesToGarbageCollector();
             _ = arena.Scratch<byte>(8_192, static writer => writer.Fill(default!));
             allowCallback.Set();
-            await worker;
+            await worker.ConfigureAwait(true);
 
             Assert.Equal([1L, 2L, 3L], arena.CurrentSegmentOrdinalsForTest);
             ConcurrentArenaLease<byte> scoped = arena.ScratchScoped<byte>(1, static writer => writer.Fill(default!));
@@ -554,11 +554,11 @@ public sealed class MechanismRegressionTests
     {
         NativeMemoryTestHooks.Reset();
         NativeConcurrentPool<int> pool = new(preLease: 1, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        ManualResetEventSlim entered = new();
-        ManualResetEventSlim allowCallback = new();
+        using ManualResetEventSlim entered = new();
+        using ManualResetEventSlim allowCallback = new();
         NativeMemoryTestHooks.SetOperationEntered(operation =>
         {
-            if (operation == nameof(ConcurrentPooled<int>.Access))
+            if (string.Equals(operation, nameof(ConcurrentPooled<int>.Access), StringComparison.Ordinal))
             {
                 entered.Set();
             }
@@ -576,7 +576,7 @@ public sealed class MechanismRegressionTests
             _ = pool.Rent(2, static writer => writer.Fill(default!));
             pool.ReleaseLeasesToGarbageCollector();
             allowCallback.Set();
-            await worker;
+            await worker.ConfigureAwait(true);
 
             Assert.Equal([1L, 2L], pool.CurrentSegmentOrdinalsForTest);
             Assert.Equal((nuint)(2 * sizeof(int)), pool.TrimRetainedMemoryByBytes(1));
@@ -592,16 +592,17 @@ public sealed class MechanismRegressionTests
     }
 
     [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The test intentionally captures arbitrary callback or worker failures for lifecycle assertions.")]
     public async Task RetiredDrainClearFailureQuarantinesStorageInsteadOfReusingIt()
     {
         NativeMemoryTestHooks.Reset();
         Assert.Null(typeof(NativeOwnerKernel).Assembly.GetType("Supprocom.NativeAllocationManagement.NativeQuarantinedSegment"));
         NativeConcurrentPool<int> pool = new(preLease: 1, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        ManualResetEventSlim entered = new();
-        ManualResetEventSlim allowCallback = new();
+        using ManualResetEventSlim entered = new();
+        using ManualResetEventSlim allowCallback = new();
         NativeMemoryTestHooks.SetOperationEntered(operation =>
         {
-            if (operation == nameof(ConcurrentPooled<int>.Access))
+            if (string.Equals(operation, nameof(ConcurrentPooled<int>.Access), StringComparison.Ordinal))
             {
                 entered.Set();
             }
@@ -627,7 +628,7 @@ public sealed class MechanismRegressionTests
             pool.ReleaseLeasesToGarbageCollector();
             NativeMemoryTestHooks.FailAfterCommitBoundary(1);
             allowCallback.Set();
-            NativeAllocationQuarantinedException failure = Assert.IsType<NativeAllocationQuarantinedException>(await worker);
+            NativeAllocationQuarantinedException failure = Assert.IsType<NativeAllocationQuarantinedException>(await worker.ConfigureAwait(true));
             Assert.Equal("clear", failure.Boundary);
             Assert.Equal(1, failure.SegmentOrdinal);
             Assert.Equal(1, pool.QuarantinedSegmentCountForTest);
@@ -654,12 +655,12 @@ public sealed class MechanismRegressionTests
     {
         NativeMemoryTestHooks.Reset();
         NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        ManualResetEventSlim bothEntered = new();
-        ManualResetEventSlim allowCallback = new();
+        using ManualResetEventSlim bothEntered = new();
+        using ManualResetEventSlim allowCallback = new();
         int enteredCount = 0;
         NativeMemoryTestHooks.SetOperationEntered(operation =>
         {
-            if (operation == nameof(ConcurrentPooled<int>.Access) && Interlocked.Increment(ref enteredCount) == 2)
+            if (string.Equals(operation, nameof(ConcurrentPooled<int>.Access), StringComparison.Ordinal) && Interlocked.Increment(ref enteredCount) == 2)
             {
                 bothEntered.Set();
             }
@@ -676,8 +677,8 @@ public sealed class MechanismRegressionTests
             pool.ReleaseLeasesToGarbageCollector();
             NativeMemoryTestHooks.FailAfterCommitBoundary(1);
             allowCallback.Set();
-            Exception? firstFailure = await firstWorker;
-            Exception? secondFailure = await secondWorker;
+            Exception? firstFailure = await firstWorker.ConfigureAwait(true);
+            Exception? secondFailure = await secondWorker.ConfigureAwait(true);
             NativeAllocationQuarantinedException failure =
                 Assert.IsType<NativeAllocationQuarantinedException>(firstFailure ?? secondFailure);
             Assert.Equal("clear", failure.Boundary);
@@ -698,15 +699,16 @@ public sealed class MechanismRegressionTests
     }
 
     [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The test intentionally captures arbitrary callback or worker failures for lifecycle assertions.")]
     public async Task RetiredDrainTransferFailureQuarantinesTheTransferredSegment()
     {
         NativeMemoryTestHooks.Reset();
         NativeConcurrentPool<int> pool = new(preLease: 1, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        ManualResetEventSlim entered = new();
-        ManualResetEventSlim allowCallback = new();
+        using ManualResetEventSlim entered = new();
+        using ManualResetEventSlim allowCallback = new();
         NativeMemoryTestHooks.SetOperationEntered(operation =>
         {
-            if (operation == nameof(ConcurrentPooled<int>.Access))
+            if (string.Equals(operation, nameof(ConcurrentPooled<int>.Access), StringComparison.Ordinal))
             {
                 entered.Set();
             }
@@ -732,7 +734,7 @@ public sealed class MechanismRegressionTests
             pool.ReleaseLeasesToGarbageCollector();
             NativeMemoryTestHooks.FailAfterCommitBoundary(2);
             allowCallback.Set();
-            NativeAllocationQuarantinedException failure = Assert.IsType<NativeAllocationQuarantinedException>(await worker);
+            NativeAllocationQuarantinedException failure = Assert.IsType<NativeAllocationQuarantinedException>(await worker.ConfigureAwait(true));
             Assert.Equal("slab transfer", failure.Boundary);
             Assert.Equal(1, failure.SegmentOrdinal);
             Assert.Equal(1, pool.QuarantinedSegmentCountForTest);
@@ -752,6 +754,7 @@ public sealed class MechanismRegressionTests
     }
 
     [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The test intentionally captures arbitrary callback or worker failures for lifecycle assertions.")]
     public async Task PoolCumulativeRetiredReservationsHandleOldGenerationDrainAndMixedOrder()
     {
         const int generationCount = 6;
@@ -793,7 +796,7 @@ public sealed class MechanismRegressionTests
             {
                 int index = drainOrder[step];
                 allows[index].Set();
-                Assert.Null(await workers[index]);
+                Assert.Null(await workers[index].ConfigureAwait(true));
                 Assert.Equal(generationCount - step - 1, pool.RetiredGenerationCountForTest);
                 Assert.Equal(capacities, pool.CurrentBankCapacitiesForTest);
                 Assert.Equal(quarantineCapacity, pool.QuarantineCapacityForTest);
@@ -818,7 +821,7 @@ public sealed class MechanismRegressionTests
                 {
                     try
                     {
-                        _ = await worker;
+                        _ = await worker.ConfigureAwait(true);
                     }
                     catch
                     {
@@ -832,6 +835,7 @@ public sealed class MechanismRegressionTests
     }
 
     [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The test intentionally captures arbitrary callback or worker failures for lifecycle assertions.")]
     public async Task PoolCumulativeQuarantineReservationsCoverEveryRetiredGeneration()
     {
         const int generationCount = 6;
@@ -869,7 +873,7 @@ public sealed class MechanismRegressionTests
                 NativeMemoryTestHooks.FailAfterCommitBoundary(1);
                 allows[index].Set();
                 NativeAllocationQuarantinedException failure =
-                    Assert.IsType<NativeAllocationQuarantinedException>(await workers[index]);
+                    Assert.IsType<NativeAllocationQuarantinedException>(await workers[index].ConfigureAwait(true));
                 Assert.Equal("clear", failure.Boundary);
                 Assert.Equal(index + 1, pool.QuarantinedGenerationCountForTest);
                 Assert.Equal(index + 1, pool.QuarantinedSegmentCountForTest);
@@ -896,7 +900,7 @@ public sealed class MechanismRegressionTests
                 {
                     try
                     {
-                        _ = await worker;
+                        _ = await worker.ConfigureAwait(true);
                     }
                     catch
                     {
@@ -910,6 +914,7 @@ public sealed class MechanismRegressionTests
     }
 
     [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The test intentionally captures arbitrary callback or worker failures for lifecycle assertions.")]
     public async Task ArenaCumulativeRetiredReservationsHandleOldGenerationDrainAndMixedOrder()
     {
         const int generationCount = 6;
@@ -950,7 +955,7 @@ public sealed class MechanismRegressionTests
             {
                 int index = drainOrder[step];
                 allows[index].Set();
-                Assert.Null(await workers[index]);
+                Assert.Null(await workers[index].ConfigureAwait(true));
                 Assert.Equal(generationCount - step - 1, arena.RetiredGenerationCountForTest);
                 Assert.Equal(capacities, arena.CurrentBankCapacitiesForTest);
                 Assert.Equal(quarantineCapacity, arena.QuarantineCapacityForTest);
@@ -975,7 +980,7 @@ public sealed class MechanismRegressionTests
                 {
                     try
                     {
-                        _ = await worker;
+                        _ = await worker.ConfigureAwait(true);
                     }
                     catch
                     {
@@ -989,6 +994,7 @@ public sealed class MechanismRegressionTests
     }
 
     [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The test intentionally captures arbitrary callback or worker failures for lifecycle assertions.")]
     public async Task ArenaCumulativeQuarantineReservationsCoverEveryRetiredGeneration()
     {
         const int generationCount = 6;
@@ -1026,7 +1032,7 @@ public sealed class MechanismRegressionTests
                 NativeMemoryTestHooks.FailAfterCommitBoundary(1);
                 allows[index].Set();
                 NativeAllocationQuarantinedException failure =
-                    Assert.IsType<NativeAllocationQuarantinedException>(await workers[index]);
+                    Assert.IsType<NativeAllocationQuarantinedException>(await workers[index].ConfigureAwait(true));
                 Assert.Equal("clear", failure.Boundary);
                 Assert.Equal(index + 1, arena.QuarantinedGenerationCountForTest);
                 Assert.Equal(index + 1, arena.QuarantinedSegmentCountForTest);
@@ -1053,7 +1059,7 @@ public sealed class MechanismRegressionTests
                 {
                     try
                     {
-                        _ = await worker;
+                        _ = await worker.ConfigureAwait(true);
                     }
                     catch
                     {
@@ -1182,6 +1188,7 @@ public sealed class MechanismRegressionTests
         return weakOwner;
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The test intentionally captures arbitrary callback or worker failures for lifecycle assertions.")]
     private static Exception? HoldBusyLease(
         NativeConcurrentPool<int> pool,
         int length,
@@ -1207,6 +1214,7 @@ public sealed class MechanismRegressionTests
         }
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The test intentionally captures arbitrary callback or worker failures for lifecycle assertions.")]
     private static Exception? HoldBusyArenaLease(
         NativeConcurrentArena arena,
         int length,

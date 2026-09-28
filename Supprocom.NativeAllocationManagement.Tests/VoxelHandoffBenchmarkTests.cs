@@ -30,11 +30,11 @@ public sealed class VoxelHandoffBenchmarkTests
         VoxelHandoffWorkerEvidence managed =
             await VoxelHandoffBenchmark.RunWorkerAsync(
                 VoxelHandoffImplementation.Managed,
-                options);
+                options).ConfigureAwait(false);
         VoxelHandoffWorkerEvidence native =
             await VoxelHandoffBenchmark.RunWorkerAsync(
                 VoxelHandoffImplementation.Native,
-                options);
+                options).ConfigureAwait(false);
 
         Assert.True(managed.ExactParity);
         Assert.True(native.ExactParity);
@@ -56,7 +56,7 @@ public sealed class VoxelHandoffBenchmarkTests
             Seed: 1);
 
         await Assert.ThrowsAsync<ArgumentException>(
-            () => VoxelHandoffBenchmark.RunPairedAsync(options));
+            () => VoxelHandoffBenchmark.RunPairedAsync(options)).ConfigureAwait(false);
     }
 
     [VoxelDemonstrationFact]

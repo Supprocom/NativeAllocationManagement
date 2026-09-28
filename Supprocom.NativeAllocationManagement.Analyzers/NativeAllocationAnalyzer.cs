@@ -23,6 +23,11 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
     /// <inheritdoc />
     public override void Initialize(AnalysisContext context)
     {
+        if (context is null)
+        {
+            throw new ArgumentNullException(nameof(context));
+        }
+
         context.EnableConcurrentExecution();
         context.ConfigureGeneratedCodeAnalysis(GeneratedCodeAnalysisFlags.None);
         context.RegisterCompilationStartAction(startContext =>
@@ -586,10 +591,11 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         internal void Complete()
         {
             _context.CancellationToken.ThrowIfCancellationRequested();
-            IEnumerable<FlowSnapshot> exits = _exitSnapshots.Count == 0
+            List<FlowSnapshot> exits = _exitSnapshots.Count == 0
                 ? [CaptureSnapshot()]
                 : _exitSnapshots;
 
+#pragma warning disable HLQ012 // CollectionsMarshal is unavailable on the analyzer's netstandard2.0 target.
             foreach (FlowSnapshot exit in exits)
             {
                 _context.CancellationToken.ThrowIfCancellationRequested();
@@ -659,6 +665,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     }
                 }
             }
+#pragma warning restore HLQ012
         }
 
         private void AnalyzeControlFlowGraph(ControlFlowGraph graph)
@@ -1062,11 +1069,11 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         {
             FlowSnapshot result = CloneSnapshot(state);
             ControlFlowRegion[] finallyRegions = GetFinallyRegionsForBranch(graph, branch);
-            for (int index = 0; index < finallyRegions.Length; index++)
+            foreach (var itemAt40386 in finallyRegions)
             {
                 result = AnalyzeFinallyRegion(
                     graph,
-                    finallyRegions[index],
+                    itemAt40386,
                     result,
                     emitDiagnostics);
             }
@@ -1366,11 +1373,11 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         {
             FlowSnapshot result = CloneSnapshot(state);
             ControlFlowRegion[] finallyRegions = GetFinallyRegionsForBranch(graph, branch);
-            for (int index = 0; index < finallyRegions.Length; index++)
+            foreach (var itemAt52312 in finallyRegions)
             {
                 result = AnalyzeFinallyRegion(
                     graph,
-                    finallyRegions[index],
+                    itemAt52312,
                     result,
                     emitDiagnostics);
             }
@@ -1395,12 +1402,12 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             return ordinal >= region.FirstBlockOrdinal && ordinal <= region.LastBlockOrdinal;
         }
 
-        private static IEnumerable<ControlFlowBranch> GraphBranches(ControlFlowGraph graph, BasicBlock block)
+        private static ControlFlowBranch[] GraphBranches(ControlFlowGraph graph, BasicBlock block)
         {
             return ControlFlowTopology.For(graph).Branches(block);
         }
 
-        private static IEnumerable<BasicBlock> GraphSuccessors(ControlFlowGraph graph, BasicBlock block)
+        private static BasicBlock[] GraphSuccessors(ControlFlowGraph graph, BasicBlock block)
         {
             return ControlFlowTopology.For(graph).Successors(block);
         }
@@ -1520,7 +1527,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     static candidate => new ControlFlowTopology(candidate));
             }
 
-            internal IEnumerable<ControlFlowBranch> Branches(BasicBlock source)
+            internal Microsoft.CodeAnalysis.FlowAnalysis.ControlFlowBranch[] Branches(BasicBlock source)
             {
                 return _branchesBySource.TryGetValue(
                     source.Ordinal,
@@ -1529,7 +1536,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     : [];
             }
 
-            internal IEnumerable<BasicBlock> Successors(BasicBlock source)
+            internal Microsoft.CodeAnalysis.FlowAnalysis.BasicBlock[] Successors(BasicBlock source)
             {
                 return _successorsBySource.TryGetValue(
                     source.Ordinal,
@@ -1690,6 +1697,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     merged.Ambiguous |= owner.Ambiguous;
                     merged.ScopedPending |= owner.ScopedPending;
                     merged.ScopedPendingAmbiguous |= owner.ScopedPendingAmbiguous;
+#pragma warning disable HLQ012 // CollectionsMarshal is unavailable on the analyzer's netstandard2.0 target.
                     foreach (GenerationLivenessFact fact in owner.LivenessFacts)
                     {
                         if (!merged.LivenessFacts.Any(existing => existing.SameAs(fact)))
@@ -1697,6 +1705,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                             merged.LivenessFacts.Add(fact);
                         }
                     }
+#pragma warning restore HLQ012
                 }
 
                 bool canAssumeActiveWhenAbsent =
@@ -1844,7 +1853,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 if (present.Length != paths.Length
                     || present.Any(transfer => transfer.Kind != first.Kind)
                     || present.Any(transfer => transfer.Status != first.Status)
-                    || present.Any(transfer => transfer.OwnershipIdentity != first.OwnershipIdentity))
+                    || present.Any(transfer => !string.Equals(transfer.OwnershipIdentity, first.OwnershipIdentity, StringComparison.Ordinal)))
                 {
                     merged.Status = TransferStatus.Ambiguous;
                 }
@@ -1856,13 +1865,15 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             List<RegionScope> regions = [];
             foreach (FlowSnapshot path in paths)
             {
+#pragma warning disable HLQ012 // CollectionsMarshal is unavailable on the analyzer's netstandard2.0 target.
                 foreach (RegionScope region in path.Regions)
                 {
-                    if (!regions.Any(existing => existing.Name == region.Name && existing.Start == region.Start))
+                    if (!regions.Any(existing => string.Equals(existing.Name, region.Name, StringComparison.Ordinal) && existing.Start == region.Start))
                     {
                         regions.Add(region);
                     }
                 }
+#pragma warning restore HLQ012
             }
 
             HashSet<OwnerState> borrowed = [];
@@ -2063,8 +2074,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 if (!right.Transfers.TryGetValue(pair.Key, out TransferState? other)
                     || pair.Value.Kind != other.Kind
                     || pair.Value.Status != other.Status
-                    || pair.Value.OwnershipIdentity != other.OwnershipIdentity
-                    || pair.Value.MustEnd != other.MustEnd
+                    || !string.Equals(pair.Value.OwnershipIdentity, other.OwnershipIdentity, StringComparison.Ordinal) || pair.Value.MustEnd != other.MustEnd
                     || pair.Value.IsUsing != other.IsUsing)
                 {
                     return false;
@@ -2080,7 +2090,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             {
                 RegionScope a = left.Regions[index];
                 RegionScope b = right.Regions[index];
-                if (a.Name != b.Name || a.Scope != b.Scope || a.Start != b.Start)
+                if (!string.Equals(a.Name, b.Name, StringComparison.Ordinal) || a.Scope != b.Scope || a.Start != b.Start)
                 {
                     return false;
                 }
@@ -2177,7 +2187,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     return;
                 }
 
-                if (operation.TargetMethod.Name == "Dispose")
+                if (string.Equals(operation.TargetMethod.Name, "Dispose", StringComparison.Ordinal))
                 {
                     handle.Returned = true;
                 }
@@ -3163,8 +3173,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 return;
             }
 
-            if (operation.TargetMethod.Name == "Dispose"
-                && IsConditionalTransferCleanup(operation, transfer))
+            if (string.Equals(operation.TargetMethod.Name, "Dispose", StringComparison.Ordinal) && IsConditionalTransferCleanup(operation, transfer))
             {
                 if (_cfgMode)
                 {
@@ -3200,7 +3209,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 return;
             }
 
-            if (operation.TargetMethod.Name == "Dispose")
+            if (string.Equals(operation.TargetMethod.Name, "Dispose", StringComparison.Ordinal))
             {
                 MarkTransferIdentity(
                     transfer.OwnershipIdentity,
@@ -3248,7 +3257,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             IInvocationOperation operation,
             TransferState transfer)
         {
-            if (operation.TargetMethod.Name != "Dispose")
+            if (!string.Equals(operation.TargetMethod.Name, "Dispose", StringComparison.Ordinal))
             {
                 return false;
             }
@@ -3353,7 +3362,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 return;
             }
 
-            if (operation.TargetMethod.Name == "Complete")
+            if (string.Equals(operation.TargetMethod.Name, "Complete", StringComparison.Ordinal))
             {
                 if (builder.Status != TransferStatus.Active)
                 {
@@ -3380,8 +3389,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             }
 
             if (operation.IsImplicit
-                && operation.TargetMethod.Name == "Dispose"
-                && builder.Status is TransferStatus.Moved or TransferStatus.Disposed)
+                && string.Equals(operation.TargetMethod.Name, "Dispose", StringComparison.Ordinal) && builder.Status is TransferStatus.Moved or TransferStatus.Disposed)
             {
                 return;
             }
@@ -3405,7 +3413,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 return;
             }
 
-            if (operation.TargetMethod.Name == "Dispose")
+            if (string.Equals(operation.TargetMethod.Name, "Dispose", StringComparison.Ordinal))
             {
                 MarkTransferIdentity(
                     builder.OwnershipIdentity,
@@ -3424,8 +3432,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             }
 
             if (operation.IsImplicit
-                && operation.TargetMethod.Name == "Dispose"
-                && workspace.Status == TransferStatus.Disposed)
+                && string.Equals(operation.TargetMethod.Name, "Dispose", StringComparison.Ordinal) && workspace.Status == TransferStatus.Disposed)
             {
                 return;
             }
@@ -3438,7 +3445,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 return;
             }
 
-            if (operation.TargetMethod.Name == "Dispose")
+            if (string.Equals(operation.TargetMethod.Name, "Dispose", StringComparison.Ordinal))
             {
                 MarkTransferIdentity(
                     workspace.OwnershipIdentity,
@@ -4129,9 +4136,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             IInvocationOperation[] releases = operation
                 .DescendantsAndSelf()
                 .OfType<IInvocationOperation>()
-                .Where(invocation =>
-                    invocation.TargetMethod.Name == "Dispose"
-                    && GetSymbol(Unwrap(invocation.Instance))
+                .Where(invocation => string.Equals(invocation.TargetMethod.Name, "Dispose", StringComparison.Ordinal) && GetSymbol(Unwrap(invocation.Instance))
                         is IFieldSymbol candidate
                     && SymbolEqualityComparer.Default.Equals(
                         candidate,
@@ -4252,7 +4257,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             }
 
             if (workspace.Kind == OwnershipKind.WorkspaceBorrow
-                && operation == "Dispose")
+                && string.Equals(operation, "Dispose", StringComparison.Ordinal))
             {
                 Report(
                     NativeAllocationDiagnosticDescriptors.InactiveWorkspaceUse,
@@ -4351,7 +4356,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         {
             foreach (TransferState transfer in _transfers.Values)
             {
-                if (transfer.OwnershipIdentity == ownershipIdentity)
+                if (string.Equals(transfer.OwnershipIdentity, ownershipIdentity, StringComparison.Ordinal))
                 {
                     transfer.Status = status;
                 }
@@ -4542,14 +4547,12 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     RefKind: RefKind.None
                 }
                 || argument.Parent is not IInvocationOperation write
-                || write.TargetMethod.Name != "WriteAsync"
-                || write.TargetMethod.ContainingType.OriginalDefinition.ToDisplayString()
-                    != "System.Threading.Channels.ChannelWriter<T>"
-                || Unwrap(write.Instance) is not IPropertyReferenceOperation
-                {
-                    Property.Name: "Writer",
-                    Instance: { } channel
-                })
+                || !string.Equals(write.TargetMethod.Name, "WriteAsync", StringComparison.Ordinal) || !string.Equals(write.TargetMethod.ContainingType.OriginalDefinition.ToDisplayString()
+, "System.Threading.Channels.ChannelWriter<T>", StringComparison.Ordinal) || Unwrap(write.Instance) is not IPropertyReferenceOperation
+{
+    Property.Name: "Writer",
+    Instance: { } channel
+})
             {
                 return false;
             }
@@ -4657,10 +4660,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         private bool IsBoundedTransferChannelFactory(
             IInvocationOperation factory)
         {
-            return factory.TargetMethod.Name == "CreateBounded"
-                && factory.TargetMethod.ContainingType.ToDisplayString()
-                    == "System.Threading.Channels.Channel"
-                && IsTransferChannel(factory.Type);
+            return string.Equals(factory.TargetMethod.Name, "CreateBounded", StringComparison.Ordinal) && string.Equals(factory.TargetMethod.ContainingType.ToDisplayString()
+, "System.Threading.Channels.Channel", StringComparison.Ordinal) && IsTransferChannel(factory.Type);
         }
 
         private bool IsTransferChannel(ITypeSymbol? type)
@@ -4669,9 +4670,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             {
                 TypeArguments.Length: 1
             } channel
-                && channel.OriginalDefinition.ToDisplayString()
-                    == "System.Threading.Channels.Channel<T>"
-                && IsNativeTransfer(channel.TypeArguments[0]);
+                && string.Equals(channel.OriginalDefinition.ToDisplayString()
+, "System.Threading.Channels.Channel<T>", StringComparison.Ordinal) && IsNativeTransfer(channel.TypeArguments[0]);
         }
 
         private bool IsDirectTypedReturnSyntax(IInvocationOperation move)
@@ -4721,16 +4721,14 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
         private bool IsTransferMoveInvocation(IOperation operation) =>
             operation is IInvocationOperation invocation
-            && invocation.TargetMethod.Name == "Move"
-            && IsNativeTransfer(invocation.TargetMethod.ContainingType)
+            && string.Equals(invocation.TargetMethod.Name, "Move", StringComparison.Ordinal) && IsNativeTransfer(invocation.TargetMethod.ContainingType)
             && IsNativeTransfer(invocation.Type);
 
         private bool IsTransferFactoryInvocation(IOperation operation) =>
             operation is IInvocationOperation invocation
             && IsNativeTransfer(invocation.Type)
-            && invocation.TargetMethod.Name == "RentTransferable"
-            && invocation.TargetMethod.ContainingType.ToDisplayString()
-                == "Supprocom.NativeAllocationManagement.NativeTransferPoolExtensions";
+            && string.Equals(invocation.TargetMethod.Name, "RentTransferable", StringComparison.Ordinal) && string.Equals(invocation.TargetMethod.ContainingType.ToDisplayString()
+, "Supprocom.NativeAllocationManagement.NativeTransferPoolExtensions", StringComparison.Ordinal);
 
         private bool IsBuilderFactoryOperation(IOperation operation) =>
             operation is IObjectCreationOperation creation
@@ -4772,9 +4770,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         }
 
         private bool IsCompositeBuilderBorrowInvocation(
-            IInvocationOperation invocation) =>
-            invocation.TargetMethod.Name == "Borrow"
-            && IsNativeBuilder(invocation.TargetMethod.ContainingType)
+            IInvocationOperation invocation) => string.Equals(invocation.TargetMethod.Name, "Borrow", StringComparison.Ordinal) && IsNativeBuilder(invocation.TargetMethod.ContainingType)
             && invocation.TargetMethod.Parameters.Length >= 2
             && IsNativeBuilder(
                 invocation.TargetMethod.Parameters[0].Type)
@@ -5169,8 +5165,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             IInvocationOperation operation)
         {
             IArgumentOperation? ownerArgument = operation.Arguments
-                .FirstOrDefault(argument =>
-                    argument.Parameter?.Name == "arena");
+                .FirstOrDefault(argument => string.Equals(argument.Parameter?.Name, "arena", StringComparison.Ordinal));
             OwnerState? owner = GetOwner(
                 Unwrap(ownerArgument?.Value));
             if (owner is null
@@ -5183,8 +5178,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             }
 
             IArgumentOperation? sourceArgument = operation.Arguments
-                .FirstOrDefault(argument =>
-                    argument.Parameter?.Name == "source");
+                .FirstOrDefault(argument => string.Equals(argument.Parameter?.Name, "source", StringComparison.Ordinal));
             HandleState? source = GetHandle(
                 Unwrap(sourceArgument?.Value));
             if (source is not null)
@@ -5241,7 +5235,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 return;
             }
 
-            if (name == "Retire")
+            if (string.Equals(name, "Retire", StringComparison.Ordinal))
             {
                 if (!IsNativePool(owner.Type)
                     || !CheckOwnerActive(owner, syntax, name))
@@ -5280,7 +5274,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 return;
             }
 
-            if (name == "ReleaseRetiredStorage")
+            if (string.Equals(name, "ReleaseRetiredStorage", StringComparison.Ordinal))
             {
                 bool acceptedFieldRelease =
                     owner.Symbol is IFieldSymbol field
@@ -5314,8 +5308,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 or "Reset")
             {
                 bool isMemoryReturn = name.StartsWith("ReturnMemory", StringComparison.Ordinal);
-                bool isNative = name == "Reset"
-                    || name.EndsWith("ToNativeMemory", StringComparison.Ordinal);
+                bool isNative = string.Equals(name, "Reset", StringComparison.Ordinal) || name.EndsWith("ToNativeMemory", StringComparison.Ordinal);
                 if (isMemoryReturn && owner.IsUsing && !owner.IsRegion)
                 {
                     Report(NativeAllocationDiagnosticDescriptors.ScopedLifecycle, syntax, owner.DisplayName, name);
@@ -5355,7 +5348,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 return;
             }
 
-            if (name == "RecycleScoped")
+            if (string.Equals(name, "RecycleScoped", StringComparison.Ordinal))
             {
                 if (!CheckOwnerActive(owner, syntax, name))
                 {
@@ -5413,7 +5406,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 return;
             }
 
-            if (name == "LeaseFromMemory")
+            if (string.Equals(name, "LeaseFromMemory", StringComparison.Ordinal))
             {
                 if (owner.IsUsing && !owner.IsRegion && !owner.Unleased)
                 {
@@ -5449,7 +5442,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 return;
             }
 
-            if (name == "Dispose")
+            if (string.Equals(name, "Dispose", StringComparison.Ordinal))
             {
                 if (owner.IsUsing && !owner.IsRegion)
                 {
@@ -5521,7 +5514,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             return findings.ToArray();
         }
 
-        private bool IsScopedHandleLiveAt(HandleState handle, SyntaxNode operationSyntax)
+        private static bool IsScopedHandleLiveAt(HandleState handle, SyntaxNode operationSyntax)
         {
             if (!handle.IsScoped)
             {
@@ -5575,15 +5568,13 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             return kind switch
             {
                 GenerationLivenessKind.RootReference when operation is "ReturnMemoryToNativeMemory" or "ReleaseLeasesToNativeMemory" or "Reset" or "RecycleScoped" or "Dispose" or "Retire"
-                        => operation == "Dispose"
-                            ? "The root/reference would become stale when owner disposal ends the generation; end it before disposing the owner."
+                        => string.Equals(operation, "Dispose", StringComparison.Ordinal) ? "The root/reference would become stale when owner disposal ends the generation; end it before disposing the owner."
                             : "The root/reference would become stale at the generation boundary; end it before deterministic native return.",
                 GenerationLivenessKind.RootReference
                     => "The root/reference becomes stale immediately; it does not retain detached native storage.",
                 GenerationLivenessKind.ActiveBorrow when operation is "ReturnMemoryToNativeMemory" or "ReleaseLeasesToNativeMemory" or "Reset" or "RecycleScoped" or "Retire"
                         => "An entered bounded operation still holds the generation; end the callback before deterministic native return.",
-                GenerationLivenessKind.ActiveBorrow when operation == "Dispose"
-                    => "An entered bounded operation still holds the generation; end the callback before disposing the owner.",
+                GenerationLivenessKind.ActiveBorrow when string.Equals(operation, "Dispose", StringComparison.Ordinal) => "An entered bounded operation still holds the generation; end the callback before disposing the owner.",
                 GenerationLivenessKind.ActiveBorrow
                     => "The entered operation token retains detached native storage until the callback exits.",
                 GenerationLivenessKind.AliasOrEscape
@@ -5634,14 +5625,6 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                             owner.DisplayName,
                             lifecycleName);
                     }
-                    else if (!owner.IsRegion)
-                    {
-                        ReportGenerationReturnLiveness(
-                            owner,
-                            lifecycleName,
-                            invocation,
-                            FindGenerationReturnLiveness(owner));
-                    }
                     else
                     {
                         ReportGenerationReturnLiveness(
@@ -5658,7 +5641,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         {
             return _borrowScopes.Any(scope =>
                 SymbolEqualityComparer.Default.Equals(scope.OwnerSymbol, handle.Owner.Symbol)
-                && scope.HandleName == handle.DisplayName);
+                && string.Equals(scope.HandleName, handle.DisplayName, StringComparison.Ordinal));
         }
 
         private bool CheckOwnerActive(OwnerState owner, SyntaxNode syntax, string operation)
@@ -6007,7 +5990,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             IFieldSymbol field,
             string operation)
         {
-            if (operation == "Retire")
+            if (string.Equals(operation, "Retire", StringComparison.Ordinal))
             {
                 return field.ContainingType.GetMembers("Retire")
                     .OfType<IMethodSymbol>()
@@ -6081,9 +6064,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
             FieldInvocationWalker walker = new();
             walker.Visit(body);
-            return walker.Invocations.Count(invocation =>
-                invocation.TargetMethod.Name == operation
-                && IsNativePool(
+            return walker.Invocations.Count(invocation => string.Equals(invocation.TargetMethod.Name, operation, StringComparison.Ordinal) && IsNativePool(
                     invocation.TargetMethod.ContainingType)
                 && Unwrap(invocation.Instance)
                     is IFieldReferenceOperation reference
@@ -6177,8 +6158,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             walker.Visit(body);
             return walker.Invocations.Any(invocation =>
             {
-                if (invocation.TargetMethod.Name != candidate.Name
-                    || invocation.TargetMethod.Parameters.Length != candidate.Parameters.Length
+                if (!string.Equals(invocation.TargetMethod.Name, candidate.Name, StringComparison.Ordinal) || invocation.TargetMethod.Parameters.Length != candidate.Parameters.Length
                     || invocation.TargetMethod.Parameters.Select(parameter => parameter.Type)
                         .SequenceEqual(candidate.Parameters.Select(parameter => parameter.Type), SymbolEqualityComparer.Default))
                 {
@@ -6398,7 +6378,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             }
 
             string text = block.BranchValue?.Syntax.ToString().Trim() ?? string.Empty;
-            return text == parameter.Name || text == "!" + parameter.Name;
+            return string.Equals(text, parameter.Name, StringComparison.Ordinal) || string.Equals(text, "!" + parameter.Name, StringComparison.Ordinal);
         }
 
         private bool FieldRegionDisposesOnEveryPath(
@@ -6788,6 +6768,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     outgoing.Unknown = true;
                 }
 
+#pragma warning disable HLQ012 // CollectionsMarshal is unavailable on the analyzer's netstandard2.0 target.
                 foreach (LifecycleEffect effect in walker.Effects)
                 {
                     if (outgoing.Unknown || outgoing.Effect is not LifecycleEffect.None)
@@ -6799,6 +6780,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                         outgoing.Effect = effect;
                     }
                 }
+#pragma warning restore HLQ012
 
                 bool changed = !exitStates.TryGetValue(block, out LifecycleSummaryState? oldExit)
                     || !oldExit.EquivalentTo(outgoing);
@@ -7109,12 +7091,12 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             bool sawPolicy = false;
             foreach (IArgumentOperation argument in operation.Arguments)
             {
-                if (argument.Parameter?.Name == "returnMemoryOnDispose" && argument.Value.ConstantValue.HasValue)
+                if (string.Equals(argument.Parameter?.Name, "returnMemoryOnDispose", StringComparison.Ordinal) && argument.Value.ConstantValue.HasValue)
                 {
                     return argument.Value.ConstantValue.Value is 1;
                 }
 
-                if (argument.Parameter?.Name == "returnMemoryOnDispose")
+                if (string.Equals(argument.Parameter?.Name, "returnMemoryOnDispose", StringComparison.Ordinal))
                 {
                     sawPolicy = true;
                 }
@@ -7134,7 +7116,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         {
             foreach (IArgumentOperation argument in operation.Arguments)
             {
-                if (argument.Parameter?.Name != "doNotLeaseOnDeclaration")
+                if (!string.Equals(argument.Parameter?.Name, "doNotLeaseOnDeclaration", StringComparison.Ordinal))
                 {
                     continue;
                 }
@@ -7162,13 +7144,11 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
         private static bool IsNonRetainingCompositeLeaseOperation(IInvocationOperation operation) =>
             (operation.TargetMethod.Name is "Access" or "InitializeScoped")
-            && operation.TargetMethod.ContainingType.ToDisplayString() == "Supprocom.NativeAllocationManagement.NativeLeaseOperations";
+            && string.Equals(operation.TargetMethod.ContainingType.ToDisplayString(), "Supprocom.NativeAllocationManagement.NativeLeaseOperations", StringComparison.Ordinal);
 
         private static bool IsScopedGroupInitialization(
-            IInvocationOperation operation) =>
-            operation.TargetMethod.Name == "InitializeScoped"
-            && operation.TargetMethod.ContainingType.ToDisplayString()
-                == "Supprocom.NativeAllocationManagement.NativeLeaseOperations";
+            IInvocationOperation operation) => string.Equals(operation.TargetMethod.Name, "InitializeScoped", StringComparison.Ordinal) && string.Equals(operation.TargetMethod.ContainingType.ToDisplayString()
+, "Supprocom.NativeAllocationManagement.NativeLeaseOperations", StringComparison.Ordinal);
 
         private static Target FindTarget(IOperation operation)
         {
@@ -7346,9 +7326,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     || declaration.ToString().TrimStart().StartsWith("scoped ", StringComparison.Ordinal));
             return declaration is not null
                 && isScoped
-                && declaration.Declaration.Variables.Any(variable =>
-                    variable.Identifier.ValueText == symbol.Name
-                    && variable.Initializer?.Value is SyntaxNode initializer
+                && declaration.Declaration.Variables.Any(variable => string.Equals(variable.Identifier.ValueText, symbol.Name, StringComparison.Ordinal) && variable.Initializer?.Value is SyntaxNode initializer
                     && initializer.Span.Contains(syntax.Span));
         }
 
@@ -7416,7 +7394,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             return statement.Declaration.Variables.Any(variable =>
                 variable.Initializer?.Value is SyntaxNode initializer
                 && initializer.Span.Contains(syntax.Span)
-                && (symbol is null || variable.Identifier.ValueText == symbol.Name));
+                && (symbol is null || string.Equals(variable.Identifier.ValueText, symbol.Name, StringComparison.Ordinal)));
         }
 
         private static bool IsDirectUsingDeclarationInitializer(
@@ -7427,7 +7405,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             return statement.Declaration.Variables.Any(variable =>
                 variable.Initializer?.Value is SyntaxNode initializer
                 && initializer.Span.Contains(syntax.Span)
-                && (symbol is null || variable.Identifier.ValueText == symbol.Name));
+                && (symbol is null || string.Equals(variable.Identifier.ValueText, symbol.Name, StringComparison.Ordinal)));
         }
 
         private void ReportMissingScopedCompletion(OwnerState owner, SyntaxNode syntax)
@@ -7488,7 +7466,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 .Add("NAM.SourceFile", sourceFile)
                 .Add("NAM.SourceLine", (line.StartLinePosition.Line + 1).ToString(System.Globalization.CultureInfo.InvariantCulture))
                 .Add("NAM.SourceColumn", (line.StartLinePosition.Character + 1).ToString(System.Globalization.CultureInfo.InvariantCulture))
-                .Add("NAM.Operation", descriptor.Title.ToString())
+                .Add("NAM.Operation", descriptor.Title.ToString(System.Globalization.CultureInfo.InvariantCulture))
                 .Add("NAM.OperationId", descriptor.Id);
             _context.ReportDiagnostic(Diagnostic.Create(
                 descriptor,
@@ -7536,7 +7514,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 return Generation == other.Generation
                     && GenerationRelation == other.GenerationRelation
                     && Kind == other.Kind
-                    && Path == other.Path;
+                    && string.Equals(Path, other.Path, StringComparison.Ordinal);
             }
         }
 

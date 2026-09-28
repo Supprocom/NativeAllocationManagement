@@ -762,6 +762,7 @@ public sealed class RuntimeLifecycleTests
     }
 
     [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The test intentionally captures arbitrary callback or worker failures for lifecycle assertions.")]
     public void CallbackExceptionsReleaseTheOperationToken()
     {
         NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
@@ -807,6 +808,7 @@ public sealed class RuntimeLifecycleTests
     }
 
     [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The test intentionally captures arbitrary callback or worker failures for lifecycle assertions.")]
     public void InvalidPoliciesAndLengthsDoNotCreateOwners()
     {
         Assert.Throws<ArgumentOutOfRangeException>(() => new NativeConcurrentPool<int>(returnMemoryOnDispose: (NativeMemoryReturn)99));
@@ -863,13 +865,13 @@ public sealed class RuntimeLifecycleTests
         PropertyInfo[] pooledProperties = typeof(ConcurrentPooled<int>).GetProperties(BindingFlags.Public | BindingFlags.Instance);
         PropertyInfo[] localProperties = typeof(Local<int>).GetProperties(BindingFlags.Public | BindingFlags.Instance);
 
-        Assert.Contains(pooledProperties, property => property.Name == "Length" && property.PropertyType == typeof(int));
-        Assert.Contains(pooledProperties, property => property.Name == "Capacity" && property.PropertyType == typeof(int));
+        Assert.Contains(pooledProperties, property => string.Equals(property.Name, "Length", StringComparison.Ordinal) && property.PropertyType == typeof(int));
+        Assert.Contains(pooledProperties, property => string.Equals(property.Name, "Capacity", StringComparison.Ordinal) && property.PropertyType == typeof(int));
         Assert.DoesNotContain(pooledProperties, property => property.PropertyType == typeof(Span<int>));
         Assert.DoesNotContain(localProperties, property => property.PropertyType == typeof(Span<int>));
         Assert.DoesNotContain(
             localProperties,
-            property => property.Name == "Item");
+            property => string.Equals(property.Name, "Item", StringComparison.Ordinal));
         Assert.Null(typeof(ConcurrentPooled<int>).GetProperty("DangerousPointer", BindingFlags.Public | BindingFlags.Instance));
     }
 
@@ -877,11 +879,11 @@ public sealed class RuntimeLifecycleTests
     public void NativeRegionExposesOnlyItsSingleLifetimeOperations()
     {
         MethodInfo[] methods = typeof(NativeRegion).GetMethods(BindingFlags.Public | BindingFlags.Instance);
-        Assert.Contains(methods, method => method.Name == "Lease" && method.IsGenericMethodDefinition);
-        Assert.DoesNotContain(methods, method => method.Name == "Allocate");
-        Assert.DoesNotContain(methods, method => method.Name == "LeaseScoped");
-        Assert.DoesNotContain(methods, method => method.Name == "RecycleScoped");
-        Assert.DoesNotContain(methods, method => method.Name == "LeaseFromMemory");
+        Assert.Contains(methods, method => string.Equals(method.Name, "Lease", StringComparison.Ordinal) && method.IsGenericMethodDefinition);
+        Assert.DoesNotContain(methods, method => string.Equals(method.Name, "Allocate", StringComparison.Ordinal));
+        Assert.DoesNotContain(methods, method => string.Equals(method.Name, "LeaseScoped", StringComparison.Ordinal));
+        Assert.DoesNotContain(methods, method => string.Equals(method.Name, "RecycleScoped", StringComparison.Ordinal));
+        Assert.DoesNotContain(methods, method => string.Equals(method.Name, "LeaseFromMemory", StringComparison.Ordinal));
         Assert.DoesNotContain(methods, method => method.Name.StartsWith("ReturnMemoryTo", StringComparison.Ordinal));
         Assert.DoesNotContain(methods, method => method.Name.StartsWith("TrimRetainedMemory", StringComparison.Ordinal));
     }
@@ -993,6 +995,7 @@ public sealed class RuntimeLifecycleTests
     }
 
     [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The test intentionally captures arbitrary callback or worker failures for lifecycle assertions.")]
     public void FailedIndividualLeaseReturnRestoresActiveStateWithoutRequeueing()
     {
         NativeMemoryTestHooks.Reset();
@@ -1120,6 +1123,7 @@ public sealed class RuntimeLifecycleTests
     }
 
     [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1861", Justification = "The expected arrays are one-shot before-and-after test assertions.")]
     public void InvalidCopyArgumentsDoNotChangeNativeOrManagedState()
     {
         NativeConcurrentPool<int> pool = new();
@@ -1164,6 +1168,7 @@ public sealed class RuntimeLifecycleTests
     }
 
     [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000", Justification = "The pool is intentionally abandoned so detached native bytes remain until finalization.")]
     public void DetachedNativeBytesRemainAccountedUntilFinalization()
     {
         NativeMemoryTestHooks.Reset();
@@ -1181,6 +1186,7 @@ public sealed class RuntimeLifecycleTests
         GC.WaitForPendingFinalizers();
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000", Justification = "The detached generation is intentionally abandoned for the finalization test.")]
     private static void DetachOneGeneration()
     {
         NativeConcurrentPool<int> pool = new(preLease: 4);
@@ -1380,6 +1386,7 @@ public sealed class RuntimeLifecycleTests
         value.Dispose();
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The test intentionally captures arbitrary callback or worker failures for lifecycle assertions.")]
     private static Exception? CaptureArgumentFailure(ConcurrentPooled<int> lease, int operation)
     {
         try
@@ -1405,6 +1412,7 @@ public sealed class RuntimeLifecycleTests
         return null;
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The test intentionally captures arbitrary callback or worker failures for lifecycle assertions.")]
     private static Exception? CaptureNullPooledCallback(ConcurrentPooled<int> pooled, bool read)
     {
         try
@@ -1426,6 +1434,7 @@ public sealed class RuntimeLifecycleTests
         return null;
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The test intentionally captures arbitrary callback or worker failures for lifecycle assertions.")]
     private static Exception? CaptureNullLocalCallback(Local<int> local, bool read)
     {
         try

@@ -13,17 +13,17 @@ The package targets .NET 10. The fast `NativePool<T>`, `NativeRegion`, and
 generation model for concurrent ownership. Their ordinary leases can store managed
 references through a separate root-aware path. Transferable leases remain unmanaged.
 
-Install version `0.2.2` with the .NET CLI:
+Install version `0.2.3` with the .NET CLI:
 
 ```powershell
-dotnet add package Supprocom.NativeAllocationManagement --version 0.2.2
+dotnet add package Supprocom.NativeAllocationManagement --version 0.2.3
 ```
 
 The equivalent project file entry is:
 
 ```xml
 <ItemGroup>
-  <PackageReference Include="Supprocom.NativeAllocationManagement" Version="0.2.2" />
+  <PackageReference Include="Supprocom.NativeAllocationManagement" Version="0.2.3" />
 </ItemGroup>
 ```
 

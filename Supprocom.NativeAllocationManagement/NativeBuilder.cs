@@ -415,6 +415,8 @@ public sealed class NativeBuilder<T> : IDisposable
     }
 
     /// <summary>Publishes one exact logical range and invalidates this builder.</summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA1816", Justification = "Completion transfers native ownership and disarms the builder finalizer.")]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "This boundary captures any failure to preserve cleanup and report the original error.")]
     public NativeTransfer<T> Complete(
         CancellationToken cancellationToken = default)
     {
@@ -649,6 +651,7 @@ public sealed class NativeBuilder<T> : IDisposable
 
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA1816", Justification = "Failure cleanup releases native storage and disarms the builder finalizer.")]
     private void FailOperation(Exception failure)
     {
         if (Interlocked.CompareExchange(
@@ -676,6 +679,7 @@ public sealed class NativeBuilder<T> : IDisposable
         }
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "This boundary captures any failure to preserve cleanup and report the original error.")]
     private static void FailPair(
         NativeBuilder<T> first,
         NativeBuilder<T> second,
@@ -688,7 +692,7 @@ public sealed class NativeBuilder<T> : IDisposable
         }
         catch (Exception cleanupFailure)
         {
-            (cleanupFailures ??= []).Add(cleanupFailure);
+            cleanupFailures = [cleanupFailure];
         }
 
         try
@@ -700,7 +704,10 @@ public sealed class NativeBuilder<T> : IDisposable
             (cleanupFailures ??= []).Add(cleanupFailure);
         }
 
+        // Either native owner cleanup can throw; preserve the original failure when neither does.
+#pragma warning disable CA1508
         if (cleanupFailures is null)
+#pragma warning restore CA1508
         {
             return;
         }
@@ -828,6 +835,8 @@ public sealed class NativeBuilder<T> : IDisposable
     }
 
     /// <summary>Returns storage when an application abandons an active builder.</summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "MA0055", Justification = "Emergency native-memory cleanup supplements mandatory deterministic disposal.")]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "An emergency finalizer must never let cleanup exceptions terminate the process.")]
     ~NativeBuilder()
     {
         try

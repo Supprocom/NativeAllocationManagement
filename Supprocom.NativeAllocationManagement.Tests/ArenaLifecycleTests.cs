@@ -95,6 +95,7 @@ public sealed class ArenaLifecycleTests
     }
 
     [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The test intentionally captures arbitrary callback or worker failures for lifecycle assertions.")]
     public void ArenaSharesOneHeterogeneousGenerationAndInvalidatesEveryLeaseOnRelease()
     {
         NativeMemoryTestHooks.Reset();
@@ -630,11 +631,11 @@ public sealed class ArenaLifecycleTests
     {
         NativeMemoryTestHooks.Reset();
         NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        ManualResetEventSlim entered = new();
-        ManualResetEventSlim release = new();
+        using ManualResetEventSlim entered = new();
+        using ManualResetEventSlim release = new();
         NativeMemoryTestHooks.SetOperationEntered(operation =>
         {
-            if (operation == nameof(ConcurrentArenaLease<int>.Access))
+            if (string.Equals(operation, nameof(ConcurrentArenaLease<int>.Access), StringComparison.Ordinal))
             {
                 entered.Set();
                 release.Wait(TimeSpan.FromSeconds(10));
@@ -713,6 +714,7 @@ public sealed class ArenaLifecycleTests
         }
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The test intentionally captures arbitrary callback or worker failures for lifecycle assertions.")]
     private static Exception Record(Action action)
     {
         try
@@ -727,6 +729,7 @@ public sealed class ArenaLifecycleTests
         throw new Xunit.Sdk.XunitException("Expected an exception.");
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The test intentionally captures arbitrary callback or worker failures for lifecycle assertions.")]
     private static Exception CaptureReturned<T>(ConcurrentArenaLease<T> lease)
     {
         try
@@ -751,7 +754,10 @@ public sealed class ArenaLifecycleTests
                 NativeSegment.Alignment);
             if (pointer is null)
             {
+                // Test allocator mirrors AlignedAlloc's null-on-failure contract.
+#pragma warning disable CA2201
                 throw new OutOfMemoryException();
+#pragma warning restore CA2201
             }
 
             SetHandle((nint)pointer);

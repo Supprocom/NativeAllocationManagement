@@ -25,7 +25,7 @@ internal static class NativeBuilderWriteRegression
     internal static async Task<int> RunCommandAsync(string[] args)
     {
         NativeBuilderWriteOptions options = ParseOptions(args);
-        if (args[0] == "--native-builder-write-worker")
+        if (string.Equals(args[0], "--native-builder-write-worker", StringComparison.Ordinal))
         {
             NativeBuilderWriteImplementation implementation = Enum.Parse<
                 NativeBuilderWriteImplementation>(
@@ -51,7 +51,7 @@ internal static class NativeBuilderWriteRegression
                     : 3;
         }
 
-        NativeBuilderWriteReport report = await RunPairedAsync(options);
+        NativeBuilderWriteReport report = await RunPairedAsync(options).ConfigureAwait(false);
         string json = JsonSerializer.Serialize(report, IndentedJson);
         string? outputPath = ReadOptionalOption(args, "--output");
         if (outputPath is not null)
@@ -63,7 +63,7 @@ internal static class NativeBuilderWriteRegression
                 Directory.CreateDirectory(directory);
             }
 
-            await File.WriteAllTextAsync(fullPath, json);
+            await File.WriteAllTextAsync(fullPath, json).ConfigureAwait(false);
         }
 
         Console.WriteLine(json);
@@ -88,13 +88,13 @@ internal static class NativeBuilderWriteRegression
             NativeBuilderWriteImplementation first =
                 GetFirstImplementation(sampleIndex);
             NativeBuilderWriteWorkerEvidence firstEvidence =
-                await RunIsolatedWorkerAsync(first, options);
+                await RunIsolatedWorkerAsync(first, options).ConfigureAwait(false);
             NativeBuilderWriteImplementation second = first
                 == NativeBuilderWriteImplementation.RepeatedAppend
                     ? NativeBuilderWriteImplementation.BoundedWrite
                     : NativeBuilderWriteImplementation.RepeatedAppend;
             NativeBuilderWriteWorkerEvidence secondEvidence =
-                await RunIsolatedWorkerAsync(second, options);
+                await RunIsolatedWorkerAsync(second, options).ConfigureAwait(false);
             NativeBuilderWriteWorkerEvidence append = first
                 == NativeBuilderWriteImplementation.RepeatedAppend
                     ? firstEvidence
@@ -119,9 +119,8 @@ internal static class NativeBuilderWriteRegression
         NativeBuilderWriteBinaryIdentity benchmarkIdentity =
             CreateBinaryIdentity(
                 typeof(NativeBuilderWriteRegression).Assembly);
-        bool binaryIdentity = runtimeIdentity.SourceCommit
-                == benchmarkIdentity.SourceCommit
-            && runtimeIdentity.SourceCommit.Length == 40;
+        bool binaryIdentity = string.Equals(runtimeIdentity.SourceCommit
+, benchmarkIdentity.SourceCommit, StringComparison.Ordinal) && runtimeIdentity.SourceCommit.Length == 40;
         double[] speedups = pairs
             .Select(static pair => pair.AppendToWriteSpeedup)
             .ToArray();
@@ -135,9 +134,8 @@ internal static class NativeBuilderWriteRegression
         bool parity = pairs.All(static pair =>
             pair.RepeatedAppend.ExactParity
             && pair.BoundedWrite.ExactParity
-            && pair.RepeatedAppend.OutputSha256
-                == pair.BoundedWrite.OutputSha256
-            && pair.RepeatedAppend.Checksum
+            && string.Equals(pair.RepeatedAppend.OutputSha256
+, pair.BoundedWrite.OutputSha256, StringComparison.Ordinal) && pair.RepeatedAppend.Checksum
                 == pair.BoundedWrite.Checksum);
         bool balanced = pairs.Count(static pair =>
                 pair.FirstImplementation
@@ -227,14 +225,14 @@ internal static class NativeBuilderWriteRegression
             implementation);
         long expectedChecksum = ComputeExpectedChecksum(options);
         verificationClock.Stop();
-        bool exactParity = outputHash == expectedHash;
+        bool exactParity = string.Equals(outputHash, expectedHash, StringComparison.Ordinal);
 
         Stopwatch warmupClock = Stopwatch.StartNew();
         long warmupChecksum = execution.RunBatch(implementation);
         warmupClock.Stop();
         exactParity &= warmupChecksum == expectedChecksum;
-        bool cancellationCleanup = execution.ProbeCancellation();
-        bool exactlyOnceCleanup = execution.ProbeExactlyOnceCleanup();
+        bool cancellationCleanup = BuilderWriteExecution.ProbeCancellation();
+        bool exactlyOnceCleanup = BuilderWriteExecution.ProbeExactlyOnceCleanup();
 
         long allocationsBefore = execution.NativeAllocationCount;
         long freesBefore = execution.NativeFreeCount;
@@ -395,15 +393,15 @@ internal static class NativeBuilderWriteRegression
         Task exitTask = process.WaitForExitAsync();
         if (await Task.WhenAny(
                 exitTask,
-                Task.Delay(TimeSpan.FromSeconds(60))) != exitTask)
+                Task.Delay(TimeSpan.FromSeconds(60))).ConfigureAwait(false) != exitTask)
         {
             process.Kill(entireProcessTree: true);
             throw new TimeoutException(
                 "The builder write benchmark worker exceeded 60 seconds.");
         }
 
-        string output = await outputTask;
-        string error = await errorTask;
+        string output = await outputTask.ConfigureAwait(false);
+        string error = await errorTask.ConfigureAwait(false);
         if (process.ExitCode != 0)
         {
             throw new InvalidOperationException(
@@ -428,8 +426,7 @@ internal static class NativeBuilderWriteRegression
     {
         if (!append.ExactParity
             || !direct.ExactParity
-            || append.OutputSha256 != direct.OutputSha256
-            || append.Checksum != direct.Checksum
+            || !string.Equals(append.OutputSha256, direct.OutputSha256, StringComparison.Ordinal) || append.Checksum != direct.Checksum
             || append.RecordCount != direct.RecordCount
             || append.WordCount != direct.WordCount)
         {
@@ -521,7 +518,7 @@ internal static class NativeBuilderWriteRegression
     private static long ComputeChecksum(ReadOnlySpan<uint> values)
     {
         ulong checksum = 14_695_981_039_346_656_037UL;
-        foreach (uint value in values)
+        foreach (ref readonly uint value in values)
         {
             checksum = unchecked(
                 (checksum ^ value)
@@ -561,11 +558,11 @@ internal static class NativeBuilderWriteRegression
         NativeBuilderWriteOptions options)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
-            options.RecordsPerBuilder);
+            options.RecordsPerBuilder, nameof(options));
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
-            options.WorkerCount);
+            options.WorkerCount, nameof(options));
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
-            options.SampleCount);
+            options.SampleCount, nameof(options));
         if ((options.SampleCount & 1) != 0)
         {
             throw new ArgumentException(
@@ -593,7 +590,7 @@ internal static class NativeBuilderWriteRegression
         string name) =>
         ReadOptionalOption(args, name)
         ?? throw new ArgumentException(
-            $"The required option {name} is missing.");
+            $"The required option {name} is missing.", nameof(args));
 
     private static string? ReadOptionalOption(
         string[] args,
@@ -603,7 +600,7 @@ internal static class NativeBuilderWriteRegression
             index < args.Length - 1;
             index++)
         {
-            if (args[index] == name)
+            if (string.Equals(args[index], name, StringComparison.Ordinal))
             {
                 return args[index + 1];
             }
@@ -681,6 +678,8 @@ internal static class NativeBuilderWriteRegression
             };
         }
 
+        // These session-shaped metrics intentionally expose one consistent probe facade.
+#pragma warning disable CA1822
         internal long NativeAllocationCount =>
             NativeMemoryTestHooks.Snapshot().AllocationCount;
 
@@ -689,6 +688,7 @@ internal static class NativeBuilderWriteRegression
 
         internal long RetainedBytes =>
             NativeMemoryTestHooks.Snapshot().OutstandingNativeBytes;
+#pragma warning restore CA1822
 
         internal string ComputeExactHash(
             NativeBuilderWriteImplementation implementation)
@@ -725,11 +725,11 @@ internal static class NativeBuilderWriteRegression
             return checksum;
         }
 
-        internal bool ProbeCancellation() =>
-            _workers[0].ProbeCancellation();
+        internal static bool ProbeCancellation() =>
+            BuilderWriteWorker.ProbeCancellation();
 
-        internal bool ProbeExactlyOnceCleanup() =>
-            _workers[0].ProbeExactlyOnceCleanup();
+        internal static bool ProbeExactlyOnceCleanup() =>
+            BuilderWriteWorker.ProbeExactlyOnceCleanup();
 
     }
 
@@ -778,7 +778,7 @@ internal static class NativeBuilderWriteRegression
             }
         }
 
-        internal bool ProbeCancellation()
+        internal static bool ProbeCancellation()
         {
             using CancellationTokenSource cancellation = new();
             NativeBuilder<uint> builder = new(
@@ -814,7 +814,7 @@ internal static class NativeBuilderWriteRegression
                     .OutstandingNativeBytes == 0;
         }
 
-        internal bool ProbeExactlyOnceCleanup()
+        internal static bool ProbeExactlyOnceCleanup()
         {
             using NativeBuilder<uint> builder =
                 new(preLease: 2);

@@ -161,13 +161,11 @@ public sealed class NativeWorkspaceStateBenchmarkTests
             NativeWorkspaceStateBenchmark.RunSharedPairWorker(
                 sampleIndex: 0,
                 options);
-        NativeWorkspaceStateWorkerEvidence managed = pair.Evidence
-            .Single(evidence => evidence.Implementation
-                == NativeWorkspaceStateImplementation.ManagedArray);
-        NativeWorkspaceStateWorkerEvidence native = pair.Evidence
-            .Single(evidence => evidence.Implementation
+        NativeWorkspaceStateWorkerEvidence managed = SingleExpected(pair.Evidence.Where(evidence => evidence.Implementation
+                == NativeWorkspaceStateImplementation.ManagedArray));
+        NativeWorkspaceStateWorkerEvidence native = SingleExpected(pair.Evidence.Where(evidence => evidence.Implementation
                 == NativeWorkspaceStateImplementation
-                    .ExplicitStateWorkspace);
+                    .ExplicitStateWorkspace));
 
         Assert.Equal(4, managed.WorkerThreadIds.Distinct().Count());
         Assert.Equal(

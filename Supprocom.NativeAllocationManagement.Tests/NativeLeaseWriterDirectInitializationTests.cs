@@ -68,7 +68,7 @@ public sealed class NativeLeaseWriterDirectInitializationTests
         using NativeConcurrentPool<int> pool = new(
             preLease: 16,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        CancellationTokenSource cancellation = new();
+        using CancellationTokenSource cancellation = new();
         cancellation.Cancel();
 
         Assert.Throws<OperationCanceledException>(

@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.Numerics;
@@ -29,7 +30,7 @@ internal static class NativeBuilderBenchmark
 
     internal static async Task<int> RunCommandAsync(string[] args)
     {
-        if (args[0] == "--native-builder-worker")
+        if (string.Equals(args[0], "--native-builder-worker", StringComparison.Ordinal))
         {
             NativeBuilderBenchmarkImplementation implementation =
                 Enum.Parse<NativeBuilderBenchmarkImplementation>(
@@ -38,7 +39,7 @@ internal static class NativeBuilderBenchmark
             NativeBuilderBenchmarkOptions options = ParseOptions(args);
             NativeBuilderWorkerEvidence evidence = await RunWorkerAsync(
                 implementation,
-                options);
+                options).ConfigureAwait(false);
             Console.WriteLine(JsonSerializer.Serialize(
                 evidence,
                 CompactJsonOptions));
@@ -49,7 +50,7 @@ internal static class NativeBuilderBenchmark
             ParseOptions(args);
         string? outputPath = ReadOptionalOption(args, "--output");
         NativeBuilderBenchmarkReport report = await RunPairedAsync(
-            benchmarkOptions);
+            benchmarkOptions).ConfigureAwait(false);
         string json = JsonSerializer.Serialize(
             report,
             IndentedJsonOptions);
@@ -62,7 +63,7 @@ internal static class NativeBuilderBenchmark
                 Directory.CreateDirectory(directory);
             }
 
-            await File.WriteAllTextAsync(fullPath, json);
+            await File.WriteAllTextAsync(fullPath, json).ConfigureAwait(false);
         }
 
         Console.WriteLine(json);
@@ -83,13 +84,13 @@ internal static class NativeBuilderBenchmark
             NativeBuilderBenchmarkImplementation first =
                 GetFirstImplementation(sampleIndex);
             NativeBuilderWorkerEvidence firstEvidence =
-                await RunIsolatedWorkerAsync(first, options);
+                await RunIsolatedWorkerAsync(first, options).ConfigureAwait(false);
             NativeBuilderBenchmarkImplementation second =
                 first == NativeBuilderBenchmarkImplementation.ManagedList
                     ? NativeBuilderBenchmarkImplementation.NativeBuilder
                     : NativeBuilderBenchmarkImplementation.ManagedList;
             NativeBuilderWorkerEvidence secondEvidence =
-                await RunIsolatedWorkerAsync(second, options);
+                await RunIsolatedWorkerAsync(second, options).ConfigureAwait(false);
             NativeBuilderWorkerEvidence managed =
                 first == NativeBuilderBenchmarkImplementation.ManagedList
                     ? firstEvidence
@@ -121,9 +122,8 @@ internal static class NativeBuilderBenchmark
         bool parity = pairs.All(pair =>
             pair.Managed.ExactParity
             && pair.Native.ExactParity
-            && pair.Managed.ExactOutputSha256
-                == pair.Native.ExactOutputSha256
-            && pair.Managed.Checksum == pair.Native.Checksum);
+            && string.Equals(pair.Managed.ExactOutputSha256
+, pair.Native.ExactOutputSha256, StringComparison.Ordinal) && pair.Managed.Checksum == pair.Native.Checksum);
         bool balancedOrder = pairs.Count(pair =>
                 pair.FirstImplementation
                     == NativeBuilderBenchmarkImplementation.ManagedList)
@@ -188,10 +188,10 @@ internal static class NativeBuilderBenchmark
             == NativeBuilderBenchmarkImplementation.ManagedList
                 ? await RunManagedBatchAsync(
                     options,
-                    options.WarmupIterations)
+                    options.WarmupIterations).ConfigureAwait(false)
                 : await RunNativeBatchAsync(
                     options,
-                    options.WarmupIterations);
+                    options.WarmupIterations).ConfigureAwait(false);
         warmupClock.Stop();
         if (warmup.Checksum != unchecked(
             expectedChecksum * options.WarmupIterations))
@@ -215,10 +215,10 @@ internal static class NativeBuilderBenchmark
             == NativeBuilderBenchmarkImplementation.ManagedList
                 ? await RunManagedBatchAsync(
                     options,
-                    options.Iterations)
+                    options.Iterations).ConfigureAwait(false)
                 : await RunNativeBatchAsync(
                     options,
-                    options.Iterations);
+                    options.Iterations).ConfigureAwait(false);
         process.Refresh();
         long workingSetAfter = process.WorkingSet64;
         long managedAllocated = GC.GetTotalAllocatedBytes(
@@ -341,7 +341,7 @@ internal static class NativeBuilderBenchmark
             long checksum = 0;
             ready.SetResult();
             await foreach (ManagedBuilderVoxelPacket packet
-                in channel.Reader.ReadAllAsync())
+                in channel.Reader.ReadAllAsync().ConfigureAwait(false))
             {
                 checksum = unchecked(checksum + packet.Consume());
                 packet.Dispose();
@@ -349,7 +349,7 @@ internal static class NativeBuilderBenchmark
 
             return checksum;
         });
-        await ready.Task;
+        await ready.Task.ConfigureAwait(false);
         Stopwatch clock = Stopwatch.StartNew();
         try
         {
@@ -357,8 +357,16 @@ internal static class NativeBuilderBenchmark
                 iteration < iterations;
                 iteration++)
             {
-                await channel.Writer.WriteAsync(
-                    CreateManagedPacket(options));
+                ManagedBuilderVoxelPacket? packet = CreateManagedPacket(options);
+                try
+                {
+                    await channel.Writer.WriteAsync(packet).ConfigureAwait(false);
+                    packet = null; // The channel consumer now owns the packet.
+                }
+                finally
+                {
+                    packet?.Dispose();
+                }
             }
         }
         finally
@@ -366,7 +374,7 @@ internal static class NativeBuilderBenchmark
             channel.Writer.TryComplete();
         }
 
-        long checksum = await consumer;
+        long checksum = await consumer.ConfigureAwait(false);
         clock.Stop();
         return new NativeBuilderBatchResult(
             checksum,
@@ -392,7 +400,7 @@ internal static class NativeBuilderBenchmark
             long checksum = 0;
             ready.SetResult();
             await foreach (NativeBuilderVoxelPacket packet
-                in channel.Reader.ReadAllAsync())
+                in channel.Reader.ReadAllAsync().ConfigureAwait(false))
             {
                 try
                 {
@@ -407,7 +415,7 @@ internal static class NativeBuilderBenchmark
 
             return checksum;
         });
-        await ready.Task;
+        await ready.Task.ConfigureAwait(false);
         Stopwatch clock = Stopwatch.StartNew();
         try
         {
@@ -419,7 +427,7 @@ internal static class NativeBuilderBenchmark
                     CreateNativePacket(options);
                 try
                 {
-                    await channel.Writer.WriteAsync(packet);
+                    await channel.Writer.WriteAsync(packet).ConfigureAwait(false);
                     packet = null;
                 }
                 finally
@@ -433,7 +441,7 @@ internal static class NativeBuilderBenchmark
             channel.Writer.TryComplete();
         }
 
-        long checksum = await consumer;
+        long checksum = await consumer.ConfigureAwait(false);
         clock.Stop();
         return new NativeBuilderBatchResult(
             checksum,
@@ -695,7 +703,7 @@ internal static class NativeBuilderBenchmark
         double initialization = ElapsedMilliseconds(phaseStart);
 
         phaseStart = Stopwatch.GetTimestamp();
-        ManagedBuilderVoxelPacket packet = new(
+        using ManagedBuilderVoxelPacket packet = new(
             new NativeBuilderExactOutput(
                 opaque.ToArray(),
                 transparent.ToArray()));
@@ -867,12 +875,12 @@ internal static class NativeBuilderBenchmark
 
             await Task.WhenAny(
                 exitTask,
-                Task.Delay(TimeSpan.FromMilliseconds(2)));
+                Task.Delay(TimeSpan.FromMilliseconds(2))).ConfigureAwait(false);
         }
 
-        await exitTask;
-        string output = await outputTask;
-        string error = await errorTask;
+        await exitTask.ConfigureAwait(false);
+        string output = await outputTask.ConfigureAwait(false);
+        string error = await errorTask.ConfigureAwait(false);
         if (process.ExitCode != 0)
         {
             throw new InvalidOperationException(
@@ -894,7 +902,7 @@ internal static class NativeBuilderBenchmark
     }
 
     private static void AddWorkerArguments(
-        ICollection<string> arguments,
+        Collection<string> arguments,
         NativeBuilderBenchmarkImplementation implementation,
         NativeBuilderBenchmarkOptions options)
     {
@@ -943,9 +951,8 @@ internal static class NativeBuilderBenchmark
             || native.Iterations != options.Iterations
             || !managed.ExactParity
             || !native.ExactParity
-            || managed.ExactOutputSha256
-                != native.ExactOutputSha256
-            || managed.Checksum != native.Checksum)
+            || !string.Equals(managed.ExactOutputSha256
+, native.ExactOutputSha256, StringComparison.Ordinal) || managed.Checksum != native.Checksum)
         {
             throw new InvalidDataException(
                 "The paired native builder evidence is not equivalent.");
@@ -992,20 +999,20 @@ internal static class NativeBuilderBenchmark
         NativeBuilderBenchmarkOptions options)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
-            options.ElementCount);
+            options.ElementCount, nameof(options));
         ArgumentOutOfRangeException.ThrowIfNegative(
-            options.PreLease);
+            options.PreLease, nameof(options));
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
-            options.BatchSize);
+            options.BatchSize, nameof(options));
         ArgumentOutOfRangeException.ThrowIfGreaterThan(
             options.BatchSize,
-            1_024);
+            1_024, nameof(options));
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
-            options.Iterations);
+            options.Iterations, nameof(options));
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
-            options.WarmupIterations);
+            options.WarmupIterations, nameof(options));
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
-            options.SampleCount);
+            options.SampleCount, nameof(options));
         if ((options.SampleCount & 1) != 0)
         {
             throw new ArgumentException(
@@ -1041,7 +1048,7 @@ internal static class NativeBuilderBenchmark
             index < args.Length - 1;
             index++)
         {
-            if (args[index] == name)
+            if (string.Equals(args[index], name, StringComparison.Ordinal))
             {
                 return args[index + 1];
             }
@@ -1179,6 +1186,7 @@ internal static class NativeBuilderBenchmark
         }
     }
 
+    [StructLayout(LayoutKind.Sequential)]
     private readonly record struct NativeBuilderBatchResult(
         long Checksum,
         double ElapsedMilliseconds);

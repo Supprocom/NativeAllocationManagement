@@ -187,6 +187,7 @@ public sealed class NativeWorkspace<T> : IDisposable
     }
 
     /// <summary>Returns the fixed native block on the owner thread.</summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1065", Justification = "Disposal must reject active bounded use before freeing native memory.")]
     public void Dispose()
     {
         ValidateOwnerThread(nameof(Dispose));
@@ -316,6 +317,8 @@ public sealed class NativeWorkspace<T> : IDisposable
     }
 
     /// <summary>Releases abandoned native storage as an emergency action.</summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "MA0055", Justification = "Emergency native-memory cleanup supplements mandatory deterministic disposal.")]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "An emergency finalizer must never let cleanup exceptions terminate the process.")]
     ~NativeWorkspace()
     {
         try

@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Globalization;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.Json;
 
@@ -43,7 +44,7 @@ internal static class NativeWorkspaceStateBenchmark
     internal static async Task<int> RunCommandAsync(string[] args)
     {
         NativeWorkspaceStateOptions options = ParseOptions(args);
-        if (args[0] == "--native-workspace-state-worker")
+        if (string.Equals(args[0], "--native-workspace-state-worker", StringComparison.Ordinal))
         {
             NativeWorkspaceStateImplementation implementation = Enum.Parse<
                 NativeWorkspaceStateImplementation>(
@@ -65,7 +66,7 @@ internal static class NativeWorkspaceStateBenchmark
         }
 
 
-        if (args[0] == "--native-workspace-state-pair-worker")
+        if (string.Equals(args[0], "--native-workspace-state-pair-worker", StringComparison.Ordinal))
         {
             int sampleIndex = ReadIntOption(
                 args,
@@ -86,7 +87,7 @@ internal static class NativeWorkspaceStateBenchmark
                     : 3;
         }
 
-        NativeWorkspaceStateReport report = await RunPairedAsync(options);
+        NativeWorkspaceStateReport report = await RunPairedAsync(options).ConfigureAwait(false);
         string json = JsonSerializer.Serialize(report, IndentedJson);
         string? outputPath = ReadOptionalOption(args, "--output");
         if (outputPath is not null)
@@ -98,7 +99,7 @@ internal static class NativeWorkspaceStateBenchmark
                 Directory.CreateDirectory(directory);
             }
 
-            await File.WriteAllTextAsync(fullPath, json);
+            await File.WriteAllTextAsync(fullPath, json).ConfigureAwait(false);
         }
 
         Console.WriteLine(json);
@@ -121,7 +122,7 @@ internal static class NativeWorkspaceStateBenchmark
             sampleIndex++)
         {
             NativeWorkspaceStateIsolatedPairEvidence isolated =
-                await RunIsolatedPairAsync(sampleIndex, options);
+                await RunIsolatedPairAsync(sampleIndex, options).ConfigureAwait(false);
             NativeWorkspaceStateImplementation[] order =
                 isolated.ImplementationOrder.ToArray();
             Dictionary<
@@ -156,9 +157,8 @@ internal static class NativeWorkspaceStateBenchmark
         NativeWorkspaceStateBinaryIdentity benchmarkIdentity =
             CreateBinaryIdentity(
                 typeof(NativeWorkspaceStateBenchmark).Assembly);
-        bool binaryIdentity = runtimeIdentity.SourceCommit
-                == benchmarkIdentity.SourceCommit
-            && runtimeIdentity.SourceCommit.Length == 40;
+        bool binaryIdentity = string.Equals(runtimeIdentity.SourceCommit
+, benchmarkIdentity.SourceCommit, StringComparison.Ordinal) && runtimeIdentity.SourceCommit.Length == 40;
         double[] managedSpeedups = pairs
             .Select(static pair => pair.ManagedToExplicitStateSpeedup)
             .ToArray();
@@ -169,11 +169,8 @@ internal static class NativeWorkspaceStateBenchmark
                 pair.ExplicitState.ElapsedMilliseconds);
         double confidenceLower95 =
             PairedBenchmarkStatistics.ConfidenceLower95(managedSpeedups);
-        bool exactParity = pairs.All(static pair =>
-            pair.Managed.OutputSha256 == pair.Capturing.OutputSha256
-            && pair.Managed.OutputSha256
-                == pair.ExplicitState.OutputSha256
-            && pair.Managed.WorkerChecksums.SequenceEqual(
+        bool exactParity = pairs.All(static pair => string.Equals(pair.Managed.OutputSha256, pair.Capturing.OutputSha256, StringComparison.Ordinal) && string.Equals(pair.Managed.OutputSha256
+, pair.ExplicitState.OutputSha256, StringComparison.Ordinal) && pair.Managed.WorkerChecksums.SequenceEqual(
                 pair.Capturing.WorkerChecksums)
             && pair.Managed.WorkerChecksums.SequenceEqual(
                 pair.ExplicitState.WorkerChecksums));
@@ -304,12 +301,9 @@ internal static class NativeWorkspaceStateBenchmark
             int gen0Before = GC.CollectionCount(0);
             int gen1Before = GC.CollectionCount(1);
             int gen2Before = GC.CollectionCount(2);
-            for (int passIndex = 0;
-                passIndex < measurementPassMilliseconds.Length;
-                passIndex++)
+            foreach (ref double measurement in measurementPassMilliseconds.AsSpan())
             {
-                measurementPassMilliseconds[passIndex] =
-                    execution.RunBatch(implementation);
+                measurement = execution.RunBatch(implementation);
             }
 
             elapsedMilliseconds =
@@ -444,10 +438,8 @@ internal static class NativeWorkspaceStateBenchmark
                 passIndex < options.MeasurementPassCount;
                 passIndex++)
             {
-                for (int orderIndex = 0; orderIndex < 2; orderIndex++)
+                foreach (ref readonly NativeWorkspaceStateImplementation implementation in order.AsSpan(0, 2))
                 {
-                    NativeWorkspaceStateImplementation implementation =
-                        order[orderIndex];
                     MeasureSharedPass(
                         execution,
                         implementation,
@@ -561,16 +553,16 @@ internal static class NativeWorkspaceStateBenchmark
         WorkspaceExecution execution,
         NativeWorkspaceStateImplementation implementation,
         int passIndex,
-        IDictionary<
+        Dictionary<
             NativeWorkspaceStateImplementation,
             double[]> measurementMilliseconds,
-        IDictionary<NativeWorkspaceStateImplementation, long>
+        Dictionary<NativeWorkspaceStateImplementation, long>
             managedAllocatedBytes,
-        IDictionary<NativeWorkspaceStateImplementation, int>
+        Dictionary<NativeWorkspaceStateImplementation, int>
             gen0Collections,
-        IDictionary<NativeWorkspaceStateImplementation, int>
+        Dictionary<NativeWorkspaceStateImplementation, int>
             gen1Collections,
-        IDictionary<NativeWorkspaceStateImplementation, int>
+        Dictionary<NativeWorkspaceStateImplementation, int>
             gen2Collections)
     {
         long allocationBefore =
@@ -632,7 +624,7 @@ internal static class NativeWorkspaceStateBenchmark
         && confidenceLower95 >= RequiredConfidenceLower95;
 
     private static bool IsBalancedOrder(
-        IReadOnlyList<NativeWorkspaceStatePairEvidence> pairs)
+        NativeWorkspaceStatePairEvidence[] pairs)
     {
         return pairs.Count(pair =>
                 pair.ImplementationOrder[0]
@@ -640,14 +632,14 @@ internal static class NativeWorkspaceStateBenchmark
                 && pair.ImplementationOrder[1]
                     == NativeWorkspaceStateImplementation
                         .ExplicitStateWorkspace)
-                == pairs.Count / 2
+                == pairs.Length / 2
             && pairs.Count(pair =>
                 pair.ImplementationOrder[0]
                     == NativeWorkspaceStateImplementation
                         .ExplicitStateWorkspace
                 && pair.ImplementationOrder[1]
                     == NativeWorkspaceStateImplementation.ManagedArray)
-                == pairs.Count / 2
+                == pairs.Length / 2
             && pairs.All(pair =>
                 pair.ImplementationOrder[2]
                     == NativeWorkspaceStateImplementation
@@ -705,15 +697,15 @@ internal static class NativeWorkspaceStateBenchmark
         Task exitTask = process.WaitForExitAsync();
         if (await Task.WhenAny(
                 exitTask,
-                Task.Delay(TimeSpan.FromSeconds(60))) != exitTask)
+                Task.Delay(TimeSpan.FromSeconds(60))).ConfigureAwait(false) != exitTask)
         {
             process.Kill(entireProcessTree: true);
             throw new TimeoutException(
                 "The workspace pair worker exceeded 60 seconds.");
         }
 
-        string output = await outputTask;
-        string error = await errorTask;
+        string output = await outputTask.ConfigureAwait(false);
+        string error = await errorTask.ConfigureAwait(false);
         if (process.ExitCode != 0)
         {
             throw new InvalidOperationException(
@@ -740,9 +732,7 @@ internal static class NativeWorkspaceStateBenchmark
         if (!managed.Completed
             || !capturing.Completed
             || !explicitState.Completed
-            || managed.OutputSha256 != capturing.OutputSha256
-            || managed.OutputSha256 != explicitState.OutputSha256
-            || !managed.WorkerChecksums.SequenceEqual(
+            || !string.Equals(managed.OutputSha256, capturing.OutputSha256, StringComparison.Ordinal) || !string.Equals(managed.OutputSha256, explicitState.OutputSha256, StringComparison.Ordinal) || !managed.WorkerChecksums.SequenceEqual(
                 capturing.WorkerChecksums)
             || !managed.WorkerChecksums.SequenceEqual(
                 explicitState.WorkerChecksums))
@@ -762,11 +752,11 @@ internal static class NativeWorkspaceStateBenchmark
     }
 
     private static string ComputeOutputSha256(
-        IReadOnlyList<ulong> checksums)
+        ulong[] checksums)
     {
         byte[] bytes = new byte[checked(
-            checksums.Count * sizeof(ulong))];
-        for (int index = 0; index < checksums.Count; index++)
+            checksums.Length * sizeof(ulong))];
+        for (int index = 0; index < checksums.Length; index++)
         {
             BinaryPrimitives.WriteUInt64LittleEndian(
                 bytes.AsSpan(
@@ -806,7 +796,7 @@ internal static class NativeWorkspaceStateBenchmark
         ulong checksum,
         ReadOnlySpan<float> values)
     {
-        foreach (float value in values)
+        foreach (ref readonly float value in values)
         {
             checksum ^= unchecked(
                 (uint)BitConverter.SingleToInt32Bits(value));
@@ -859,19 +849,19 @@ internal static class NativeWorkspaceStateBenchmark
         NativeWorkspaceStateOptions options)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
-            options.MapCount);
+            options.MapCount, nameof(options));
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
-            options.MapSize);
+            options.MapSize, nameof(options));
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
-            options.WorkspaceLength);
+            options.WorkspaceLength, nameof(options));
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
-            options.WorkerCount);
+            options.WorkerCount, nameof(options));
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
-            options.SampleCount);
+            options.SampleCount, nameof(options));
         ArgumentOutOfRangeException.ThrowIfNegative(
-            options.WarmupCount);
+            options.WarmupCount, nameof(options));
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
-            options.MeasurementPassCount);
+            options.MeasurementPassCount, nameof(options));
         if ((options.SampleCount & 1) != 0)
         {
             throw new ArgumentOutOfRangeException(
@@ -917,7 +907,7 @@ internal static class NativeWorkspaceStateBenchmark
         string name) =>
         ReadOptionalOption(args, name)
         ?? throw new ArgumentException(
-            $"The required option {name} is missing.");
+            $"The required option {name} is missing.", nameof(args));
 
     private static string? ReadOptionalOption(
         string[] args,
@@ -925,7 +915,7 @@ internal static class NativeWorkspaceStateBenchmark
     {
         for (int index = 0; index < args.Length - 1; index++)
         {
-            if (args[index] == name)
+            if (string.Equals(args[index], name, StringComparison.Ordinal))
             {
                 return args[index + 1];
             }
@@ -1148,6 +1138,7 @@ internal static class NativeWorkspaceStateBenchmark
 
         public void Dispose() => _start.Dispose();
 
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "This boundary captures any failure to preserve cleanup and report the original error.")]
         private void Run()
         {
             try
@@ -1308,7 +1299,7 @@ internal static class NativeWorkspaceStateBenchmark
             return checksum;
         }
 
-        private bool VerifyCancellationCleanup(
+        private static bool VerifyCancellationCleanup(
             scoped in NativeWorkspace<float> workspace)
         {
             using CancellationTokenSource cancellation = new();
@@ -1364,6 +1355,7 @@ internal static class NativeWorkspaceStateBenchmark
                 / _options.WorkerCount);
     }
 
+    [StructLayout(LayoutKind.Sequential)]
     private readonly record struct HeightProcessState(
         long Seed,
         int BaseX,

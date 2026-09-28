@@ -4,6 +4,7 @@ using System.Text.Json.Serialization;
 
 namespace Supprocom.NativeAllocationManagement.Demos.VoxelChunkPipeline.SharedContract;
 
+[StructLayout(LayoutKind.Sequential)]
 public readonly record struct FaceRecord(
     int CellIndex,
     int BlockId,
@@ -13,10 +14,14 @@ public readonly record struct FaceRecord(
     int StageMask,
     int StageBytes);
 
+[StructLayout(LayoutKind.Sequential)]
 public readonly record struct Vertex(int X, int Y, int Z, int Face, int Corner, int BlockId);
 
+[StructLayout(LayoutKind.Sequential)]
 public readonly record struct PayloadSlice(int Offset, int Length, int Alignment, int StageMask, int BlockId, int CellIndex);
 
+// These fixed-size GPU staging buffers are byte containers, not equality values.
+#pragma warning disable CA1815
 [InlineArray(160)]
 public struct GpuStage160
 {
@@ -46,6 +51,7 @@ public struct GpuStage224
 {
     private byte _element0;
 }
+#pragma warning restore CA1815
 
 public ref struct GpuStageBuffers
 {
@@ -226,6 +232,9 @@ public readonly record struct SectionPrerenderDescriptor(
     int SectionBaseZ,
     int ContentTag);
 
+// VoxelCell is a packed mutable interop value; field offsets and direct writes are contractual.
+#pragma warning disable CA1815, CA1051
+[StructLayout(LayoutKind.Sequential)]
 public struct VoxelCell
 {
     public ushort BlockId;
@@ -235,7 +244,10 @@ public struct VoxelCell
     public int TransparentMask;
     public int Section;
 }
+#pragma warning restore CA1815, CA1051
 
+// Materialized output arrays are the voxel serialization contract.
+#pragma warning disable CA1819
 public readonly record struct OutputFixture(
     Vertex[] OpaqueVertices,
     int[] OpaqueIndices,
@@ -245,6 +257,7 @@ public readonly record struct OutputFixture(
     int[] TransparentIndices,
     PayloadSlice[] TransparentSlices,
     byte[] TransparentUpload);
+#pragma warning restore CA1819
 
 public readonly record struct CanonicalOutputSummary(
     [property: JsonIgnore] long ByteHash,
@@ -262,6 +275,8 @@ public readonly record struct CanonicalOutputSummary(
     long TransparentStagedBytes,
     string StrongHash = "");
 
+// Optional cell materialization is retained as an array in the evidence schema.
+#pragma warning disable CA1819
 public readonly record struct ChunkOutputSummary(
     int ChunkId,
     [property: JsonIgnore] long ByteHash,
@@ -277,6 +292,7 @@ public readonly record struct ChunkOutputSummary(
     string StrongInputHash = "",
     long InputCellCount = 0,
     CanonicalInputCell[]? InputCells = null);
+#pragma warning restore CA1819
 
 public readonly record struct NativeOwnerProfile(
     string Owner,
@@ -292,6 +308,7 @@ public readonly record struct NativeOwnerProfile(
     long TrimCalls,
     long RegrowthCount);
 
+[StructLayout(LayoutKind.Sequential)]
 public readonly record struct StreamResult(
     int FaceCount,
     int VertexCount,
@@ -299,6 +316,8 @@ public readonly record struct StreamResult(
     int StagedBytes,
     int EnabledStageBytes);
 
+// Optional cell materialization is retained as an array in the evidence schema.
+#pragma warning disable CA1819
 public readonly record struct ChunkResult(
     [property: JsonIgnore] long Digest,
     int OpaqueFaces,
@@ -340,6 +359,7 @@ public readonly record struct ChunkResult(
     public int Indices => OpaqueIndices + TransparentIndices;
     public int StagedBytes => OpaqueStagedBytes + TransparentStagedBytes;
 }
+#pragma warning restore CA1819
 
 public readonly record struct WorkerResult(PipelineResult Result);
 

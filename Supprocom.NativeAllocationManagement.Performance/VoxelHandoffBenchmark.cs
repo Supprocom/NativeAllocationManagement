@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Collections.ObjectModel;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -27,7 +28,7 @@ internal static class VoxelHandoffBenchmark
 
     internal static async Task<int> RunCommandAsync(string[] args)
     {
-        if (args[0] == "--voxel-handoff-worker")
+        if (string.Equals(args[0], "--voxel-handoff-worker", StringComparison.Ordinal))
         {
             VoxelHandoffImplementation implementation = Enum.Parse<VoxelHandoffImplementation>(
                 ReadRequiredOption(args, "--implementation"),
@@ -35,7 +36,7 @@ internal static class VoxelHandoffBenchmark
             VoxelHandoffBenchmarkOptions options = ParseOptions(args);
             VoxelHandoffWorkerEvidence evidence = await RunWorkerAsync(
                 implementation,
-                options);
+                options).ConfigureAwait(false);
             Console.WriteLine(JsonSerializer.Serialize(
                 evidence,
                 CompactJsonOptions));
@@ -45,7 +46,7 @@ internal static class VoxelHandoffBenchmark
         VoxelHandoffBenchmarkOptions benchmarkOptions = ParseOptions(args);
         string? outputPath = ReadOptionalOption(args, "--output");
         VoxelHandoffBenchmarkReport report = await RunPairedAsync(
-            benchmarkOptions);
+            benchmarkOptions).ConfigureAwait(false);
         string json = JsonSerializer.Serialize(
             report,
             IndentedJsonOptions);
@@ -58,7 +59,7 @@ internal static class VoxelHandoffBenchmark
                 Directory.CreateDirectory(directory);
             }
 
-            await File.WriteAllTextAsync(fullPath, json);
+            await File.WriteAllTextAsync(fullPath, json).ConfigureAwait(false);
         }
 
         Console.WriteLine(json);
@@ -78,13 +79,13 @@ internal static class VoxelHandoffBenchmark
                 sampleIndex);
             VoxelHandoffWorkerEvidence firstEvidence = await RunIsolatedWorkerAsync(
                 first,
-                options);
+                options).ConfigureAwait(false);
             VoxelHandoffImplementation second = first == VoxelHandoffImplementation.Managed
                 ? VoxelHandoffImplementation.Native
                 : VoxelHandoffImplementation.Managed;
             VoxelHandoffWorkerEvidence secondEvidence = await RunIsolatedWorkerAsync(
                 second,
-                options);
+                options).ConfigureAwait(false);
             VoxelHandoffWorkerEvidence managed = first == VoxelHandoffImplementation.Managed
                 ? firstEvidence
                 : secondEvidence;
@@ -110,8 +111,7 @@ internal static class VoxelHandoffBenchmark
         long logicalBytes = pairs[0].Managed.LogicalBytes;
         bool parity = pairs.All(pair => pair.Managed.ExactParity
             && pair.Native.ExactParity
-            && pair.Managed.ExactOutputSha256 == pair.Native.ExactOutputSha256
-            && pair.Managed.Checksum == pair.Native.Checksum);
+            && string.Equals(pair.Managed.ExactOutputSha256, pair.Native.ExactOutputSha256, StringComparison.Ordinal) && pair.Managed.Checksum == pair.Native.Checksum);
         bool balancedOrder = pairs.Count(pair => pair.FirstImplementation == VoxelHandoffImplementation.Managed)
             == options.SampleCount / 2
             && pairs.Count(pair => pair.FirstImplementation == VoxelHandoffImplementation.Native)
@@ -150,20 +150,21 @@ internal static class VoxelHandoffBenchmark
             SHA256.HashData(exactOutput));
         long perItemChecksum = ConsumeUpload(exactOutput);
         bool exactParity;
-        NativeConcurrentPool<uint>? pool = null;
+        using NativeConcurrentPool<uint>? pool =
+            implementation == VoxelHandoffImplementation.Native
+                ? new NativeConcurrentPool<uint>(
+                    options.WordCount,
+                    NativeMemoryReturn.ToNativeMemory)
+                : null;
         TransferInitializer? initializer = null;
         if (implementation == VoxelHandoffImplementation.Native)
         {
-            pool = new NativeConcurrentPool<uint>(
-                options.WordCount,
-                NativeMemoryReturn.ToNativeMemory);
             initializer = new TransferInitializer(source);
-            NativeTransfer<uint> verification = pool.RentTransferable(
+            using NativeTransfer<uint> verification = pool!.RentTransferable(
                 options.WordCount,
                 initializer.Action);
             exactParity = verification.Read(view =>
                 MemoryMarshal.AsBytes(view.AsSpan()).SequenceEqual(exactOutput));
-            verification.Dispose();
         }
         else
         {
@@ -173,12 +174,12 @@ internal static class VoxelHandoffBenchmark
         setupClock.Stop();
         Stopwatch warmupClock = Stopwatch.StartNew();
         BatchResult warmup = implementation == VoxelHandoffImplementation.Managed
-            ? await RunManagedBatchAsync(source, options.WarmupIterations)
+            ? await RunManagedBatchAsync(source, options.WarmupIterations).ConfigureAwait(false)
             : await RunNativeBatchAsync(
                 pool!,
                 initializer!,
                 options.WordCount,
-                options.WarmupIterations);
+                options.WarmupIterations).ConfigureAwait(false);
         warmupClock.Stop();
         long expectedWarmupChecksum = unchecked(
             perItemChecksum * options.WarmupIterations);
@@ -196,12 +197,12 @@ internal static class VoxelHandoffBenchmark
         long workingSetBefore = process.WorkingSet64;
         NativeOwnerStatistics statisticsBefore = pool?.GetStatistics() ?? default;
         BatchResult measured = implementation == VoxelHandoffImplementation.Managed
-            ? await RunManagedBatchAsync(source, options.Iterations)
+            ? await RunManagedBatchAsync(source, options.Iterations).ConfigureAwait(false)
             : await RunNativeBatchAsync(
                 pool!,
                 initializer!,
                 options.WordCount,
-                options.Iterations);
+                options.Iterations).ConfigureAwait(false);
         process.Refresh();
         long workingSetAfter = process.WorkingSet64;
         long managedAllocated = GC.GetTotalAllocatedBytes(precise: true) - allocatedBefore;
@@ -213,7 +214,6 @@ internal static class VoxelHandoffBenchmark
         }
 
         NativeOwnerStatistics statistics = pool?.GetStatistics() ?? default;
-        pool?.Dispose();
         long logicalBytes = checked(
             (long)options.WordCount
             * sizeof(uint)
@@ -344,21 +344,21 @@ internal static class VoxelHandoffBenchmark
         {
             long checksum = 0;
             ready.SetResult();
-            await foreach (byte[] upload in channel.Reader.ReadAllAsync())
+            await foreach (byte[] upload in channel.Reader.ReadAllAsync().ConfigureAwait(false))
             {
                 checksum = unchecked(checksum + ConsumeUpload(upload));
             }
 
             return checksum;
         });
-        await ready.Task;
+        await ready.Task.ConfigureAwait(false);
         Stopwatch clock = Stopwatch.StartNew();
         try
         {
             for (int iteration = 0; iteration < iterations; iteration++)
             {
                 await channel.Writer.WriteAsync(
-                    CreateManagedUpload(source));
+                    CreateManagedUpload(source)).ConfigureAwait(false);
             }
         }
         finally
@@ -366,7 +366,7 @@ internal static class VoxelHandoffBenchmark
             channel.Writer.TryComplete();
         }
 
-        long result = await consumer;
+        long result = await consumer.ConfigureAwait(false);
         clock.Stop();
         return new BatchResult(
             result,
@@ -392,7 +392,7 @@ internal static class VoxelHandoffBenchmark
         Task<long> consumer = Task.Run(async () =>
         {
             ready.SetResult();
-            await foreach (NativeTransfer<uint> transfer in channel.Reader.ReadAllAsync())
+            await foreach (NativeTransfer<uint> transfer in channel.Reader.ReadAllAsync().ConfigureAwait(false))
             {
                 try
                 {
@@ -406,7 +406,7 @@ internal static class VoxelHandoffBenchmark
 
             return nativeConsumer.Checksum;
         });
-        await ready.Task;
+        await ready.Task.ConfigureAwait(false);
         Stopwatch clock = Stopwatch.StartNew();
         try
         {
@@ -416,7 +416,7 @@ internal static class VoxelHandoffBenchmark
                     wordCount,
                     initializer.Action);
                 await channel.Writer.WriteAsync(
-                    NativeTransfer<uint>.Move(ref source));
+                    NativeTransfer<uint>.Move(ref source)).ConfigureAwait(false);
             }
         }
         finally
@@ -424,7 +424,7 @@ internal static class VoxelHandoffBenchmark
             channel.Writer.TryComplete();
         }
 
-        long result = await consumer;
+        long result = await consumer.ConfigureAwait(false);
         clock.Stop();
         return new BatchResult(
             result,
@@ -436,7 +436,7 @@ internal static class VoxelHandoffBenchmark
         if (upload.Length < 32)
         {
             long small = upload.Length;
-            foreach (byte value in upload)
+            foreach (ref readonly byte value in upload)
             {
                 small = unchecked((small * 397) ^ value);
             }
@@ -495,15 +495,15 @@ internal static class VoxelHandoffBenchmark
         Task exitTask = process.WaitForExitAsync();
         if (await Task.WhenAny(
             exitTask,
-            Task.Delay(TimeSpan.FromSeconds(60))) != exitTask)
+            Task.Delay(TimeSpan.FromSeconds(60))).ConfigureAwait(false) != exitTask)
         {
             process.Kill(entireProcessTree: true);
             throw new TimeoutException(
                 $"The {implementation} Voxel handoff worker exceeded 60 seconds.");
         }
 
-        string output = await outputTask;
-        string error = await errorTask;
+        string output = await outputTask.ConfigureAwait(false);
+        string error = await errorTask.ConfigureAwait(false);
         if (process.ExitCode != 0)
         {
             throw new InvalidOperationException(
@@ -518,7 +518,7 @@ internal static class VoxelHandoffBenchmark
     }
 
     private static void AddWorkerArguments(
-        ICollection<string> arguments,
+        Collection<string> arguments,
         VoxelHandoffImplementation implementation,
         VoxelHandoffBenchmarkOptions options)
     {
@@ -550,8 +550,7 @@ internal static class VoxelHandoffBenchmark
             || native.Iterations != options.Iterations
             || !managed.ExactParity
             || !native.ExactParity
-            || managed.ExactOutputSha256 != native.ExactOutputSha256
-            || managed.Checksum != native.Checksum)
+            || !string.Equals(managed.ExactOutputSha256, native.ExactOutputSha256, StringComparison.Ordinal) || managed.Checksum != native.Checksum)
         {
             throw new InvalidDataException(
                 "The paired Voxel handoff evidence is not equivalent.");
@@ -572,10 +571,10 @@ internal static class VoxelHandoffBenchmark
 
     private static void ValidateOptions(VoxelHandoffBenchmarkOptions options)
     {
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(options.WordCount);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(options.Iterations);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(options.WarmupIterations);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(options.SampleCount);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(options.WordCount, nameof(options));
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(options.Iterations, nameof(options));
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(options.WarmupIterations, nameof(options));
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(options.SampleCount, nameof(options));
         if ((options.SampleCount & 1) != 0)
         {
             throw new ArgumentException(
@@ -609,7 +608,7 @@ internal static class VoxelHandoffBenchmark
     {
         for (int index = 0; index < args.Length - 1; index++)
         {
-            if (args[index] == name)
+            if (string.Equals(args[index], name, StringComparison.Ordinal))
             {
                 return args[index + 1];
             }
@@ -673,6 +672,7 @@ internal static class VoxelHandoffBenchmark
         }
     }
 
+    [StructLayout(LayoutKind.Sequential)]
     private readonly record struct BatchResult(
         long Checksum,
         double ElapsedMilliseconds);

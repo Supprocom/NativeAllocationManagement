@@ -84,11 +84,11 @@ public sealed class NativeRegionManagedAllocationAnalyzerTests
                 + (line.StartLinePosition.Character + 1);
             Assert.Equal(DiagnosticSeverity.Warning, warning.Severity);
             Assert.True(warning.Location.IsInSource);
-            Assert.Contains("<in-memory>:", warning.GetMessage(), StringComparison.Ordinal);
+            Assert.Contains("<in-memory>:", warning.GetMessage(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal);
             Assert.EndsWith(sourceSuffix, warning.Properties["NAM.Source"]!, StringComparison.Ordinal);
             Assert.Contains(
                 warning.Properties["NAM.AllocationSource"]!,
-                warning.GetMessage(),
+                warning.GetMessage(System.Globalization.CultureInfo.InvariantCulture),
                 StringComparison.Ordinal);
         });
     }
@@ -189,8 +189,8 @@ public sealed class NativeRegionManagedAllocationAnalyzerTests
         Diagnostic[] warnings = ManagedAllocationDiagnostics(diagnostics);
         AssertNoAnalyzerFailures(diagnostics);
         Assert.Equal(2, warnings.Length);
-        Assert.DoesNotContain("NAM1006", AnalyzerContractTests.NativeDiagnostics(diagnostics));
-        Assert.DoesNotContain("NAM1010", AnalyzerContractTests.NativeDiagnostics(diagnostics));
+        Assert.DoesNotContain("NAM1006", AnalyzerContractTests.NativeDiagnostics(diagnostics), StringComparer.Ordinal);
+        Assert.DoesNotContain("NAM1010", AnalyzerContractTests.NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -225,7 +225,7 @@ public sealed class NativeRegionManagedAllocationAnalyzerTests
         Diagnostic[] warnings = ManagedAllocationDiagnostics(diagnostics);
         AssertNoAnalyzerFailures(diagnostics);
         Assert.Equal(3, warnings.Length);
-        Assert.DoesNotContain("NAM1006", AnalyzerContractTests.NativeDiagnostics(diagnostics));
+        Assert.DoesNotContain("NAM1006", AnalyzerContractTests.NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -242,9 +242,9 @@ public sealed class NativeRegionManagedAllocationAnalyzerTests
             """,
             OutputKind.ConsoleApplication);
 
-        Diagnostic warning = Assert.Single(ManagedAllocationDiagnostics(diagnostics));
+        Diagnostic warning = SingleExpected(ManagedAllocationDiagnostics(diagnostics));
         AssertNoAnalyzerFailures(diagnostics);
-        Assert.Contains("class object creation", warning.GetMessage(), StringComparison.Ordinal);
+        Assert.Contains("class object creation", warning.GetMessage(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -276,7 +276,7 @@ public sealed class NativeRegionManagedAllocationAnalyzerTests
         AssertNoAnalyzerFailures(diagnostics);
         Assert.Equal(4, warnings.Length);
         Assert.Equal(2, warnings.Count(warning =>
-            warning.GetMessage().Contains("source method", StringComparison.Ordinal)));
+            warning.GetMessage(System.Globalization.CultureInfo.InvariantCulture).Contains("source method", StringComparison.Ordinal)));
         AssertKind(warnings, "delegate creation");
         AssertKind(warnings, "capturing lambda closure creation");
     }
@@ -536,13 +536,13 @@ public sealed class NativeRegionManagedAllocationAnalyzerTests
             }
             """);
 
-        Diagnostic warning = Assert.Single(
+        Diagnostic warning = SingleExpected(
             ManagedAllocationDiagnostics(diagnostics));
         AssertNoAnalyzerFailures(diagnostics);
         Assert.Equal(
             "new object()",
-            warning.Location.SourceTree!.GetText()
-                .ToString(warning.Location.SourceSpan));
+(await warning.Location.SourceTree!.GetTextAsync()
+).ToString(warning.Location.SourceSpan));
     }
 
     [Fact]
@@ -724,13 +724,13 @@ public sealed class NativeRegionManagedAllocationAnalyzerTests
             }
             """);
 
-        Diagnostic warning = Assert.Single(
+        Diagnostic warning = SingleExpected(
             ManagedAllocationDiagnostics(diagnostics));
         AssertNoAnalyzerFailures(diagnostics);
         Assert.Equal(
             "new object()",
-            warning.Location.SourceTree!.GetText()
-                .ToString(warning.Location.SourceSpan));
+(await warning.Location.SourceTree!.GetTextAsync()
+).ToString(warning.Location.SourceSpan));
     }
 
     [Fact]
@@ -793,13 +793,13 @@ public sealed class NativeRegionManagedAllocationAnalyzerTests
             }
             """);
 
-        Diagnostic warning = Assert.Single(
+        Diagnostic warning = SingleExpected(
             ManagedAllocationDiagnostics(diagnostics));
         AssertNoAnalyzerFailures(diagnostics);
         Assert.Equal(
             "new object()",
-            warning.Location.SourceTree!.GetText()
-                .ToString(warning.Location.SourceSpan));
+(await warning.Location.SourceTree!.GetTextAsync()
+).ToString(warning.Location.SourceSpan));
     }
 
     [Fact]
@@ -829,13 +829,13 @@ public sealed class NativeRegionManagedAllocationAnalyzerTests
             }
             """);
 
-        Diagnostic warning = Assert.Single(
+        Diagnostic warning = SingleExpected(
             ManagedAllocationDiagnostics(diagnostics));
         AssertNoAnalyzerFailures(diagnostics);
         Assert.Equal(
             "new byte[1]",
-            warning.Location.SourceTree!.GetText()
-                .ToString(warning.Location.SourceSpan));
+(await warning.Location.SourceTree!.GetTextAsync()
+).ToString(warning.Location.SourceSpan));
     }
 
     [Fact]
@@ -928,10 +928,10 @@ public sealed class NativeRegionManagedAllocationAnalyzerTests
         Diagnostic[] warnings = ManagedAllocationDiagnostics(diagnostics);
         AssertNoAnalyzerFailures(diagnostics);
         Assert.Equal(2, warnings.Length);
-        Assert.Single(warnings, warning => warning.GetMessage().Contains(
+        SingleExpected(warnings, warning => warning.GetMessage(System.Globalization.CultureInfo.InvariantCulture).Contains(
             "async state-machine creation",
             StringComparison.Ordinal));
-        Assert.Single(warnings, warning => warning.GetMessage().Contains(
+        SingleExpected(warnings, warning => warning.GetMessage(System.Globalization.CultureInfo.InvariantCulture).Contains(
             "iterator state-machine creation",
             StringComparison.Ordinal));
     }
@@ -1013,7 +1013,7 @@ public sealed class NativeRegionManagedAllocationAnalyzerTests
         AssertNoAnalyzerFailures(diagnostics);
         Assert.Equal(3, warnings.Length);
         Assert.All(warnings, warning =>
-            Assert.Contains("source method", warning.GetMessage(), StringComparison.Ordinal));
+            Assert.Contains("source method", warning.GetMessage(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal));
     }
 
     [Fact]
@@ -1065,7 +1065,7 @@ public sealed class NativeRegionManagedAllocationAnalyzerTests
         AssertNoAnalyzerFailures(diagnostics);
         Assert.Equal(3, warnings.Length);
         Assert.All(warnings, warning =>
-            Assert.Contains("source method", warning.GetMessage(), StringComparison.Ordinal));
+            Assert.Contains("source method", warning.GetMessage(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal));
     }
 
     [Fact]
@@ -1121,7 +1121,7 @@ public sealed class NativeRegionManagedAllocationAnalyzerTests
 
         AssertNoAnalyzerFailures(diagnostics);
         Assert.Empty(ManagedAllocationDiagnostics(diagnostics));
-        Assert.Contains("NAM1001", AnalyzerContractTests.NativeDiagnostics(diagnostics));
+        Assert.Contains("NAM1001", AnalyzerContractTests.NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -1142,7 +1142,7 @@ public sealed class NativeRegionManagedAllocationAnalyzerTests
             """,
             treatWarningsAsErrors: true);
 
-        Diagnostic error = Assert.Single(ManagedAllocationDiagnostics(diagnostics));
+        Diagnostic error = SingleExpected(ManagedAllocationDiagnostics(diagnostics));
         Assert.Equal(DiagnosticSeverity.Error, error.Severity);
     }
 
@@ -1150,7 +1150,7 @@ public sealed class NativeRegionManagedAllocationAnalyzerTests
         ImmutableArray<Diagnostic> diagnostics)
     {
         return diagnostics
-            .Where(diagnostic => diagnostic.Id == "NAM1035")
+            .Where(diagnostic => string.Equals(diagnostic.Id, "NAM1035", StringComparison.Ordinal))
             .OrderBy(diagnostic => diagnostic.Location.SourceSpan.Start)
             .ToArray();
     }
@@ -1160,12 +1160,12 @@ public sealed class NativeRegionManagedAllocationAnalyzerTests
         string kind)
     {
         Assert.Contains(diagnostics, diagnostic =>
-            diagnostic.GetMessage().Contains(kind, StringComparison.Ordinal));
+            diagnostic.GetMessage(System.Globalization.CultureInfo.InvariantCulture).Contains(kind, StringComparison.Ordinal));
     }
 
     private static void AssertNoAnalyzerFailures(
         ImmutableArray<Diagnostic> diagnostics)
     {
-        Assert.DoesNotContain(diagnostics, diagnostic => diagnostic.Id == "AD0001");
+        Assert.DoesNotContain(diagnostics, diagnostic => string.Equals(diagnostic.Id, "AD0001", StringComparison.Ordinal));
     }
 }

@@ -1,0 +1,2 @@
+# BinaryFormatter cannot safely deserialize untrusted input.
+T:System.Runtime.Serialization.Formatters.Binary.BinaryFormatter; Use an explicit data contract and safe serializer.

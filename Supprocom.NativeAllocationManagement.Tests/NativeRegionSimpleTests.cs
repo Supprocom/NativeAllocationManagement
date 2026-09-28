@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Runtime.InteropServices;
 using Supprocom.NativeAllocationManagement;
 
 namespace Supprocom.NativeAllocationManagement.Tests;
@@ -93,6 +94,7 @@ public sealed class NativeRegionSimpleTests
     }
 
     [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The test intentionally captures arbitrary callback or worker failures for lifecycle assertions.")]
     public void FailedInitializationRewindsTheCurrentCursor()
     {
         NativeMemoryTestHooks.Reset();
@@ -124,6 +126,7 @@ public sealed class NativeRegionSimpleTests
     }
 
     [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The test intentionally captures arbitrary callback or worker failures for lifecycle assertions.")]
     public void FailedZeroLengthInitializationPreservesTheCurrentCursor()
     {
         NativeMemoryTestHooks.Reset();
@@ -181,6 +184,7 @@ public sealed class NativeRegionSimpleTests
     }
 
     [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The test intentionally captures arbitrary callback or worker failures for lifecycle assertions.")]
     public void KernelRejectsAccessFromAnotherThread()
     {
         NativeRegionKernel kernel = new(
@@ -309,15 +313,15 @@ public sealed class NativeRegionSimpleTests
     {
         MethodInfo[] methods = typeof(NativeRegion).GetMethods(
             BindingFlags.Public | BindingFlags.Instance);
-        MethodInfo lease = Assert.Single(
+        MethodInfo lease = SingleExpected(
             methods,
-            method => method.Name == nameof(NativeRegion.Lease));
+            method => string.Equals(method.Name, nameof(NativeRegion.Lease), StringComparison.Ordinal));
         Type element = lease.GetGenericArguments()[0];
 
         Assert.Contains(
             element.GetCustomAttributesData(),
-            attribute => attribute.AttributeType.Name
-                == "IsUnmanagedAttribute");
+            attribute => string.Equals(attribute.AttributeType.Name
+, "IsUnmanagedAttribute", StringComparison.Ordinal));
         Assert.DoesNotContain(
             methods,
             method => method.Name is
@@ -400,6 +404,7 @@ public sealed class NativeRegionSimpleTests
         throw new InvalidOperationException(
             "The test initializer failed before a write.");
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The test intentionally captures arbitrary callback or worker failures for lifecycle assertions.")]
     private static Exception ReadAfterDispose(Local<int> local)
     {
         try
@@ -415,6 +420,7 @@ public sealed class NativeRegionSimpleTests
             "The disposed Local remained active.");
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The test intentionally captures arbitrary callback or worker failures for lifecycle assertions.")]
     private static Exception ReadAfterDispose(Local<long> local)
     {
         try
@@ -431,21 +437,9 @@ public sealed class NativeRegionSimpleTests
     }
 
     private static string FindRepositoryRoot()
-    {
-        DirectoryInfo? directory = new(AppContext.BaseDirectory);
-        while (directory is not null
-            && !File.Exists(Path.Combine(
-                directory.FullName,
-                "Supprocom.NativeAllocationManagement.slnx")))
-        {
-            directory = directory.Parent;
-        }
+        => RepositoryTestPaths.Root;
 
-        return directory?.FullName
-            ?? throw new DirectoryNotFoundException(
-                "The repository root was not found.");
-    }
-
+    [StructLayout(LayoutKind.Sequential)]
     private readonly record struct SampleCell(
         long Wide,
         int Narrow);

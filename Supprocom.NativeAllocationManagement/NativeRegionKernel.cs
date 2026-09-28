@@ -139,6 +139,7 @@ internal sealed unsafe class NativeRegionKernel
             _freshSegmentAllocationCount);
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA1816", Justification = "Internal region-kernel disposal disarms its emergency finalizer; the outer owner exposes disposal.")]
     internal void Dispose()
     {
         if (Environment.CurrentManagedThreadId != _ownerThreadId)
@@ -435,6 +436,8 @@ internal sealed unsafe class NativeRegionKernel
         return checked(value + mask) & ~mask;
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "MA0055", Justification = "Emergency native-memory cleanup supplements mandatory deterministic disposal.")]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "An emergency finalizer must never let cleanup exceptions terminate the process.")]
     ~NativeRegionKernel()
     {
         try
@@ -456,6 +459,7 @@ internal sealed unsafe class NativeRegionKernel
         internal int Detached;
     }
 
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
     private readonly struct RegionReservation
     {
         internal RegionReservation(

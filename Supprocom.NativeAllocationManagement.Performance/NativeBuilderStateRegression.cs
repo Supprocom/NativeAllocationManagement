@@ -22,7 +22,7 @@ internal static class NativeBuilderStateRegression
 
     internal static async Task<int> RunCommandAsync(string[] args)
     {
-        if (args[0] == "--native-builder-state-worker")
+        if (string.Equals(args[0], "--native-builder-state-worker", StringComparison.Ordinal))
         {
             StateBuilderImplementation implementation = Enum.Parse<
                 StateBuilderImplementation>(
@@ -40,7 +40,7 @@ internal static class NativeBuilderStateRegression
                     : 3;
         }
 
-        StateBuilderReport report = await RunBalancedAsync();
+        StateBuilderReport report = await RunBalancedAsync().ConfigureAwait(false);
         string json = JsonSerializer.Serialize(report, JsonOptions);
         string? output = ReadOptionalOption(args, "--output");
         if (output is not null)
@@ -52,7 +52,7 @@ internal static class NativeBuilderStateRegression
                 Directory.CreateDirectory(directory);
             }
 
-            await File.WriteAllTextAsync(fullPath, json);
+            await File.WriteAllTextAsync(fullPath, json).ConfigureAwait(false);
         }
 
         Console.WriteLine(json);
@@ -78,7 +78,7 @@ internal static class NativeBuilderStateRegression
             for (int position = 0; position < order.Length; position++)
             {
                 results[position] = await RunIsolatedWorkerAsync(
-                    order[position]);
+                    order[position]).ConfigureAwait(false);
             }
 
             StateBuilderWorkerEvidence managed = results.Single(
@@ -119,10 +119,9 @@ internal static class NativeBuilderStateRegression
             sample.ManagedArray.ExactParity
             && sample.CapturingBorrow.ExactParity
             && sample.StateBorrow.ExactParity
-            && sample.ManagedArray.OutputSha256
-                == sample.CapturingBorrow.OutputSha256
-            && sample.ManagedArray.OutputSha256
-                == sample.StateBorrow.OutputSha256);
+            && string.Equals(sample.ManagedArray.OutputSha256
+, sample.CapturingBorrow.OutputSha256, StringComparison.Ordinal) && string.Equals(sample.ManagedArray.OutputSha256
+, sample.StateBorrow.OutputSha256, StringComparison.Ordinal));
         bool balanced = Enum.GetValues<StateBuilderImplementation>()
             .All(implementation =>
                 samples.Count(sample =>
@@ -150,10 +149,9 @@ internal static class NativeBuilderStateRegression
             sample.StateBorrow.CallbackAllocatedBytes == 0);
         bool binaryIdentity = samples.All(sample =>
             sample.ManagedArray.SourceCommit.Length == 40
-            && sample.ManagedArray.SourceCommit
-                == sample.CapturingBorrow.SourceCommit
-            && sample.ManagedArray.SourceCommit
-                == sample.StateBorrow.SourceCommit);
+            && string.Equals(sample.ManagedArray.SourceCommit
+, sample.CapturingBorrow.SourceCommit, StringComparison.Ordinal) && string.Equals(sample.ManagedArray.SourceCommit
+, sample.StateBorrow.SourceCommit, StringComparison.Ordinal));
         bool gatePassed = EvaluateGate(
             parity,
             balanced,
@@ -228,11 +226,9 @@ internal static class NativeBuilderStateRegression
         long workingSetBefore = process.WorkingSet64;
         StateBuilderExecution[] measurements =
             new StateBuilderExecution[MeasurementIterations];
-        for (int iteration = 0;
-            iteration < measurements.Length;
-            iteration++)
+        foreach (ref StateBuilderExecution measurement in measurements.AsSpan())
         {
-            measurements[iteration] = RunExecution(
+            measurement = RunExecution(
                 implementation,
                 TotalWords,
                 ChunkCount);
@@ -341,7 +337,7 @@ internal static class NativeBuilderStateRegression
                 measurement.TotalBatchCount != first.TotalBatchCount
                 || measurement.MaximumBatchCount
                     != first.MaximumBatchCount
-                || measurement.OutputSha256 != first.OutputSha256))
+                || !string.Equals(measurement.OutputSha256, first.OutputSha256, StringComparison.Ordinal)))
         {
             throw new InvalidOperationException(
                 "The repeated state builder measurements changed their work or output.");
@@ -727,15 +723,15 @@ internal static class NativeBuilderStateRegression
         Task exitTask = process.WaitForExitAsync();
         if (await Task.WhenAny(
                 exitTask,
-                Task.Delay(TimeSpan.FromSeconds(60))) != exitTask)
+                Task.Delay(TimeSpan.FromSeconds(60))).ConfigureAwait(false) != exitTask)
         {
             process.Kill(entireProcessTree: true);
             throw new TimeoutException(
                 "The state builder benchmark worker exceeded 60 seconds.");
         }
 
-        string output = await outputTask;
-        string error = await errorTask;
+        string output = await outputTask.ConfigureAwait(false);
+        string error = await errorTask.ConfigureAwait(false);
         if (process.ExitCode != 0)
         {
             throw new InvalidOperationException(
@@ -759,8 +755,7 @@ internal static class NativeBuilderStateRegression
             || managed.ChunkCount != state.ChunkCount
             || managed.TotalBatchCount != capturing.TotalBatchCount
             || managed.TotalBatchCount != state.TotalBatchCount
-            || managed.OutputSha256 != capturing.OutputSha256
-            || managed.OutputSha256 != state.OutputSha256)
+            || !string.Equals(managed.OutputSha256, capturing.OutputSha256, StringComparison.Ordinal) || !string.Equals(managed.OutputSha256, state.OutputSha256, StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
                 "The state builder sample used different work or output.");
@@ -790,7 +785,7 @@ internal static class NativeBuilderStateRegression
         string name) =>
         ReadOptionalOption(args, name)
         ?? throw new ArgumentException(
-            $"Missing required option {name}.");
+            $"Missing required option {name}.", nameof(args));
 
     private static string? ReadOptionalOption(
         string[] args,
@@ -798,7 +793,7 @@ internal static class NativeBuilderStateRegression
     {
         for (int index = 0; index < args.Length - 1; index++)
         {
-            if (args[index] == name)
+            if (string.Equals(args[index], name, StringComparison.Ordinal))
             {
                 return args[index + 1];
             }
@@ -810,11 +805,13 @@ internal static class NativeBuilderStateRegression
     private static bool HasOption(string[] args, string name) =>
         args.Contains(name, StringComparer.Ordinal);
 
+    [StructLayout(LayoutKind.Sequential)]
     private readonly record struct ChunkState(
         int GlobalStart,
         int WordCount,
         int BatchCount);
 
+    [StructLayout(LayoutKind.Sequential)]
     private readonly record struct BatchState(
         int GlobalStart,
         int Count);

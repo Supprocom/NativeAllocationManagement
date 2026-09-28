@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.Json;
 
@@ -22,7 +23,7 @@ internal static class NativeWorkspaceWorkerRegression
         Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
         await File.WriteAllTextAsync(
             fullPath,
-            JsonSerializer.Serialize(report, JsonOptions));
+            JsonSerializer.Serialize(report, JsonOptions)).ConfigureAwait(false);
         Console.WriteLine(JsonSerializer.Serialize(report, JsonOptions));
         return report.Passed ? 0 : 3;
     }
@@ -72,9 +73,7 @@ internal static class NativeWorkspaceWorkerRegression
                 NativeMemoryTestHooks.Snapshot();
 
             bool balancedOrder = IsBalancedOrder(samples);
-            bool exactParity = managedHash == persistentHash
-                && managedHash == transientHash
-                && samples.Select(static sample => sample.Checksum)
+            bool exactParity = string.Equals(managedHash, persistentHash, StringComparison.Ordinal) && string.Equals(managedHash, transientHash, StringComparison.Ordinal) && samples.Select(static sample => sample.Checksum)
                     .Distinct()
                     .Count() == 1;
             bool zeroTimedPersistentGrowth = samples
@@ -442,6 +441,7 @@ internal static class NativeWorkspaceWorkerRegression
         public void Dispose() => _workspace.Dispose();
     }
 
+    [StructLayout(LayoutKind.Sequential)]
     private readonly record struct WorkspaceBuildState(
         int Build,
         ulong Checksum);

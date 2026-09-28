@@ -257,8 +257,8 @@ internal sealed class NativeRegionManagedAllocationAnalysis
             && SymbolEqualityComparer.Default.Equals(
                 definition.ContainingAssembly,
                 _runtimeAssembly)
-            && definition.ContainingNamespace.ToDisplayString()
-                == "Supprocom.NativeAllocationManagement";
+            && string.Equals(definition.ContainingNamespace.ToDisplayString()
+, "Supprocom.NativeAllocationManagement", StringComparison.Ordinal);
     }
 
     private bool IsCanonicalAllocation(IMethodSymbol method)
@@ -313,11 +313,7 @@ internal sealed class NativeRegionManagedAllocationAnalysis
 
             try
             {
-                return ResolveReachingDelegateSources(
-                    localReference.Local,
-                    localReference.Syntax,
-                    cancellationToken,
-                    activeResolutions);
+                return ResolveReachingDelegateSources(localReference.Local, localReference.Syntax, activeResolutions, cancellationToken);
             }
             finally
             {
@@ -328,11 +324,7 @@ internal sealed class NativeRegionManagedAllocationAnalysis
         return [];
     }
 
-    private ImmutableArray<IMethodSymbol> ResolveReachingDelegateSources(
-        ILocalSymbol local,
-        SyntaxNode useSyntax,
-        CancellationToken cancellationToken,
-        HashSet<ISymbol> activeResolutions)
+    private ImmutableArray<IMethodSymbol> ResolveReachingDelegateSources(ILocalSymbol local, SyntaxNode useSyntax, HashSet<ISymbol> activeResolutions, CancellationToken cancellationToken)
     {
         SemanticModel model = _compilation.GetSemanticModel(
             useSyntax.SyntaxTree);
@@ -376,14 +368,7 @@ internal sealed class NativeRegionManagedAllocationAnalysis
                 DelegateFlowState? output = input?.Clone();
                 if (output is not null)
                 {
-                    ApplyBlockMutations(
-                        block,
-                        output,
-                        local,
-                        model,
-                        int.MaxValue,
-                        cancellationToken,
-                        activeResolutions);
+                    ApplyBlockMutations(block, output, local, model, int.MaxValue, activeResolutions, cancellationToken);
                 }
 
                 if (!DelegateFlowState.AreEqual(
@@ -402,14 +387,7 @@ internal sealed class NativeRegionManagedAllocationAnalysis
         }
 
         DelegateFlowState reaching = state.Clone();
-        ApplyBlockMutations(
-            useBlock,
-            reaching,
-            local,
-            model,
-            useSyntax.SpanStart,
-            cancellationToken,
-            activeResolutions);
+        ApplyBlockMutations(useBlock, reaching, local, model, useSyntax.SpanStart, activeResolutions, cancellationToken);
         if (reaching.HasUnknownSource)
         {
             return [];
@@ -517,48 +495,20 @@ internal sealed class NativeRegionManagedAllocationAnalysis
         return merged;
     }
 
-    private void ApplyBlockMutations(
-        BasicBlock block,
-        DelegateFlowState state,
-        ILocalSymbol local,
-        SemanticModel model,
-        int beforePosition,
-        CancellationToken cancellationToken,
-        HashSet<ISymbol> activeResolutions)
+    private void ApplyBlockMutations(BasicBlock block, DelegateFlowState state, ILocalSymbol local, SemanticModel model, int beforePosition, HashSet<ISymbol> activeResolutions, CancellationToken cancellationToken)
     {
         foreach (IOperation operation in block.Operations)
         {
-            ApplyOperationMutations(
-                operation,
-                state,
-                local,
-                model,
-                beforePosition,
-                cancellationToken,
-                activeResolutions);
+            ApplyOperationMutations(operation, state, local, model, beforePosition, activeResolutions, cancellationToken);
         }
 
         if (block.BranchValue is not null)
         {
-            ApplyOperationMutations(
-                block.BranchValue,
-                state,
-                local,
-                model,
-                beforePosition,
-                cancellationToken,
-                activeResolutions);
+            ApplyOperationMutations(block.BranchValue, state, local, model, beforePosition, activeResolutions, cancellationToken);
         }
     }
 
-    private void ApplyOperationMutations(
-        IOperation root,
-        DelegateFlowState state,
-        ILocalSymbol local,
-        SemanticModel model,
-        int beforePosition,
-        CancellationToken cancellationToken,
-        HashSet<ISymbol> activeResolutions)
+    private void ApplyOperationMutations(IOperation root, DelegateFlowState state, ILocalSymbol local, SemanticModel model, int beforePosition, HashSet<ISymbol> activeResolutions, CancellationToken cancellationToken)
     {
         IEnumerable<IOperation> mutations = root.DescendantsAndSelf()
             .Where(operation => operation.Syntax.Span.End <= beforePosition)
@@ -576,12 +526,7 @@ internal sealed class NativeRegionManagedAllocationAnalysis
             switch (mutation)
             {
                 case IInvocationOperation invocation:
-                    ApplyInvocationMutation(
-                        state,
-                        invocation,
-                        local,
-                        cancellationToken,
-                        activeResolutions);
+                    ApplyInvocationMutation(state, invocation, local, activeResolutions, cancellationToken);
                     break;
 
                 case ISimpleAssignmentOperation assignment
@@ -640,18 +585,10 @@ internal sealed class NativeRegionManagedAllocationAnalysis
         };
     }
 
-    private void ApplyInvocationMutation(
-        DelegateFlowState state,
-        IInvocationOperation invocation,
-        ILocalSymbol local,
-        CancellationToken cancellationToken,
-        HashSet<ISymbol> activeResolutions)
+    private void ApplyInvocationMutation(DelegateFlowState state, IInvocationOperation invocation, ILocalSymbol local, HashSet<ISymbol> activeResolutions, CancellationToken cancellationToken)
     {
         ImmutableArray<IMethodSymbol> sourceMethods =
-            GetInvocationMutationSources(
-                invocation,
-                cancellationToken,
-                activeResolutions);
+            GetInvocationMutationSources(invocation, activeResolutions, cancellationToken);
         if (sourceMethods.IsDefaultOrEmpty)
         {
             return;
@@ -713,10 +650,7 @@ internal sealed class NativeRegionManagedAllocationAnalysis
         }
     }
 
-    private ImmutableArray<IMethodSymbol> GetInvocationMutationSources(
-        IInvocationOperation invocation,
-        CancellationToken cancellationToken,
-        HashSet<ISymbol> activeResolutions)
+    private ImmutableArray<IMethodSymbol> GetInvocationMutationSources(IInvocationOperation invocation, HashSet<ISymbol> activeResolutions, CancellationToken cancellationToken)
     {
         if (!IsCanonicalAllocation(invocation.TargetMethod))
         {
@@ -1612,8 +1546,7 @@ internal sealed class NativeRegionManagedAllocationAnalysis
         if (!NativeAllocationAnalyzer.NativeSymbols.Is(
                 method.ContainingType,
                 _symbols.Region)
-            || method.Name != "Dispose"
-            || method.Parameters.Length != 0
+            || !string.Equals(method.Name, "Dispose", StringComparison.Ordinal) || method.Parameters.Length != 0
             || Unwrap(invocation.Instance) is not ILocalReferenceOperation local)
         {
             return false;
@@ -1739,7 +1672,7 @@ internal sealed class NativeRegionManagedAllocationAnalysis
                         System.Globalization.CultureInfo.InvariantCulture))
                 .Add(
                     "NAM.Operation",
-                    NativeAllocationDiagnosticDescriptors.ManagedAllocationInRegion.Title.ToString())
+                    NativeAllocationDiagnosticDescriptors.ManagedAllocationInRegion.Title.ToString(System.Globalization.CultureInfo.InvariantCulture))
                 .Add("NAM.OperationId", NativeAllocationDiagnosticDescriptors.ManagedAllocationInRegion.Id)
                 .Add("NAM.AllocationSource", allocationLocation);
         context.ReportDiagnostic(Diagnostic.Create(
@@ -1956,8 +1889,7 @@ internal sealed class NativeRegionManagedAllocationAnalysis
 
         public bool Equals(AllocationFinding x, AllocationFinding y)
         {
-            return x.Kind == y.Kind
-                && ReferenceEquals(x.Source.SyntaxTree, y.Source.SyntaxTree)
+            return string.Equals(x.Kind, y.Kind, StringComparison.Ordinal) && ReferenceEquals(x.Source.SyntaxTree, y.Source.SyntaxTree)
                 && x.Source.Span.Equals(y.Source.Span);
         }
 
@@ -1965,7 +1897,7 @@ internal sealed class NativeRegionManagedAllocationAnalysis
         {
             unchecked
             {
-                int hash = finding.Kind.GetHashCode();
+                int hash = StringComparer.Ordinal.GetHashCode(finding.Kind);
                 hash = (hash * 397) ^ finding.Source.SyntaxTree.GetHashCode();
                 return (hash * 397) ^ finding.Source.Span.GetHashCode();
             }

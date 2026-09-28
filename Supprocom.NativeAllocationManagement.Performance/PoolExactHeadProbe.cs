@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 
 namespace Supprocom.NativeAllocationManagement.Performance;
 
@@ -82,6 +83,7 @@ internal static class PoolExactHeadProbe
     }
 }
 
+[StructLayout(LayoutKind.Sequential)]
 internal readonly record struct PoolExactHeadProbeReport(
     int WarmupIterations,
     int MeasuredIterations,

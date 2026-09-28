@@ -107,9 +107,9 @@ internal static class NativeRegionPhaseBenchmark
         long allocatedBefore =
             GC.GetAllocatedBytesForCurrentThread();
         long start = Stopwatch.GetTimestamp();
-        for (int index = 0; index < kernels.Length; index++)
+        foreach (ref NativeRegionKernel kernel in kernels.AsSpan())
         {
-            kernels[index] = new NativeRegionKernel(
+            kernel = new NativeRegionKernel(
                 64,
                 NativeMemoryReturn.ToNativeMemory);
         }
@@ -142,9 +142,9 @@ internal static class NativeRegionPhaseBenchmark
         long allocatedBefore =
             GC.GetAllocatedBytesForCurrentThread();
         long start = Stopwatch.GetTimestamp();
-        for (int index = 0; index < kernels.Length; index++)
+        foreach (ref NativeOwnerKernel kernel in kernels.AsSpan())
         {
-            kernels[index] = CreateLegacyKernel(64);
+            kernel = CreateLegacyKernel(64);
         }
 
         long elapsed = Stopwatch.GetTimestamp() - start;
@@ -384,9 +384,9 @@ internal static class NativeRegionPhaseBenchmark
     {
         NativeRegionKernel[] kernels =
             new NativeRegionKernel[GrowthIterations];
-        for (int index = 0; index < kernels.Length; index++)
+        foreach (ref NativeRegionKernel kernel in kernels.AsSpan())
         {
-            kernels[index] = new NativeRegionKernel(
+            kernel = new NativeRegionKernel(
                 1,
                 NativeMemoryReturn.ToNativeMemory);
         }
@@ -424,9 +424,9 @@ internal static class NativeRegionPhaseBenchmark
     {
         NativeOwnerKernel[] kernels =
             new NativeOwnerKernel[GrowthIterations];
-        for (int index = 0; index < kernels.Length; index++)
+        foreach (ref NativeOwnerKernel kernel in kernels.AsSpan())
         {
-            kernels[index] = CreateLegacyKernel(1);
+            kernel = CreateLegacyKernel(1);
         }
 
         try
@@ -463,9 +463,9 @@ internal static class NativeRegionPhaseBenchmark
     {
         NativeRegionKernel[] kernels =
             new NativeRegionKernel[DisposalIterations];
-        for (int index = 0; index < kernels.Length; index++)
+        foreach (ref NativeRegionKernel kernel in kernels.AsSpan())
         {
-            kernels[index] = new NativeRegionKernel(
+            kernel = new NativeRegionKernel(
                 64,
                 NativeMemoryReturn.ToNativeMemory);
         }
@@ -488,9 +488,9 @@ internal static class NativeRegionPhaseBenchmark
     {
         NativeOwnerKernel[] kernels =
             new NativeOwnerKernel[DisposalIterations];
-        for (int index = 0; index < kernels.Length; index++)
+        foreach (ref NativeOwnerKernel kernel in kernels.AsSpan())
         {
-            kernels[index] = CreateLegacyKernel(64);
+            kernel = CreateLegacyKernel(64);
         }
 
         return MeasurePreparedDisposal(

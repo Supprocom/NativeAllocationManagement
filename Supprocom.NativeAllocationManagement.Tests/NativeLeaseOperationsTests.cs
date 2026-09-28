@@ -355,8 +355,7 @@ public sealed class NativeLeaseOperationsTests
         NativeAllocationException? transitionFailure = null;
         NativeMemoryTestHooks.SetOperationEnteredWithAllocation((operation, kernel, _, _) =>
         {
-            if (operation != nameof(NativeLeaseOperations.Access)
-                || !ReferenceEquals(kernel, expectedKernel)
+            if (!string.Equals(operation, nameof(NativeLeaseOperations.Access), StringComparison.Ordinal) || !ReferenceEquals(kernel, expectedKernel)
                 || Interlocked.Increment(ref notifications) != 1)
             {
                 return;
@@ -460,8 +459,8 @@ public sealed class NativeLeaseOperationsTests
                     two.Write(input[2]);
                     three.Write(checked((byte)input[2]));
                     three.Write(checked((byte)input[3]));
-                    four.Write(input[0].ToString());
-                    four.Write(input[3].ToString());
+                    four.Write(input[0].ToString(System.Globalization.CultureInfo.InvariantCulture));
+                    four.Write(input[3].ToString(System.Globalization.CultureInfo.InvariantCulture));
                 },
                 out first,
                 out second,
@@ -1081,7 +1080,7 @@ public sealed class NativeLeaseOperationsTests
         int admissions = 0;
         NativeMemoryTestHooks.SetBeforeOperationEntry(operation =>
         {
-            if (operation == nameof(NativeLeaseOperations.Access))
+            if (string.Equals(operation, nameof(NativeLeaseOperations.Access), StringComparison.Ordinal))
             {
                 admissions++;
             }
@@ -1178,7 +1177,7 @@ public sealed class NativeLeaseOperationsTests
         int admissions = 0;
         NativeMemoryTestHooks.SetBeforeOperationEntry(operation =>
         {
-            if (operation == nameof(NativeLeaseOperations.Access))
+            if (string.Equals(operation, nameof(NativeLeaseOperations.Access), StringComparison.Ordinal))
             {
                 admissions++;
             }
@@ -1269,7 +1268,7 @@ public sealed class NativeLeaseOperationsTests
         int admissions = 0;
         NativeMemoryTestHooks.SetBeforeOperationEntry(operation =>
         {
-            if (operation == nameof(NativeLeaseOperations.Access))
+            if (string.Equals(operation, nameof(NativeLeaseOperations.Access), StringComparison.Ordinal))
             {
                 admissions++;
             }

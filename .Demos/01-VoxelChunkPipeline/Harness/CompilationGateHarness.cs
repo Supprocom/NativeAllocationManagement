@@ -8,6 +8,16 @@ namespace Supprocom.NativeAllocationManagement.Demos.VoxelChunkPipeline.Harness;
 
 internal static class CompilationGateHarness
 {
+    private static readonly JsonSerializerOptions OutputOptions = new(VoxelJson.Options)
+    {
+        WriteIndented = true
+    };
+
+    private static readonly Regex CompilerTiming = new(
+        @"^\s*(?<milliseconds>\d+)\s+ms\s+Csc\s+1\s+calls?\s*$",
+        RegexOptions.Multiline | RegexOptions.CultureInvariant | RegexOptions.ExplicitCapture,
+        TimeSpan.FromSeconds(1));
+
     internal static async Task<int> RunAsync(string[] args)
     {
         Options options = Options.Parse(args);
@@ -15,11 +25,11 @@ internal static class CompilationGateHarness
         string commit = (await RunCommandAsync(
             "git",
             ["-C", options.RepositoryRoot, "rev-parse", "HEAD"],
-            TimeSpan.FromSeconds(10))).StandardOutput.Trim();
+            TimeSpan.FromSeconds(10)).ConfigureAwait(false)).StandardOutput.Trim();
         string sdk = (await RunCommandAsync(
             "dotnet",
             ["--version"],
-            TimeSpan.FromSeconds(10))).StandardOutput.Trim();
+            TimeSpan.FromSeconds(10)).ConfigureAwait(false)).StandardOutput.Trim();
 
         string safeProject = Path.Combine(
             options.RepositoryRoot,
@@ -44,7 +54,7 @@ internal static class CompilationGateHarness
                 CompilationGatePolicy.SafeRunsFirst(pair),
                 safeProject,
                 namProject,
-                warmups);
+                warmups).ConfigureAwait(false);
         }
 
         bool warmupGatePassed =
@@ -63,7 +73,7 @@ internal static class CompilationGateHarness
                 sdk,
                 warmups,
                 samples,
-                warmupFailure);
+                warmupFailure).ConfigureAwait(false);
             return 3;
         }
 
@@ -75,7 +85,7 @@ internal static class CompilationGateHarness
                 CompilationGatePolicy.SafeRunsFirst(pair),
                 safeProject,
                 namProject,
-                samples);
+                samples).ConfigureAwait(false);
         }
 
         CompilationGateSummary summary =
@@ -87,7 +97,7 @@ internal static class CompilationGateHarness
             sdk,
             warmups,
             samples,
-            summary);
+            summary).ConfigureAwait(false);
         return summary.GatePassed ? 0 : 3;
     }
 
@@ -109,10 +119,10 @@ internal static class CompilationGateHarness
                 samples,
                 options.MeasuredPairs);
         CompilationSample[] safeSamples = samples
-            .Where(sample => sample.Implementation == "SafeCSharp")
+            .Where(sample => string.Equals(sample.Implementation, "SafeCSharp", StringComparison.Ordinal))
             .ToArray();
         CompilationSample[] namSamples = samples
-            .Where(sample => sample.Implementation == "NAM")
+            .Where(sample => string.Equals(sample.Implementation, "NAM", StringComparison.Ordinal))
             .ToArray();
         bool allCompleted =
             CompilationGatePolicy.AllCompilationsCompleted(
@@ -212,13 +222,9 @@ internal static class CompilationGateHarness
             Directory.CreateDirectory(outputDirectory);
         }
 
-        JsonSerializerOptions json = new(VoxelJson.Options)
-        {
-            WriteIndented = true
-        };
         await File.WriteAllTextAsync(
             options.OutputPath,
-            JsonSerializer.Serialize(report, json));
+            JsonSerializer.Serialize(report, OutputOptions)).ConfigureAwait(false);
         Console.WriteLine(JsonSerializer.Serialize(summary, VoxelJson.Options));
         Console.WriteLine(options.OutputPath);
     }
@@ -229,7 +235,7 @@ internal static class CompilationGateHarness
         bool safeFirst,
         string safeProject,
         string namProject,
-        ICollection<CompilationSample> destination)
+        List<CompilationSample> destination)
     {
         (string Name, string Project)[] order = safeFirst
             ? [("SafeCSharp", safeProject), ("NAM", namProject)]
@@ -242,10 +248,11 @@ internal static class CompilationGateHarness
                     pair,
                     position,
                     order[position].Name,
-                    order[position].Project));
+                    order[position].Project).ConfigureAwait(false));
         }
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The compilation gate records any child-build failure as sample evidence instead of terminating the measurement series.")]
     private static async Task<CompilationSample> CompileAsync(
         Options options,
         int pair,
@@ -290,7 +297,7 @@ internal static class CompilationGateHarness
                 "dotnet",
                 arguments,
                 options.PerCompilationTimeout,
-                childConfiguration);
+                childConfiguration).ConfigureAwait(false);
         }
         catch (TimeoutException exception)
         {
@@ -328,13 +335,10 @@ internal static class CompilationGateHarness
         }
 
         stopwatch.Stop();
-        Match compilerTiming = Regex.Match(
-            result.StandardOutput,
-            @"(?m)^\s*(\d+)\s+ms\s+Csc\s+1\s+calls?\s*$",
-            RegexOptions.CultureInvariant);
+        Match compilerTiming = CompilerTiming.Match(result.StandardOutput);
         double? compilerElapsed = compilerTiming.Success
             ? double.Parse(
-                compilerTiming.Groups[1].Value,
+                compilerTiming.Groups["milliseconds"].Value,
                 CultureInfo.InvariantCulture)
             : null;
         CompilationOutcome outcome = result.ExitCode != 0
@@ -357,6 +361,7 @@ internal static class CompilationGateHarness
             Tail(result.StandardError));
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "A best-effort process kill cannot replace the original timeout failure.")]
     private static async Task<CommandResult> RunCommandAsync(
         string fileName,
         IReadOnlyList<string> arguments,
@@ -391,9 +396,9 @@ internal static class CompilationGateHarness
         using CancellationTokenSource timeoutSource = new(timeout);
         try
         {
-            await process.WaitForExitAsync(timeoutSource.Token);
+            await process.WaitForExitAsync(timeoutSource.Token).ConfigureAwait(false);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException exception)
         {
             try
             {
@@ -403,16 +408,17 @@ internal static class CompilationGateHarness
             {
             }
 
-            await Task.WhenAll(stdoutTask, stderrTask);
+            await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false);
             throw new TimeoutException(
                 $"'{FormatCommand(fileName, arguments)}' exceeded "
-                + $"{timeout.TotalMilliseconds.ToString(CultureInfo.InvariantCulture)} ms.");
+                + $"{timeout.TotalMilliseconds.ToString(CultureInfo.InvariantCulture)} ms.",
+                exception);
         }
 
         return new CommandResult(
             process.ExitCode,
-            await stdoutTask,
-            await stderrTask);
+            await stdoutTask.ConfigureAwait(false),
+            await stderrTask.ConfigureAwait(false));
     }
 
     private static string FormatCommand(
@@ -437,9 +443,9 @@ internal static class CompilationGateHarness
     }
 
     private static double? SampleStandardDeviation(
-        IReadOnlyList<CompilationSample> samples)
+        CompilationSample[] samples)
     {
-        if (samples.Count < 2
+        if (samples.Length < 2
             || samples.Any(
                 static sample =>
                     !sample.CompilerElapsedMilliseconds.HasValue))
@@ -456,7 +462,7 @@ internal static class CompilationGateHarness
                 sample.CompilerElapsedMilliseconds!.Value - mean;
             return delta * delta;
         });
-        return Math.Sqrt(sum / (samples.Count - 1));
+        return Math.Sqrt(sum / (samples.Length - 1));
     }
 
     private static double? MeanForPosition(
@@ -483,21 +489,22 @@ internal static class CompilationGateHarness
         int MeasuredPairs,
         TimeSpan PerCompilationTimeout)
     {
-        internal static Options Parse(IReadOnlyList<string> args)
+        internal static Options Parse(string[] args)
         {
             Dictionary<string, string> values = new(StringComparer.Ordinal);
-            for (int index = 0; index < args.Count; index++)
+            for (int index = 0; index < args.Length; index++)
             {
-                if (args[index] == "--compile-gate")
+                if (string.Equals(args[index], "--compile-gate", StringComparison.Ordinal))
                 {
                     continue;
                 }
 
                 if (!args[index].StartsWith("--", StringComparison.Ordinal)
-                    || index + 1 >= args.Count)
+                    || index + 1 >= args.Length)
                 {
                     throw new ArgumentException(
-                        $"Unknown compilation-gate argument '{args[index]}'.");
+                        $"Unknown compilation-gate argument '{args[index]}'.",
+                        nameof(args));
                 }
 
                 values[args[index]] = args[++index];
@@ -535,14 +542,15 @@ internal static class CompilationGateHarness
         }
 
         private static string Required(
-            IReadOnlyDictionary<string, string> values,
+            Dictionary<string, string> values,
             string key)
         {
             return values.TryGetValue(key, out string? value)
                 && !string.IsNullOrWhiteSpace(value)
                 ? value
                 : throw new ArgumentException(
-                    $"The compilation gate requires '{key}'.");
+                    $"The compilation gate requires '{key}'.",
+                    nameof(values));
         }
     }
 

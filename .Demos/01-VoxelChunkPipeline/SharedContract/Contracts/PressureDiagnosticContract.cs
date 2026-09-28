@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 
 namespace Supprocom.NativeAllocationManagement.Demos.VoxelChunkPipeline.SharedContract;
 
@@ -20,6 +21,7 @@ public enum PressureDiagnosticPhase
     Reset
 }
 
+[StructLayout(LayoutKind.Sequential)]
 public readonly record struct PressurePhaseTimings(
     double BuildMilliseconds,
     double SectionPreparationMilliseconds,
@@ -35,6 +37,7 @@ public sealed class PressurePhaseRecorder
     private readonly long[] _ticks = new long[
         Enum.GetValues<PressureDiagnosticPhase>().Length];
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822", Justification = "The instance recorder API pairs Start with Record for each phase.")]
     public long Start() => Stopwatch.GetTimestamp();
 
     public void Record(

@@ -113,7 +113,7 @@ public sealed class PersistentFieldPoolAnalyzerTests
             """);
 
         AssertNoCompilerErrors(diagnostics);
-        Assert.Contains("NAM1003", AnalyzerContractTests.NativeDiagnostics(diagnostics));
+        Assert.Contains("NAM1003", AnalyzerContractTests.NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -151,8 +151,8 @@ public sealed class PersistentFieldPoolAnalyzerTests
 
         AssertNoCompilerErrors(diagnostics);
         string[] ids = AnalyzerContractTests.NativeDiagnostics(diagnostics);
-        Assert.Contains("NAM1007", ids);
-        Assert.Contains("NAM1009", ids);
+        Assert.Contains("NAM1007", ids, StringComparer.Ordinal);
+        Assert.Contains("NAM1009", ids, StringComparer.Ordinal);
     }
 
     [Fact]
@@ -182,7 +182,7 @@ public sealed class PersistentFieldPoolAnalyzerTests
             """);
 
         AssertNoCompilerErrors(diagnostics);
-        Assert.Contains("NAM1009", AnalyzerContractTests.NativeDiagnostics(diagnostics));
+        Assert.Contains("NAM1009", AnalyzerContractTests.NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -241,8 +241,8 @@ public sealed class PersistentFieldPoolAnalyzerTests
             """);
 
         string[] ids = AnalyzerContractTests.NativeDiagnostics(diagnostics);
-        Assert.Contains("NAM1013", ids);
-        Assert.Contains("NAM1011", ids);
+        Assert.Contains("NAM1013", ids, StringComparer.Ordinal);
+        Assert.Contains("NAM1011", ids, StringComparer.Ordinal);
     }
 
     [Fact]
@@ -336,8 +336,8 @@ public sealed class PersistentFieldPoolAnalyzerTests
         AssertNoCompilerErrors(diagnostics);
         string[] ids =
             AnalyzerContractTests.NativeDiagnostics(diagnostics);
-        Assert.Contains("NAM1007", ids);
-        Assert.Contains("NAM1009", ids);
+        Assert.Contains("NAM1007", ids, StringComparer.Ordinal);
+        Assert.Contains("NAM1009", ids, StringComparer.Ordinal);
     }
 
     [Fact]
@@ -361,7 +361,7 @@ public sealed class PersistentFieldPoolAnalyzerTests
         AssertNoCompilerErrors(diagnostics);
         Assert.Contains(
             "NAM1003",
-            AnalyzerContractTests.NativeDiagnostics(diagnostics));
+            AnalyzerContractTests.NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 
     [Fact]
@@ -392,7 +392,7 @@ public sealed class PersistentFieldPoolAnalyzerTests
         string[] ids =
             AnalyzerContractTests.NativeDiagnostics(diagnostics);
         Assert.True(
-            ids.Count(id => id == "NAM1009") >= 2,
+            ids.Count(id => string.Equals(id, "NAM1009", StringComparison.Ordinal)) >= 2,
             string.Join(Environment.NewLine, diagnostics));
     }
 
@@ -422,8 +422,8 @@ public sealed class PersistentFieldPoolAnalyzerTests
         AssertNoCompilerErrors(diagnostics);
         string[] ids =
             AnalyzerContractTests.NativeDiagnostics(diagnostics);
-        Assert.Contains("NAM1001", ids);
-        Assert.Contains("NAM1015", ids);
+        Assert.Contains("NAM1001", ids, StringComparer.Ordinal);
+        Assert.Contains("NAM1015", ids, StringComparer.Ordinal);
     }
 
     [Fact]
@@ -455,7 +455,7 @@ public sealed class PersistentFieldPoolAnalyzerTests
         AssertNoCompilerErrors(diagnostics);
         Assert.Contains(
             "NAM1015",
-            AnalyzerContractTests.NativeDiagnostics(diagnostics));
+            AnalyzerContractTests.NativeDiagnostics(diagnostics), StringComparer.Ordinal);
     }
 
     private static void AssertNoCompilerErrors(

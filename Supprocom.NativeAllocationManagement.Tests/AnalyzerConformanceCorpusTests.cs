@@ -10,6 +10,11 @@ namespace Supprocom.NativeAllocationManagement.Tests;
 
 public sealed class AnalyzerConformanceCorpusTests
 {
+    private static readonly JsonSerializerOptions CorpusJsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
+
     private readonly ITestOutputHelper _output;
 
     public AnalyzerConformanceCorpusTests(ITestOutputHelper output)
@@ -24,7 +29,7 @@ public sealed class AnalyzerConformanceCorpusTests
         path = Path.Combine(path, "conformance", "native-allocation-ownership.json");
         CorpusCase[] cases = JsonSerializer.Deserialize<CorpusCase[]>(
             await File.ReadAllTextAsync(path),
-            new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+            CorpusJsonOptions)
             ?? throw new InvalidDataException("The ownership conformance corpus was empty.");
         int analyzerCases = 0;
         int compilerRejectedCases = 0;
@@ -84,7 +89,7 @@ public sealed class AnalyzerConformanceCorpusTests
                 .ToArray();
             string[] actualIds = actual
                 .Select(static diagnostic => diagnostic.Id)
-                .Distinct()
+                .Distinct(StringComparer.Ordinal)
                 .OrderBy(
                     static id => id,
                     StringComparer.Ordinal)
@@ -99,7 +104,7 @@ public sealed class AnalyzerConformanceCorpusTests
 
             foreach (ExpectedDiagnostic expected in expectedDiagnostics)
             {
-                ActualDiagnostic[] actualForId = actual.Where(diagnostic => diagnostic.Id == expected.Id).ToArray();
+                ActualDiagnostic[] actualForId = actual.Where(diagnostic => string.Equals(diagnostic.Id, expected.Id, StringComparison.Ordinal)).ToArray();
                 Assert.True(
                     expected.Count == actualForId.Length,
                     $"Corpus case '{testCase.Name}' expected {expected.Count} "
@@ -149,16 +154,7 @@ public sealed class AnalyzerConformanceCorpusTests
     }
 
     private static string FindRepositoryRoot()
-    {
-        DirectoryInfo? directory = new(AppContext.BaseDirectory);
-        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "Supprocom.NativeAllocationManagement.slnx")))
-        {
-            directory = directory.Parent;
-        }
-
-        return directory?.FullName
-            ?? throw new DirectoryNotFoundException("The repository root was not found from the test output directory.");
-    }
+        => RepositoryTestPaths.Root;
 
     private static IEnumerable<MetadataReference> GetTrustedPlatformReferences()
     {
@@ -167,6 +163,8 @@ public sealed class AnalyzerConformanceCorpusTests
         return trustedAssemblies.Split(Path.PathSeparator).Select(path => MetadataReference.CreateFromFile(path));
     }
 
+    // JSON deserialization constructs these private corpus records by reflection.
+#pragma warning disable CA1812
     private sealed record CorpusCase(
         string Name,
         bool CompilerRejected,
@@ -178,6 +176,7 @@ public sealed class AnalyzerConformanceCorpusTests
         int Count,
         DiagnosticFact[] Facts,
         string? Severity = null);
+#pragma warning restore CA1812
 
     private sealed record DiagnosticFact(int Line, int Column, string Provenance);
 

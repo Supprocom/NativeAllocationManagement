@@ -24,7 +24,7 @@ internal static class NativePoolRetirementRegression
         string fullPath = Path.GetFullPath(outputPath);
         Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
         string json = JsonSerializer.Serialize(report, JsonOptions);
-        await File.WriteAllTextAsync(fullPath, json);
+        await File.WriteAllTextAsync(fullPath, json).ConfigureAwait(false);
         Console.WriteLine(json);
         return report.Passed ? 0 : 3;
     }
@@ -72,9 +72,7 @@ internal static class NativePoolRetirementRegression
                 NativeMemoryTestHooks.Snapshot();
 
             bool balancedOrder = IsBalancedOrder(samples);
-            bool exactParity = managedHash == persistentHash
-                && managedHash == transientHash
-                && samples.Select(static sample => sample.Checksum)
+            bool exactParity = string.Equals(managedHash, persistentHash, StringComparison.Ordinal) && string.Equals(managedHash, transientHash, StringComparison.Ordinal) && samples.Select(static sample => sample.Checksum)
                     .Distinct()
                     .Count() == 1;
             bool zeroPersistentGrowth = samples
@@ -455,10 +453,13 @@ internal static class NativePoolRetirementRegression
 
         private sealed class PersistentPoolWorker : IDisposable
         {
+            // Retirement transfers cleanup to ReleaseRetiredStorage in Dispose().
+#pragma warning disable CA2213
             private readonly NativePool<short> _pool = new(
                 preLease: Capacity,
                 returnMemoryOnDispose:
                     NativeMemoryReturn.ToNativeMemory);
+#pragma warning restore CA2213
 
             internal ulong Build() => RunOne(_pool);
 

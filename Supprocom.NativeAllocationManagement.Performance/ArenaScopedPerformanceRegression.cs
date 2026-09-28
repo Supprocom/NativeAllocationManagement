@@ -126,7 +126,8 @@ internal static class ArenaScopedPerformanceRegression
             attempt++)
         {
             ArenaScopedSampleEvidence evidence = measurement()
-                with { Attempt = attempt };
+                with
+            { Attempt = attempt };
             last = evidence;
             if (evidence.Gen0Collections == 0
                 && evidence.Gen1Collections == 0
@@ -435,7 +436,7 @@ internal static class ArenaScopedPerformanceRegression
     {
         ReadOnlySpan<byte> bytes = MemoryMarshal.AsBytes(values);
         ulong hash = 14_695_981_039_346_656_037UL;
-        foreach (byte value in bytes)
+        foreach (ref readonly byte value in bytes)
         {
             hash ^= value;
             hash *= 1_099_511_628_211UL;

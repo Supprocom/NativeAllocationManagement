@@ -153,8 +153,8 @@ public ref struct NativeBuilderBorrow<T>
         CompleteWrite(
             start,
             committedCount,
-            cancellationToken,
-            default(TCancellation));
+            default(TCancellation),
+            cancellationToken);
     }
 
     /// <summary>Writes one bounded range with explicit callback state.</summary>
@@ -273,8 +273,8 @@ public ref struct NativeBuilderBorrow<T>
         CompleteWrite(
             start,
             committedCount,
-            cancellationToken,
-            default(TCancellation));
+            default(TCancellation),
+            cancellationToken);
     }
 
     private interface IStateWriter<TState>
@@ -319,8 +319,8 @@ public ref struct NativeBuilderBorrow<T>
     private void CompleteWrite<TCancellation>(
         int start,
         int committedCount,
-        CancellationToken cancellationToken,
-        TCancellation cancellationPolicy)
+        TCancellation cancellationPolicy,
+        CancellationToken cancellationToken)
         where TCancellation : struct, ICancellationPolicy
     {
         TCancellation.Check(cancellationToken);

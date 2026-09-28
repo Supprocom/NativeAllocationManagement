@@ -102,6 +102,7 @@ public sealed class NativeTransfer<T> : IDisposable
 
     /// <summary>Moves ownership and sets the source variable to null.</summary>
     /// <remarks>All aliases of the old object become invalid after a successful move.</remarks>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1000", Justification = "Destructive transfer uses the exact element type and invalidates a ref source.")]
     public static NativeTransfer<T> Move(
         ref NativeTransfer<T>? source)
     {
@@ -195,6 +196,7 @@ public sealed class NativeTransfer<T> : IDisposable
     }
 
     /// <summary>Returns this transfer's storage exactly once.</summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1065", Justification = "Disposal must reject active bounded use before freeing native memory.")]
     public void Dispose()
     {
         int observed = Interlocked.CompareExchange(
@@ -352,6 +354,7 @@ public sealed class NativeTransfer<T> : IDisposable
         }
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA1816", Justification = "Moving native ownership disarms the source finalizer.")]
     private void MoveTo(NativeTransfer<T> destination)
     {
         int observed = Interlocked.CompareExchange(
@@ -402,6 +405,7 @@ public sealed class NativeTransfer<T> : IDisposable
         }
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA1816", Justification = "Publishing a moved owner disarms the source finalizer.")]
     private void PublishMove(NativeTransfer<T> destination)
     {
         NativeOperationAdmission.Reset(
@@ -425,6 +429,7 @@ public sealed class NativeTransfer<T> : IDisposable
             operation);
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "This boundary captures any failure to preserve cleanup and report the original error.")]
     private void ReturnStorageFromFinalizer()
     {
         try
@@ -482,6 +487,8 @@ public sealed class NativeTransfer<T> : IDisposable
     }
 
     /// <summary>Returns storage when a receiver abandons the active transfer.</summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "MA0055", Justification = "Emergency native-memory cleanup supplements mandatory deterministic disposal.")]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "An emergency finalizer must never let cleanup exceptions terminate the process.")]
     ~NativeTransfer()
     {
         try

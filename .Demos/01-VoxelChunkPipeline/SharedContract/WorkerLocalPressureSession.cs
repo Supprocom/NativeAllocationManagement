@@ -212,7 +212,7 @@ public sealed class WorkerLocalPressureSession : IPressureProfileSession
 
     private void EnsureWorkerCapacityPlan(
         PressureProfileRequest request,
-        IReadOnlyList<PressureChunkPlanEntry> plan)
+        Supprocom.NativeAllocationManagement.Demos.VoxelChunkPipeline.SharedContract.PressureChunkPlanEntry[] plan)
     {
         if (_activeWorkerCount != 0)
         {
@@ -232,13 +232,16 @@ public sealed class WorkerLocalPressureSession : IPressureProfileSession
             request.CgroupCapBytes - processReserve);
         if (retainedLimit <= 0)
         {
+            // The pressure protocol classifies an exhausted cap as out of memory.
+#pragma warning disable CA2201
             throw new OutOfMemoryException(
                 "The process memory reserve consumes the complete pressure cap.");
+#pragma warning restore CA2201
         }
 
         int maximumCount = Math.Min(
             _workers.Length,
-            plan.Count);
+            plan.Length);
         for (int candidate = maximumCount;
             candidate >= 1;
             candidate--)
@@ -306,12 +309,15 @@ public sealed class WorkerLocalPressureSession : IPressureProfileSession
             return;
         }
 
+        // The pressure protocol classifies a plan exceeding worker capacity as out of memory.
+#pragma warning disable CA2201
         throw new OutOfMemoryException(
             "One worker cannot fit the canonical pressure plan and its safety reserve.");
+#pragma warning restore CA2201
     }
 
     private static long[] AllocateWorkerBudgets(
-        IReadOnlyList<PressureWorkerCapacity> capacities,
+        Supprocom.NativeAllocationManagement.Demos.VoxelChunkPipeline.SharedContract.PressureWorkerCapacity[] capacities,
         long retainedLimit,
         long selectionBytes)
     {
@@ -406,16 +412,16 @@ public sealed class WorkerLocalPressureSession : IPressureProfileSession
         };
     }
 
-    private WorkerPartition[] Partition(
-        IReadOnlyList<PressureChunkPlanEntry> plan,
+    private static WorkerPartition[] Partition(
+        PressureChunkPlanEntry[] plan,
         int maximumWorkerCount)
     {
         int workerCount = Math.Min(
             maximumWorkerCount,
-            plan.Count);
+            plan.Length);
         int cycleLength =
             PressureWorkContract.CanonicalPressureCycleLength;
-        if (plan.Count % cycleLength != 0)
+        if (plan.Length % cycleLength != 0)
         {
             throw new InvalidOperationException(
                 "The canonical pressure plan must contain complete cycles.");
@@ -423,10 +429,12 @@ public sealed class WorkerLocalPressureSession : IPressureProfileSession
 
         WorkerPartition[] partitions = new WorkerPartition[
             workerCount];
+#pragma warning disable HLQ013 // Each newly allocated array element must be initialized by index.
         for (int index = 0; index < workerCount; index++)
         {
             partitions[index] = new WorkerPartition();
         }
+#pragma warning restore HLQ013
 
         int[] cycleOwners = new int[cycleLength];
         for (int cyclePosition = 0;
@@ -439,7 +447,7 @@ public sealed class WorkerLocalPressureSession : IPressureProfileSession
         }
 
         for (int index = cycleLength;
-            index < plan.Count;
+            index < plan.Length;
             index++)
         {
             int cyclePosition = index % cycleLength;
@@ -485,7 +493,7 @@ public sealed class WorkerLocalPressureSession : IPressureProfileSession
 
     private PressureProfileResult Aggregate(
         PressureProfileRequest request,
-        IReadOnlyList<PressureChunkPlanEntry> plan,
+        Supprocom.NativeAllocationManagement.Demos.VoxelChunkPipeline.SharedContract.PressureChunkPlanEntry[] plan,
         IReadOnlyList<WorkerExecution> executions,
         PressureRuntimeSnapshot before,
         PressureRuntimeSnapshot after)
@@ -530,7 +538,7 @@ public sealed class WorkerLocalPressureSession : IPressureProfileSession
                 .ToArray()
             : [];
         bool exactEvidencePlan = !verification
-            || evidence.Length == plan.Count;
+            || evidence.Length == plan.Length;
         if (verification && exactEvidencePlan)
         {
             for (int index = 0;
@@ -563,7 +571,7 @@ public sealed class WorkerLocalPressureSession : IPressureProfileSession
             && results.All(
                 static result =>
                     result.CorrectnessPassed)
-            && completedChunks == plan.Count
+            && completedChunks == plan.Length
             && realizedDemand
                 >= request.RequestedCumulativeDemandBytes;
         Exception? failure = failedExecution?.Failure;
@@ -712,10 +720,17 @@ public sealed class WorkerLocalPressureSession : IPressureProfileSession
         for (int index = 0; index < executions.Count; index++)
         {
             WorkerExecution execution = executions[index];
-            PressureWorkerDiagnostic inner =
-                execution.Result?.Diagnostics?.Workers
-                    .SingleOrDefault()
-                ?? default;
+            IReadOnlyList<PressureWorkerDiagnostic>? workerDiagnostics =
+                execution.Result?.Diagnostics?.Workers;
+            if (workerDiagnostics is { Count: > 1 })
+            {
+                throw new InvalidOperationException(
+                    "A partition produced more than one worker diagnostic.");
+            }
+
+            PressureWorkerDiagnostic inner = workerDiagnostics is { Count: 1 }
+                ? workerDiagnostics[0]
+                : default;
             PressureDiagnosticRequest workerRequest =
                 execution.Request.Diagnostic
                 ?? throw new InvalidDataException(
@@ -969,6 +984,7 @@ public sealed class WorkerLocalPressureSession : IPressureProfileSession
             set;
         }
 
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "This boundary captures any failure to preserve cleanup and report the original error.")]
         internal void Complete()
         {
             if (QueuedResult is null)
@@ -979,7 +995,10 @@ public sealed class WorkerLocalPressureSession : IPressureProfileSession
 
             try
             {
+                // Completion is a synchronous worker protocol with no captured synchronization context.
+#pragma warning disable VSTHRD002
                 Result = QueuedResult.GetAwaiter().GetResult();
+#pragma warning restore VSTHRD002
             }
             catch (Exception exception)
             {
@@ -1027,6 +1046,7 @@ public sealed class WorkerLocalPressureSession : IPressureProfileSession
             _thread.Start();
         }
 
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "This boundary captures any failure to preserve cleanup and report the original error.")]
         internal void Submit(WorkerExecution execution)
         {
             if (_session is IQueuedPressureProfileSession queued)
@@ -1063,6 +1083,7 @@ public sealed class WorkerLocalPressureSession : IPressureProfileSession
                     0,
                     1);
 
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "This boundary captures any failure to preserve cleanup and report the original error.")]
         private void WorkerLoop()
         {
             foreach (WorkerExecution execution

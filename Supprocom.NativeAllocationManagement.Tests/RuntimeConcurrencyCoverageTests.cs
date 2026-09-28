@@ -68,17 +68,18 @@ public sealed class RuntimeConcurrencyCoverageTests
     }
 
     [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The test intentionally captures arbitrary callback or worker failures for lifecycle assertions.")]
     public async Task DisposeRestoresActiveStateAfterAConcurrentOperationWins()
     {
         foreach (NativeMemoryReturn policy in Enum.GetValues<NativeMemoryReturn>())
         {
             NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: policy);
-            ManualResetEventSlim entered = new();
-            ManualResetEventSlim release = new();
+            using ManualResetEventSlim entered = new();
+            using ManualResetEventSlim release = new();
             Exception? disposeException = null;
             NativeMemoryTestHooks.SetOperationEntered(operation =>
             {
-                if (operation != nameof(ConcurrentPooled<int>.Access))
+                if (!string.Equals(operation, nameof(ConcurrentPooled<int>.Access), StringComparison.Ordinal))
                 {
                     return;
                 }
@@ -113,7 +114,7 @@ public sealed class RuntimeConcurrencyCoverageTests
 
                 Assert.True(entered.Wait(TimeSpan.FromSeconds(10)));
                 release.Set();
-                await worker;
+                await worker.ConfigureAwait(true);
                 Assert.IsType<NativeAllocationInUseException>(disposeException);
 
                 pool.Dispose();
@@ -133,12 +134,12 @@ public sealed class RuntimeConcurrencyCoverageTests
         {
             for (int trimKind = 0; trimKind < 3; trimKind++)
             {
-                NativeConcurrentPool<int> pool = new(preLease: 16, returnMemoryOnDispose: policy);
-                ManualResetEventSlim entered = new();
-                ManualResetEventSlim release = new();
+                using NativeConcurrentPool<int> pool = new(preLease: 16, returnMemoryOnDispose: policy);
+                using ManualResetEventSlim entered = new();
+                using ManualResetEventSlim release = new();
                 NativeMemoryTestHooks.SetOperationEntered(operation =>
                 {
-                    if (operation == nameof(ConcurrentPooled<int>.Access))
+                    if (string.Equals(operation, nameof(ConcurrentPooled<int>.Access), StringComparison.Ordinal))
                     {
                         entered.Set();
                         release.Wait(TimeSpan.FromSeconds(10));
@@ -163,7 +164,7 @@ public sealed class RuntimeConcurrencyCoverageTests
                     Assert.True(entered.Wait(TimeSpan.FromSeconds(10)));
                     Assert.Equal((nuint)0, TrimPool(pool, trimKind));
                     release.Set();
-                    await worker;
+                    await worker.ConfigureAwait(true);
                     Assert.True(TrimPool(pool, trimKind) > 0);
                 }
                 finally
@@ -174,14 +175,14 @@ public sealed class RuntimeConcurrencyCoverageTests
                 }
 
                 NativeConcurrentArena arena = new(4096, policy);
-                entered = new ManualResetEventSlim();
-                release = new ManualResetEventSlim();
+                using ManualResetEventSlim arenaEntered = new();
+                using ManualResetEventSlim arenaRelease = new();
                 NativeMemoryTestHooks.SetOperationEntered(operation =>
                 {
-                    if (operation == nameof(ConcurrentArenaLease<int>.Access))
+                    if (string.Equals(operation, nameof(ConcurrentArenaLease<int>.Access), StringComparison.Ordinal))
                     {
-                        entered.Set();
-                        release.Wait(TimeSpan.FromSeconds(10));
+                        arenaEntered.Set();
+                        arenaRelease.Wait(TimeSpan.FromSeconds(10));
                     }
                 });
 
@@ -193,16 +194,16 @@ public sealed class RuntimeConcurrencyCoverageTests
                         lease.Access(static span => span[0] = 2);
                     });
 
-                    Assert.True(entered.Wait(TimeSpan.FromSeconds(10)));
+                    Assert.True(arenaEntered.Wait(TimeSpan.FromSeconds(10)));
                     Assert.Equal((nuint)0, TrimArena(arena, trimKind));
-                    release.Set();
-                    await worker;
+                    arenaRelease.Set();
+                    await worker.ConfigureAwait(true);
                     arena.ReleaseLeasesToNativeMemory();
                     Assert.True(TrimArena(arena, trimKind) > 0);
                 }
                 finally
                 {
-                    release.Set();
+                    arenaRelease.Set();
                     NativeMemoryTestHooks.Reset();
                     arena.Dispose();
                 }
@@ -211,6 +212,7 @@ public sealed class RuntimeConcurrencyCoverageTests
     }
 
     [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The test intentionally captures arbitrary callback or worker failures for lifecycle assertions.")]
     public void ReturnAndReLeaseRaceIsSerializedForBothPolicies()
     {
         foreach (NativeMemoryReturn policy in Enum.GetValues<NativeMemoryReturn>())
@@ -265,6 +267,7 @@ public sealed class RuntimeConcurrencyCoverageTests
     }
 
     [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The test intentionally captures arbitrary callback or worker failures for lifecycle assertions.")]
     public void ReLeaseAndDisposeRacePublishesAtMostOneTerminalState()
     {
         for (int iteration = 0; iteration < 16; iteration++)
@@ -349,6 +352,7 @@ public sealed class RuntimeConcurrencyCoverageTests
     }
 
     [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The test intentionally captures arbitrary callback or worker failures for lifecycle assertions.")]
     public void ReturnAndDisposeRaceLeavesNoReleasableGeneration()
     {
         for (int iteration = 0; iteration < 32; iteration++)
@@ -402,11 +406,11 @@ public sealed class RuntimeConcurrencyCoverageTests
         NativeMemoryReturn policy,
         string operation)
     {
-        ManualResetEventSlim entered = new();
-        ManualResetEventSlim release = new();
+        using ManualResetEventSlim entered = new();
+        using ManualResetEventSlim release = new();
         NativeMemoryTestHooks.SetOperationEntered(name =>
         {
-            if (name == operation)
+            if (string.Equals(name, operation, StringComparison.Ordinal))
             {
                 entered.Set();
                 release.Wait(TimeSpan.FromSeconds(10));
@@ -425,7 +429,7 @@ public sealed class RuntimeConcurrencyCoverageTests
                 Assert.Contains("No lease was invalidated", exception.Message, StringComparison.OrdinalIgnoreCase);
                 Assert.Equal(NativeOwnerLifecycle.Active, pool.CurrentLifecycle);
                 release.Set();
-                await worker;
+                await worker.ConfigureAwait(true);
             }
             else
             {
@@ -441,7 +445,7 @@ public sealed class RuntimeConcurrencyCoverageTests
                 current.Dispose();
 
                 release.Set();
-                await worker;
+                await worker.ConfigureAwait(true);
             }
         }
         finally
@@ -456,11 +460,11 @@ public sealed class RuntimeConcurrencyCoverageTests
         bool returnMemory)
     {
         NativeConcurrentArena arena = new(returnMemoryOnDispose: policy);
-        ManualResetEventSlim entered = new();
-        ManualResetEventSlim release = new();
+        using ManualResetEventSlim entered = new();
+        using ManualResetEventSlim release = new();
         NativeMemoryTestHooks.SetOperationEntered(name =>
         {
-            if (name == operation)
+            if (string.Equals(name, operation, StringComparison.Ordinal))
             {
                 entered.Set();
                 release.Wait(TimeSpan.FromSeconds(10));
@@ -506,7 +510,7 @@ public sealed class RuntimeConcurrencyCoverageTests
             }
 
             release.Set();
-            await worker;
+            await worker.ConfigureAwait(true);
 
             if (returnMemory)
             {
@@ -532,17 +536,18 @@ public sealed class RuntimeConcurrencyCoverageTests
         }
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The test intentionally captures arbitrary callback or worker failures for lifecycle assertions.")]
     private static async Task RaceArenaTransitionWinsBeforeEntryAsync(
         NativeMemoryReturn policy,
         string operation,
         bool returnMemory)
     {
         NativeConcurrentArena arena = new(returnMemoryOnDispose: policy);
-        ManualResetEventSlim beforeEntry = new();
-        ManualResetEventSlim release = new();
+        using ManualResetEventSlim beforeEntry = new();
+        using ManualResetEventSlim release = new();
         NativeMemoryTestHooks.SetBeforeOperationEntry(name =>
         {
-            if (name == operation)
+            if (string.Equals(name, operation, StringComparison.Ordinal))
             {
                 beforeEntry.Set();
                 release.Wait(TimeSpan.FromSeconds(10));
@@ -586,7 +591,7 @@ public sealed class RuntimeConcurrencyCoverageTests
             }
 
             release.Set();
-            Assert.IsType<NativeAllocationReturnedException>(await worker);
+            Assert.IsType<NativeAllocationReturnedException>(await worker.ConfigureAwait(true));
         }
         finally
         {
@@ -716,14 +721,15 @@ public sealed class RuntimeConcurrencyCoverageTests
         internal NativeConcurrentPool<int> Pool { get; }
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The test intentionally captures arbitrary callback or worker failures for lifecycle assertions.")]
     private static async Task RaceReturnWinsBeforeOperationEntryAsync(NativeMemoryReturn policy, string operation)
     {
         NativeConcurrentPool<int> pool = new();
-        ManualResetEventSlim beforeEntry = new();
-        ManualResetEventSlim release = new();
+        using ManualResetEventSlim beforeEntry = new();
+        using ManualResetEventSlim release = new();
         NativeMemoryTestHooks.SetBeforeOperationEntry(name =>
         {
-            if (name == operation)
+            if (string.Equals(name, operation, StringComparison.Ordinal))
             {
                 beforeEntry.Set();
                 release.Wait(TimeSpan.FromSeconds(10));
@@ -761,7 +767,7 @@ public sealed class RuntimeConcurrencyCoverageTests
             }
 
             release.Set();
-            Exception? exception = await worker;
+            Exception? exception = await worker.ConfigureAwait(true);
             Assert.IsType<NativeAllocationReturnedException>(exception);
         }
         finally

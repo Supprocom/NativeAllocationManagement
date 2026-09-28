@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Reflection.Emit;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using Supprocom.NativeAllocationManagement;
 
 namespace Supprocom.NativeAllocationManagement.Tests;
@@ -66,6 +67,7 @@ public sealed class NativeBuilderTests
     }
 
     [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1861", Justification = "This one-shot assertion keeps its expected array local to the test case.")]
     public void BoundedWritePublishesOnlyTheCommittedPrefix()
     {
         using NativeBuilder<int> builder =
@@ -95,6 +97,7 @@ public sealed class NativeBuilderTests
     }
 
     [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1861", Justification = "This one-shot assertion keeps its expected array local to the test case.")]
     public void BoundedWriteGrowsOnceAndCommitsTheFullRange()
     {
         using NativeBuilder<int> builder =
@@ -122,6 +125,7 @@ public sealed class NativeBuilderTests
     }
 
     [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1861", Justification = "This one-shot assertion keeps its expected array local to the test case.")]
     public void StateWriteForwardsStateThroughNestedHelpers()
     {
         using NativeBuilder<int> builder =
@@ -142,6 +146,7 @@ public sealed class NativeBuilderTests
     }
 
     [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1861", Justification = "This one-shot assertion keeps its expected array local to the test case.")]
     public void BorrowedStateWriteUsesTheSameWritePipeline()
     {
         using NativeBuilder<int> builder =
@@ -167,6 +172,7 @@ public sealed class NativeBuilderTests
     }
 
     [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1861", Justification = "This one-shot assertion keeps its expected array local to the test case.")]
     public void CompileTimeStateWriteUsesTheSameWritePipeline()
     {
         using NativeBuilder<int> builder =
@@ -185,6 +191,7 @@ public sealed class NativeBuilderTests
     }
 
     [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1861", Justification = "This one-shot assertion keeps its expected array local to the test case.")]
     public void BorrowedCompileTimeStateWriteUsesTheSamePipeline()
     {
         using NativeBuilder<int> builder =
@@ -208,6 +215,7 @@ public sealed class NativeBuilderTests
     }
 
     [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1861", Justification = "This one-shot assertion keeps its expected array local to the test case.")]
     public void StateWriteSupportsARefStructState()
     {
         using NativeBuilder<int> builder =
@@ -442,6 +450,7 @@ public sealed class NativeBuilderTests
     }
 
     [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1861", Justification = "This one-shot assertion keeps its expected array local to the test case.")]
     public void ExclusiveBorrowPassesThroughNestedHelpers()
     {
         using NativeBuilder<int> builder =
@@ -516,6 +525,7 @@ public sealed class NativeBuilderTests
     }
 
     [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1861", Justification = "This one-shot assertion keeps its expected array local to the test case.")]
     public async Task ConcurrentBorrowIsRejected()
     {
         using NativeBuilder<int> builder =
@@ -550,6 +560,7 @@ public sealed class NativeBuilderTests
     }
 
     [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1861", Justification = "These one-shot assertions keep expected arrays local to the test case.")]
     public void CompositeBorrowWritesBothBuildersThroughNestedHelpers()
     {
         using NativeBuilder<int> first =
@@ -574,6 +585,7 @@ public sealed class NativeBuilderTests
     }
 
     [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1861", Justification = "This one-shot assertion keeps its expected array local to the test case.")]
     public void CompositeBorrowRejectsDuplicateOwnerWithoutMutation()
     {
         using NativeBuilder<int> builder =
@@ -731,12 +743,10 @@ public sealed class NativeBuilderTests
                 "Supprocom.NativeAllocationManagement.NativeBlockAllocator");
         Assert.NotNull(resolvedAllocatorType);
         Type allocatorType = resolvedAllocatorType;
-        MethodInfo resize = Assert.Single(
+        MethodInfo resize = SingleExpected(
             allocatorType.GetMethods(
                 BindingFlags.Static | BindingFlags.NonPublic),
-            static method =>
-                method.Name == "Resize"
-                && method.IsGenericMethodDefinition);
+            static method => string.Equals(method.Name, "Resize", StringComparison.Ordinal) && method.IsGenericMethodDefinition);
 
         OpCode[] instructions = ReadOpCodes(resize).ToArray();
 
@@ -803,7 +813,7 @@ public sealed class NativeBuilderTests
     public void DisposalReturnsBuilderStorageOnlyOnce()
     {
         using NativeMetricsScope metrics = new();
-        NativeBuilder<int> builder =
+        using NativeBuilder<int> builder =
             new NativeBuilder<int>(preLease: 4);
         builder.Append([1, 2, 3]);
 
@@ -849,7 +859,7 @@ public sealed class NativeBuilderTests
     public void AppendCancellationReleasesBuilderStorage()
     {
         using NativeMetricsScope metrics = new();
-        NativeBuilder<int> builder =
+        using NativeBuilder<int> builder =
             new NativeBuilder<int>(preLease: 4);
         using CancellationTokenSource cancellation = new();
         cancellation.Cancel();
@@ -866,7 +876,7 @@ public sealed class NativeBuilderTests
     public void CompletionCancellationReleasesBuilderStorage()
     {
         using NativeMetricsScope metrics = new();
-        NativeBuilder<int> builder =
+        using NativeBuilder<int> builder =
             new NativeBuilder<int>(preLease: 4);
         builder.Append([1, 2, 3]);
         using CancellationTokenSource cancellation = new();
@@ -898,7 +908,7 @@ public sealed class NativeBuilderTests
                     static view =>
                     {
                         long total = 0;
-                        foreach (long value in view.AsSpan())
+                        foreach (ref long value in view.AsSpan())
                         {
                             total += value;
                         }
@@ -919,6 +929,7 @@ public sealed class NativeBuilderTests
     }
 
     [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1861", Justification = "This one-shot assertion keeps its expected array local to the test case.")]
     public void BuilderDoesNotRequireAnAllocatorOwner()
     {
         using NativeBuilder<int> builder =
@@ -963,7 +974,7 @@ public sealed class NativeBuilderTests
         NativeMemoryTestHooks.SetBeforeOperationEntry(
             operation =>
             {
-                if (operation != "NativeBuilder.Append")
+                if (!string.Equals(operation, "NativeBuilder.Append", StringComparison.Ordinal))
                 {
                     return;
                 }
@@ -984,7 +995,7 @@ public sealed class NativeBuilderTests
                 () => builder.Complete());
 
             releaseAppend.Set();
-            await first;
+            await first.ConfigureAwait(true);
         }
         finally
         {
@@ -1000,6 +1011,8 @@ public sealed class NativeBuilderTests
     }
 
     [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The test intentionally captures arbitrary callback or worker failures for lifecycle assertions.")]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1861", Justification = "This one-shot assertion keeps its expected array local to the test case.")]
     public async Task ConcurrentCompletionAndDisposalReturnStorageOnce()
     {
         using NativeMetricsScope metrics = new();
@@ -1132,6 +1145,7 @@ public sealed class NativeBuilderTests
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000", Justification = "The test intentionally abandons the builder to exercise emergency finalization.")]
     private static WeakReference CreateAbandonedBuilder()
     {
         NativeBuilder<int> builder =
@@ -1294,6 +1308,7 @@ public sealed class NativeBuilderTests
             NativeMemoryTestHooks.Reset();
         }
 
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822", Justification = "A metrics scope exposes an instance assertion while reading global test hooks.")]
         internal void AssertBalanced()
         {
             NativeMemoryTestMetrics metrics =
@@ -1307,6 +1322,7 @@ public sealed class NativeBuilderTests
         public void Dispose() => NativeMemoryTestHooks.Reset();
     }
 
+    [StructLayout(LayoutKind.Sequential)]
     private readonly record struct WriteState(int Start, int Count);
 
     private readonly ref struct SpanWriteState

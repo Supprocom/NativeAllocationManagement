@@ -58,6 +58,11 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
     /// <inheritdoc />
     public override void Initialize(AnalysisContext context)
     {
+        if (context is null)
+        {
+            throw new ArgumentNullException(nameof(context));
+        }
+
         context.EnableConcurrentExecution();
         context.ConfigureGeneratedCodeAnalysis(
             GeneratedCodeAnalysisFlags.None);
@@ -776,24 +781,18 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
             && PairBorrowAction is not null
             && BorrowStateAction is not null;
 
-        internal bool IsBuilderWrite(IMethodSymbol method) =>
-            method.Name == "Write"
-            && (Is(method.ContainingType, Builder)
+        internal bool IsBuilderWrite(IMethodSymbol method) => string.Equals(method.Name, "Write", StringComparison.Ordinal) && (Is(method.ContainingType, Builder)
                 || Is(method.ContainingType, Borrow))
             && method.Parameters.Any(parameter =>
                 IsWriteAction(parameter.Type));
 
-        internal bool IsBuilderStateWrite(IMethodSymbol method) =>
-            method.Name == "Write"
-            && (Is(method.ContainingType, Builder)
+        internal bool IsBuilderStateWrite(IMethodSymbol method) => string.Equals(method.Name, "Write", StringComparison.Ordinal) && (Is(method.ContainingType, Builder)
                 || Is(method.ContainingType, Borrow))
             && method.Parameters.Any(parameter =>
                 IsWriteStateAction(parameter.Type));
 
         internal bool IsBuilderCompileTimeStateWrite(
-            IMethodSymbol method) =>
-            method.Name == "Write"
-            && (Is(method.ContainingType, Builder)
+            IMethodSymbol method) => string.Equals(method.Name, "Write", StringComparison.Ordinal) && (Is(method.ContainingType, Builder)
                 || Is(method.ContainingType, Borrow))
             && method.TypeArguments.Length == 2
             && method.Parameters.Any(parameter =>
@@ -821,20 +820,47 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
             ITypeSymbol resolvedStateType = method.TypeArguments[0];
             ITypeSymbol elementType =
                 method.ContainingType.TypeArguments[0];
-            INamedTypeSymbol? contract = actionType.AllInterfaces
-                .SingleOrDefault(candidate =>
-                    Is(candidate, CompileTimeWriteAction)
-                    && candidate.TypeArguments.Length == 2
-                    && SymbolEqualityComparer.Default.Equals(
-                        candidate.TypeArguments[0],
-                        elementType)
-                    && SymbolEqualityComparer.Default.Equals(
-                        candidate.TypeArguments[1],
-                        resolvedStateType));
-            IMethodSymbol? contractMethod = contract?
-                .GetMembers("Invoke")
-                .OfType<IMethodSymbol>()
-                .SingleOrDefault();
+            INamedTypeSymbol? contract = null;
+            foreach (INamedTypeSymbol candidate in actionType.AllInterfaces)
+            {
+                if (!Is(candidate, CompileTimeWriteAction)
+                    || candidate.TypeArguments.Length != 2
+                    || !SymbolEqualityComparer.Default.Equals(
+                        candidate.TypeArguments[0], elementType)
+                    || !SymbolEqualityComparer.Default.Equals(
+                        candidate.TypeArguments[1], resolvedStateType))
+                {
+                    continue;
+                }
+
+                if (contract is not null)
+                {
+                    return false;
+                }
+
+                contract = candidate;
+            }
+
+            // Symbol lookup and interface implementation can fail in incomplete compilations.
+#pragma warning disable CA1508
+            IMethodSymbol? contractMethod = null;
+            if (contract is not null)
+            {
+                foreach (ISymbol member in contract.GetMembers("Invoke"))
+                {
+                    if (member is not IMethodSymbol candidate)
+                    {
+                        continue;
+                    }
+
+                    if (contractMethod is not null)
+                    {
+                        return false;
+                    }
+
+                    contractMethod = candidate;
+                }
+            }
             IMethodSymbol? resolvedAction = contractMethod is null
                 ? null
                 : actionType.FindImplementationForInterfaceMember(
@@ -854,21 +880,18 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
             {
                 return false;
             }
+#pragma warning restore CA1508
 
             stateType = resolvedStateType;
             action = resolvedAction;
             return true;
         }
 
-        internal bool IsBuilderBorrow(IMethodSymbol method) =>
-            method.Name == "Borrow"
-            && Is(method.ContainingType, Builder)
+        internal bool IsBuilderBorrow(IMethodSymbol method) => string.Equals(method.Name, "Borrow", StringComparison.Ordinal) && Is(method.ContainingType, Builder)
             && method.Parameters.Any(parameter =>
                 GetBorrowActionArity(parameter.Type) != 0);
 
-        internal bool IsBuilderStateBorrow(IMethodSymbol method) =>
-            method.Name == "Borrow"
-            && Is(method.ContainingType, Builder)
+        internal bool IsBuilderStateBorrow(IMethodSymbol method) => string.Equals(method.Name, "Borrow", StringComparison.Ordinal) && Is(method.ContainingType, Builder)
             && method.Parameters.Any(parameter =>
                 IsBorrowStateAction(parameter.Type));
 
@@ -906,6 +929,7 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
         internal bool IsBuilder(ITypeSymbol? type) =>
             Is(type, Builder);
 
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822", Justification = "Symbol queries remain on the per-compilation Symbols facade.")]
         internal bool IsOwnerBearingState(ITypeSymbol type) =>
             IsOwnerBearingState(
                 type,
@@ -928,8 +952,7 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
                 && IsTrustedFrameworkMethod(definition)
                 && method.IsStatic
                 && method.ReturnsVoid
-                && method.Name == "Write"
-                && method.Arity == 1
+                && string.Equals(method.Name, "Write", StringComparison.Ordinal) && method.Arity == 1
                 && method.Parameters.Length == 2
                 && Is(method.ContainingType, MemoryMarshal)
                 && method.Parameters[0].RefKind == RefKind.None
@@ -981,7 +1004,7 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
                 : null;
         }
 
-        internal bool IsScopedInForward(
+        internal static bool IsScopedInForward(
             IParameterSymbol? parameter,
             ITypeSymbol stateType)
         {
@@ -1018,7 +1041,7 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
                 || IsBuilderCompileTimeStateWrite(
                     invocation.TargetMethod));
 
-        internal bool IsScopedRefForward(
+        internal static bool IsScopedRefForward(
             IParameterSymbol? parameter,
             Func<ITypeSymbol?, bool> isAuthority)
         {
@@ -1041,7 +1064,7 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
                 && isAuthority(declaration.Type);
         }
 
-        internal bool IsScopedAdapterForward(
+        internal static bool IsScopedAdapterForward(
             IParameterSymbol? parameter,
             ITypeSymbol adapterType)
         {
@@ -1086,7 +1109,7 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
                 or "System.ReadOnlySpan<T>";
         }
 
-        private bool IsOwnerBearingState(
+        private static bool IsOwnerBearingState(
             ITypeSymbol type,
             HashSet<ITypeSymbol> visited)
         {
@@ -1151,8 +1174,8 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
         private static bool IsNamOwnershipType(
             INamedTypeSymbol type)
         {
-            if (type.ContainingNamespace.ToDisplayString()
-                != "Supprocom.NativeAllocationManagement")
+            if (!string.Equals(type.ContainingNamespace.ToDisplayString()
+, "Supprocom.NativeAllocationManagement", StringComparison.Ordinal))
             {
                 return false;
             }
@@ -1424,15 +1447,14 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
 
             if (parent is IArgumentOperation argument)
             {
-                return _symbols.IsScopedRefForward(
+                return Symbols.IsScopedRefForward(
                     argument.Parameter,
                     _symbols.IsWriter);
             }
 
             return parent is IPropertyReferenceOperation property
                 && ReferenceEquals(property.Instance, reference)
-                && property.Property.Name == "Length"
-                && _symbols.IsWriter(
+                && string.Equals(property.Property.Name, "Length", StringComparison.Ordinal) && _symbols.IsWriter(
                     property.Property.ContainingType);
         }
 
@@ -1475,7 +1497,10 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
                 || !adapterType.IsRefLikeType
                 || adapterType.DeclaringSyntaxReferences.Length != 1
                 || creation.Constructor is not { } constructor
+                // A synthesized or metadata constructor must fail closed.
+#pragma warning disable CA1508
                 || constructor.DeclaringSyntaxReferences.Length != 1
+#pragma warning restore CA1508
                 || !SymbolEqualityComparer.Default.Equals(
                     declaration.Symbol.Type,
                     adapterType))
@@ -1629,7 +1654,7 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
                 .FirstOrDefault(reference =>
                     _adapters.Contains(reference.Local));
             return adapter is not null
-                && _symbols.IsScopedAdapterForward(
+                && Symbols.IsScopedAdapterForward(
                     argument.Parameter,
                     adapter.Local.Type);
         }
@@ -2020,7 +2045,7 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
                     .DescendantsAndSelf()
                     .OfType<IParameterReferenceOperation>()
                     .First(item => IsState(item.Parameter));
-                if (!_symbols.IsScopedInForward(
+                if (!Symbols.IsScopedInForward(
                         operation.Parameter,
                         reference.Parameter.Type)
                     && !_symbols.IsStateBoundaryForward(
@@ -2112,7 +2137,7 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
             }
 
             return parent is IArgumentOperation argument
-                && (_symbols.IsScopedInForward(
+                && (Symbols.IsScopedInForward(
                         argument.Parameter,
                         reference.Parameter.Type)
                     || _symbols.IsStateBoundaryForward(
@@ -2356,7 +2381,7 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
             }
 
             return parent is IArgumentOperation argument
-                && _symbols.IsScopedRefForward(
+                && Symbols.IsScopedRefForward(
                     argument.Parameter,
                     _symbols.IsBorrow);
         }
@@ -2426,9 +2451,7 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
 
         private int Length { get; }
 
-        public bool Equals(DiagnosticKey other) =>
-            Id == other.Id
-            && ReferenceEquals(Tree, other.Tree)
+        public bool Equals(DiagnosticKey other) => string.Equals(Id, other.Id, StringComparison.Ordinal) && ReferenceEquals(Tree, other.Tree)
             && Start == other.Start
             && Length == other.Length;
 
@@ -2439,7 +2462,7 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
         {
             unchecked
             {
-                int hash = Id.GetHashCode();
+                int hash = StringComparer.Ordinal.GetHashCode(Id);
                 hash = (hash * 397) ^ Tree.GetHashCode();
                 hash = (hash * 397) ^ Start;
                 return (hash * 397) ^ Length;

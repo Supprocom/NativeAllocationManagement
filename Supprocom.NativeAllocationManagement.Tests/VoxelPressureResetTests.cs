@@ -65,7 +65,7 @@ public sealed class VoxelPressureResetTests
     }
 
     private static void VerifyDiagnosticState(
-        IPressureProfileSession session,
+        WorkerLocalPressureSession session,
         bool expectAllocatorState)
     {
         const long capBytes = 64L * 1024 * 1024;
@@ -110,7 +110,7 @@ public sealed class VoxelPressureResetTests
             Assert.IsType<PressureRequestDiagnostics>(
                 result.Diagnostics);
         PressureWorkerDiagnostic worker =
-            Assert.Single(diagnostics.Workers);
+            SingleExpected(diagnostics.Workers);
 
         Assert.Equal(0, worker.WorkerIndex);
         Assert.Equal(
@@ -153,10 +153,18 @@ public sealed class VoxelPressureResetTests
                 Assert.IsType<PressureRequestDiagnostics>(
                     warmup.Diagnostics);
             PressureWorkerDiagnostic warmupWorker =
-                Assert.Single(warmupDiagnostics.Workers);
+                SingleExpected(warmupDiagnostics.Workers);
 
-            Assert.True(
-                worker.AllocatorAfterReset.ActiveRecords > 0);
+            Assert.True(result.StateAfterReset.HasValue);
+            PressureSessionState reset = result.StateAfterReset.Value;
+            Assert.True(reset.PersistentAllocationBytes > 0);
+            Assert.NotNull(result.NativeOwners);
+            NativeOwnerProfile owner = SingleExpected(result.NativeOwners);
+            Assert.Equal(reset.PersistentAllocationBytes, owner.RequestedBytes);
+            Assert.True(worker.AllocatorAfterReset.RetainedSegmentCount > 0);
+            Assert.Equal(
+                warmupWorker.AllocatorAfterReset.RetainedSegmentCount,
+                worker.AllocatorAfterReset.RetainedSegmentCount);
             Assert.Equal(
                 warmupWorker.AllocatorAfterReset.ActiveRecords,
                 worker.AllocatorAfterReset.ActiveRecords);

@@ -12,7 +12,7 @@ public sealed class AllocatorPerformanceRegressionTests
     [Fact]
     public async Task NativeRegionBeatsOptimizedTypedArrayPools()
     {
-        RegionRegressionReport report = await RunWorker<RegionRegressionReport>(
+        RegionRegressionReport report = await RunWorkerAsync<RegionRegressionReport>(
             "Region");
         string evidence = JsonSerializer.Serialize(report);
 
@@ -29,9 +29,9 @@ public sealed class AllocatorPerformanceRegressionTests
             evidence);
 
         int arrayPoolFirst = report.Pairs.Count(
-            pair => pair.Order == "ArrayPool-Region");
+            pair => string.Equals(pair.Order, "ArrayPool-Region", StringComparison.Ordinal));
         int regionFirst = report.Pairs.Count(
-            pair => pair.Order == "Region-ArrayPool");
+            pair => string.Equals(pair.Order, "Region-ArrayPool", StringComparison.Ordinal));
         Assert.InRange(
             Math.Abs(arrayPoolFirst - regionFirst),
             0,
@@ -69,7 +69,7 @@ public sealed class AllocatorPerformanceRegressionTests
     [Fact]
     public async Task NativeArenaBeatsOptimizedTypedArrayPools()
     {
-        ArenaRegressionReport report = await RunWorker<ArenaRegressionReport>(
+        ArenaRegressionReport report = await RunWorkerAsync<ArenaRegressionReport>(
             "Arena");
         string evidence = JsonSerializer.Serialize(report);
 
@@ -86,9 +86,9 @@ public sealed class AllocatorPerformanceRegressionTests
             evidence);
 
         int arrayPoolFirst = report.Pairs.Count(
-            pair => pair.Order == "ArrayPool-Arena");
+            pair => string.Equals(pair.Order, "ArrayPool-Arena", StringComparison.Ordinal));
         int arenaFirst = report.Pairs.Count(
-            pair => pair.Order == "Arena-ArrayPool");
+            pair => string.Equals(pair.Order, "Arena-ArrayPool", StringComparison.Ordinal));
         Assert.InRange(
             Math.Abs(arrayPoolFirst - arenaFirst),
             0,
@@ -118,7 +118,7 @@ public sealed class AllocatorPerformanceRegressionTests
         }
 
         ArenaScopedRegressionReport scopedReport =
-            await RunWorker<ArenaScopedRegressionReport>(
+            await RunWorkerAsync<ArenaScopedRegressionReport>(
                 "ArenaScoped");
         AssertArenaScopedReport(scopedReport);
     }
@@ -141,9 +141,9 @@ public sealed class AllocatorPerformanceRegressionTests
             evidence);
 
         int arrayPoolFirst = report.Pairs.Count(
-            pair => pair.Order == "ArrayPool-ArenaScoped");
+            pair => string.Equals(pair.Order, "ArrayPool-ArenaScoped", StringComparison.Ordinal));
         int arenaFirst = report.Pairs.Count(
-            pair => pair.Order == "ArenaScoped-ArrayPool");
+            pair => string.Equals(pair.Order, "ArenaScoped-ArrayPool", StringComparison.Ordinal));
         Assert.InRange(
             Math.Abs(arrayPoolFirst - arenaFirst),
             0,
@@ -174,7 +174,7 @@ public sealed class AllocatorPerformanceRegressionTests
         }
     }
 
-    private static async Task<TReport> RunWorker<TReport>(
+    private static async Task<TReport> RunWorkerAsync<TReport>(
         string kind)
     {
         string dotnet = Environment.GetEnvironmentVariable(
@@ -206,17 +206,18 @@ public sealed class AllocatorPerformanceRegressionTests
             ProcessTimeoutMilliseconds);
         try
         {
-            await process.WaitForExitAsync(timeout.Token);
+            await process.WaitForExitAsync(timeout.Token).ConfigureAwait(true);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException exception)
         {
             process.Kill(entireProcessTree: true);
             throw new TimeoutException(
-                $"The {kind} regression process exceeded ten seconds.");
+                $"The {kind} regression process exceeded ten seconds.",
+                exception);
         }
 
-        string output = await outputTask;
-        string error = await errorTask;
+        string output = await outputTask.ConfigureAwait(true);
+        string error = await errorTask.ConfigureAwait(true);
         TReport report =
             JsonSerializer.Deserialize<TReport>(
                 output)
@@ -225,7 +226,7 @@ public sealed class AllocatorPerformanceRegressionTests
         string evidence = output + Environment.NewLine + error;
 
         Assert.True(process.ExitCode == 0, evidence);
-        Assert.DoesNotContain("Unhandled exception", error);
+        Assert.DoesNotContain("Unhandled exception", error, StringComparison.Ordinal);
         return report;
     }
 

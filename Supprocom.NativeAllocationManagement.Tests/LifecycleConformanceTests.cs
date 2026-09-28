@@ -5,13 +5,18 @@ namespace Supprocom.NativeAllocationManagement.Tests;
 
 public sealed class LifecycleConformanceTests
 {
+    private static readonly JsonSerializerOptions CorpusJsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
+
     [Fact]
     public void ExecutableLifecycleCorpusMatchesObservedOwnerStates()
     {
         string path = Path.Combine(FindRepositoryRoot(), "conformance", "native-allocation-lifecycle.json");
         LifecycleCase[] cases = JsonSerializer.Deserialize<LifecycleCase[]>(
             File.ReadAllText(path),
-            new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+            CorpusJsonOptions)
             ?? throw new InvalidDataException("The executable lifecycle corpus was empty.");
 
         foreach (LifecycleCase testCase in cases)
@@ -24,16 +29,16 @@ public sealed class LifecycleConformanceTests
         Assert.Equal(15, cases.Length);
     }
 
-    private static IReadOnlyList<NativeOwnerLifecycle> Execute(LifecycleCase testCase)
+    private static List<NativeOwnerLifecycle> Execute(LifecycleCase testCase)
     {
         List<NativeOwnerLifecycle> states = [];
         NativeMemoryReturn returnPolicy = Enum.Parse<NativeMemoryReturn>(testCase.ReturnPolicy, ignoreCase: false);
 
-        if (testCase.Owner == "pool")
+        if (string.Equals(testCase.Owner, "pool", StringComparison.Ordinal))
         {
             NativeConcurrentPool<int> pool = new(testCase.InitialReservation, returnPolicy, testCase.DelayedActivation);
             states.Add(pool.CurrentLifecycle);
-            if (testCase.ReturnKind == "disposeBeforeActivation")
+            if (string.Equals(testCase.ReturnKind, "disposeBeforeActivation", StringComparison.Ordinal))
             {
                 pool.Dispose();
                 states.Add(pool.CurrentLifecycle);
@@ -46,7 +51,7 @@ public sealed class LifecycleConformanceTests
                 states.Add(pool.CurrentLifecycle);
             }
             ExecuteReturn(pool, testCase.ReturnKind);
-            if (testCase.ReturnKind != "none")
+            if (!string.Equals(testCase.ReturnKind, "none", StringComparison.Ordinal))
             {
                 states.Add(pool.CurrentLifecycle);
             }
@@ -62,7 +67,7 @@ public sealed class LifecycleConformanceTests
             return states;
         }
 
-        if (testCase.Owner == "region")
+        if (string.Equals(testCase.Owner, "region", StringComparison.Ordinal))
         {
             NativeRegion region = new(
                 (nuint)testCase.InitialReservation,
@@ -70,7 +75,7 @@ public sealed class LifecycleConformanceTests
             states.Add(region.CurrentLifecycle);
             if (testCase.DelayedActivation
                 || testCase.ReLease
-                || testCase.ReturnKind != "none")
+                || !string.Equals(testCase.ReturnKind, "none", StringComparison.Ordinal))
             {
                 throw new InvalidDataException(
                     "A simple Region case cannot use generation transitions.");
@@ -81,11 +86,11 @@ public sealed class LifecycleConformanceTests
             return states;
         }
 
-        if (testCase.Owner == "arena")
+        if (string.Equals(testCase.Owner, "arena", StringComparison.Ordinal))
         {
             NativeConcurrentArena arena = new((nuint)testCase.InitialReservation, returnPolicy, testCase.DelayedActivation);
             states.Add(arena.CurrentLifecycle);
-            if (testCase.ReturnKind == "disposeBeforeActivation")
+            if (string.Equals(testCase.ReturnKind, "disposeBeforeActivation", StringComparison.Ordinal))
             {
                 arena.Dispose();
                 states.Add(arena.CurrentLifecycle);
@@ -163,17 +168,10 @@ public sealed class LifecycleConformanceTests
     }
 
     private static string FindRepositoryRoot()
-    {
-        DirectoryInfo? directory = new(AppContext.BaseDirectory);
-        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "Supprocom.NativeAllocationManagement.slnx")))
-        {
-            directory = directory.Parent;
-        }
+        => RepositoryTestPaths.Root;
 
-        return directory?.FullName
-            ?? throw new DirectoryNotFoundException("The repository root was not found from the test output directory.");
-    }
-
+    // JSON deserialization constructs this private corpus record by reflection.
+#pragma warning disable CA1812
     private sealed record LifecycleCase(
         string Name,
         string Owner,
@@ -184,4 +182,5 @@ public sealed class LifecycleConformanceTests
         bool DelayedActivation,
         string[] States,
         string Result);
+#pragma warning restore CA1812
 }

@@ -6,10 +6,15 @@
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
   </PropertyGroup>
 
   <ItemGroup>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>NAM.RepositoryRoot</_Parameter1>
+      <_Parameter2>$(MSBuildProjectDirectory)/..</_Parameter2>
+    </AssemblyAttribute>
+    <PackageReference Include="xunit.analyzers" Version="2.1.0" PrivateAssets="all" />
     <None Include="..\conformance\native-allocation-ownership.json" CopyToOutputDirectory="PreserveNewest" />
     <ProjectReference Include="..\Supprocom.NativeAllocationManagement\Supprocom.NativeAllocationManagement.csproj" />
     <ProjectReference Include="..\Supprocom.NativeAllocationManagement.Analyzers\Supprocom.NativeAllocationManagement.Analyzers.csproj" />

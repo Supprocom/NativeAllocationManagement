@@ -1,0 +1,362 @@
+#nullable enable
+override Supprocom.NativeAllocationManagement.NativeMemoryStatistics.GetHashCode() -> int
+override Supprocom.NativeAllocationManagement.NativeOwnerStatistics.GetHashCode() -> int
+static Supprocom.NativeAllocationManagement.NativeLeaseOperations.Access<TFirst, TSecond, TThird, TFourth, TFifth, TSixth, TSeventh, TEighth>(scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TFirst> first, scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TSecond> second, scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TThird> third, scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TFourth> fourth, scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TFifth> fifth, scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TSixth> sixth, scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TSeventh> seventh, scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TEighth> eighth, Supprocom.NativeAllocationManagement.NativeLeaseOctupleAction<TFirst, TSecond, TThird, TFourth, TFifth, TSixth, TSeventh, TEighth>! action) -> void
+static Supprocom.NativeAllocationManagement.NativeLeaseOperations.Access<TFirst, TSecond, TThird, TFourth, TFifth, TSixth, TSeventh>(scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TFirst> first, scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TSecond> second, scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TThird> third, scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TFourth> fourth, scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TFifth> fifth, scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TSixth> sixth, scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TSeventh> seventh, Supprocom.NativeAllocationManagement.NativeLeaseSeptupleAction<TFirst, TSecond, TThird, TFourth, TFifth, TSixth, TSeventh>! action) -> void
+static Supprocom.NativeAllocationManagement.NativeLeaseOperations.Access<TFirst, TSecond, TThird, TFourth, TFifth>(scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TFirst> first, scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TSecond> second, scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TThird> third, scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TFourth> fourth, scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TFifth> fifth, Supprocom.NativeAllocationManagement.NativeLeaseQuintupleAction<TFirst, TSecond, TThird, TFourth, TFifth>! action) -> void
+static Supprocom.NativeAllocationManagement.NativeLeaseOperations.Access<TFirst, TSecond, TThird, TFourth, TFifth>(scoped Supprocom.NativeAllocationManagement.ConcurrentPooled<TFirst> first, scoped Supprocom.NativeAllocationManagement.ConcurrentPooled<TSecond> second, scoped Supprocom.NativeAllocationManagement.ConcurrentPooled<TThird> third, scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TFourth> fourth, scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TFifth> fifth, Supprocom.NativeAllocationManagement.NativeLeaseQuintupleAction<TFirst, TSecond, TThird, TFourth, TFifth>! action) -> void
+static Supprocom.NativeAllocationManagement.NativeLeaseOperations.Access<TFirst, TSecond, TThird, TFourth, TFifth>(scoped Supprocom.NativeAllocationManagement.Pooled<TFirst> first, scoped Supprocom.NativeAllocationManagement.Pooled<TSecond> second, scoped Supprocom.NativeAllocationManagement.Pooled<TThird> third, scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TFourth> fourth, scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TFifth> fifth, Supprocom.NativeAllocationManagement.NativeLeaseQuintupleAction<TFirst, TSecond, TThird, TFourth, TFifth>! action) -> void
+static Supprocom.NativeAllocationManagement.NativeLeaseOperations.Access<TFirst, TSecond, TThird, TFourth>(scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TFirst> first, scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TSecond> second, scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TThird> third, scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TFourth> fourth, Supprocom.NativeAllocationManagement.NativeLeaseQuadrupleAction<TFirst, TSecond, TThird, TFourth>! action) -> void
+static Supprocom.NativeAllocationManagement.NativeLeaseOperations.Access<TFirst, TSecond, TThird, TFourth>(scoped Supprocom.NativeAllocationManagement.ConcurrentPooled<TFirst> first, scoped Supprocom.NativeAllocationManagement.ConcurrentPooled<TSecond> second, scoped Supprocom.NativeAllocationManagement.ConcurrentPooled<TThird> third, scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TFourth> fourth, Supprocom.NativeAllocationManagement.NativeLeaseQuadrupleAction<TFirst, TSecond, TThird, TFourth>! action) -> void
+static Supprocom.NativeAllocationManagement.NativeLeaseOperations.Access<TFirst, TSecond, TThird, TFourth>(scoped Supprocom.NativeAllocationManagement.Pooled<TFirst> first, scoped Supprocom.NativeAllocationManagement.Pooled<TSecond> second, scoped Supprocom.NativeAllocationManagement.Pooled<TThird> third, scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TFourth> fourth, Supprocom.NativeAllocationManagement.NativeLeaseQuadrupleAction<TFirst, TSecond, TThird, TFourth>! action) -> void
+static Supprocom.NativeAllocationManagement.NativeLeaseOperations.Access<TFirst, TSecond, TThird>(scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TFirst> first, scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TSecond> second, scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TThird> third, Supprocom.NativeAllocationManagement.NativeLeaseTripleAction<TFirst, TSecond, TThird>! action) -> void
+static Supprocom.NativeAllocationManagement.NativeLeaseOperations.Access<TFirst, TSecond, TThird>(scoped Supprocom.NativeAllocationManagement.ConcurrentPooled<TFirst> first, scoped Supprocom.NativeAllocationManagement.ConcurrentPooled<TSecond> second, scoped Supprocom.NativeAllocationManagement.ConcurrentPooled<TThird> third, Supprocom.NativeAllocationManagement.NativeLeaseTripleAction<TFirst, TSecond, TThird>! action) -> void
+static Supprocom.NativeAllocationManagement.NativeLeaseOperations.Access<TFirst, TSecond, TThird>(scoped Supprocom.NativeAllocationManagement.Pooled<TFirst> first, scoped Supprocom.NativeAllocationManagement.Pooled<TSecond> second, scoped Supprocom.NativeAllocationManagement.Pooled<TThird> third, Supprocom.NativeAllocationManagement.NativeLeaseTripleAction<TFirst, TSecond, TThird>! action) -> void
+static Supprocom.NativeAllocationManagement.NativeLeaseOperations.Access<TFirst, TSecond>(scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TFirst> first, scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TSecond> second, Supprocom.NativeAllocationManagement.NativeLeasePairAction<TFirst, TSecond>! action) -> void
+static Supprocom.NativeAllocationManagement.NativeLeaseOperations.Access<TFirst, TSecond>(scoped Supprocom.NativeAllocationManagement.ConcurrentPooled<TFirst> first, scoped Supprocom.NativeAllocationManagement.ConcurrentPooled<TSecond> second, Supprocom.NativeAllocationManagement.NativeLeasePairAction<TFirst, TSecond>! action) -> void
+static Supprocom.NativeAllocationManagement.NativeLeaseOperations.Access<TFirst, TSecond>(scoped Supprocom.NativeAllocationManagement.Pooled<TFirst> first, scoped Supprocom.NativeAllocationManagement.Pooled<TSecond> second, Supprocom.NativeAllocationManagement.NativeLeasePairAction<TFirst, TSecond>! action) -> void
+static Supprocom.NativeAllocationManagement.NativeLeaseOperations.Access<TPooled, TArena>(scoped Supprocom.NativeAllocationManagement.ConcurrentPooled<TPooled> pooled, scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TArena> arena, Supprocom.NativeAllocationManagement.NativeLeasePooledArenaAction<TPooled, TArena>! action) -> void
+static Supprocom.NativeAllocationManagement.NativeLeaseOperations.Access<TPooled, TArena>(scoped Supprocom.NativeAllocationManagement.Pooled<TPooled> pooled, scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TArena> arena, Supprocom.NativeAllocationManagement.NativeLeasePooledArenaAction<TPooled, TArena>! action) -> void
+static Supprocom.NativeAllocationManagement.NativeLeaseOperations.Access<TPooled, TFirst, TSecond, TThird, TFourth>(scoped Supprocom.NativeAllocationManagement.ConcurrentPooled<TPooled> pooled, scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TFirst> first, scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TSecond> second, scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TThird> third, scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TFourth> fourth, Supprocom.NativeAllocationManagement.NativeLeaseQuintupleAction<TPooled, TFirst, TSecond, TThird, TFourth>! action) -> void
+static Supprocom.NativeAllocationManagement.NativeLeaseOperations.Access<TPooled, TFirst, TSecond, TThird, TFourth>(scoped Supprocom.NativeAllocationManagement.Pooled<TPooled> pooled, scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TFirst> first, scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TSecond> second, scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TThird> third, scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TFourth> fourth, Supprocom.NativeAllocationManagement.NativeLeaseQuintupleAction<TPooled, TFirst, TSecond, TThird, TFourth>! action) -> void
+static Supprocom.NativeAllocationManagement.NativeLeaseOperations.Access<TPooled, TFirst, TSecond>(scoped Supprocom.NativeAllocationManagement.ConcurrentPooled<TPooled> pooled, scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TFirst> first, scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TSecond> second, Supprocom.NativeAllocationManagement.NativeLeasePooledArenaPairAction<TPooled, TFirst, TSecond>! action) -> void
+static Supprocom.NativeAllocationManagement.NativeLeaseOperations.Access<TPooled, TFirst, TSecond>(scoped Supprocom.NativeAllocationManagement.Pooled<TPooled> pooled, scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TFirst> first, scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TSecond> second, Supprocom.NativeAllocationManagement.NativeLeasePooledArenaPairAction<TPooled, TFirst, TSecond>! action) -> void
+static Supprocom.NativeAllocationManagement.NativeLeaseOperations.InitializeScoped<TSource, TFirst, TSecond, TThird, TFourth, TFifth, TSixth, TSeventh, TEighth>(scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TSource> source, Supprocom.NativeAllocationManagement.NativeConcurrentArena! arena, int firstLength, int secondLength, int thirdLength, int fourthLength, int fifthLength, int sixthLength, int seventhLength, int eighthLength, Supprocom.NativeAllocationManagement.NativeLeaseSourceOctupleSpanInitializer<TSource, TFirst, TSecond, TThird, TFourth, TFifth, TSixth, TSeventh, TEighth>! initializer, out Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TFirst> first, out Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TSecond> second, out Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TThird> third, out Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TFourth> fourth, out Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TFifth> fifth, out Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TSixth> sixth, out Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TSeventh> seventh, out Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TEighth> eighth) -> void
+static Supprocom.NativeAllocationManagement.NativeLeaseOperations.InitializeScoped<TSource, TFirst, TSecond, TThird, TFourth>(scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TSource> source, Supprocom.NativeAllocationManagement.NativeConcurrentArena! arena, int firstLength, int secondLength, int thirdLength, int fourthLength, Supprocom.NativeAllocationManagement.NativeLeaseSourceQuadInitializer<TSource, TFirst, TSecond, TThird, TFourth>! initializer, out Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TFirst> first, out Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TSecond> second, out Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TThird> third, out Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TFourth> fourth) -> void
+static Supprocom.NativeAllocationManagement.NativeLeaseOperations.InitializeScoped<TSource, TFirst, TSecond, TThird, TFourth>(scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TSource> source, Supprocom.NativeAllocationManagement.NativeConcurrentArena! arena, int firstLength, int secondLength, int thirdLength, int fourthLength, Supprocom.NativeAllocationManagement.NativeLeaseSourceQuadSpanInitializer<TSource, TFirst, TSecond, TThird, TFourth>! initializer, out Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TFirst> first, out Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TSecond> second, out Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TThird> third, out Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TFourth> fourth) -> void
+static Supprocom.NativeAllocationManagement.NativeLeaseOperations.InitializeScoped<TSource, TFirst, TSecond, TThird, TFourth>(scoped Supprocom.NativeAllocationManagement.ConcurrentPooled<TSource> source, Supprocom.NativeAllocationManagement.NativeConcurrentArena! arena, int firstLength, int secondLength, int thirdLength, int fourthLength, Supprocom.NativeAllocationManagement.NativeLeaseSourceQuadInitializer<TSource, TFirst, TSecond, TThird, TFourth>! initializer, out Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TFirst> first, out Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TSecond> second, out Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TThird> third, out Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TFourth> fourth) -> void
+static Supprocom.NativeAllocationManagement.NativeLeaseOperations.InitializeScoped<TSource, TFirst, TSecond, TThird, TFourth>(scoped Supprocom.NativeAllocationManagement.Pooled<TSource> source, Supprocom.NativeAllocationManagement.NativeConcurrentArena! arena, int firstLength, int secondLength, int thirdLength, int fourthLength, Supprocom.NativeAllocationManagement.NativeLeaseSourceQuadInitializer<TSource, TFirst, TSecond, TThird, TFourth>! initializer, out Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TFirst> first, out Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TSecond> second, out Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TThird> third, out Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TFourth> fourth) -> void
+static Supprocom.NativeAllocationManagement.NativeMemoryDiagnostics.Snapshot() -> Supprocom.NativeAllocationManagement.NativeMemoryStatistics
+static Supprocom.NativeAllocationManagement.NativeMemoryStatistics.operator !=(Supprocom.NativeAllocationManagement.NativeMemoryStatistics left, Supprocom.NativeAllocationManagement.NativeMemoryStatistics right) -> bool
+static Supprocom.NativeAllocationManagement.NativeMemoryStatistics.operator ==(Supprocom.NativeAllocationManagement.NativeMemoryStatistics left, Supprocom.NativeAllocationManagement.NativeMemoryStatistics right) -> bool
+static Supprocom.NativeAllocationManagement.NativeOwnerStatistics.operator !=(Supprocom.NativeAllocationManagement.NativeOwnerStatistics left, Supprocom.NativeAllocationManagement.NativeOwnerStatistics right) -> bool
+static Supprocom.NativeAllocationManagement.NativeOwnerStatistics.operator ==(Supprocom.NativeAllocationManagement.NativeOwnerStatistics left, Supprocom.NativeAllocationManagement.NativeOwnerStatistics right) -> bool
+static Supprocom.NativeAllocationManagement.NativeTransfer<T>.Move(ref Supprocom.NativeAllocationManagement.NativeTransfer<T>? source) -> Supprocom.NativeAllocationManagement.NativeTransfer<T>!
+static Supprocom.NativeAllocationManagement.NativeTransferPoolExtensions.RentTransferable<T>(this Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>! pool, int length, Supprocom.NativeAllocationManagement.NativeLeaseInitializer<T>! initializer) -> Supprocom.NativeAllocationManagement.NativeTransfer<T>!
+Supprocom.NativeAllocationManagement.ArenaLease<T>
+Supprocom.NativeAllocationManagement.ArenaLease<T>.Access(Supprocom.NativeAllocationManagement.NativeLeaseAction<T>! action) -> void
+Supprocom.NativeAllocationManagement.ArenaLease<T>.ArenaLease() -> void
+Supprocom.NativeAllocationManagement.ArenaLease<T>.Capacity.get -> int
+Supprocom.NativeAllocationManagement.ArenaLease<T>.Clear() -> void
+Supprocom.NativeAllocationManagement.ArenaLease<T>.CopyFrom(scoped System.ReadOnlySpan<T> source) -> void
+Supprocom.NativeAllocationManagement.ArenaLease<T>.CopyTo(scoped System.Span<T> destination) -> void
+Supprocom.NativeAllocationManagement.ArenaLease<T>.Length.get -> int
+Supprocom.NativeAllocationManagement.ArenaLease<T>.Read<TResult>(Supprocom.NativeAllocationManagement.NativeLeaseFunc<T, TResult>! action) -> TResult
+Supprocom.NativeAllocationManagement.ConcurrentArenaLease<T>
+Supprocom.NativeAllocationManagement.ConcurrentArenaLease<T>.Access(Supprocom.NativeAllocationManagement.NativeLeaseAction<T>! action) -> void
+Supprocom.NativeAllocationManagement.ConcurrentArenaLease<T>.Capacity.get -> int
+Supprocom.NativeAllocationManagement.ConcurrentArenaLease<T>.Clear() -> void
+Supprocom.NativeAllocationManagement.ConcurrentArenaLease<T>.ConcurrentArenaLease() -> void
+Supprocom.NativeAllocationManagement.ConcurrentArenaLease<T>.CopyFrom(scoped System.ReadOnlySpan<T> source) -> void
+Supprocom.NativeAllocationManagement.ConcurrentArenaLease<T>.CopyTo(scoped System.Span<T> destination) -> void
+Supprocom.NativeAllocationManagement.ConcurrentArenaLease<T>.Length.get -> int
+Supprocom.NativeAllocationManagement.ConcurrentArenaLease<T>.Read<TResult>(Supprocom.NativeAllocationManagement.NativeLeaseFunc<T, TResult>! action) -> TResult
+Supprocom.NativeAllocationManagement.ConcurrentPooled<T>
+Supprocom.NativeAllocationManagement.ConcurrentPooled<T>.Access(Supprocom.NativeAllocationManagement.NativeLeaseAction<T>! action) -> void
+Supprocom.NativeAllocationManagement.ConcurrentPooled<T>.Capacity.get -> int
+Supprocom.NativeAllocationManagement.ConcurrentPooled<T>.Clear() -> void
+Supprocom.NativeAllocationManagement.ConcurrentPooled<T>.ConcurrentPooled() -> void
+Supprocom.NativeAllocationManagement.ConcurrentPooled<T>.CopyFrom(scoped System.ReadOnlySpan<T> source) -> void
+Supprocom.NativeAllocationManagement.ConcurrentPooled<T>.CopyTo(scoped System.Span<T> destination) -> void
+Supprocom.NativeAllocationManagement.ConcurrentPooled<T>.Dispose() -> void
+Supprocom.NativeAllocationManagement.ConcurrentPooled<T>.Length.get -> int
+Supprocom.NativeAllocationManagement.ConcurrentPooled<T>.Process<TState, TResult>(int length, scoped in TState state, Supprocom.NativeAllocationManagement.NativeLeaseStateFunc<T, TState, TResult>! callback) -> TResult
+Supprocom.NativeAllocationManagement.ConcurrentPooled<T>.Read<TResult>(Supprocom.NativeAllocationManagement.NativeLeaseFunc<T, TResult>! action) -> TResult
+Supprocom.NativeAllocationManagement.INativeBuilderWriteAction<T, TState>
+Supprocom.NativeAllocationManagement.INativeBuilderWriteAction<T, TState>.Invoke(scoped Supprocom.NativeAllocationManagement.NativeBuilderWriter<T> writer, scoped in TState state) -> void
+Supprocom.NativeAllocationManagement.Local<T>
+Supprocom.NativeAllocationManagement.Local<T>.Access(Supprocom.NativeAllocationManagement.NativeLeaseAction<T>! action) -> void
+Supprocom.NativeAllocationManagement.Local<T>.Capacity.get -> int
+Supprocom.NativeAllocationManagement.Local<T>.Clear() -> void
+Supprocom.NativeAllocationManagement.Local<T>.CopyFrom(scoped System.ReadOnlySpan<T> source) -> void
+Supprocom.NativeAllocationManagement.Local<T>.CopyTo(scoped System.Span<T> destination) -> void
+Supprocom.NativeAllocationManagement.Local<T>.Length.get -> int
+Supprocom.NativeAllocationManagement.Local<T>.Local() -> void
+Supprocom.NativeAllocationManagement.Local<T>.Process<TState, TResult>(TState state, Supprocom.NativeAllocationManagement.NativeSpanStateProcessor<T, TState, TResult>! processor) -> TResult
+Supprocom.NativeAllocationManagement.Local<T>.Read<TResult>(Supprocom.NativeAllocationManagement.NativeLeaseFunc<T, TResult>! action) -> TResult
+Supprocom.NativeAllocationManagement.NativeAllocationDisposedException
+Supprocom.NativeAllocationManagement.NativeAllocationException
+Supprocom.NativeAllocationManagement.NativeAllocationException.ActiveOperationCount.get -> int
+Supprocom.NativeAllocationManagement.NativeAllocationException.AllocationId.get -> long
+Supprocom.NativeAllocationManagement.NativeAllocationException.CurrentGeneration.get -> long
+Supprocom.NativeAllocationManagement.NativeAllocationException.CurrentLifecycle.get -> Supprocom.NativeAllocationManagement.NativeOwnerLifecycle
+Supprocom.NativeAllocationManagement.NativeAllocationException.Generation.get -> long
+Supprocom.NativeAllocationManagement.NativeAllocationException.Operation.get -> string!
+Supprocom.NativeAllocationManagement.NativeAllocationException.OwnerKind.get -> string!
+Supprocom.NativeAllocationManagement.NativeAllocationException.OwnerWideBusyGenerationCount.get -> int
+Supprocom.NativeAllocationManagement.NativeAllocationException.OwnerWideLeaseReturnCount.get -> int
+Supprocom.NativeAllocationManagement.NativeAllocationFailedException
+Supprocom.NativeAllocationManagement.NativeAllocationFailedException.RequestedBytes.get -> nuint
+Supprocom.NativeAllocationManagement.NativeAllocationInUseException
+Supprocom.NativeAllocationManagement.NativeAllocationQuarantinedException
+Supprocom.NativeAllocationManagement.NativeAllocationQuarantinedException.Boundary.get -> string!
+Supprocom.NativeAllocationManagement.NativeAllocationQuarantinedException.SegmentOrdinal.get -> long
+Supprocom.NativeAllocationManagement.NativeAllocationReturnedException
+Supprocom.NativeAllocationManagement.NativeAllocationStateException
+Supprocom.NativeAllocationManagement.NativeAllocationUninitializedException
+Supprocom.NativeAllocationManagement.NativeArena
+Supprocom.NativeAllocationManagement.NativeArena.Dispose() -> void
+Supprocom.NativeAllocationManagement.NativeArena.GetStatistics() -> Supprocom.NativeAllocationManagement.NativeOwnerStatistics
+Supprocom.NativeAllocationManagement.NativeArena.NativeArena(nuint preAllocateBytes = 0, Supprocom.NativeAllocationManagement.NativeMemoryReturn returnMemoryOnDispose = Supprocom.NativeAllocationManagement.NativeMemoryReturn.ToGarbageCollector) -> void
+Supprocom.NativeAllocationManagement.NativeArena.RecycleScoped() -> void
+Supprocom.NativeAllocationManagement.NativeArena.Reset() -> void
+Supprocom.NativeAllocationManagement.NativeArena.Scratch<T>(int length, Supprocom.NativeAllocationManagement.NativeLeaseInitializer<T>! initializer) -> Supprocom.NativeAllocationManagement.ArenaLease<T>
+Supprocom.NativeAllocationManagement.NativeArena.ScratchScoped<T>(int length, Supprocom.NativeAllocationManagement.NativeLeaseInitializer<T>! initializer) -> Supprocom.NativeAllocationManagement.ArenaLease<T>
+Supprocom.NativeAllocationManagement.NativeArena.TrimRetainedMemory() -> nuint
+Supprocom.NativeAllocationManagement.NativeArena.TrimRetainedMemoryByBytes(nuint bytesToRelease) -> nuint
+Supprocom.NativeAllocationManagement.NativeBuilder<T>
+Supprocom.NativeAllocationManagement.NativeBuilder<T>.Append(scoped System.ReadOnlySpan<T> source, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> void
+Supprocom.NativeAllocationManagement.NativeBuilder<T>.Append(T value, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> void
+Supprocom.NativeAllocationManagement.NativeBuilder<T>.Borrow(Supprocom.NativeAllocationManagement.NativeBuilder<T>! second, Supprocom.NativeAllocationManagement.NativeBuilderPairBorrowAction<T>! action, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> void
+Supprocom.NativeAllocationManagement.NativeBuilder<T>.Borrow(Supprocom.NativeAllocationManagement.NativeBuilderBorrowAction<T>! action, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> void
+Supprocom.NativeAllocationManagement.NativeBuilder<T>.Borrow<TState>(scoped in TState state, Supprocom.NativeAllocationManagement.NativeBuilderBorrowStateAction<T, TState>! action, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> void
+Supprocom.NativeAllocationManagement.NativeBuilder<T>.Capacity.get -> int
+Supprocom.NativeAllocationManagement.NativeBuilder<T>.Complete(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> Supprocom.NativeAllocationManagement.NativeTransfer<T>!
+Supprocom.NativeAllocationManagement.NativeBuilder<T>.Count.get -> int
+Supprocom.NativeAllocationManagement.NativeBuilder<T>.Dispose() -> void
+Supprocom.NativeAllocationManagement.NativeBuilder<T>.NativeBuilder(int preLease = 0) -> void
+Supprocom.NativeAllocationManagement.NativeBuilder<T>.Write(int maximumAdditionalCount, Supprocom.NativeAllocationManagement.NativeBuilderWriteAction<T>! action, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> void
+Supprocom.NativeAllocationManagement.NativeBuilder<T>.Write<TState, TAction>(int maximumAdditionalCount, scoped in TState state, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> void
+Supprocom.NativeAllocationManagement.NativeBuilder<T>.Write<TState>(int maximumAdditionalCount, scoped in TState state, Supprocom.NativeAllocationManagement.NativeBuilderWriteStateAction<T, TState>! action, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> void
+Supprocom.NativeAllocationManagement.NativeBuilderBorrow<T>
+Supprocom.NativeAllocationManagement.NativeBuilderBorrow<T>.Append(scoped System.ReadOnlySpan<T> source, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> void
+Supprocom.NativeAllocationManagement.NativeBuilderBorrow<T>.Append(T value, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> void
+Supprocom.NativeAllocationManagement.NativeBuilderBorrow<T>.Capacity.get -> int
+Supprocom.NativeAllocationManagement.NativeBuilderBorrow<T>.Count.get -> int
+Supprocom.NativeAllocationManagement.NativeBuilderBorrow<T>.NativeBuilderBorrow() -> void
+Supprocom.NativeAllocationManagement.NativeBuilderBorrow<T>.Write(int maximumAdditionalCount, Supprocom.NativeAllocationManagement.NativeBuilderWriteAction<T>! action) -> void
+Supprocom.NativeAllocationManagement.NativeBuilderBorrow<T>.Write(int maximumAdditionalCount, Supprocom.NativeAllocationManagement.NativeBuilderWriteAction<T>! action, System.Threading.CancellationToken cancellationToken) -> void
+Supprocom.NativeAllocationManagement.NativeBuilderBorrow<T>.Write<TState, TAction>(int maximumAdditionalCount, scoped in TState state) -> void
+Supprocom.NativeAllocationManagement.NativeBuilderBorrow<T>.Write<TState, TAction>(int maximumAdditionalCount, scoped in TState state, System.Threading.CancellationToken cancellationToken) -> void
+Supprocom.NativeAllocationManagement.NativeBuilderBorrow<T>.Write<TState>(int maximumAdditionalCount, scoped in TState state, Supprocom.NativeAllocationManagement.NativeBuilderWriteStateAction<T, TState>! action) -> void
+Supprocom.NativeAllocationManagement.NativeBuilderBorrow<T>.Write<TState>(int maximumAdditionalCount, scoped in TState state, Supprocom.NativeAllocationManagement.NativeBuilderWriteStateAction<T, TState>! action, System.Threading.CancellationToken cancellationToken) -> void
+Supprocom.NativeAllocationManagement.NativeBuilderBorrowAction<T>
+Supprocom.NativeAllocationManagement.NativeBuilderBorrowStateAction<T, TState>
+Supprocom.NativeAllocationManagement.NativeBuilderPairBorrowAction<T>
+Supprocom.NativeAllocationManagement.NativeBuilderWriteAction<T>
+Supprocom.NativeAllocationManagement.NativeBuilderWriter<T>
+Supprocom.NativeAllocationManagement.NativeBuilderWriter<T>.AsSpan() -> System.Span<T>
+Supprocom.NativeAllocationManagement.NativeBuilderWriter<T>.Commit(int actualCount) -> void
+Supprocom.NativeAllocationManagement.NativeBuilderWriter<T>.Length.get -> int
+Supprocom.NativeAllocationManagement.NativeBuilderWriter<T>.NativeBuilderWriter() -> void
+Supprocom.NativeAllocationManagement.NativeBuilderWriteStateAction<T, TState>
+Supprocom.NativeAllocationManagement.NativeConcurrentArena
+Supprocom.NativeAllocationManagement.NativeConcurrentArena.Dispose() -> void
+Supprocom.NativeAllocationManagement.NativeConcurrentArena.GetStatistics() -> Supprocom.NativeAllocationManagement.NativeOwnerStatistics
+Supprocom.NativeAllocationManagement.NativeConcurrentArena.LeaseFromMemory() -> void
+Supprocom.NativeAllocationManagement.NativeConcurrentArena.NativeConcurrentArena(nuint preAllocateBytes = 0, Supprocom.NativeAllocationManagement.NativeMemoryReturn returnMemoryOnDispose = Supprocom.NativeAllocationManagement.NativeMemoryReturn.ToGarbageCollector, bool doNotLeaseOnDeclaration = false) -> void
+Supprocom.NativeAllocationManagement.NativeConcurrentArena.RecycleScoped() -> void
+Supprocom.NativeAllocationManagement.NativeConcurrentArena.ReleaseLeasesToGarbageCollector() -> void
+Supprocom.NativeAllocationManagement.NativeConcurrentArena.ReleaseLeasesToNativeMemory() -> void
+Supprocom.NativeAllocationManagement.NativeConcurrentArena.ReserveExternalMemory(System.Runtime.InteropServices.SafeBuffer! buffer, nuint byteOffset, nuint byteLength) -> nuint
+Supprocom.NativeAllocationManagement.NativeConcurrentArena.ReserveRetainedMemory(nuint byteLength) -> nuint
+Supprocom.NativeAllocationManagement.NativeConcurrentArena.ReturnMemoryToGarbageCollector() -> void
+Supprocom.NativeAllocationManagement.NativeConcurrentArena.ReturnMemoryToNativeMemory() -> void
+Supprocom.NativeAllocationManagement.NativeConcurrentArena.Scratch<T>(int length, Supprocom.NativeAllocationManagement.NativeLeaseInitializer<T>! initializer) -> Supprocom.NativeAllocationManagement.ConcurrentArenaLease<T>
+Supprocom.NativeAllocationManagement.NativeConcurrentArena.ScratchScoped<T>(int length, Supprocom.NativeAllocationManagement.NativeLeaseInitializer<T>! initializer) -> Supprocom.NativeAllocationManagement.ConcurrentArenaLease<T>
+Supprocom.NativeAllocationManagement.NativeConcurrentArena.TrimRetainedMemory() -> nuint
+Supprocom.NativeAllocationManagement.NativeConcurrentArena.TrimRetainedMemoryByBytes(nuint bytesToRelease) -> nuint
+Supprocom.NativeAllocationManagement.NativeConcurrentArena.TrimRetainedMemoryByLeaseSize<T>(int leaseLength = 1) -> nuint
+Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>
+Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>.Dispose() -> void
+Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>.GetStatistics() -> Supprocom.NativeAllocationManagement.NativeOwnerStatistics
+Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>.LeaseFromMemory() -> void
+Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>.LeaseScoped(int length, Supprocom.NativeAllocationManagement.NativeLeaseInitializer<T>! initializer) -> Supprocom.NativeAllocationManagement.ConcurrentPooled<T>
+Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>.NativeConcurrentPool(int preLease = 0, Supprocom.NativeAllocationManagement.NativeMemoryReturn returnMemoryOnDispose = Supprocom.NativeAllocationManagement.NativeMemoryReturn.ToGarbageCollector, bool doNotLeaseOnDeclaration = false) -> void
+Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>.NativeConcurrentPool(int preLease, nuint preAllocateBytes, Supprocom.NativeAllocationManagement.NativeMemoryReturn returnMemoryOnDispose = Supprocom.NativeAllocationManagement.NativeMemoryReturn.ToGarbageCollector, bool doNotLeaseOnDeclaration = false) -> void
+Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>.RecycleScoped() -> void
+Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>.ReleaseLeasesToGarbageCollector() -> void
+Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>.ReleaseLeasesToNativeMemory() -> void
+Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>.Rent(int length, Supprocom.NativeAllocationManagement.NativeLeaseInitializer<T>! initializer) -> Supprocom.NativeAllocationManagement.ConcurrentPooled<T>
+Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>.ReturnMemoryToGarbageCollector() -> void
+Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>.ReturnMemoryToNativeMemory() -> void
+Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>.TrimRetainedMemory() -> nuint
+Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>.TrimRetainedMemoryByBytes(nuint bytesToRelease) -> nuint
+Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>.TrimRetainedMemoryByLeaseSize(int leaseLength = 1) -> nuint
+Supprocom.NativeAllocationManagement.NativeLeaseAction<T>
+Supprocom.NativeAllocationManagement.NativeLeaseFunc<T, TResult>
+Supprocom.NativeAllocationManagement.NativeLeaseInitializer<T>
+Supprocom.NativeAllocationManagement.NativeLeaseOctupleAction<TFirst, TSecond, TThird, TFourth, TFifth, TSixth, TSeventh, TEighth>
+Supprocom.NativeAllocationManagement.NativeLeaseOperations
+Supprocom.NativeAllocationManagement.NativeLeasePairAction<TFirst, TSecond>
+Supprocom.NativeAllocationManagement.NativeLeasePooledArenaAction<TPooled, TArena>
+Supprocom.NativeAllocationManagement.NativeLeasePooledArenaPairAction<TPooled, TFirst, TSecond>
+Supprocom.NativeAllocationManagement.NativeLeaseQuadrupleAction<TFirst, TSecond, TThird, TFourth>
+Supprocom.NativeAllocationManagement.NativeLeaseQuintupleAction<TFirst, TSecond, TThird, TFourth, TFifth>
+Supprocom.NativeAllocationManagement.NativeLeaseSeptupleAction<TFirst, TSecond, TThird, TFourth, TFifth, TSixth, TSeventh>
+Supprocom.NativeAllocationManagement.NativeLeaseSourceOctupleSpanInitializer<TSource, TFirst, TSecond, TThird, TFourth, TFifth, TSixth, TSeventh, TEighth>
+Supprocom.NativeAllocationManagement.NativeLeaseSourceQuadInitializer<TSource, TFirst, TSecond, TThird, TFourth>
+Supprocom.NativeAllocationManagement.NativeLeaseSourceQuadSpanInitializer<TSource, TFirst, TSecond, TThird, TFourth>
+Supprocom.NativeAllocationManagement.NativeLeaseStateFunc<T, TState, TResult>
+Supprocom.NativeAllocationManagement.NativeLeaseTripleAction<TFirst, TSecond, TThird>
+Supprocom.NativeAllocationManagement.NativeLeaseView<T>
+Supprocom.NativeAllocationManagement.NativeLeaseView<T>.AsSpan() -> System.Span<T>
+Supprocom.NativeAllocationManagement.NativeLeaseView<T>.Capacity.get -> int
+Supprocom.NativeAllocationManagement.NativeLeaseView<T>.Clear() -> void
+Supprocom.NativeAllocationManagement.NativeLeaseView<T>.CopyFrom(scoped System.ReadOnlySpan<T> source) -> void
+Supprocom.NativeAllocationManagement.NativeLeaseView<T>.CopyTo(scoped System.Span<T> destination) -> void
+Supprocom.NativeAllocationManagement.NativeLeaseView<T>.Fill(T value) -> void
+Supprocom.NativeAllocationManagement.NativeLeaseView<T>.Length.get -> int
+Supprocom.NativeAllocationManagement.NativeLeaseView<T>.NativeLeaseView() -> void
+Supprocom.NativeAllocationManagement.NativeLeaseView<T>.this[int index].get -> T
+Supprocom.NativeAllocationManagement.NativeLeaseView<T>.this[int index].set -> void
+Supprocom.NativeAllocationManagement.NativeLeaseWriter<T>
+Supprocom.NativeAllocationManagement.NativeLeaseWriter<T>.BeginSequentialRange(int start, int length) -> Supprocom.NativeAllocationManagement.NativeSequentialLeaseWriter<T>
+Supprocom.NativeAllocationManagement.NativeLeaseWriter<T>.Fill(int start, int length, T value) -> void
+Supprocom.NativeAllocationManagement.NativeLeaseWriter<T>.Fill(T value) -> void
+Supprocom.NativeAllocationManagement.NativeLeaseWriter<T>.InitializeRemaining(Supprocom.NativeAllocationManagement.NativeSpanInitializer<T>! initializer) -> void
+Supprocom.NativeAllocationManagement.NativeLeaseWriter<T>.Length.get -> int
+Supprocom.NativeAllocationManagement.NativeLeaseWriter<T>.NativeLeaseWriter() -> void
+Supprocom.NativeAllocationManagement.NativeLeaseWriter<T>.ReadInitialized(int index) -> T
+Supprocom.NativeAllocationManagement.NativeLeaseWriter<T>.ReadInitializedSpan(int start, int length) -> System.ReadOnlySpan<T>
+Supprocom.NativeAllocationManagement.NativeLeaseWriter<T>.Remaining.get -> int
+Supprocom.NativeAllocationManagement.NativeLeaseWriter<T>.RewriteInitializedSpan(int start, int length) -> System.Span<T>
+Supprocom.NativeAllocationManagement.NativeLeaseWriter<T>.Write(scoped System.ReadOnlySpan<T> source) -> void
+Supprocom.NativeAllocationManagement.NativeLeaseWriter<T>.Write(T value) -> void
+Supprocom.NativeAllocationManagement.NativeLeaseWriter<T>.WriteAt(int index, T value) -> void
+Supprocom.NativeAllocationManagement.NativeLeaseWriter<T>.WriteRangeAt(int start, scoped System.ReadOnlySpan<T> source) -> void
+Supprocom.NativeAllocationManagement.NativeMemoryDiagnostics
+Supprocom.NativeAllocationManagement.NativeMemoryReturn
+Supprocom.NativeAllocationManagement.NativeMemoryReturn.ToGarbageCollector = 0 -> Supprocom.NativeAllocationManagement.NativeMemoryReturn
+Supprocom.NativeAllocationManagement.NativeMemoryReturn.ToNativeMemory = 1 -> Supprocom.NativeAllocationManagement.NativeMemoryReturn
+Supprocom.NativeAllocationManagement.NativeMemoryStatistics
+Supprocom.NativeAllocationManagement.NativeMemoryStatistics.Deconstruct(out long OutstandingNativeBytes, out long PeakOutstandingNativeBytes, out long DetachedNativeBytes, out long RetiredNativeBytes, out long ReusedNativeSegmentCount, out long ReclaimedRangeReuseCount, out long ReclaimedRangeReuseBytes) -> void
+Supprocom.NativeAllocationManagement.NativeMemoryStatistics.DetachedNativeBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryStatistics.DetachedNativeBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeMemoryStatistics.Equals(Supprocom.NativeAllocationManagement.NativeMemoryStatistics other) -> bool
+Supprocom.NativeAllocationManagement.NativeMemoryStatistics.NativeMemoryStatistics() -> void
+Supprocom.NativeAllocationManagement.NativeMemoryStatistics.NativeMemoryStatistics(long OutstandingNativeBytes, long PeakOutstandingNativeBytes, long DetachedNativeBytes, long RetiredNativeBytes, long ReusedNativeSegmentCount, long ReclaimedRangeReuseCount = 0, long ReclaimedRangeReuseBytes = 0) -> void
+Supprocom.NativeAllocationManagement.NativeMemoryStatistics.OutstandingNativeBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryStatistics.OutstandingNativeBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeMemoryStatistics.PeakOutstandingNativeBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryStatistics.PeakOutstandingNativeBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeMemoryStatistics.ReclaimedRangeReuseBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryStatistics.ReclaimedRangeReuseBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeMemoryStatistics.ReclaimedRangeReuseCount.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryStatistics.ReclaimedRangeReuseCount.init -> void
+Supprocom.NativeAllocationManagement.NativeMemoryStatistics.RetainedNativeBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryStatistics.RetiredNativeBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryStatistics.RetiredNativeBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeMemoryStatistics.ReusedNativeSegmentCount.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryStatistics.ReusedNativeSegmentCount.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerLifecycle
+Supprocom.NativeAllocationManagement.NativeOwnerLifecycle.Active = 0 -> Supprocom.NativeAllocationManagement.NativeOwnerLifecycle
+Supprocom.NativeAllocationManagement.NativeOwnerLifecycle.Disposed = 4 -> Supprocom.NativeAllocationManagement.NativeOwnerLifecycle
+Supprocom.NativeAllocationManagement.NativeOwnerLifecycle.Returned = 3 -> Supprocom.NativeAllocationManagement.NativeOwnerLifecycle
+Supprocom.NativeAllocationManagement.NativeOwnerLifecycle.Returning = 1 -> Supprocom.NativeAllocationManagement.NativeOwnerLifecycle
+Supprocom.NativeAllocationManagement.NativeOwnerLifecycle.RollingOver = 2 -> Supprocom.NativeAllocationManagement.NativeOwnerLifecycle
+Supprocom.NativeAllocationManagement.NativeOwnerLifecycle.Uninitialized = 5 -> Supprocom.NativeAllocationManagement.NativeOwnerLifecycle
+Supprocom.NativeAllocationManagement.NativeOwnerLifecycle.Unleased = 6 -> Supprocom.NativeAllocationManagement.NativeOwnerLifecycle
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.AvailableSegmentCount.get -> int
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.AvailableSegmentCount.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.Deconstruct(out Supprocom.NativeAllocationManagement.NativeOwnerLifecycle Lifecycle, out long Generation, out long RequestedBytes, out long RetainedBytes, out long RetiredBytes, out int SegmentCount, out int AvailableSegmentCount, out int RetiredSegmentCount, out long TrimmedBytes, out long TrimCallCount, out long FreshSegmentAllocationCount) -> void
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.Equals(Supprocom.NativeAllocationManagement.NativeOwnerStatistics other) -> bool
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.FreshSegmentAllocationCount.get -> long
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.FreshSegmentAllocationCount.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.Generation.get -> long
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.Generation.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.Lifecycle.get -> Supprocom.NativeAllocationManagement.NativeOwnerLifecycle
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.Lifecycle.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.NativeOwnerStatistics() -> void
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.NativeOwnerStatistics(Supprocom.NativeAllocationManagement.NativeOwnerLifecycle Lifecycle, long Generation, long RequestedBytes, long RetainedBytes, long RetiredBytes, int SegmentCount, int AvailableSegmentCount, int RetiredSegmentCount, long TrimmedBytes, long TrimCallCount, long FreshSegmentAllocationCount) -> void
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.RequestedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.RequestedBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.RetainedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.RetainedBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.RetiredBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.RetiredBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.RetiredSegmentCount.get -> int
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.RetiredSegmentCount.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.SegmentCount.get -> int
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.SegmentCount.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.TrimCallCount.get -> long
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.TrimCallCount.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.TrimmedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.TrimmedBytes.init -> void
+Supprocom.NativeAllocationManagement.NativePool<T>
+Supprocom.NativeAllocationManagement.NativePool<T>.Dispose() -> void
+Supprocom.NativeAllocationManagement.NativePool<T>.GetStatistics() -> Supprocom.NativeAllocationManagement.NativeOwnerStatistics
+Supprocom.NativeAllocationManagement.NativePool<T>.NativePool(int preLease = 0, Supprocom.NativeAllocationManagement.NativeMemoryReturn returnMemoryOnDispose = Supprocom.NativeAllocationManagement.NativeMemoryReturn.ToGarbageCollector) -> void
+Supprocom.NativeAllocationManagement.NativePool<T>.NativePool(int preLease, nuint preAllocateBytes, Supprocom.NativeAllocationManagement.NativeMemoryReturn returnMemoryOnDispose = Supprocom.NativeAllocationManagement.NativeMemoryReturn.ToGarbageCollector) -> void
+Supprocom.NativeAllocationManagement.NativePool<T>.ReleaseRetiredStorage() -> void
+Supprocom.NativeAllocationManagement.NativePool<T>.Rent(int length, Supprocom.NativeAllocationManagement.NativeLeaseInitializer<T>! initializer) -> Supprocom.NativeAllocationManagement.Pooled<T>
+Supprocom.NativeAllocationManagement.NativePool<T>.Retire() -> void
+Supprocom.NativeAllocationManagement.NativePool<T>.TrimRetainedMemory() -> nuint
+Supprocom.NativeAllocationManagement.NativePool<T>.TrimRetainedMemoryByBytes(nuint bytesToRelease) -> nuint
+Supprocom.NativeAllocationManagement.NativePool<T>.TrimRetainedMemoryByLeaseSize(int leaseLength = 1) -> nuint
+Supprocom.NativeAllocationManagement.NativeRegion
+Supprocom.NativeAllocationManagement.NativeRegion.Dispose() -> void
+Supprocom.NativeAllocationManagement.NativeRegion.GetStatistics() -> Supprocom.NativeAllocationManagement.NativeOwnerStatistics
+Supprocom.NativeAllocationManagement.NativeRegion.Lease<T>(int length, Supprocom.NativeAllocationManagement.NativeLeaseInitializer<T>! initializer) -> Supprocom.NativeAllocationManagement.Local<T>
+Supprocom.NativeAllocationManagement.NativeRegion.NativeRegion() -> void
+Supprocom.NativeAllocationManagement.NativeRegion.NativeRegion(nuint preAllocateBytes = 0, Supprocom.NativeAllocationManagement.NativeMemoryReturn returnMemoryOnDispose = Supprocom.NativeAllocationManagement.NativeMemoryReturn.ToGarbageCollector) -> void
+Supprocom.NativeAllocationManagement.NativeSequentialLeaseWriter<T>
+Supprocom.NativeAllocationManagement.NativeSequentialLeaseWriter<T>.Complete() -> void
+Supprocom.NativeAllocationManagement.NativeSequentialLeaseWriter<T>.Fill(int length, T value) -> void
+Supprocom.NativeAllocationManagement.NativeSequentialLeaseWriter<T>.Fill(T value) -> void
+Supprocom.NativeAllocationManagement.NativeSequentialLeaseWriter<T>.Length.get -> int
+Supprocom.NativeAllocationManagement.NativeSequentialLeaseWriter<T>.NativeSequentialLeaseWriter() -> void
+Supprocom.NativeAllocationManagement.NativeSequentialLeaseWriter<T>.ReadWritten(int index) -> T
+Supprocom.NativeAllocationManagement.NativeSequentialLeaseWriter<T>.Write(scoped System.ReadOnlySpan<T> source) -> void
+Supprocom.NativeAllocationManagement.NativeSequentialLeaseWriter<T>.Write(T value) -> void
+Supprocom.NativeAllocationManagement.NativeSequentialLeaseWriter<T>.WrittenCount.get -> int
+Supprocom.NativeAllocationManagement.NativeSpanInitializer<T>
+Supprocom.NativeAllocationManagement.NativeSpanReader<T, TResult>
+Supprocom.NativeAllocationManagement.NativeSpanStateProcessor<T, TState, TResult>
+Supprocom.NativeAllocationManagement.NativeTransfer<T>
+Supprocom.NativeAllocationManagement.NativeTransfer<T>.Access(Supprocom.NativeAllocationManagement.NativeLeaseAction<T>! action) -> void
+Supprocom.NativeAllocationManagement.NativeTransfer<T>.Capacity.get -> int
+Supprocom.NativeAllocationManagement.NativeTransfer<T>.Dispose() -> void
+Supprocom.NativeAllocationManagement.NativeTransfer<T>.Length.get -> int
+Supprocom.NativeAllocationManagement.NativeTransfer<T>.Read<TResult>(Supprocom.NativeAllocationManagement.NativeLeaseFunc<T, TResult>! action) -> TResult
+Supprocom.NativeAllocationManagement.NativeTransferPoolExtensions
+Supprocom.NativeAllocationManagement.NativeWorkspace<T>
+Supprocom.NativeAllocationManagement.NativeWorkspace<T>.Access(Supprocom.NativeAllocationManagement.NativeLeaseAction<T>! action) -> void
+Supprocom.NativeAllocationManagement.NativeWorkspace<T>.Capacity.get -> int
+Supprocom.NativeAllocationManagement.NativeWorkspace<T>.Dispose() -> void
+Supprocom.NativeAllocationManagement.NativeWorkspace<T>.Initialize(int length, Supprocom.NativeAllocationManagement.NativeLeaseInitializer<T>! initializer, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> void
+Supprocom.NativeAllocationManagement.NativeWorkspace<T>.Length.get -> int
+Supprocom.NativeAllocationManagement.NativeWorkspace<T>.NativeWorkspace(int preLease) -> void
+Supprocom.NativeAllocationManagement.NativeWorkspace<T>.Process<TResult>(int length, Supprocom.NativeAllocationManagement.NativeSpanInitializer<T>! initializer, Supprocom.NativeAllocationManagement.NativeSpanReader<T, TResult>! reader, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> TResult
+Supprocom.NativeAllocationManagement.NativeWorkspace<T>.Process<TState, TResult>(int length, scoped in TState state, Supprocom.NativeAllocationManagement.NativeSpanStateProcessor<T, TState, TResult>! processor, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> TResult
+Supprocom.NativeAllocationManagement.NativeWorkspace<T>.Read<TResult>(Supprocom.NativeAllocationManagement.NativeLeaseFunc<T, TResult>! action) -> TResult
+Supprocom.NativeAllocationManagement.NativeWorkspace<T>.Reset() -> void
+Supprocom.NativeAllocationManagement.Pooled<T>
+Supprocom.NativeAllocationManagement.Pooled<T>.Access(Supprocom.NativeAllocationManagement.NativeLeaseAction<T>! action) -> void
+Supprocom.NativeAllocationManagement.Pooled<T>.Capacity.get -> int
+Supprocom.NativeAllocationManagement.Pooled<T>.Clear() -> void
+Supprocom.NativeAllocationManagement.Pooled<T>.CopyFrom(scoped System.ReadOnlySpan<T> source) -> void
+Supprocom.NativeAllocationManagement.Pooled<T>.CopyTo(scoped System.Span<T> destination) -> void
+Supprocom.NativeAllocationManagement.Pooled<T>.Dispose() -> void
+Supprocom.NativeAllocationManagement.Pooled<T>.Length.get -> int
+Supprocom.NativeAllocationManagement.Pooled<T>.Pooled() -> void
+Supprocom.NativeAllocationManagement.Pooled<T>.Process<TState, TResult>(int logicalLength, TState state, Supprocom.NativeAllocationManagement.NativeSpanStateProcessor<T, TState, TResult>! processor) -> TResult
+Supprocom.NativeAllocationManagement.Pooled<T>.Read<TResult>(Supprocom.NativeAllocationManagement.NativeLeaseFunc<T, TResult>! action) -> TResult
+virtual Supprocom.NativeAllocationManagement.NativeBuilderBorrowAction<T>.Invoke(scoped ref Supprocom.NativeAllocationManagement.NativeBuilderBorrow<T> builder) -> void
+virtual Supprocom.NativeAllocationManagement.NativeBuilderBorrowStateAction<T, TState>.Invoke(scoped ref Supprocom.NativeAllocationManagement.NativeBuilderBorrow<T> builder, scoped in TState state) -> void
+virtual Supprocom.NativeAllocationManagement.NativeBuilderPairBorrowAction<T>.Invoke(scoped ref Supprocom.NativeAllocationManagement.NativeBuilderBorrow<T> first, scoped ref Supprocom.NativeAllocationManagement.NativeBuilderBorrow<T> second) -> void
+virtual Supprocom.NativeAllocationManagement.NativeBuilderWriteAction<T>.Invoke(scoped Supprocom.NativeAllocationManagement.NativeBuilderWriter<T> writer) -> void
+virtual Supprocom.NativeAllocationManagement.NativeBuilderWriteStateAction<T, TState>.Invoke(scoped Supprocom.NativeAllocationManagement.NativeBuilderWriter<T> writer, scoped in TState state) -> void
+virtual Supprocom.NativeAllocationManagement.NativeLeaseAction<T>.Invoke(scoped Supprocom.NativeAllocationManagement.NativeLeaseView<T> view) -> void
+virtual Supprocom.NativeAllocationManagement.NativeLeaseFunc<T, TResult>.Invoke(scoped Supprocom.NativeAllocationManagement.NativeLeaseView<T> view) -> TResult
+virtual Supprocom.NativeAllocationManagement.NativeLeaseInitializer<T>.Invoke(scoped Supprocom.NativeAllocationManagement.NativeLeaseWriter<T> writer) -> void
+virtual Supprocom.NativeAllocationManagement.NativeLeaseOctupleAction<TFirst, TSecond, TThird, TFourth, TFifth, TSixth, TSeventh, TEighth>.Invoke(scoped Supprocom.NativeAllocationManagement.NativeLeaseView<TFirst> first, scoped Supprocom.NativeAllocationManagement.NativeLeaseView<TSecond> second, scoped Supprocom.NativeAllocationManagement.NativeLeaseView<TThird> third, scoped Supprocom.NativeAllocationManagement.NativeLeaseView<TFourth> fourth, scoped Supprocom.NativeAllocationManagement.NativeLeaseView<TFifth> fifth, scoped Supprocom.NativeAllocationManagement.NativeLeaseView<TSixth> sixth, scoped Supprocom.NativeAllocationManagement.NativeLeaseView<TSeventh> seventh, scoped Supprocom.NativeAllocationManagement.NativeLeaseView<TEighth> eighth) -> void
+virtual Supprocom.NativeAllocationManagement.NativeLeasePairAction<TFirst, TSecond>.Invoke(scoped Supprocom.NativeAllocationManagement.NativeLeaseView<TFirst> first, scoped Supprocom.NativeAllocationManagement.NativeLeaseView<TSecond> second) -> void
+virtual Supprocom.NativeAllocationManagement.NativeLeasePooledArenaAction<TPooled, TArena>.Invoke(scoped Supprocom.NativeAllocationManagement.NativeLeaseView<TPooled> pooled, scoped Supprocom.NativeAllocationManagement.NativeLeaseView<TArena> arena) -> void
+virtual Supprocom.NativeAllocationManagement.NativeLeasePooledArenaPairAction<TPooled, TFirst, TSecond>.Invoke(scoped Supprocom.NativeAllocationManagement.NativeLeaseView<TPooled> pooled, scoped Supprocom.NativeAllocationManagement.NativeLeaseView<TFirst> first, scoped Supprocom.NativeAllocationManagement.NativeLeaseView<TSecond> second) -> void
+virtual Supprocom.NativeAllocationManagement.NativeLeaseQuadrupleAction<TFirst, TSecond, TThird, TFourth>.Invoke(scoped Supprocom.NativeAllocationManagement.NativeLeaseView<TFirst> first, scoped Supprocom.NativeAllocationManagement.NativeLeaseView<TSecond> second, scoped Supprocom.NativeAllocationManagement.NativeLeaseView<TThird> third, scoped Supprocom.NativeAllocationManagement.NativeLeaseView<TFourth> fourth) -> void
+virtual Supprocom.NativeAllocationManagement.NativeLeaseQuintupleAction<TFirst, TSecond, TThird, TFourth, TFifth>.Invoke(scoped Supprocom.NativeAllocationManagement.NativeLeaseView<TFirst> first, scoped Supprocom.NativeAllocationManagement.NativeLeaseView<TSecond> second, scoped Supprocom.NativeAllocationManagement.NativeLeaseView<TThird> third, scoped Supprocom.NativeAllocationManagement.NativeLeaseView<TFourth> fourth, scoped Supprocom.NativeAllocationManagement.NativeLeaseView<TFifth> fifth) -> void
+virtual Supprocom.NativeAllocationManagement.NativeLeaseSeptupleAction<TFirst, TSecond, TThird, TFourth, TFifth, TSixth, TSeventh>.Invoke(scoped Supprocom.NativeAllocationManagement.NativeLeaseView<TFirst> first, scoped Supprocom.NativeAllocationManagement.NativeLeaseView<TSecond> second, scoped Supprocom.NativeAllocationManagement.NativeLeaseView<TThird> third, scoped Supprocom.NativeAllocationManagement.NativeLeaseView<TFourth> fourth, scoped Supprocom.NativeAllocationManagement.NativeLeaseView<TFifth> fifth, scoped Supprocom.NativeAllocationManagement.NativeLeaseView<TSixth> sixth, scoped Supprocom.NativeAllocationManagement.NativeLeaseView<TSeventh> seventh) -> void
+virtual Supprocom.NativeAllocationManagement.NativeLeaseSourceOctupleSpanInitializer<TSource, TFirst, TSecond, TThird, TFourth, TFifth, TSixth, TSeventh, TEighth>.Invoke(scoped Supprocom.NativeAllocationManagement.NativeLeaseView<TSource> source, scoped System.Span<TFirst> first, scoped System.Span<TSecond> second, scoped System.Span<TThird> third, scoped System.Span<TFourth> fourth, scoped System.Span<TFifth> fifth, scoped System.Span<TSixth> sixth, scoped System.Span<TSeventh> seventh, scoped System.Span<TEighth> eighth) -> void
+virtual Supprocom.NativeAllocationManagement.NativeLeaseSourceQuadInitializer<TSource, TFirst, TSecond, TThird, TFourth>.Invoke(scoped Supprocom.NativeAllocationManagement.NativeLeaseView<TSource> source, scoped Supprocom.NativeAllocationManagement.NativeLeaseWriter<TFirst> first, scoped Supprocom.NativeAllocationManagement.NativeLeaseWriter<TSecond> second, scoped Supprocom.NativeAllocationManagement.NativeLeaseWriter<TThird> third, scoped Supprocom.NativeAllocationManagement.NativeLeaseWriter<TFourth> fourth) -> void
+virtual Supprocom.NativeAllocationManagement.NativeLeaseSourceQuadSpanInitializer<TSource, TFirst, TSecond, TThird, TFourth>.Invoke(scoped Supprocom.NativeAllocationManagement.NativeLeaseView<TSource> source, scoped System.Span<TFirst> first, scoped System.Span<TSecond> second, scoped System.Span<TThird> third, scoped System.Span<TFourth> fourth) -> void
+virtual Supprocom.NativeAllocationManagement.NativeLeaseStateFunc<T, TState, TResult>.Invoke(scoped Supprocom.NativeAllocationManagement.NativeLeaseView<T> view, scoped TState state) -> TResult
+virtual Supprocom.NativeAllocationManagement.NativeLeaseTripleAction<TFirst, TSecond, TThird>.Invoke(scoped Supprocom.NativeAllocationManagement.NativeLeaseView<TFirst> first, scoped Supprocom.NativeAllocationManagement.NativeLeaseView<TSecond> second, scoped Supprocom.NativeAllocationManagement.NativeLeaseView<TThird> third) -> void
+virtual Supprocom.NativeAllocationManagement.NativeSpanInitializer<T>.Invoke(scoped System.Span<T> values) -> void
+virtual Supprocom.NativeAllocationManagement.NativeSpanReader<T, TResult>.Invoke(scoped System.ReadOnlySpan<T> values) -> TResult
+virtual Supprocom.NativeAllocationManagement.NativeSpanStateProcessor<T, TState, TResult>.Invoke(scoped System.Span<T> values, TState state) -> TResult
+~override Supprocom.NativeAllocationManagement.NativeMemoryStatistics.Equals(object obj) -> bool
+~override Supprocom.NativeAllocationManagement.NativeMemoryStatistics.ToString() -> string
+~override Supprocom.NativeAllocationManagement.NativeOwnerStatistics.Equals(object obj) -> bool
+~override Supprocom.NativeAllocationManagement.NativeOwnerStatistics.ToString() -> string

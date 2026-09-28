@@ -182,6 +182,7 @@ internal sealed unsafe class NativePoolKernel<T>
     {
         ValidateOwner(nameof(GetStatistics));
         int freeCount = 0;
+#pragma warning disable HLQ013 // Only the first _slabCount slots are initialized.
         for (int index = 0; index < _slabCount; index++)
         {
             if (_slabs[index].State == SlabState.Free)
@@ -189,6 +190,7 @@ internal sealed unsafe class NativePoolKernel<T>
                 freeCount++;
             }
         }
+#pragma warning restore HLQ013
 
         return new NativeOwnerStatistics(
             _lifecycle,
@@ -248,6 +250,7 @@ internal sealed unsafe class NativePoolKernel<T>
         Volatile.Write(ref _retirementState, 1);
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA1816", Justification = "Coordinator-owned retirement cleanup disarms the emergency finalizer.")]
     internal void ReleaseRetiredStorage()
     {
         int prior = Interlocked.CompareExchange(
@@ -264,6 +267,7 @@ internal sealed unsafe class NativePoolKernel<T>
         GC.SuppressFinalize(this);
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA1816", Justification = "Internal pool-kernel disposal disarms its emergency finalizer; the outer owner exposes IDisposable.")]
     internal void Dispose()
     {
         ValidateThread(nameof(Dispose));
@@ -295,6 +299,7 @@ internal sealed unsafe class NativePoolKernel<T>
 
     private bool HasInFlightSlab()
     {
+#pragma warning disable HLQ013 // The slab's writable ref and active prefix are required.
         for (int index = 0; index < _slabCount; index++)
         {
             ref Slab slab = ref _slabs[index];
@@ -305,6 +310,7 @@ internal sealed unsafe class NativePoolKernel<T>
                 return true;
             }
         }
+#pragma warning restore HLQ013
 
         return false;
     }
@@ -708,6 +714,7 @@ internal sealed unsafe class NativePoolKernel<T>
     private int CountUnused()
     {
         int count = 0;
+#pragma warning disable HLQ013 // Only the first _slabCount slots are initialized.
         for (int index = 0; index < _slabCount; index++)
         {
             if (_slabs[index].State == SlabState.Unused)
@@ -715,12 +722,14 @@ internal sealed unsafe class NativePoolKernel<T>
                 count++;
             }
         }
+#pragma warning restore HLQ013
 
         return count;
     }
 
     private void MarkDetached()
     {
+#pragma warning disable HLQ013 // The slab's writable ref and active prefix are required.
         for (int index = 0; index < _slabCount; index++)
         {
             ref Slab slab = ref _slabs[index];
@@ -735,6 +744,7 @@ internal sealed unsafe class NativePoolKernel<T>
                 slab.AllocationBytes,
                 slab.MetricsEpoch);
         }
+#pragma warning restore HLQ013
 
         NativeMemoryTestHooks.RecordDetachedGeneration(
             NativeMemoryTestHooks.CurrentMetricsEpoch);
@@ -742,10 +752,12 @@ internal sealed unsafe class NativePoolKernel<T>
 
     private void FreeAll()
     {
+#pragma warning disable HLQ013 // Free only initialized slabs by writable reference.
         for (int index = 0; index < _slabCount; index++)
         {
             FreeSlab(ref _slabs[index]);
         }
+#pragma warning restore HLQ013
 
         _retainedBytes = 0;
     }
@@ -849,6 +861,8 @@ internal sealed unsafe class NativePoolKernel<T>
         throw new InvalidOperationException(
             $"The native lease initializer wrote {initializedLength} of {requiredLength} required elements.");
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "MA0055", Justification = "Emergency native-memory cleanup supplements mandatory deterministic disposal.")]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "An emergency finalizer must never let cleanup exceptions terminate the process.")]
     ~NativePoolKernel()
     {
         try

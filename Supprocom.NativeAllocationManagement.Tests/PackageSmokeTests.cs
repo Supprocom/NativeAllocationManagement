@@ -31,7 +31,7 @@ public sealed class PackageSmokeTests
                 excludeAnalyzer: false,
                 suppressDiagnostics: false,
                 executable: true);
-            File.WriteAllText(
+            await File.WriteAllTextAsync(
                 Path.Combine(consumerRoot, "Program.cs"),
                 """
                 using Supprocom.NativeAllocationManagement;
@@ -98,7 +98,7 @@ public sealed class PackageSmokeTests
         try
         {
             WriteConsumerProject(consumerRoot, package, excludeAnalyzer: false, suppressDiagnostics: false);
-            File.WriteAllText(
+            await File.WriteAllTextAsync(
                 Path.Combine(consumerRoot, "Program.cs"),
                 """
                 using Supprocom.NativeAllocationManagement;
@@ -200,7 +200,7 @@ public sealed class PackageSmokeTests
             string program = Path.Combine(
                 consumerRoot,
                 "Program.cs");
-            File.WriteAllText(
+            await File.WriteAllTextAsync(
                 program,
                 """
                 using Supprocom.NativeAllocationManagement;
@@ -253,7 +253,7 @@ public sealed class PackageSmokeTests
                 consumerRoot);
             Assert.True(run.ExitCode == 0, run.Output);
 
-            File.WriteAllText(
+            await File.WriteAllTextAsync(
                 program,
                 """
                 using Supprocom.NativeAllocationManagement;
@@ -323,7 +323,7 @@ public sealed class PackageSmokeTests
         try
         {
             WriteConsumerProject(consumerRoot, package, excludeAnalyzer: false, suppressDiagnostics: false, executable: true);
-            File.WriteAllText(
+            await File.WriteAllTextAsync(
                 Path.Combine(consumerRoot, "Program.cs"),
                 """
                 using Supprocom.NativeAllocationManagement;
@@ -412,7 +412,7 @@ public sealed class PackageSmokeTests
         try
         {
             WriteConsumerProject(consumerRoot, package, excludeAnalyzer: false, suppressDiagnostics: false);
-            File.WriteAllText(
+            await File.WriteAllTextAsync(
                 Path.Combine(consumerRoot, "Consumer.cs"),
                 """
                 using Supprocom.NativeAllocationManagement;
@@ -454,7 +454,7 @@ public sealed class PackageSmokeTests
         try
         {
             WriteConsumerProject(consumerRoot, package, excludeAnalyzer: false, suppressDiagnostics: false, executable: true);
-            File.WriteAllText(
+            await File.WriteAllTextAsync(
                 Path.Combine(consumerRoot, "Program.cs"),
                 """
                 using Supprocom.NativeAllocationManagement;
@@ -490,7 +490,7 @@ public sealed class PackageSmokeTests
         try
         {
             WriteConsumerProject(consumerRoot, package, excludeAnalyzer: false, suppressDiagnostics: false, executable: true);
-            File.WriteAllText(
+            await File.WriteAllTextAsync(
                 Path.Combine(consumerRoot, "Program.cs"),
                 """
                 using Supprocom.NativeAllocationManagement;
@@ -526,7 +526,7 @@ public sealed class PackageSmokeTests
         try
         {
             WriteConsumerProject(consumerRoot, package, excludeAnalyzer: false, suppressDiagnostics: false, executable: true);
-            File.WriteAllText(
+            await File.WriteAllTextAsync(
                 Path.Combine(consumerRoot, "Program.cs"),
                 """
                 using Supprocom.NativeAllocationManagement;
@@ -564,7 +564,7 @@ public sealed class PackageSmokeTests
         try
         {
             WriteConsumerProject(consumerRoot, package, excludeAnalyzer: false, suppressDiagnostics: false);
-            File.WriteAllText(
+            await File.WriteAllTextAsync(
                 Path.Combine(consumerRoot, "Program.cs"),
                 """
                 using Supprocom.NativeAllocationManagement;
@@ -611,7 +611,7 @@ public sealed class PackageSmokeTests
                 excludeAnalyzer: false,
                 suppressDiagnostics: false,
                 treatWarningsAsErrors: true);
-            File.WriteAllText(
+            await File.WriteAllTextAsync(
                 Path.Combine(consumerRoot, "Program.cs"),
                 """
                 using Supprocom.NativeAllocationManagement;
@@ -660,7 +660,7 @@ public sealed class PackageSmokeTests
                 suppressDiagnostics: false,
                 treatWarningsAsErrors: true);
             string program = Path.Combine(consumerRoot, "Program.cs");
-            File.WriteAllText(
+            await File.WriteAllTextAsync(
                 program,
                 """
                 using Supprocom.NativeAllocationManagement;
@@ -688,7 +688,7 @@ public sealed class PackageSmokeTests
                 consumerRoot);
             Assert.True(accepted.ExitCode == 0, accepted.Output);
 
-            File.WriteAllText(
+            await File.WriteAllTextAsync(
                 program,
                 """
                 using Supprocom.NativeAllocationManagement;
@@ -728,7 +728,7 @@ public sealed class PackageSmokeTests
         try
         {
             WriteConsumerProject(consumerRoot, package, excludeAnalyzer: false, suppressDiagnostics: false);
-            File.WriteAllText(
+            await File.WriteAllTextAsync(
                 Path.Combine(consumerRoot, "Program.cs"),
                 """
                 using Supprocom.NativeAllocationManagement;
@@ -775,7 +775,7 @@ public sealed class PackageSmokeTests
         try
         {
             WriteConsumerProject(consumerRoot, package, excludeAnalyzer: false, suppressDiagnostics: false);
-            File.WriteAllText(
+            await File.WriteAllTextAsync(
                 Path.Combine(consumerRoot, "Program.cs"),
                 """
                 using Supprocom.NativeAllocationManagement;
@@ -815,7 +815,7 @@ public sealed class PackageSmokeTests
         try
         {
             WriteConsumerProject(consumerRoot, package, excludeAnalyzer: false, suppressDiagnostics: false);
-            File.WriteAllText(
+            await File.WriteAllTextAsync(
                 Path.Combine(consumerRoot, "Program.cs"),
                 """
                 using Supprocom.NativeAllocationManagement;
@@ -857,7 +857,7 @@ public sealed class PackageSmokeTests
         try
         {
             WriteConsumerProject(consumerRoot, package, excludeAnalyzer: false, suppressDiagnostics: false);
-            File.WriteAllText(
+            await File.WriteAllTextAsync(
                 Path.Combine(consumerRoot, "Program.cs"),
                 """
                 using Supprocom.NativeAllocationManagement;
@@ -901,7 +901,7 @@ public sealed class PackageSmokeTests
         try
         {
             WriteConsumerProject(consumerRoot, package, excludeAnalyzer: false, suppressDiagnostics: false);
-            File.WriteAllText(
+            await File.WriteAllTextAsync(
                 Path.Combine(consumerRoot, "Program.cs"),
                 """
                 using Supprocom.NativeAllocationManagement;
@@ -960,7 +960,7 @@ public sealed class PackageSmokeTests
         try
         {
             WriteConsumerProject(consumerRoot, package, excludeAnalyzer: false, suppressDiagnostics: false);
-            File.WriteAllText(
+            await File.WriteAllTextAsync(
                 Path.Combine(consumerRoot, "Program.cs"),
                 """
                 using Supprocom.NativeAllocationManagement;
@@ -1003,7 +1003,7 @@ public sealed class PackageSmokeTests
         try
         {
             WriteConsumerProject(consumerRoot, package, excludeAnalyzer: true, suppressDiagnostics: false);
-            File.WriteAllText(
+            await File.WriteAllTextAsync(
                 Path.Combine(consumerRoot, "Program.cs"),
                 """
                 using Supprocom.NativeAllocationManagement;
@@ -1049,7 +1049,7 @@ public sealed class PackageSmokeTests
                 package,
                 excludeAnalyzer: false,
                 suppressDiagnostics: false);
-            File.WriteAllText(
+            await File.WriteAllTextAsync(
                 Path.Combine(consumerRoot, "Consumer.cs"),
                 """
                 using Supprocom.NativeAllocationManagement;
@@ -1105,7 +1105,7 @@ public sealed class PackageSmokeTests
         try
         {
             WriteConsumerProject(consumerRoot, package, excludeAnalyzer: false, suppressDiagnostics: false);
-            File.WriteAllText(
+            await File.WriteAllTextAsync(
                 Path.Combine(consumerRoot, "Consumer.cs"),
                 """
                 using Supprocom.NativeAllocationManagement;
@@ -1150,7 +1150,7 @@ public sealed class PackageSmokeTests
         try
         {
             WriteConsumerProject(consumerRoot, package, excludeAnalyzer: false, suppressDiagnostics: false);
-            File.WriteAllText(
+            await File.WriteAllTextAsync(
                 Path.Combine(consumerRoot, "Consumer.cs"),
                 """
                 using Supprocom.NativeAllocationManagement;
@@ -1207,7 +1207,7 @@ public sealed class PackageSmokeTests
         try
         {
             WriteConsumerProject(consumerRoot, package, excludeAnalyzer: false, suppressDiagnostics: true);
-            File.WriteAllText(
+            await File.WriteAllTextAsync(
                 Path.Combine(consumerRoot, "Program.cs"),
                 """
                 using Supprocom.NativeAllocationManagement;
@@ -1308,7 +1308,7 @@ public sealed class PackageSmokeTests
         try
         {
             WriteConsumerProject(consumerRoot, package, excludeAnalyzer: false, suppressDiagnostics: true, executable: true);
-            File.WriteAllText(
+            await File.WriteAllTextAsync(
                 Path.Combine(consumerRoot, "Program.cs"),
                 """
                 using Supprocom.NativeAllocationManagement;
@@ -1447,7 +1447,7 @@ public sealed class PackageSmokeTests
 
     private static async Task<PackageEvidence> GetPackageAsync()
     {
-        await PackageGate.WaitAsync();
+        await PackageGate.WaitAsync().ConfigureAwait(true);
         try
         {
             if (_package is not null)
@@ -1463,12 +1463,12 @@ public sealed class PackageSmokeTests
             string packagePath = Path.Combine(packageDirectory, $"Supprocom.NativeAllocationManagement.{version}.nupkg");
             CommandResult pack = await RunDotnetAsync(
                 $"pack Supprocom.NativeAllocationManagement\\Supprocom.NativeAllocationManagement.csproj --no-restore --nologo -c Release -p:PackageVersion={version} -p:PackageOutputPath=\"{packageDirectory}\"",
-                repositoryRoot);
+                repositoryRoot).ConfigureAwait(true);
             Assert.True(pack.ExitCode == 0, pack.Output);
             Assert.True(File.Exists(packagePath), pack.Output);
 
             PackageEvidence evidence = ReadPackage(packagePath, packageDirectory, version);
-            string expectedCommit = await ReadGitHeadAsync(repositoryRoot);
+            string expectedCommit = await ReadGitHeadAsync(repositoryRoot).ConfigureAwait(true);
             Assert.Equal(expectedCommit, evidence.RepositoryCommit);
             _package = evidence;
             return evidence;
@@ -1489,11 +1489,11 @@ public sealed class PackageSmokeTests
             ?? throw new InvalidDataException("The package does not contain its nuspec.");
         using StreamReader reader = new(nuspecEntry.Open());
         XDocument nuspec = XDocument.Parse(reader.ReadToEnd());
-        string commit = nuspec.Descendants().First(element => element.Name.LocalName == "repository").Attribute("commit")?.Value
+        string commit = nuspec.Descendants().First(element => string.Equals(element.Name.LocalName, "repository", StringComparison.Ordinal)).Attribute("commit")?.Value
             ?? throw new InvalidDataException("The package nuspec does not contain repository commit metadata.");
-        string authors = nuspec.Descendants().First(element => element.Name.LocalName == "authors").Value;
-        string description = nuspec.Descendants().First(element => element.Name.LocalName == "description").Value;
-        XElement licenseElement = nuspec.Descendants().First(element => element.Name.LocalName == "license");
+        string authors = nuspec.Descendants().First(element => string.Equals(element.Name.LocalName, "authors", StringComparison.Ordinal)).Value;
+        string description = nuspec.Descendants().First(element => string.Equals(element.Name.LocalName, "description", StringComparison.Ordinal)).Value;
+        XElement licenseElement = nuspec.Descendants().First(element => string.Equals(element.Name.LocalName, "license", StringComparison.Ordinal));
         string license = licenseElement.Attribute("type")?.Value
             ?? throw new InvalidDataException("The package nuspec does not contain license metadata.");
         Assert.Equal("Supprocom", authors);
@@ -1514,14 +1514,14 @@ public sealed class PackageSmokeTests
 
     private static async Task<string> ReadGitHeadAsync(string repositoryRoot)
     {
-        CommandResult result = await RunProcessAsync("git", "rev-parse HEAD", repositoryRoot);
+        CommandResult result = await RunProcessAsync("git", "rev-parse HEAD", repositoryRoot).ConfigureAwait(true);
         Assert.Equal(0, result.ExitCode);
         return result.Output.Trim();
     }
 
     private static async Task<CommandResult> RunDotnetAsync(string arguments, string workingDirectory)
     {
-        return await RunProcessAsync(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet", arguments, workingDirectory);
+        return await RunProcessAsync(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet", arguments, workingDirectory).ConfigureAwait(true);
     }
 
     private static async Task<CommandResult> RunProcessAsync(string fileName, string arguments, string workingDirectory)
@@ -1546,9 +1546,9 @@ public sealed class PackageSmokeTests
         using CancellationTokenSource timeout = new(TimeSpan.FromSeconds(90));
         try
         {
-            await process.WaitForExitAsync(timeout.Token);
+            await process.WaitForExitAsync(timeout.Token).ConfigureAwait(true);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException exception)
         {
             try
             {
@@ -1558,24 +1558,15 @@ public sealed class PackageSmokeTests
             {
             }
 
-            throw new TimeoutException($"{fileName} {arguments} exceeded the 90 second smoke-test timeout.");
+            throw new TimeoutException($"{fileName} {arguments} exceeded the 90 second smoke-test timeout.", exception);
         }
 
-        string output = await stdout + Environment.NewLine + await stderr;
+        string output = await stdout.ConfigureAwait(true) + Environment.NewLine + await stderr.ConfigureAwait(true);
         return new CommandResult(process.ExitCode, output);
     }
 
     private static string FindRepositoryRoot()
-    {
-        DirectoryInfo? directory = new(AppContext.BaseDirectory);
-        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "Supprocom.NativeAllocationManagement.slnx")))
-        {
-            directory = directory.Parent;
-        }
-
-        return directory?.FullName
-            ?? throw new DirectoryNotFoundException("The repository root was not found from the test output directory.");
-    }
+        => RepositoryTestPaths.Root;
 
     private static string CreateConsumerRoot()
     {
