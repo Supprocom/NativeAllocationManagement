@@ -550,6 +550,18 @@ public sealed class PackageSmokeTests
                             || afterClear.DetachedGenerationCount < beforeClear.DetachedGenerationCount
                             || afterClear.BumpTraversalVisitCount < beforeClear.BumpTraversalVisitCount) return 18;
                         System.Console.WriteLine("accounted-clears=2; cleared-bytes=16; final-backing=unchanged");
+                        NativeMemoryStatistics beforeCopy = NativeMemoryDiagnostics.Snapshot();
+                        using (NativeBuilder<int> builder = new(preLease: 2))
+                        {
+                            ReadOnlySpan<int> input = [17, 19];
+                            builder.Append(input);
+                            using NativeTransfer<int> transfer = builder.Complete();
+                            int[] exported = new int[2];
+                            transfer.Access(view => view.CopyTo(exported));
+                            if (exported[0] != 17 || exported[1] != 19) return 19;
+                        }
+                        if (NativeMemoryDiagnostics.Snapshot().CopiedBytes != beforeCopy.CopiedBytes + 16) return 20;
+                        System.Console.WriteLine("accounted-copy-bytes=16; exported-output=17,19");
                         return 0;
                     }
                     private sealed class MappedBuffer : SafeBuffer

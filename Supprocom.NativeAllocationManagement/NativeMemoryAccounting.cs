@@ -18,6 +18,7 @@ internal static class NativeMemoryAccounting
         internal long StorageClearCount;
         internal long StorageClearBytes;
         internal long WrittenClearBytes;
+        internal long CopiedBytes;
 
         internal void Reset(long epoch)
         {
@@ -29,6 +30,7 @@ internal static class NativeMemoryAccounting
             StorageClearCount = 0;
             StorageClearBytes = 0;
             WrittenClearBytes = 0;
+            CopiedBytes = 0;
             Volatile.Write(ref Epoch, epoch);
         }
     }
@@ -43,6 +45,7 @@ internal static class NativeMemoryAccounting
         internal long StorageClearCount;
         internal long StorageClearBytes;
         internal long WrittenClearBytes;
+        internal long CopiedBytes;
         internal bool HistoryOverflowed;
     }
 
@@ -221,6 +224,8 @@ internal static class NativeMemoryAccounting
             Volatile.Read(ref metrics.StorageClearBytes), ref total.HistoryOverflowed);
         NativeOwnerHistory.Add(ref total.WrittenClearBytes,
             Volatile.Read(ref metrics.WrittenClearBytes), ref total.HistoryOverflowed);
+        NativeOwnerHistory.Add(ref total.CopiedBytes,
+            Volatile.Read(ref metrics.CopiedBytes), ref total.HistoryOverflowed);
         total.HistoryOverflowed |= Volatile.Read(ref metrics.HistoryOverflowed);
     }
 
@@ -349,6 +354,7 @@ internal static class NativeMemoryAccounting
             Volatile.Read(ref _reallocationCount))
         {
             HistoryOverflowed = Volatile.Read(ref _historyOverflowed) || hot.HistoryOverflowed,
+            CopiedBytes = hot.CopiedBytes,
             MetricsEpoch = CurrentMetricsEpoch
         };
     }
@@ -375,7 +381,8 @@ internal static class NativeMemoryAccounting
             BumpTraversalVisitCount = hot.BumpTraversalVisitCount,
             StorageClearCount = hot.StorageClearCount,
             StorageClearBytes = hot.StorageClearBytes,
-            WrittenClearBytes = hot.WrittenClearBytes
+            WrittenClearBytes = hot.WrittenClearBytes,
+            CopiedBytes = hot.CopiedBytes
         };
     }
 
@@ -384,6 +391,22 @@ internal static class NativeMemoryAccounting
     {
         NativeHotMetrics metrics = CurrentHotMetrics();
         AddHotHistory(metrics, ref metrics.BumpTraversalVisitCount, 1);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static void RecordCopiedRange<T>(scoped ReadOnlySpan<T> source, scoped Span<T> destination)
+    {
+        if (source.IsEmpty || Unsafe.AreSame(
+            ref System.Runtime.InteropServices.MemoryMarshal.GetReference(source),
+            ref System.Runtime.InteropServices.MemoryMarshal.GetReference(destination)))
+        {
+            return;
+        }
+        NativeHotMetrics metrics = CurrentHotMetrics();
+        // Both factors are Int32-sized; their product fits Int64. This
+        // observation cannot throw overflow after the actual copy succeeds.
+        long bytes = (long)source.Length * Unsafe.SizeOf<T>();
+        AddHotHistory(metrics, ref metrics.CopiedBytes, bytes);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

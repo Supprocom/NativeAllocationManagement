@@ -92,6 +92,7 @@ public ref struct NativeBuilderBorrow<T>
             ref _address,
             ref _capacity);
         source.CopyTo(destination);
+        NativeMemoryAccounting.RecordCopiedRange(source, destination);
         if (canCancel)
         {
             cancellationToken.ThrowIfCancellationRequested();

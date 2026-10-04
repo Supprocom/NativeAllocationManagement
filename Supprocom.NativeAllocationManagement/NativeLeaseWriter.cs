@@ -224,7 +224,9 @@ public readonly ref struct NativeLeaseWriter<T>
         int end = start + source.Length;
         if (!RuntimeHelpers.IsReferenceOrContainsReferences<T>())
         {
-            source.CopyTo(_directValues[start..]);
+            Span<T> copyTarget = _directValues[start..];
+            source.CopyTo(copyTarget);
+            NativeMemoryAccounting.RecordCopiedRange(source, copyTarget);
             _initializedLength = Math.Max(
                 initializedLength,
                 end);
@@ -263,7 +265,9 @@ public readonly ref struct NativeLeaseWriter<T>
 
         if (!RuntimeHelpers.IsReferenceOrContainsReferences<T>())
         {
-            source.CopyTo(_directValues[start..]);
+            Span<T> copyTarget = _directValues[start..];
+            source.CopyTo(copyTarget);
+            NativeMemoryAccounting.RecordCopiedRange(source, copyTarget);
             _initializedLength = start + source.Length;
             return;
         }

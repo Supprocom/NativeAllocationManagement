@@ -6,6 +6,53 @@ namespace Supprocom.NativeAllocationManagement.Tests;
 
 public sealed class NativeBuilderAnalyzerTests
 {
+    [Theory]
+    [InlineData("using NativeTransfer<int> transfer = builder.Complete();", "return transfer.Read(static view => view[0]);")]
+    [InlineData("using NativeTransfer<int> transfer = builder.Complete();", "throw new System.InvalidOperationException();")]
+    [InlineData("using (NativeTransfer<int> transfer = builder.Complete())", "{ return transfer.Read(static view => view[0]); }")]
+    public async Task CompletedTransferUsingInitializerRetainsAutomaticCleanup(string acquisition, string exit)
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            $$"""
+            using Supprocom.NativeAllocationManagement;
+            public static class Sample
+            {
+                public static int Run()
+                {
+                    using (NativeBuilder<int> builder = new(preLease: 1))
+                    {
+                        builder.Append(42);
+                        {{acquisition}}
+                        {{exit}}
+                    }
+                }
+            }
+            """);
+        AssertNoNativeDiagnostics(diagnostics);
+    }
+
+    [Fact]
+    public async Task UnownedCompletionDoesNotInheritTheBuildersUsingCleanup()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+            public static class Sample
+            {
+                public static int Run()
+                {
+                    using (NativeBuilder<int> builder = new(preLease: 1))
+                    {
+                        builder.Append(42);
+                        NativeTransfer<int> transfer = builder.Complete();
+                        return transfer.Read(static view => view[0]);
+                    }
+                }
+            }
+            """);
+        Assert.Contains("NAM1025", AnalyzerContractTests.NativeDiagnostics(diagnostics), StringComparer.Ordinal);
+    }
+
     [Fact]
     public async Task LocalBuilderCompletionAndTransferDisposalAreAccepted()
     {

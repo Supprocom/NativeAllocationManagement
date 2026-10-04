@@ -236,6 +236,8 @@ Supprocom.NativeAllocationManagement.NativeMemoryStatistics.StorageClearBytes.ge
 Supprocom.NativeAllocationManagement.NativeMemoryStatistics.StorageClearBytes.init -> void
 Supprocom.NativeAllocationManagement.NativeMemoryStatistics.WrittenClearBytes.get -> long
 Supprocom.NativeAllocationManagement.NativeMemoryStatistics.WrittenClearBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeMemoryStatistics.CopiedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryStatistics.CopiedBytes.init -> void
 Supprocom.NativeAllocationManagement.NativeMemoryStatistics.ReallocationCount.get -> long
 Supprocom.NativeAllocationManagement.NativeMemoryStatistics.ReallocationCount.init -> void
 Supprocom.NativeAllocationManagement.NativeConcurrentArena.CaptureDiagnosticSnapshot() -> Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot

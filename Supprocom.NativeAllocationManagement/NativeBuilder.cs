@@ -829,9 +829,10 @@ public sealed class NativeBuilder<T> : IDisposable
         int required)
     {
         EnsureCapacity(required);
-        source.CopyTo(
-            new Span<T>((void*)_block.Pointer, _capacity)
-                .Slice(start, source.Length));
+        Span<T> copyTarget = new Span<T>((void*)_block.Pointer, _capacity)
+            .Slice(start, source.Length);
+        source.CopyTo(copyTarget);
+        NativeMemoryAccounting.RecordCopiedRange(source, copyTarget);
     }
 
     private unsafe Span<T> PrepareWriteDirect(

@@ -242,6 +242,7 @@ internal readonly record struct NativeMemoryTestMetrics(
 {
     internal bool HistoryOverflowed { get; init; }
     internal long MetricsEpoch { get; init; }
+    internal long CopiedBytes { get; init; }
     internal long RetainedNativeBytes => OutstandingNativeBytes - DetachedNativeBytes;
 }
 
@@ -288,6 +289,9 @@ public readonly record struct NativeMemoryStatistics(
 
     /// <summary>Gets bytes actually zero-written by NAM-controlled clears; empty reference slots require no write.</summary>
     public long WrittenClearBytes { get; init; }
+
+    /// <summary>Gets bytes actually copied by NAM-controlled unmanaged bulk operations; excludes same-start no-ops, opaque realloc and managed-root assignment.</summary>
+    public long CopiedBytes { get; init; }
 
     /// <summary>Gets storage still owned by active or retained allocator generations.</summary>
     public long RetainedNativeBytes => OutstandingNativeBytes - DetachedNativeBytes;
@@ -1630,7 +1634,9 @@ internal sealed class NativeAllocation
 
         if (ReferenceRoots is null)
         {
-            source.CopyTo(AsSpan<T>()[start..]);
+            Span<T> copyTarget = AsSpan<T>()[start..];
+            source.CopyTo(copyTarget);
+            NativeMemoryAccounting.RecordCopiedRange(source, copyTarget);
             return;
         }
 
@@ -1642,6 +1648,13 @@ internal sealed class NativeAllocation
 
     internal void CopyTo<T>(Span<T> destination)
     {
+        if (ReferenceRoots is null)
+        {
+            ReadOnlySpan<T> copySource = AsSpan<T>()[..Length];
+            copySource.CopyTo(destination);
+            NativeMemoryAccounting.RecordCopiedRange(copySource, destination);
+            return;
+        }
         for (int index = 0; index < Length; index++)
         {
             destination[index] = GetValue<T>(index);

@@ -4019,7 +4019,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     target,
                     value.Syntax,
                     mustEnd: target.Symbol is ILocalSymbol,
-                    isUsing: IsUsingSyntax(target.Syntax, target.Symbol));
+                    isUsing: IsUsingSyntax(value.Syntax, target.Symbol));
             }
         }
 

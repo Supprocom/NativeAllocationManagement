@@ -154,7 +154,9 @@ public readonly ref struct NativeLeaseView<T>
 
         if (_allocation is null)
         {
-            source.CopyTo(GetDirectSpan());
+            Span<T> copyTarget = GetDirectSpan();
+            source.CopyTo(copyTarget);
+            NativeMemoryAccounting.RecordCopiedRange(source, copyTarget);
             return;
         }
 
@@ -173,7 +175,9 @@ public readonly ref struct NativeLeaseView<T>
 
         if (_allocation is null)
         {
-            GetDirectSpan().CopyTo(destination);
+            ReadOnlySpan<T> copySource = GetDirectSpan();
+            copySource.CopyTo(destination);
+            NativeMemoryAccounting.RecordCopiedRange(copySource, destination);
             return;
         }
 
@@ -185,7 +189,9 @@ public readonly ref struct NativeLeaseView<T>
 
         if (_allocation.ReferenceRoots is null)
         {
-            _allocation.AsSpan<T>()[.._length].CopyTo(destination);
+            ReadOnlySpan<T> copySource = _allocation.AsSpan<T>()[.._length];
+            copySource.CopyTo(destination);
+            NativeMemoryAccounting.RecordCopiedRange(copySource, destination);
             return;
         }
 
