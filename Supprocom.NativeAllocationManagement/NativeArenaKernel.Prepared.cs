@@ -72,6 +72,11 @@ internal sealed unsafe partial class NativeArenaKernel
             _preparedPeakOrdinaryUsedBytes, _preparedPeakScopedUsedBytes,
             _retainedBytes, _preparedPeakRetainedBytes, _preparedSuccessCount,
             _preparedRefusalCount, _preparedInitializerFailureCount, _preparedHistoryOverflowed);
+        snapshot = snapshot with
+        {
+            ActiveBorrowedBytes = _externalActiveBytes,
+            RetainedBorrowedBytes = _externalRetainedBytes
+        };
         GC.KeepAlive(this);
         return snapshot;
     }
@@ -177,13 +182,15 @@ internal sealed unsafe partial class NativeArenaKernel
         nuint released = 0;
         if (byteBudget != 0 && _ordinary.UsedBytes == 0 && _ordinary.First != null)
         {
-            released = _ordinary.First->AllocationBytes;
+            long previousRetained = _retainedBytes;
             FreeLane(ref _ordinary, NativeMemoryTraceKind.Trimmed);
+            released = checked((nuint)(previousRetained - _retainedBytes));
         }
         if (released < byteBudget && _scoped.UsedBytes == 0 && _scoped.First != null)
         {
-            released = checked(released + _scoped.First->AllocationBytes);
+            long previousRetained = _retainedBytes;
             FreeLane(ref _scoped, NativeMemoryTraceKind.Trimmed);
+            released = checked(released + (nuint)(previousRetained - _retainedBytes));
         }
         return released;
     }

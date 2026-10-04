@@ -126,6 +126,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             LeaseView = runtimeAssembly.GetTypeByMetadataName(
                 Namespace + "NativeLeaseView`1");
             PoolPreparation = runtimeAssembly.GetTypeByMetadataName(Namespace + "NativePoolPreparation");
+            LeaseOperations = runtimeAssembly.GetTypeByMetadataName(Namespace + "NativeLeaseOperations");
         }
 
         internal INamedTypeSymbol? Pool { get; }
@@ -158,6 +159,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
         internal INamedTypeSymbol? LeaseView { get; }
         internal INamedTypeSymbol? PoolPreparation { get; }
+        internal INamedTypeSymbol? LeaseOperations { get; }
 
         internal bool IsAvailable =>
             Pool is not null
@@ -2298,12 +2300,45 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 ReportBorrowedCallbackLifecycle(operation, borrowedOwner);
             }
 
+            int compositeScopeStart = _borrowScopes.Count;
+            HashSet<OwnerState>? newCompositeOwners = null;
+            if (IsNonRetainingCompositeLeaseOperation(operation))
+            {
+                newCompositeOwners = [];
+                foreach (IArgumentOperation argument in operation.Arguments)
+                {
+                    if (argument.Parameter?.RefKind == RefKind.Out)
+                    {
+                        continue;
+                    }
+                    HandleState? compositeHandle = GetHandle(Unwrap(argument.Value));
+                    if (compositeHandle is not null)
+                    {
+                        CheckHandleUse(compositeHandle, argument.Syntax, operation.TargetMethod.Name);
+                        _borrowScopes.Add((compositeHandle.Owner.Symbol, compositeHandle.DisplayName));
+                        if (_borrowedOwners.Add(compositeHandle.Owner))
+                        {
+                            newCompositeOwners.Add(compositeHandle.Owner);
+                        }
+                        ReportBorrowedCallbackLifecycle(operation, compositeHandle.Owner);
+                    }
+                }
+            }
+
             try
             {
                 base.VisitInvocation(operation);
             }
             finally
             {
+                if (newCompositeOwners is not null)
+                {
+                    _borrowScopes.RemoveRange(compositeScopeStart, _borrowScopes.Count - compositeScopeStart);
+                    foreach (OwnerState compositeOwner in newCompositeOwners)
+                    {
+                        _borrowedOwners.Remove(compositeOwner);
+                    }
+                }
                 if (borrowedOwner is not null)
                 {
                     _borrowScopes.RemoveAt(_borrowScopes.Count - 1);
@@ -5297,7 +5332,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 IOperation? value = Unwrap(argument.Value);
                 ISymbol? symbol = value is null
                     ? null
-                    : GetSymbol(value);
+                    : GetPreparedOutSymbol(value);
                 if (symbol is not ILocalSymbol)
                 {
                     Report(
@@ -5759,7 +5794,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
                     string lifecycleName = member.Name.Identifier.ValueText;
                     if (lifecycleName is not ("ReturnMemoryToNativeMemory" or "ReturnMemoryToGarbageCollector"
-                        or "ReleaseLeasesToNativeMemory" or "ReleaseLeasesToGarbageCollector" or "Dispose"))
+                        or "ReleaseLeasesToNativeMemory" or "ReleaseLeasesToGarbageCollector" or "Dispose"
+                        or "Reset" or "RecycleScoped"))
                     {
                         continue;
                     }
@@ -5770,7 +5806,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                         continue;
                     }
 
-                    if (owner.IsUsing && !owner.IsRegion)
+                    if (owner.IsUsing && !owner.IsRegion && lifecycleName is not ("Reset" or "RecycleScoped"))
                     {
                         Report(
                             NativeAllocationDiagnosticDescriptors.ScopedLifecycle,
@@ -7336,13 +7372,13 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     || ((invocation.TargetMethod.Name is "Scratch" or "ScratchScoped") && IsNativeArena(invocation.TargetMethod.ContainingType)));
         }
 
-        private static bool IsNonRetainingCompositeLeaseOperation(IInvocationOperation operation) =>
+        private bool IsNonRetainingCompositeLeaseOperation(IInvocationOperation operation) =>
             (operation.TargetMethod.Name is "Access" or "InitializeScoped")
-            && string.Equals(operation.TargetMethod.ContainingType.ToDisplayString(), "Supprocom.NativeAllocationManagement.NativeLeaseOperations", StringComparison.Ordinal);
+            && NativeSymbols.Is(operation.TargetMethod.ContainingType, _symbols.LeaseOperations);
 
-        private static bool IsScopedGroupInitialization(
-            IInvocationOperation operation) => string.Equals(operation.TargetMethod.Name, "InitializeScoped", StringComparison.Ordinal) && string.Equals(operation.TargetMethod.ContainingType.ToDisplayString()
-, "Supprocom.NativeAllocationManagement.NativeLeaseOperations", StringComparison.Ordinal);
+        private bool IsScopedGroupInitialization(IInvocationOperation operation) =>
+            string.Equals(operation.TargetMethod.Name, "InitializeScoped", StringComparison.Ordinal)
+            && NativeSymbols.Is(operation.TargetMethod.ContainingType, _symbols.LeaseOperations);
 
         private static Target FindTarget(IOperation operation)
         {

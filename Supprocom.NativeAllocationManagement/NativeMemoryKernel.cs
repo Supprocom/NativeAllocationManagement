@@ -1135,6 +1135,8 @@ internal sealed class NativeSegment
 
             nint address = checked(
                 baseAddress + checked((nint)byteOffset));
+            // A valid SafeBuffer byte count alone does not prove native address addition cannot wrap.
+            _ = checked(unchecked((nuint)address) + byteLength - 1);
             if (unchecked((nuint)address) % Alignment != 0)
             {
                 throw new ArgumentException(

@@ -239,7 +239,8 @@ internal sealed unsafe partial class NativeArenaKernel
         {
             OwnerId = Id,
             Model = NativeOwnerModel.ThreadConfinedArena,
-            UsableCapacityBytes = usableCapacityBytes
+            UsableCapacityBytes = usableCapacityBytes - _externalActiveBytes,
+            BorrowedBytes = _externalRetainedBytes
         };
     }
 
@@ -574,6 +575,7 @@ internal sealed unsafe partial class NativeArenaKernel
             ArenaSegmentHeader* segment =
                 (ArenaSegmentHeader*)memory;
             *segment = default;
+            segment->DataStart = (byte*)segment + HeaderBytes;
             segment->Capacity = capacity;
             segment->AllocationBytes = allocationBytes;
             metricsEpoch = NativeMemoryTestHooks.RecordAllocation(allocationBytes, zeroed: false);
@@ -782,6 +784,11 @@ internal sealed unsafe partial class NativeArenaKernel
 
     private void FreeSegment(ArenaSegmentHeader* segment, NativeMemoryTraceKind traceKind = NativeMemoryTraceKind.Released)
     {
+        if (segment->External != 0)
+        {
+            FreeExternalSegment(segment, traceKind);
+            return;
+        }
         nuint allocationBytes = segment->AllocationBytes;
         long metricsEpoch = segment->MetricsEpoch;
         bool detached = segment->Detached != 0;
@@ -908,7 +915,7 @@ internal sealed unsafe partial class NativeArenaKernel
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static byte* GetDataStart(
         ArenaSegmentHeader* segment) =>
-        (byte*)segment + HeaderBytes;
+        segment->DataStart;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static nuint AlignUp(nuint value, nuint alignment)
@@ -963,6 +970,8 @@ internal sealed unsafe partial class NativeArenaKernel
         internal long MetricsEpoch;
         internal long AllocationOrdinal;
         internal int Detached;
+        internal int External;
+        internal byte* DataStart;
     }
 
     private readonly struct ArenaReservation

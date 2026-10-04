@@ -8,6 +8,8 @@ internal sealed class NativePressureSession :
     IQueuedPressureProfileSession,
     IPressureWorkerCapacityPlanner
 {
+    private const long PhaseArenaHeaderBackingBytes = 128;
+    private const long MappedAlignmentOverheadBytes = 63;
     private readonly SectionSummary[] _sections = new SectionSummary[
         PressureWorkContract.DefaultRetentionDepth * VoxelMath.SectionsPerChunk];
     private readonly BatchSlot[] _slots = new BatchSlot[
@@ -51,16 +53,14 @@ internal sealed class NativePressureSession :
             OutputCapacityPlan.Create(
                 request,
                 request.RetentionDepth);
-        long minimumBytes = checked(
-            (long)minimum.RequiredPhaseArenaCapacity);
+        long minimumBytes = minimum.RequiredNativeCapacity;
         long safety = Math.Max(
             512L * 1024,
             minimumBytes / 32);
         return new PressureWorkerCapacity(
             minimumBytes,
             safety,
-            checked(
-                (long)preferred.RequiredPhaseArenaCapacity));
+            preferred.RequiredNativeCapacity);
     }
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "VSTHRD002", Justification = "This synchronous protocol entry point waits on a dedicated worker without a synchronization context.")]
@@ -90,9 +90,6 @@ internal sealed class NativePressureSession :
     {
         try
         {
-            using NativeConcurrentArena phaseArena = new(
-                preAllocateBytes: 0,
-                NativeMemoryReturn.ToNativeMemory);
             {
                 _ready.Set();
                 using IEnumerator<ProfileWorkItem> requests =
@@ -120,29 +117,20 @@ internal sealed class NativePressureSession :
                     new(outputCapacity.RequiredPhaseArenaCapacity);
                 long sectionAdmissionCapacity =
                     outputCapacity.SectionAdmissionCapacityBytes;
-                nuint plannedPhaseCapacity =
-                    outputCapacity.RequiredPhaseArenaCapacity;
-                nuint reservedPhaseCapacity =
-                    phaseArena.ReserveExternalMemory(
-                        mappedUpload,
-                        byteOffset: 0,
-                        byteLength: plannedPhaseCapacity);
-                if (reservedPhaseCapacity
-                    != plannedPhaseCapacity)
-                {
-                    throw new InvalidOperationException(
-                        "The planned phase-arena reservation did not complete.");
-                }
+                NativeMemoryBudget headerBudget = new(PhaseArenaHeaderBackingBytes);
+                using NativeArena phaseArena = new(mappedUpload, byteOffset: 0,
+                    new NativeArenaPreparation(outputCapacity.RequiredOrdinaryCapacity,
+                        outputCapacity.RequiredScopedCapacity), headerBudget);
 
-                ConcurrentArenaLease<VoxelCell> persistentCells =
+                ArenaLease<VoxelCell> persistentCells =
                     phaseArena.Scratch<VoxelCell>(
                         outputCapacity.CellCapacity,
                         static writer => writer.Fill(default!));
-                ConcurrentArenaLease<FaceRecord> persistentFaces =
+                ArenaLease<FaceRecord> persistentFaces =
                     phaseArena.Scratch<FaceRecord>(
                         outputCapacity.FaceCapacity,
                         static writer => writer.Fill(default!));
-                ConcurrentArenaLease<byte> persistentPayloadPatterns =
+                ArenaLease<byte> persistentPayloadPatterns =
                     phaseArena.Scratch<byte>(
                         PressureWorkContract.PayloadPatternTableBytes,
                         static writer => writer.Write(
@@ -232,22 +220,22 @@ internal sealed class NativePressureSession :
                                 {
                                     phaseStart =
                                         phaseRecorder?.Start() ?? 0;
-                                    scoped ConcurrentArenaLease<
+                                    scoped ArenaLease<
                                         SectionPrerenderDescriptor>
                                         sectionDescriptors;
-                                    scoped ConcurrentArenaLease<ushort>
+                                    scoped ArenaLease<ushort>
                                         sectionValues;
-                                    scoped ConcurrentArenaLease<uint>
+                                    scoped ArenaLease<uint>
                                         sectionWords;
-                                    scoped ConcurrentArenaLease<ulong>
+                                    scoped ArenaLease<ulong>
                                         sectionStates;
-                                    scoped ConcurrentArenaLease<ulong>
+                                    scoped ArenaLease<ulong>
                                         sectionMasks;
-                                    scoped ConcurrentArenaLease<byte>
+                                    scoped ArenaLease<byte>
                                         firstMaskMarker;
-                                    scoped ConcurrentArenaLease<byte>
+                                    scoped ArenaLease<byte>
                                         secondMaskMarker;
-                                    scoped ConcurrentArenaLease<byte>
+                                    scoped ArenaLease<byte>
                                         thirdMaskMarker;
                                     NativeLeaseOperations
                                         .InitializeScoped(
@@ -331,13 +319,13 @@ internal sealed class NativePressureSession :
                                 {
                                     phaseStart =
                                         phaseRecorder?.Start() ?? 0;
-                                    scoped ConcurrentArenaLease<Vertex>
+                                    scoped ArenaLease<Vertex>
                                         vertices;
-                                    scoped ConcurrentArenaLease<int>
+                                    scoped ArenaLease<int>
                                         indices;
-                                    scoped ConcurrentArenaLease<PayloadSlice>
+                                    scoped ArenaLease<PayloadSlice>
                                         slices;
-                                    scoped ConcurrentArenaLease<byte>
+                                    scoped ArenaLease<byte>
                                         aliasMarker;
                                     NativeLeaseOperations.InitializeScoped(
                                         persistentFaces,
@@ -658,7 +646,7 @@ internal sealed class NativePressureSession :
     private PressureSessionState ResetLogicalState(
         PressureProfileRequest request,
         NativeProfileState state,
-        NativeConcurrentArena phaseArena,
+        NativeArena phaseArena,
         OutputCapacityPlan outputCapacity,
         long persistentAllocationBytes)
     {
@@ -713,8 +701,7 @@ internal sealed class NativePressureSession :
                 OutputCapacityPlan.Create(
                     request,
                     candidate);
-            if (plan.RequiredPhaseArenaCapacity
-                <= (nuint)retainedBudgetBytes)
+            if (plan.RequiredNativeCapacity <= retainedBudgetBytes)
             {
                 retentionDepth = candidate;
                 return plan;
@@ -1718,15 +1705,21 @@ internal sealed class NativePressureSession :
             + (long)IndexCapacity * VoxelMath.IndexBytes
             + (long)SliceCapacity * VoxelMath.PayloadSliceBytes);
 
-        internal nuint RequiredPhaseArenaCapacity => checked(
-            (nuint)(
+        internal nuint RequiredOrdinaryCapacity => checked(
+            ((nuint)(
                 NativeBatchContext.AlignmentAllowanceBytes
                 + PressureWorkContract.PayloadPatternTableBytes
                 + (long)CellCapacity * VoxelMath.VoxelCellBytes
-                + (long)FaceCapacity * VoxelMath.FaceRecordBytes
-                + Math.Max(
-                    SectionAdmissionCapacityBytes,
-                    RequiredOutputTailCapacity)));
+                + (long)FaceCapacity * VoxelMath.FaceRecordBytes) + 63) & ~(nuint)63);
+
+        internal nuint RequiredScopedCapacity => checked((nuint)Math.Max(
+            SectionAdmissionCapacityBytes, RequiredOutputTailCapacity));
+
+        internal nuint RequiredPhaseArenaCapacity => checked(
+            RequiredOrdinaryCapacity + RequiredScopedCapacity);
+
+        internal long RequiredNativeCapacity => checked((long)RequiredPhaseArenaCapacity
+            + MappedAlignmentOverheadBytes + PhaseArenaHeaderBackingBytes);
 
         internal static OutputCapacityPlan Create(
             PressureProfileRequest request,

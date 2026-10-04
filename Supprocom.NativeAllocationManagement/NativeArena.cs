@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace Supprocom.NativeAllocationManagement;
 
@@ -50,6 +51,18 @@ public sealed class NativeArena : IDisposable
         _kernel = new NativeArenaKernel(preparation, budget);
     }
 
+    /// <summary>Prepares two bounded lanes in one provider-owned mapped range.</summary>
+    /// <param name="buffer">The provider whose safe-handle hold lasts until all lane backing is released.</param>
+    /// <param name="byteOffset">The aligned start of the declared range.</param>
+    /// <param name="preparation">Ordinary and scoped bounds; the scoped start must also be 64-byte aligned.</param>
+    /// <param name="budget">The admission ceiling for NAM-owned headers, not provider-owned mapped bytes.</param>
+    public NativeArena(SafeBuffer buffer, nuint byteOffset, NativeArenaPreparation preparation, NativeMemoryBudget budget)
+    {
+        ArgumentNullException.ThrowIfNull(buffer);
+        ArgumentNullException.ThrowIfNull(budget);
+        _kernel = new NativeArenaKernel(buffer, byteOffset, preparation, budget);
+    }
+
     /// <summary>Captures prepared lane capacity and recorded history without allocating or resetting it.</summary>
     public NativePreparedArenaStatistics CapturePreparedSnapshot() => _kernel.GetPreparedSnapshot();
 
@@ -63,6 +76,8 @@ public sealed class NativeArena : IDisposable
 
     internal NativeOwnerLifecycle CurrentLifecycle =>
         _kernel.Lifecycle;
+
+    internal NativeArenaKernel KernelForInitialization => _kernel;
 
     // Compatibility probe retains the per-owner instance shape.
 #pragma warning disable CA1822
@@ -248,6 +263,18 @@ public readonly ref struct ArenaLease<T>
         }
 
         return kernel;
+    }
+
+    internal NativeArenaKernel KernelForComposite => GetKernel(nameof(NativeLeaseOperations.Access));
+
+    internal NativeLeaseView<T> GetViewForComposite(NativeArenaKernel kernel, string operation)
+    {
+        if (!ReferenceEquals(kernel, GetKernel(operation)))
+        {
+            throw new ArgumentException("Fast composite leases must belong to the same arena.", nameof(kernel));
+        }
+        kernel.ValidateCompositeEpoch(_generation, _scopeEpoch, _scoped, operation);
+        return new NativeLeaseView<T>(_pointer, _length);
     }
 
     [DoesNotReturn]

@@ -2064,9 +2064,12 @@ public sealed class VoxelSharedContractTests
             nativeSource,
             StringComparison.Ordinal);
         Assert.Contains(
-            "phaseArena.ReserveExternalMemory(",
+            "new NativeArenaPreparation(outputCapacity.RequiredOrdinaryCapacity,",
             nativeSource,
             StringComparison.Ordinal);
+        Assert.Contains("using NativeArena phaseArena = new(mappedUpload", nativeSource, StringComparison.Ordinal);
+        Assert.Contains("plan.RequiredNativeCapacity <= retainedBudgetBytes", nativeSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("NativeConcurrentArena", nativeSource, StringComparison.Ordinal);
         Assert.Contains(
             "MappedGpuBuffer",
             nativeSource,

@@ -452,6 +452,7 @@ public sealed class PackageSmokeTests
             await File.WriteAllTextAsync(program,
                 """
                 using Supprocom.NativeAllocationManagement;
+                using System.Runtime.InteropServices;
                 public static class Consumer
                 {
                     public static int Main()
@@ -483,7 +484,48 @@ public sealed class PackageSmokeTests
                         }
                         if (arenaBudget.CaptureStatistics().CommittedBytes != 0) return 8;
                         System.Console.WriteLine("prepared-arena-output=17; final-charge=0");
+                        NativeMemoryBudget mappedBudget = new(128);
+                        using (MappedBuffer buffer = new())
+                        using (NativeArena arena = new(buffer, 0, new NativeArenaPreparation(64, 64), mappedBudget))
+                        {
+                            ArenaLease<int> input = arena.Scratch<int>(1, static writer => writer.Write(19));
+                            try
+                            {
+                                NativeLeaseOperations.InitializeScoped<int, int, int, int, int>(input, arena,
+                                    1, 1, 1, 1, static (source, a, b, c, d) =>
+                                    { a.Fill(source[0]); b.Fill(2); c.Fill(3); d.Fill(4); },
+                                    out ArenaLease<int> a, out ArenaLease<int> b,
+                                    out ArenaLease<int> c, out ArenaLease<int> d);
+                                NativeLeaseOperations.Access(input, a, b, c, d, static (source, a, b, c, d) =>
+                                {
+                                    if (a[0] != source[0] || b[0] != 2 || c[0] != 3 || d[0] != 4)
+                                        throw new System.InvalidOperationException("Mapped grouped parity failed.");
+                                });
+                            }
+                            finally { arena.RecycleScoped(); }
+                            NativePreparedArenaStatistics snapshot = arena.CapturePreparedSnapshot();
+                            if (snapshot.ActiveBorrowedBytes != 128 || snapshot.RetainedBorrowedBytes != 128
+                                || snapshot.RetainedBytes != 128 || snapshot.ScopedUsedBytes != 0) return 9;
+                        }
+                        if (mappedBudget.CaptureStatistics().CommittedBytes != 0) return 10;
+                        System.Console.WriteLine("mapped-group-output=19; final-charge=0");
                         return 0;
+                    }
+                    private sealed class MappedBuffer : SafeBuffer
+                    {
+                        private readonly System.IntPtr _allocation;
+                        public MappedBuffer() : base(ownsHandle: true)
+                        {
+                            _allocation = Marshal.AllocHGlobal(191);
+                            nuint aligned = checked((nuint)_allocation + 63) & ~(nuint)63;
+                            SetHandle((System.IntPtr)aligned);
+                            Initialize(128);
+                        }
+                        protected override bool ReleaseHandle()
+                        {
+                            Marshal.FreeHGlobal(_allocation);
+                            return true;
+                        }
                     }
                 }
                 """);

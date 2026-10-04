@@ -86,6 +86,12 @@ public readonly record struct NativePreparedArenaStatistics
     /// <summary>Gets complete physically retained native extents, including detached storage.</summary>
     public long RetainedBytes { get; }
 
+    /// <summary>Gets currently addressable provider-owned lane capacity, excluded from NAM-owned backing.</summary>
+    public long ActiveBorrowedBytes { get; init; }
+
+    /// <summary>Gets the complete external range still held, including capacity removed by partial trim.</summary>
+    public long RetainedBorrowedBytes { get; init; }
+
     /// <summary>Gets the recorded physically retained native high-water extent.</summary>
     public long PeakRetainedBytes { get; }
 
