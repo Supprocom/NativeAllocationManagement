@@ -5,6 +5,8 @@ namespace Supprocom.NativeAllocationManagement.Demos.VoxelChunkPipeline.SafeCSha
 
 internal static class Program
 {
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The process entry point must report any worker startup failure and exit with a protocol error code.")]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000", Justification = "PressureProtocolServer.Run takes ownership of the session and disposes it in its finally block.")]
     private static int Main(string[] args)
     {
         try

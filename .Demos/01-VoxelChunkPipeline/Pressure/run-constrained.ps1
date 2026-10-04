@@ -28,10 +28,6 @@ $preparationPassCount = 6
 $stressProfilePercent = 10000
 $stressProfileSamples = 6
 
-if ($CompilationPairs -le 0 -or ($CompilationPairs -band 1) -ne 0) {
-    throw "The compilation pair count must be positive and even."
-}
-
 function Get-ProfileValues {
     param([string]$Value)
 
@@ -81,19 +77,33 @@ function Get-MinimumHarnessFailSafeSeconds {
         $operationCount * $longestHarnessOperationSeconds + 300)
 }
 
-$profileValues = @(Get-ProfileValues $Profiles)
-$minimumAbsoluteFailSafeSeconds =
-    Get-MinimumHarnessFailSafeSeconds $profileValues $SamplesPerProfile
-if ($InactivityTimeoutSeconds -le $longestHarnessOperationSeconds) {
-    throw "The inactivity timeout must exceed the 60-second internal operation bound."
-}
+try {
+    if ($CompilationPairs -le 0 -or ($CompilationPairs -band 1) -ne 0) {
+        throw "The compilation pair count must be positive and even."
+    }
 
-if ($AbsoluteFailSafeTimeoutSeconds -eq 0) {
-    $AbsoluteFailSafeTimeoutSeconds = $minimumAbsoluteFailSafeSeconds
-} elseif (
-    $AbsoluteFailSafeTimeoutSeconds -lt $minimumAbsoluteFailSafeSeconds
-) {
-    throw "The absolute fail-safe is below the derived minimum of $minimumAbsoluteFailSafeSeconds seconds."
+    $profileValues = @(Get-ProfileValues $Profiles)
+    $minimumAbsoluteFailSafeSeconds =
+        Get-MinimumHarnessFailSafeSeconds $profileValues $SamplesPerProfile
+    if ($InactivityTimeoutSeconds -le $longestHarnessOperationSeconds) {
+        throw "The inactivity timeout must exceed the 60-second internal operation bound."
+    }
+
+    if ($AbsoluteFailSafeTimeoutSeconds -eq 0) {
+        $AbsoluteFailSafeTimeoutSeconds = $minimumAbsoluteFailSafeSeconds
+    } elseif (
+        $AbsoluteFailSafeTimeoutSeconds -lt $minimumAbsoluteFailSafeSeconds
+    ) {
+        throw "The absolute fail-safe is below the derived minimum of $minimumAbsoluteFailSafeSeconds seconds."
+    }
+} catch {
+    if ($ValidateTimeoutsOnly) {
+        # Validation is a CLI contract; PowerShell's host renderer can wrap its error text.
+        [Console]::Error.WriteLine($_.Exception.Message)
+        exit 1
+    }
+
+    throw
 }
 
 if ($ValidateTimeoutsOnly) {

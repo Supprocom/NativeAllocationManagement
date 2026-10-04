@@ -1639,15 +1639,45 @@ public sealed class VoxelSharedContractTests
                 .GetProperty("MinimumAbsoluteFailSafeTimeoutSeconds")
                 .GetInt64());
         Assert.NotEqual(0, inactivityExitCode);
-        Assert.Contains(
-            "must exceed the 60-second internal operation bound",
-            inactivityError,
-            StringComparison.Ordinal);
+        Assert.Equal(
+            "The inactivity timeout must exceed the 60-second internal operation bound."
+                + Environment.NewLine,
+            inactivityError);
         Assert.NotEqual(0, absoluteExitCode);
         Assert.Contains(
             "below the derived minimum",
             absoluteError,
             StringComparison.Ordinal);
+    }
+
+    [VoxelPowerShellFact]
+    public void WrapperTimeoutValidationReportsPlainErrorsForInvalidPlans()
+    {
+        string script = Path.Combine(
+            FindRepositoryRoot(),
+            ".Demos",
+            "01-VoxelChunkPipeline",
+            "Pressure",
+            "run-constrained.ps1");
+        (string[] Arguments, string ExpectedError)[] cases =
+        [
+            (["-CompilationPairs", "3"],
+                "The compilation pair count must be positive and even."),
+            (["-SamplesPerProfile", "3"],
+                "The sample count must be positive and even."),
+            (["-Profiles", ","],
+                "At least one pressure profile is required.")
+        ];
+
+        foreach ((string[] arguments, string expectedError) in cases)
+        {
+            (int exitCode, string output, string error) = RunPowerShell(
+                script,
+                ["-ValidateTimeoutsOnly", .. arguments]);
+            Assert.Equal(1, exitCode);
+            Assert.Empty(output);
+            Assert.Equal(expectedError + Environment.NewLine, error);
+        }
     }
 
     private static bool[] CreateProfileOrder(int profileOrdinal)

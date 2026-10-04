@@ -76,6 +76,7 @@ internal sealed class SafePressureSession :
             request.RetentionDepth);
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The worker captures arbitrary callback and allocation failures to preserve cleanup and report the protocol outcome.")]
     public PressureProfileResult Run(
         PressureProfileRequest request,
         Action<PressureProgress> reportProgress)
@@ -500,6 +501,7 @@ internal sealed class SafePressureSession :
                         Slice(stage176, 0, totalStage176),
                         Slice(stage192, 0, totalStage192),
                         Slice(stage224, 0, totalStage224));
+#pragma warning disable HLQ013 // Only the active batch prefix is processed; its index identifies the mutable slot receiving output evidence.
                     for (int batchIndex = 0;
                         batchIndex < batchCount;
                         batchIndex++)
@@ -604,6 +606,7 @@ internal sealed class SafePressureSession :
                                 + totalUploadBytes));
                         lastStage = VoxelPipelineStage.Prerender;
                     }
+#pragma warning restore HLQ013
 
                     phaseRecorder?.Record(
                         PressureDiagnosticPhase.Packing,
@@ -621,6 +624,7 @@ internal sealed class SafePressureSession :
                     }
 
                     lastStage = VoxelPipelineStage.GpuUpload;
+#pragma warning disable HLQ013 // Consume only the active batch prefix and update then clear the corresponding mutable slots.
                     for (int batchIndex = 0; batchIndex < batchCount; batchIndex++)
                     {
                         BatchSlot slot = _slots[batchIndex];
@@ -715,6 +719,7 @@ internal sealed class SafePressureSession :
                             completedLogicalBytes + slot.Demand);
                         _slots[batchIndex] = default;
                     }
+#pragma warning restore HLQ013
 
                     phaseRecorder?.Record(
                         PressureDiagnosticPhase.OutputConsumption,
@@ -1409,8 +1414,10 @@ internal sealed class SafePressureSession :
                 }
             }
 
+#pragma warning disable CA2201 // Explicit memory-budget admission failure must retain the protocol's OutOfMemory classification.
             throw new OutOfMemoryException(
                 "One canonical chunk exceeds the managed retention budget.");
+#pragma warning restore CA2201
         }
 
         private static SafeCapacityPlan CreateForDepth(
@@ -1736,8 +1743,10 @@ internal sealed class SafePressureSession :
 
             if (requestedBytes > _capacityBytes)
             {
+#pragma warning disable CA2201 // Explicit memory-budget admission failure must retain the protocol's OutOfMemory classification.
                 throw new OutOfMemoryException(
                     "The managed array phase exceeds its worker budget.");
+#pragma warning restore CA2201
             }
 
             _phaseRemainingBytes = requestedBytes;
@@ -1776,8 +1785,10 @@ internal sealed class SafePressureSession :
             if (bytes + remaining
                 > _capacityBytes - _activeBytes)
             {
+#pragma warning disable CA2201 // Explicit memory-budget admission failure must retain the protocol's OutOfMemory classification.
                 throw new OutOfMemoryException(
                     "The active managed array set exceeds its worker budget.");
+#pragma warning restore CA2201
             }
 
             _phaseRemainingBytes = remaining;
@@ -1942,8 +1953,10 @@ internal sealed class SafePressureSession :
             if (!_budget.TryCache(this, bytes))
             {
                 _cached = null;
+#pragma warning disable CA2201 // Explicit memory-budget admission failure must retain the protocol's OutOfMemory classification.
                 throw new OutOfMemoryException(
                     "The planned worker-local array exceeds its cache budget.");
+#pragma warning restore CA2201
             }
         }
 
@@ -2179,6 +2192,7 @@ internal sealed class SafePressureSession :
         }
     }
 
+    [StructLayout(LayoutKind.Sequential)]
     private readonly record struct SafeAdmissionPlan(
         int RetentionDepth,
         long RetentionBudgetBytes);
