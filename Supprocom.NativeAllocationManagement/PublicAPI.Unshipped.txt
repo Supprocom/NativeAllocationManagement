@@ -1,4 +1,19 @@
 #nullable enable
+Supprocom.NativeAllocationManagement.NativeOwnerModel
+Supprocom.NativeAllocationManagement.NativeOwnerModel.Unspecified = 0 -> Supprocom.NativeAllocationManagement.NativeOwnerModel
+Supprocom.NativeAllocationManagement.NativeOwnerModel.ThreadConfinedPool = 1 -> Supprocom.NativeAllocationManagement.NativeOwnerModel
+Supprocom.NativeAllocationManagement.NativeOwnerModel.ThreadConfinedRegion = 2 -> Supprocom.NativeAllocationManagement.NativeOwnerModel
+Supprocom.NativeAllocationManagement.NativeOwnerModel.ThreadConfinedArena = 3 -> Supprocom.NativeAllocationManagement.NativeOwnerModel
+Supprocom.NativeAllocationManagement.NativeOwnerModel.SynchronizedPool = 4 -> Supprocom.NativeAllocationManagement.NativeOwnerModel
+Supprocom.NativeAllocationManagement.NativeOwnerModel.SynchronizedRegion = 5 -> Supprocom.NativeAllocationManagement.NativeOwnerModel
+Supprocom.NativeAllocationManagement.NativeOwnerModel.SynchronizedArena = 6 -> Supprocom.NativeAllocationManagement.NativeOwnerModel
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.Model.get -> Supprocom.NativeAllocationManagement.NativeOwnerModel
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.Model.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.Model.get -> Supprocom.NativeAllocationManagement.NativeOwnerModel
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.Model.init -> void
+Supprocom.NativeAllocationManagement.NativePool<T>.CaptureDiagnosticSnapshot() -> Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot
+Supprocom.NativeAllocationManagement.NativeArena.CaptureDiagnosticSnapshot() -> Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot
+Supprocom.NativeAllocationManagement.NativeRegion.CaptureDiagnosticSnapshot() -> Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot
 Supprocom.NativeAllocationManagement.NativePool<T>.Id.get -> long
 Supprocom.NativeAllocationManagement.NativeArena.Id.get -> long
 Supprocom.NativeAllocationManagement.NativeRegion.Id.get -> long

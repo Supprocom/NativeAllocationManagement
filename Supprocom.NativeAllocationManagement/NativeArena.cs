@@ -11,6 +11,10 @@ public sealed class NativeArena : IDisposable
     /// <summary>Gets the stable process-local allocator identity.</summary>
     public long Id => _kernel.Id;
 
+    /// <summary>Captures actual thread-confined lane state without retaining native authority.</summary>
+    public NativeOwnerDiagnosticSnapshot CaptureDiagnosticSnapshot() =>
+        _kernel.GetDiagnosticSnapshot();
+
     /// <summary>Creates one active Arena with an optional raw byte reservation.</summary>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "RS0027", Justification = "Preserve the published optional signature; the budget-first overload has only required arguments and strictly greater arity, so it cannot capture any existing call.")]
     public NativeArena(

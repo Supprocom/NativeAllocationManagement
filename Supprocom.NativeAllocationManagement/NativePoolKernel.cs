@@ -214,21 +214,7 @@ internal sealed unsafe class NativePoolKernel<T>
     internal NativeOwnerStatistics GetStatistics()
     {
         ValidateOwner(nameof(GetStatistics));
-        int freeCount = 0;
-        long usableCapacityBytes = 0;
-#pragma warning disable HLQ013 // Only the first _slabCount slots are initialized.
-        for (int index = 0; index < _slabCount; index++)
-        {
-            if (_slabs[index].State == SlabState.Free)
-            {
-                freeCount++;
-            }
-            if (_slabs[index].State != SlabState.Unused)
-            {
-                usableCapacityBytes = checked(usableCapacityBytes + (long)_slabs[index].Capacity * Unsafe.SizeOf<T>());
-            }
-        }
-#pragma warning restore HLQ013
+        var counts = GetStorageCounts();
 
         return new NativeOwnerStatistics(
             _lifecycle,
@@ -236,16 +222,54 @@ internal sealed unsafe class NativePoolKernel<T>
             _requestedBytes,
             _retainedBytes,
             RetiredBytes: 0,
-            SegmentCount: _slabCount - CountUnused(),
-            AvailableSegmentCount: freeCount,
+            SegmentCount: counts.Retained,
+            AvailableSegmentCount: counts.Available,
             RetiredSegmentCount: 0,
             _trimmedBytes,
             _trimCallCount,
             _freshSegmentAllocationCount)
         {
             OwnerId = Id,
-            UsableCapacityBytes = usableCapacityBytes
+            Model = NativeOwnerModel.ThreadConfinedPool,
+            UsableCapacityBytes = counts.UsableBytes
         };
+    }
+
+    internal NativeOwnerDiagnosticSnapshot GetDiagnosticSnapshot()
+    {
+        ValidateThread(nameof(NativePool<T>.CaptureDiagnosticSnapshot));
+        var counts = GetStorageCounts();
+        NativeOwnerDiagnosticSnapshot snapshot = new(
+            _lifecycle, 0, 0, NativeMemoryTestHooks.CurrentMetricsEpoch,
+            _liveLeaseCount, 0, 0,
+            _lifecycle == NativeOwnerLifecycle.Active ? _returnedSlabIndex : -1,
+            -1, counts.Retained,
+            _lifecycle == NativeOwnerLifecycle.Active ? counts.Available : 0,
+            0, 0, 0, 0, 0, false)
+        {
+            OwnerId = Id,
+            Model = NativeOwnerModel.ThreadConfinedPool
+        };
+        GC.KeepAlive(this);
+        return snapshot;
+    }
+
+    private (int Retained, int Available, long UsableBytes) GetStorageCounts()
+    {
+        int retained = 0;
+        int available = 0;
+        long usableBytes = 0;
+        foreach (ref readonly Slab slab in _slabs.AsSpan(0, _slabCount))
+        {
+            if (slab.State == SlabState.Unused || slab.AllocationBytes == 0)
+            {
+                continue;
+            }
+            retained++;
+            available += slab.State == SlabState.Free ? 1 : 0;
+            usableBytes = checked(usableBytes + (long)slab.Capacity * Unsafe.SizeOf<T>());
+        }
+        return (retained, available, usableBytes);
     }
 
     internal nuint TrimRetainedMemory() =>
@@ -754,22 +778,6 @@ internal sealed unsafe class NativePoolKernel<T>
                 PushFreeList(index);
             }
         }
-    }
-
-    private int CountUnused()
-    {
-        int count = 0;
-#pragma warning disable HLQ013 // Only the first _slabCount slots are initialized.
-        for (int index = 0; index < _slabCount; index++)
-        {
-            if (_slabs[index].State == SlabState.Unused)
-            {
-                count++;
-            }
-        }
-#pragma warning restore HLQ013
-
-        return count;
     }
 
     private void MarkDetached()

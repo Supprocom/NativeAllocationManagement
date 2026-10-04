@@ -650,7 +650,8 @@ internal sealed class NativePressureSession :
             snapshot.QuarantinedSegmentCount,
             snapshot.CurrentGenerationQuarantined)
         {
-            OwnerId = snapshot.OwnerId
+            OwnerId = snapshot.OwnerId,
+            Model = snapshot.Model.ToString()
         };
     }
 

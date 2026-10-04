@@ -204,6 +204,16 @@ public sealed class PackageSmokeTests
                     public static int Main()
                     {
                         NativeMemoryBudget budget = new(64, traceCapacity: 8);
+                        using (NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory))
+                        {
+                            NativeOwnerDiagnosticSnapshot poolSnapshot = pool.CaptureDiagnosticSnapshot();
+                            if (poolSnapshot.OwnerId != pool.Id
+                                || poolSnapshot.Model != NativeOwnerModel.ThreadConfinedPool
+                                || poolSnapshot.RetainedSegmentCount != 0)
+                            {
+                                return 5;
+                            }
+                        }
                         using NativeBuilder<int> builder = new(budget, preLease: 4);
                         using (NativeWorkspace<int> workspace = new(budget, preLease: 8))
                         {

@@ -291,6 +291,9 @@ public readonly record struct NativeOwnerStatistics(
     long TrimCallCount,
     long FreshSegmentAllocationCount)
 {
+    /// <summary>Gets the actual allocator storage/lifecycle model.</summary>
+    public NativeOwnerModel Model { get; init; }
+
     /// <summary>Gets the stable process-local allocator identity, independent of generation.</summary>
     public long OwnerId { get; init; }
 
@@ -304,9 +307,10 @@ public readonly record struct NativeOwnerStatistics(
     public long RetiredBorrowedBytes { get; init; }
 }
 
-/// <summary>Reports structural state from one synchronized native owner.</summary>
+/// <summary>Reports structural state from one native owner under its actual lifecycle model.</summary>
 /// <remarks>
-/// Captured under the owner's lifecycle gate without retaining ownership authority.
+/// Synchronized owners capture under their lifecycle gate; fast owners capture on
+/// their construction thread. The value retains no ownership authority.
 /// Entered operations can still advance payload and fast-lane state. Capture at a
 /// quiescent maintenance boundary to reconcile fields with other snapshots.
 /// Record counts describe runtime metadata, not the number of logical bump leases.
@@ -348,6 +352,9 @@ public readonly record struct NativeOwnerDiagnosticSnapshot(
     int QuarantinedSegmentCount,
     bool CurrentGenerationQuarantined)
 {
+    /// <summary>Gets the actual allocator storage/lifecycle model.</summary>
+    public NativeOwnerModel Model { get; init; }
+
     /// <summary>Gets the stable process-local allocator identity, independent of generation.</summary>
     public long OwnerId { get; init; }
 }
@@ -3292,6 +3299,12 @@ internal ref struct NativeMultiOwnerOperationToken
 internal sealed class NativeOwnerKernel
 {
     internal long Id { get; } = NativeOwnerIdentity.Next();
+    private NativeOwnerModel Model => _kind switch
+    {
+        NativeOwnerKind.Pool => NativeOwnerModel.SynchronizedPool,
+        NativeOwnerKind.Region => NativeOwnerModel.SynchronizedRegion,
+        _ => NativeOwnerModel.SynchronizedArena
+    };
     private const nuint DefaultBumpSegmentBytes = 4096;
     private readonly Lock _gate = new();
     private readonly NativeOwnerKind _kind;
@@ -3364,6 +3377,7 @@ internal sealed class NativeOwnerKernel
                     _freshSegmentAllocationCount)
                 {
                     OwnerId = Id,
+                    Model = Model,
                     RetiredBorrowedBytes = SumRetiredBorrowedBytesLocked()
                 };
             }
@@ -3439,6 +3453,7 @@ internal sealed class NativeOwnerKernel
                 _freshSegmentAllocationCount)
             {
                 OwnerId = Id,
+                Model = Model,
                 UsableCapacityBytes = usableCapacityBytes,
                 BorrowedBytes = GetGenerationBorrowedBytes(current),
                 RetiredBorrowedBytes = SumRetiredBorrowedBytesLocked()
@@ -3536,7 +3551,8 @@ internal sealed class NativeOwnerKernel
                 quarantinedSegments,
                 current?.IsQuarantined == true)
             {
-                OwnerId = Id
+                OwnerId = Id,
+                Model = Model
             };
         }
     }

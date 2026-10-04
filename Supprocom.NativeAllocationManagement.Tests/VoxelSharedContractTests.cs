@@ -3567,6 +3567,7 @@ public sealed class VoxelSharedContractTests
             Demos.VoxelChunkPipeline.NAM.NativePressureSession.CaptureAllocatorDiagnostic(source);
         Assert.True(mapped.Available);
         Assert.Equal(arena.Id, mapped.OwnerId);
+        Assert.Equal(source.Model.ToString(), mapped.Model);
         Assert.Equal(source.Generation, mapped.Generation);
         Assert.Equal(source.ReferenceRoots, mapped.ReferenceRoots);
         string json = JsonSerializer.Serialize(mapped, VoxelJson.Options);
@@ -3576,6 +3577,7 @@ public sealed class VoxelSharedContractTests
         PressureAllocatorDiagnosticSnapshot unavailable = default;
         Assert.False(unavailable.Available);
         Assert.Null(unavailable.OwnerId);
+        Assert.Null(unavailable.Model);
     }
 
     [VoxelDemonstrationFact]

@@ -8,6 +8,10 @@ public readonly ref struct NativeRegion
     /// <summary>Gets the stable process-local allocator identity.</summary>
     public long Id => GetKernel(nameof(Id)).Id;
 
+    /// <summary>Captures actual lexical storage state without retaining native authority.</summary>
+    public NativeOwnerDiagnosticSnapshot CaptureDiagnosticSnapshot() =>
+        GetKernel(nameof(CaptureDiagnosticSnapshot)).GetDiagnosticSnapshot();
+
     /// <summary>Creates one active Region with finalizable emergency cleanup.</summary>
     public NativeRegion()
     {

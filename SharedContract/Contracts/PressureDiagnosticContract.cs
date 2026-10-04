@@ -85,6 +85,7 @@ public readonly record struct PressureAllocatorDiagnosticSnapshot(
     bool CurrentGenerationQuarantined)
 {
     public long? OwnerId { get; init; }
+    public string? Model { get; init; }
 }
 
 public readonly record struct PressureWorkerDiagnostic(

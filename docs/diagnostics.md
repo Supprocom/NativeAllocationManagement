@@ -1,14 +1,16 @@
 # Native owner diagnostics
 
-`NativeConcurrentPool<T>.CaptureDiagnosticSnapshot()` and
-`NativeConcurrentArena.CaptureDiagnosticSnapshot()` return actual runtime
+`NativePool<T>`, `NativeRegion`, `NativeArena`, `NativeConcurrentPool<T>` and
+`NativeConcurrentArena` expose `CaptureDiagnosticSnapshot()` with actual runtime
 structural state. The snapshot is a value containing no owner, allocation,
 pointer or borrowing authority. Keeping it does not retain native storage.
 The voxel NAM serializer copies these fields directly; it does not infer
 private counters from the smaller storage-statistics record.
 
-Capture runs under the owner's lifecycle gate. Entered callbacks and the fast
-lane can continue payload/cursor work independently. Use a quiescent maintenance
+Synchronized capture runs under the owner's lifecycle gate. Fast capture validates
+the construction thread and can observe terminal state without authorizing payload
+use. Entered synchronized callbacks and the fast lane can continue payload/cursor
+work independently. Use a quiescent maintenance
 boundary for reconciliation with other snapshots. Capture is not intended for
 the per-element or timed processing path. It does not reset any counter.
 
@@ -21,6 +23,7 @@ not an assertion that a segment is occupied at that index.
 
 | Field | Definition and lifetime |
 | --- | --- |
+| `Model` | Actual thread-confined or synchronized pool, arena or lexical-region model. `Unspecified` is a caller-created default value, not an observed runtime owner. The demo maps the real model and uses `null` when unavailable. |
 | `OwnerId` | Stable positive process-local allocator identity, assigned once without a global owner registry. It remains the same across generations and disposal; it is not an address or borrowing capability. The demo copies it directly and uses `null` when no NAM owner is available. |
 | `Lifecycle` | Actual owner gate state at capture, including unleased, returned and disposed owners. |
 | `Generation` | Current or most recent owner generation identity, starting at zero. Generation transitions precompute overflow before changing authority; identifiers are not addresses. |
@@ -40,11 +43,43 @@ not an assertion that a segment is occupied at that index.
 | `QuarantinedSegmentCount` | Segments in those quarantined banks; a subset of `RetiredSegmentCount`. |
 | `CurrentGenerationQuarantined` | The current generation's actual quarantine flag, or false without a current generation. A quarantined old generation does not mark its healthy replacement as quarantined. |
 
-Definitions are implemented by `NativeOwnerKernel.GetDiagnosticSnapshot`, not
-by the demo. Runtime tests cover reference/scoped record changes, real traversal,
+Synchronized definitions are implemented by `NativeOwnerKernel.GetDiagnosticSnapshot`,
+not by the demo. Runtime tests cover reference/scoped record changes, real traversal,
 missing-generation sentinels, retirement, failed-drain quarantine, and cleanup.
 Repeated capture allocates no managed object. A snapshot is an observation,
 not a memory reservation or permission to access a stale lease.
+
+## Thread-confined field interpretation
+
+The model tag is essential when interpreting an owner-independent saved value.
+Fast pool `ActiveRecords` counts its actual live/initializing slab metadata;
+a zero-length lease is a real metadata record but is not a physical segment.
+Retained/available segment counts exclude that zero-extent record. Its ordinary
+traversal index is the actual returned-slab cache candidate, or minus one with
+no candidate/active owner; it is not a bump frontier.
+
+Fast arena and lexical-region ranges do not acquire individual allocation-table
+records. Their active/scoped record and managed-root counts are genuinely zero,
+not substituted estimates of logical lease count. Ordinary/scoped indices locate
+the actual current segment within each corresponding linked bank, or minus one
+when absent. Region has no scoped bank. A newly reserved region segment is idle
+until its cursor advances; its availability now agrees in both storage and
+structural snapshots, including initializer-failure rollback.
+
+Fast pool and lexical region have one nongenerational lifetime: generation and
+scope counters are invariant zero. Fast arena reports its real checked UInt64
+generation/scope epoch using the existing signed Int64 bit representation; use
+`unchecked((ulong)value)` for the full sequence domain, rather than inferring an
+overflow or missing value from a negative signed representation. It retains those
+last epochs at terminal capture. Synchronized capture instead uses zero scope
+without a current generation. The model distinguishes these contracts.
+
+No fast owner has a generational-retirement or quarantine bank. Those fields are
+invariant zero/false, with explicit invariant tests during active and terminal
+states. GC-detached backing can remain in a closed fast kernel until finalization;
+the retained bank remains observable while physically present, but availability
+is zero for a closed owner. These snapshots do not retain that kernel. Captures
+keep the kernel alive only until the native-header traversal completes.
 
 `NativeOwnerStatistics` separately reports exposed owned payload capacity,
 complete retained backing, and borrowed external ranges. See

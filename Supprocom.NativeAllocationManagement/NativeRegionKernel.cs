@@ -141,16 +141,51 @@ internal sealed unsafe class NativeRegionKernel
             _retainedBytes,
             RetiredBytes: 0,
             _segmentCount,
-            AvailableSegmentCount: 0,
+            AvailableSegmentCount: GetAvailableSegmentCount(),
             RetiredSegmentCount: 0,
             TrimmedBytes: 0,
             TrimCallCount: 0,
             _freshSegmentAllocationCount)
         {
             OwnerId = Id,
+            Model = NativeOwnerModel.ThreadConfinedRegion,
             UsableCapacityBytes = usableCapacityBytes
         };
     }
+
+    internal NativeOwnerDiagnosticSnapshot GetDiagnosticSnapshot()
+    {
+        if (Environment.CurrentManagedThreadId != _ownerThreadId)
+        {
+            throw CreateState(nameof(NativeRegion.CaptureDiagnosticSnapshot),
+                "NativeRegion is confined to its construction thread.");
+        }
+        int index = 0;
+        int currentIndex = -1;
+        for (RegionSegmentHeader* segment = _firstSegment; segment != null; segment = segment->Next)
+        {
+            if (segment == _currentSegment)
+            {
+                currentIndex = index;
+                break;
+            }
+            index = checked(index + 1);
+        }
+        NativeOwnerDiagnosticSnapshot snapshot = new(
+            _lifecycle, 0, 0, NativeMemoryTestHooks.CurrentMetricsEpoch,
+            0, 0, 0, currentIndex, -1, _segmentCount,
+            _lifecycle == NativeOwnerLifecycle.Active ? GetAvailableSegmentCount() : 0,
+            0, 0, 0, 0, 0, false)
+        {
+            OwnerId = Id,
+            Model = NativeOwnerModel.ThreadConfinedRegion
+        };
+        GC.KeepAlive(this);
+        return snapshot;
+    }
+
+    private int GetAvailableSegmentCount() =>
+        _currentSegment != null && _currentCursor == (byte*)_currentSegment + HeaderBytes ? 1 : 0;
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA1816", Justification = "Internal region-kernel disposal disarms its emergency finalizer; the outer owner exposes disposal.")]
     internal void Dispose()

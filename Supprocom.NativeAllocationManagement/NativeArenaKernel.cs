@@ -229,8 +229,42 @@ internal sealed unsafe class NativeArenaKernel
             _freshSegmentAllocationCount)
         {
             OwnerId = Id,
+            Model = NativeOwnerModel.ThreadConfinedArena,
             UsableCapacityBytes = usableCapacityBytes
         };
+    }
+
+    internal NativeOwnerDiagnosticSnapshot GetDiagnosticSnapshot()
+    {
+        ValidateThread(nameof(NativeArena.CaptureDiagnosticSnapshot));
+        NativeOwnerDiagnosticSnapshot snapshot = new(
+            _lifecycle, unchecked((long)_generation), unchecked((long)_scopeEpoch),
+            NativeMemoryTestHooks.CurrentMetricsEpoch,
+            0, 0, 0, GetCurrentSegmentIndex(_ordinary), GetCurrentSegmentIndex(_scoped),
+            _segmentCount,
+            _lifecycle == NativeOwnerLifecycle.Active
+                ? checked(CountUnusedSegments(_ordinary) + CountUnusedSegments(_scoped)) : 0,
+            0, 0, 0, 0, 0, false)
+        {
+            OwnerId = Id,
+            Model = NativeOwnerModel.ThreadConfinedArena
+        };
+        GC.KeepAlive(this);
+        return snapshot;
+    }
+
+    private static int GetCurrentSegmentIndex(ArenaLane lane)
+    {
+        int index = 0;
+        for (ArenaSegmentHeader* segment = lane.First; segment != null; segment = segment->Next)
+        {
+            if (segment == lane.Current)
+            {
+                return index;
+            }
+            index = checked(index + 1);
+        }
+        return -1;
     }
 
     internal nuint TrimRetainedMemory(nuint byteBudget)

@@ -10,6 +10,10 @@ public sealed class NativePool<T> : IDisposable
     /// <summary>Gets the stable process-local allocator identity.</summary>
     public long Id => _kernel.Id;
 
+    /// <summary>Captures actual thread-confined slab state without retaining native authority.</summary>
+    public NativeOwnerDiagnosticSnapshot CaptureDiagnosticSnapshot() =>
+        _kernel.GetDiagnosticSnapshot();
+
     internal NativeOwnerLifecycle CurrentLifecycle => _kernel.Lifecycle;
 
     internal int CurrentAllocationRecordCountForTest =>
