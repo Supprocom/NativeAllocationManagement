@@ -1,4 +1,15 @@
 #nullable enable
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.UsableCapacityBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.UsableCapacityBytes.init -> void
+Supprocom.NativeAllocationManagement.NativePool<T>.NativePool(Supprocom.NativeAllocationManagement.NativeMemoryBudget! budget, int preLease, nuint preAllocateBytes, Supprocom.NativeAllocationManagement.NativeMemoryReturn returnMemoryOnDispose) -> void
+Supprocom.NativeAllocationManagement.NativeArena.NativeArena(Supprocom.NativeAllocationManagement.NativeMemoryBudget! budget, nuint preAllocateBytes, Supprocom.NativeAllocationManagement.NativeMemoryReturn returnMemoryOnDispose) -> void
+Supprocom.NativeAllocationManagement.NativeRegion.NativeRegion(Supprocom.NativeAllocationManagement.NativeMemoryBudget! budget, nuint preAllocateBytes, Supprocom.NativeAllocationManagement.NativeMemoryReturn returnMemoryOnDispose) -> void
+Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>.NativeConcurrentPool(Supprocom.NativeAllocationManagement.NativeMemoryBudget! budget, int preLease, nuint preAllocateBytes, Supprocom.NativeAllocationManagement.NativeMemoryReturn returnMemoryOnDispose, bool doNotLeaseOnDeclaration) -> void
+Supprocom.NativeAllocationManagement.NativeConcurrentArena.NativeConcurrentArena(Supprocom.NativeAllocationManagement.NativeMemoryBudget! budget, nuint preAllocateBytes, Supprocom.NativeAllocationManagement.NativeMemoryReturn returnMemoryOnDispose, bool doNotLeaseOnDeclaration) -> void
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.BorrowedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.BorrowedBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.RetiredBorrowedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.RetiredBorrowedBytes.init -> void
 *REMOVED*Supprocom.NativeAllocationManagement.NativeBuilder<T>.NativeBuilder(int preLease = 0) -> void
 Supprocom.NativeAllocationManagement.NativeBuilder<T>.NativeBuilder() -> void
 Supprocom.NativeAllocationManagement.NativeBuilder<T>.NativeBuilder(int preLease) -> void

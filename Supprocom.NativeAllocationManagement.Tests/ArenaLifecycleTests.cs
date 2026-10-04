@@ -40,7 +40,8 @@ public sealed class ArenaLifecycleTests
         Assert.Equal(
             allocationCount,
             NativeMemoryTestHooks.Snapshot().AllocationCount);
-        Assert.Equal(4096, arena.GetStatistics().RetainedBytes);
+        Assert.Equal(0, arena.GetStatistics().RetainedBytes);
+        Assert.Equal(4096, arena.GetStatistics().BorrowedBytes);
     }
 
     [Fact]

@@ -57,6 +57,7 @@ public sealed class NativeConcurrentPool<T> : IDisposable
     /// <param name="preLease">The typed element capacity to reserve.</param>
     /// <param name="returnMemoryOnDispose">The final storage cleanup policy.</param>
     /// <param name="doNotLeaseOnDeclaration">Defers the first generation when true.</param>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "RS0027", Justification = "Preserve the published optional signature; the budget-first overload has only required arguments and strictly greater arity, so it cannot capture any existing call.")]
     public NativeConcurrentPool(
         int preLease = 0,
         NativeMemoryReturn returnMemoryOnDispose =
@@ -75,6 +76,7 @@ public sealed class NativeConcurrentPool<T> : IDisposable
     /// <param name="preAllocateBytes">The exact raw byte capacity to reserve.</param>
     /// <param name="returnMemoryOnDispose">The final storage cleanup policy.</param>
     /// <param name="doNotLeaseOnDeclaration">Defers the first generation when true.</param>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "RS0027", Justification = "Preserve the published optional signature; the budget-first overload has only required arguments and strictly greater arity, so it cannot capture any existing call.")]
     public NativeConcurrentPool(
         int preLease,
         nuint preAllocateBytes,
@@ -93,6 +95,25 @@ public sealed class NativeConcurrentPool<T> : IDisposable
             returnMemoryOnDispose,
             NativeTypeLayout.ContainsReferences<T>(),
             doNotLeaseOnDeclaration);
+    }
+
+    /// <summary>Creates a synchronized pool with backing admitted by a shared ceiling.</summary>
+    /// <param name="budget">The backing admission domain.</param>
+    /// <param name="preLease">The typed element capacity to reserve.</param>
+    /// <param name="preAllocateBytes">The exact raw byte capacity to reserve.</param>
+    /// <param name="returnMemoryOnDispose">The final storage cleanup policy.</param>
+    /// <param name="doNotLeaseOnDeclaration">Defers the first generation when true.</param>
+    public NativeConcurrentPool(
+        NativeMemoryBudget budget, int preLease, nuint preAllocateBytes,
+        NativeMemoryReturn returnMemoryOnDispose, bool doNotLeaseOnDeclaration)
+    {
+        ArgumentNullException.ThrowIfNull(budget);
+        NativeMemoryReturnValidation.Validate(returnMemoryOnDispose, nameof(returnMemoryOnDispose));
+        _kernel = NativeOwnerKernel.CreatePool(
+            preLease, preAllocateBytes, NativeTypeLayout.StorageSize<T>(),
+            $"NativeConcurrentPool<{typeof(T).FullName ?? typeof(T).Name}>",
+            returnMemoryOnDispose, NativeTypeLayout.ContainsReferences<T>(),
+            doNotLeaseOnDeclaration, budget);
     }
 
     /// <summary>Reads the synchronized owner state.</summary>

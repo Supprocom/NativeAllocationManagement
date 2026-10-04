@@ -12,6 +12,7 @@ internal sealed unsafe class NativeRegionKernel
         NativeSegment.Alignment);
 
     private readonly NativeMemoryReturn _returnMemoryOnDispose;
+    private readonly NativeMemoryBudget? _budget;
     private readonly int _ownerThreadId;
     private NativeOwnerLifecycle _lifecycle;
     private RegionSegmentHeader* _firstSegment;
@@ -26,9 +27,11 @@ internal sealed unsafe class NativeRegionKernel
 
     internal NativeRegionKernel(
         nuint preAllocateBytes,
-        NativeMemoryReturn returnMemoryOnDispose)
+        NativeMemoryReturn returnMemoryOnDispose,
+        NativeMemoryBudget? budget = null)
     {
         _returnMemoryOnDispose = returnMemoryOnDispose;
+        _budget = budget;
         _ownerThreadId = Environment.CurrentManagedThreadId;
         _lifecycle = NativeOwnerLifecycle.Active;
 
@@ -125,6 +128,11 @@ internal sealed unsafe class NativeRegionKernel
     internal NativeOwnerStatistics GetStatistics()
     {
         ValidateActive(nameof(GetStatistics));
+        long usableCapacityBytes = 0;
+        for (RegionSegmentHeader* segment = _firstSegment; segment != null; segment = segment->Next)
+        {
+            usableCapacityBytes = checked(usableCapacityBytes + (long)segment->Capacity);
+        }
         return new NativeOwnerStatistics(
             _lifecycle,
             Generation: 0,
@@ -136,7 +144,10 @@ internal sealed unsafe class NativeRegionKernel
             RetiredSegmentCount: 0,
             TrimmedBytes: 0,
             TrimCallCount: 0,
-            _freshSegmentAllocationCount);
+            _freshSegmentAllocationCount)
+        {
+            UsableCapacityBytes = usableCapacityBytes
+        };
     }
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA1816", Justification = "Internal region-kernel disposal disarms its emergency finalizer; the outer owner exposes disposal.")]
@@ -222,16 +233,19 @@ internal sealed unsafe class NativeRegionKernel
         nuint capacity = Math.Max(
             requiredBytes,
             Math.Max(DefaultSegmentBytes, growth));
-        return AppendSegment(capacity, operation);
+        return AppendSegment(capacity, operation, requiredBytes);
     }
 
     private RegionSegmentHeader* AppendSegment(
         nuint capacity,
-        string operation)
+        string operation,
+        nuint minimumCapacity = 0)
     {
         RegionSegmentHeader* segment = AllocateSegment(
             capacity,
-            operation);
+            operation,
+            minimumCapacity);
+        capacity = segment->Capacity;
         if (_currentSegment == null)
         {
             _firstSegment = segment;
@@ -245,7 +259,7 @@ internal sealed unsafe class NativeRegionKernel
         _currentCursor = (byte*)segment + HeaderBytes;
         _currentEnd = _currentCursor + capacity;
         _retainedBytes = checked(
-            _retainedBytes + checked((long)capacity));
+            _retainedBytes + checked((long)segment->AllocationBytes));
         _segmentCount = checked(_segmentCount + 1);
         _freshSegmentAllocationCount = checked(
             _freshSegmentAllocationCount + 1);
@@ -254,22 +268,36 @@ internal sealed unsafe class NativeRegionKernel
 
     private RegionSegmentHeader* AllocateSegment(
         nuint capacity,
-        string operation)
+        string operation,
+        nuint minimumCapacity = 0)
     {
-        nuint allocationBytes = checked(HeaderBytes + capacity);
-        if (NativeMemoryTestHooks.ConsumeForcedFailure())
+        nuint allocationBytes = NativeAlignedAllocation.GetBackingByteLength(checked(HeaderBytes + capacity));
+        if (_budget is not null)
         {
-            throw new NativeAllocationFailedException(
-                allocationBytes,
-                OwnerKind,
-                generation: 0,
-                operation,
-                _lifecycle);
+            nuint preferredBytes = allocationBytes;
+            nuint minimumBytes = minimumCapacity == 0
+                ? allocationBytes : NativeAlignedAllocation.GetBackingByteLength(checked(HeaderBytes + minimumCapacity));
+            if (!_budget.TryReservePreferred(preferredBytes, minimumBytes, out allocationBytes, out long availableBytes))
+            {
+                throw new NativeMemoryBudgetExceededException(_budget.Id, _budget.CapacityBytes, minimumBytes, availableBytes);
+            }
+            if (allocationBytes != preferredBytes)
+            {
+                capacity = minimumCapacity;
+            }
         }
 
+        void* memory = null;
+        bool acquired = false;
+        bool recorded = false;
+        long metricsEpoch = 0;
         try
         {
-            void* memory = NativeMemory.AlignedAlloc(
+            if (NativeMemoryTestHooks.ConsumeForcedFailure())
+            {
+                throw new NativeAllocationFailedException(allocationBytes, OwnerKind, generation: 0, operation, _lifecycle);
+            }
+            memory = NativeMemory.AlignedAlloc(
                 allocationBytes,
                 NativeSegment.Alignment);
             if (memory == null)
@@ -287,19 +315,11 @@ internal sealed unsafe class NativeRegionKernel
             *segment = default;
             segment->Capacity = capacity;
             segment->AllocationBytes = allocationBytes;
-            try
-            {
-                segment->MetricsEpoch =
-                    NativeMemoryTestHooks.RecordAllocation(
-                        allocationBytes,
-                        zeroed: false);
-            }
-            catch
-            {
-                NativeMemory.AlignedFree(memory);
-                throw;
-            }
-
+            metricsEpoch = NativeMemoryTestHooks.RecordAllocation(allocationBytes, zeroed: false);
+            recorded = true;
+            segment->MetricsEpoch = metricsEpoch;
+            _budget?.Commit(allocationBytes);
+            acquired = true;
             return segment;
         }
         catch (OutOfMemoryException exception)
@@ -311,6 +331,21 @@ internal sealed unsafe class NativeRegionKernel
                 operation,
                 _lifecycle,
                 exception);
+        }
+        finally
+        {
+            if (!acquired)
+            {
+                if (memory != null)
+                {
+                    NativeMemory.AlignedFree(memory);
+                    if (recorded)
+                    {
+                        NativeMemoryTestHooks.RecordFree(allocationBytes, detached: false, metricsEpoch);
+                    }
+                }
+                _budget?.Cancel(allocationBytes);
+            }
         }
     }
 
@@ -352,6 +387,7 @@ internal sealed unsafe class NativeRegionKernel
             long metricsEpoch = segment->MetricsEpoch;
             bool detached = segment->Detached != 0;
             NativeMemory.AlignedFree(segment);
+            _budget?.Release(allocationBytes);
             NativeMemoryTestHooks.RecordFree(
                 allocationBytes,
                 detached,

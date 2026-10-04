@@ -9,6 +9,7 @@ public sealed class NativeArena : IDisposable
     private readonly NativeArenaKernel _kernel;
 
     /// <summary>Creates one active Arena with an optional raw byte reservation.</summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "RS0027", Justification = "Preserve the published optional signature; the budget-first overload has only required arguments and strictly greater arity, so it cannot capture any existing call.")]
     public NativeArena(
         nuint preAllocateBytes = 0,
         NativeMemoryReturn returnMemoryOnDispose =
@@ -20,6 +21,17 @@ public sealed class NativeArena : IDisposable
         _kernel = new NativeArenaKernel(
             preAllocateBytes,
             returnMemoryOnDispose);
+    }
+
+    /// <summary>Creates an arena whose complete backing extents share one admission ceiling.</summary>
+    /// <param name="budget">The backing admission domain.</param>
+    /// <param name="preAllocateBytes">The initial usable byte reservation; native headers are charged too.</param>
+    /// <param name="returnMemoryOnDispose">The final storage cleanup policy.</param>
+    public NativeArena(NativeMemoryBudget budget, nuint preAllocateBytes, NativeMemoryReturn returnMemoryOnDispose)
+    {
+        ArgumentNullException.ThrowIfNull(budget);
+        NativeMemoryReturnValidation.Validate(returnMemoryOnDispose, nameof(returnMemoryOnDispose));
+        _kernel = new NativeArenaKernel(preAllocateBytes, returnMemoryOnDispose, budget);
     }
 
     internal NativeOwnerLifecycle CurrentLifecycle =>

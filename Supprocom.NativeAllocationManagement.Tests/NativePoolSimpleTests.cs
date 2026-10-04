@@ -332,16 +332,14 @@ public sealed class NativePoolSimpleTests
             preLease: 4,
             preAllocateBytes: 24,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        Pooled<int> lease = pool.Rent(
-            4,
-            static writer => writer.Fill(1));
-
-        nuint released = pool.TrimRetainedMemory();
-        Assert.Equal((nuint)24, released);
-        Assert.Equal(16, pool.GetStatistics().RetainedBytes);
-
-        lease.Dispose();
-        Assert.Equal((nuint)16, pool.TrimRetainedMemory());
+        using (Pooled<int> lease = pool.Rent(4, static writer => writer.Fill(1)))
+        {
+            nuint released = pool.TrimRetainedMemory();
+            Assert.Equal(NativeAlignedAllocation.GetBackingByteLength(24), released);
+            Assert.Equal((long)NativeAlignedAllocation.GetBackingByteLength(16), pool.GetStatistics().RetainedBytes);
+            Assert.Equal(4 * sizeof(int), pool.GetStatistics().UsableCapacityBytes);
+        }
+        Assert.Equal(NativeAlignedAllocation.GetBackingByteLength(16), pool.TrimRetainedMemory());
         Assert.Equal(0, pool.GetStatistics().RetainedBytes);
     }
 

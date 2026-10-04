@@ -579,9 +579,9 @@ public sealed class MechanismRegressionTests
             await worker.ConfigureAwait(true);
 
             Assert.Equal([1L, 2L], pool.CurrentSegmentOrdinalsForTest);
-            Assert.Equal((nuint)(2 * sizeof(int)), pool.TrimRetainedMemoryByBytes(1));
+            Assert.Equal(NativeAlignedAllocation.GetBackingByteLength(2 * sizeof(int)), pool.TrimRetainedMemoryByBytes(1));
             Assert.Equal([1L], pool.CurrentSegmentOrdinalsForTest);
-            Assert.Equal((nuint)sizeof(int), pool.TrimRetainedMemory());
+            Assert.Equal(NativeAlignedAllocation.GetBackingByteLength(sizeof(int)), pool.TrimRetainedMemory());
         }
         finally
         {
@@ -1093,16 +1093,16 @@ public sealed class MechanismRegressionTests
         growth.Dispose();
         initial.Dispose();
         nuint firstRelease = pool.TrimRetainedMemoryByBytes(1);
-        Assert.Equal((nuint)(8 * sizeof(int)), firstRelease);
+        Assert.Equal(NativeAlignedAllocation.GetBackingByteLength(8 * sizeof(int)), firstRelease);
         nuint secondRelease = pool.TrimRetainedMemory();
-        Assert.Equal((nuint)(4 * sizeof(int)), secondRelease);
+        Assert.Equal(NativeAlignedAllocation.GetBackingByteLength(4 * sizeof(int)), secondRelease);
         pool.Dispose();
 
         NativeConcurrentPool<string> referencePool = new(preLease: 2, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         ConcurrentPooled<string> referenceLease = referencePool.Rent(2, static writer => writer.Fill(default!));
         referenceLease.Access(__namIndexedView => __namIndexedView[0] = "root");
         referenceLease.Dispose();
-        Assert.Equal((nuint)(2 * IntPtr.Size), referencePool.TrimRetainedMemoryByLeaseSize(1));
+        Assert.Equal(NativeAlignedAllocation.GetBackingByteLength((nuint)(2 * IntPtr.Size)), referencePool.TrimRetainedMemoryByLeaseSize(1));
         referencePool.Dispose();
     }
 

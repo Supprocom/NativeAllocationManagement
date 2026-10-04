@@ -34,7 +34,7 @@ not an assertion that a segment is occupied at that index.
 | `AvailableSegmentCount` | Available current-generation slabs plus completely idle bump segments. Partly used backing is not a completely idle segment. |
 | `RetiredGenerationCount` | Generations waiting for entered operations to drain, excluding quarantined generations. Drain removes or rejoins their storage. |
 | `RetiredSegmentCount` | Retired and quarantined segment banks combined. It overlaps `QuarantinedSegmentCount`; do not add them. |
-| `RetiredBytes` | Sum of recorded generation segment extents in both retired and quarantined banks. It includes storage that cannot safely be reused yet, not merely live logical payload. |
+| `RetiredBytes` | Sum of complete known NAM-owned extents in retired and quarantined banks, including backend size-alignment padding. Provider-owned ranges are excluded and reported through `NativeOwnerStatistics.RetiredBorrowedBytes`. It includes storage that cannot safely be reused yet, not merely live logical payload. |
 | `QuarantinedGenerationCount` | Failed-drain generations prevented from normal reuse, until physical release/detachment under the chosen cleanup policy. |
 | `QuarantinedSegmentCount` | Segments in those quarantined banks; a subset of `RetiredSegmentCount`. |
 | `CurrentGenerationQuarantined` | The current generation's actual quarantine flag, or false without a current generation. A quarantined old generation does not mark its healthy replacement as quarantined. |
@@ -44,3 +44,8 @@ by the demo. Runtime tests cover reference/scoped record changes, real traversal
 missing-generation sentinels, retirement, failed-drain quarantine, and cleanup.
 Repeated capture allocates no managed object. A snapshot is an observation,
 not a memory reservation or permission to access a stale lease.
+
+`NativeOwnerStatistics` separately reports exposed owned payload capacity,
+complete retained backing, and borrowed external ranges. See
+[native backing budgets](memory-budgets.md) for backend differences, units and
+the distinction between known extents, opaque allocator bookkeeping and RSS.

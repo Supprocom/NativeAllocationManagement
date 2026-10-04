@@ -85,7 +85,11 @@ public sealed class PublicSurfaceTests
 
         ConstructorInfo[] poolConstructors =
             typeof(NativePool<int>).GetConstructors();
-        Assert.Equal(2, poolConstructors.Length);
+        Assert.Equal(3, poolConstructors.Length);
+        ConstructorInfo budgetedPoolConstructor = SingleExpected(poolConstructors,
+            static constructor => constructor.GetParameters().Length == 4);
+        Assert.Equal(typeof(NativeMemoryBudget), budgetedPoolConstructor.GetParameters()[0].ParameterType);
+        Assert.All(budgetedPoolConstructor.GetParameters(), static parameter => Assert.False(parameter.IsOptional));
         ConstructorInfo? typedPoolConstructor =
             typeof(NativePool<int>).GetConstructor(
                 [typeof(int), typeof(NativeMemoryReturn)]);
@@ -117,7 +121,7 @@ public sealed class PublicSurfaceTests
             parameter => string.Equals(parameter.Name, "initialCapacity", StringComparison.Ordinal));
         ConstructorInfo[] concurrentPoolConstructors =
             typeof(NativeConcurrentPool<int>).GetConstructors();
-        Assert.Equal(2, concurrentPoolConstructors.Length);
+        Assert.Equal(3, concurrentPoolConstructors.Length);
         Assert.All(
             concurrentPoolConstructors,
             constructor => Assert.Contains(
@@ -175,13 +179,22 @@ public sealed class PublicSurfaceTests
             borrowFields,
             static field => field.Name is "_borrowEpoch"
                 or "_activeBorrowAuthority");
-        ConstructorInfo arenaConstructor = SingleExpected(typeof(NativeArena).GetConstructors());
+        ConstructorInfo[] arenaConstructors = typeof(NativeArena).GetConstructors();
+        Assert.Equal(2, arenaConstructors.Length);
+        ConstructorInfo arenaConstructor = SingleExpected(arenaConstructors,
+            static constructor => constructor.GetParameters().Length == 2);
+        ConstructorInfo budgetedArenaConstructor = SingleExpected(arenaConstructors,
+            static constructor => constructor.GetParameters().Length == 3);
+        Assert.Equal(typeof(NativeMemoryBudget), budgetedArenaConstructor.GetParameters()[0].ParameterType);
+        Assert.All(budgetedArenaConstructor.GetParameters(), static parameter => Assert.False(parameter.IsOptional));
         Assert.Contains(arenaConstructor.GetParameters(), parameter => string.Equals(parameter.Name, "returnMemoryOnDispose", StringComparison.Ordinal));
         Assert.DoesNotContain(
             arenaConstructor.GetParameters(),
             parameter => string.Equals(parameter.Name, "doNotLeaseOnDeclaration", StringComparison.Ordinal));
-        ConstructorInfo concurrentArenaConstructor = SingleExpected(
-            typeof(NativeConcurrentArena).GetConstructors());
+        ConstructorInfo[] concurrentArenaConstructors = typeof(NativeConcurrentArena).GetConstructors();
+        Assert.Equal(2, concurrentArenaConstructors.Length);
+        ConstructorInfo concurrentArenaConstructor = SingleExpected(concurrentArenaConstructors,
+            static constructor => constructor.GetParameters().Length == 3);
         Assert.Contains(
             concurrentArenaConstructor.GetParameters(),
             parameter => string.Equals(parameter.Name, "doNotLeaseOnDeclaration", StringComparison.Ordinal));

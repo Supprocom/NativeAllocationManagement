@@ -60,6 +60,7 @@ public sealed class NativePool<T> : IDisposable
     /// <summary>Creates one active typed slab pool.</summary>
     /// <param name="preLease">The typed element capacity to reserve.</param>
     /// <param name="returnMemoryOnDispose">The final storage cleanup policy.</param>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "RS0027", Justification = "Preserve the published optional signature; the budget-first overload has only required arguments and strictly greater arity, so it cannot capture any existing call.")]
     public NativePool(
         int preLease = 0,
         NativeMemoryReturn returnMemoryOnDispose =
@@ -75,6 +76,7 @@ public sealed class NativePool<T> : IDisposable
     /// <param name="preLease">The typed element capacity to reserve.</param>
     /// <param name="preAllocateBytes">The exact raw byte capacity to reserve.</param>
     /// <param name="returnMemoryOnDispose">The final storage cleanup policy.</param>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "RS0027", Justification = "Preserve the published optional signature; the budget-first overload has only required arguments and strictly greater arity, so it cannot capture any existing call.")]
     public NativePool(
         int preLease,
         nuint preAllocateBytes,
@@ -88,6 +90,22 @@ public sealed class NativePool<T> : IDisposable
             preLease,
             preAllocateBytes,
             returnMemoryOnDispose);
+    }
+
+    /// <summary>Creates a pool whose complete backing extents share one admission ceiling.</summary>
+    /// <param name="budget">The backing admission domain.</param>
+    /// <param name="preLease">The typed element capacity to reserve.</param>
+    /// <param name="preAllocateBytes">The exact raw byte capacity to reserve.</param>
+    /// <param name="returnMemoryOnDispose">The final storage cleanup policy.</param>
+    public NativePool(
+        NativeMemoryBudget budget,
+        int preLease,
+        nuint preAllocateBytes,
+        NativeMemoryReturn returnMemoryOnDispose)
+    {
+        ArgumentNullException.ThrowIfNull(budget);
+        NativeMemoryReturnValidation.Validate(returnMemoryOnDispose, nameof(returnMemoryOnDispose));
+        _kernel = new NativePoolKernel<T>(preLease, preAllocateBytes, returnMemoryOnDispose, budget);
     }
 
     /// <summary>Reads the current typed slab state.</summary>

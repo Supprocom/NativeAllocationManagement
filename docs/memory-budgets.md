@@ -6,11 +6,38 @@ headers, external storage owned by another provider, or opaque native allocator
 bookkeeping. Borrowed storage and managed metadata require separate accounting
 and preparation limits.
 
-The current integration covers `NativeBuilder<T>`, `NativeWorkspace<T>` and the
-direct backing carried by completed/moved `NativeTransfer<T>` values. Pools,
-arenas, regions, page slots and shared-pointer controls must also participate
-before the complete 0.3.0 boundary is eligible for release. This document does
-not declare those pending integrations implemented.
+The current integration covers direct builders/workspaces/completed transfers,
+thread-confined pools/arenas/regions, and synchronized pools/arenas. Storage keeps
+its domain through retention, retirement, quarantine and finalizable detachment.
+Prepared execution, page slots, shared-pointer controls and tracing are still
+required before the complete 0.3.0 boundary is eligible for release.
+
+Budgeted owner constructors require all arguments explicitly. Existing optional
+owner signatures and defaults are preserved. Their narrow RS0027 exceptions
+are confined to those existing constructors: each new budget-first overload is
+fully required and has strictly greater arity than every previously supported
+call, so it cannot change existing overload resolution. This avoids replacing
+published defaults with an expanded family of forwarding overloads.
+
+For aligned backing, admission includes the native header and known backend
+size rounding. The [.NET Unix backend](https://github.com/dotnet/dotnet/blob/b0f34d51fccc69fd334253924abd8d6853fad7aa/src/runtime/src/libraries/System.Private.CoreLib/src/System/Runtime/InteropServices/NativeMemory.Unix.cs)
+rounds size to alignment before its native call; the
+[Windows backend](https://github.com/dotnet/dotnet/blob/b0f34d51fccc69fd334253924abd8d6853fad7aa/src/runtime/src/libraries/System.Private.CoreLib/src/System/Runtime/InteropServices/NativeMemory.Windows.cs)
+passes the requested size to its aligned allocator. The charge therefore reflects the selected
+backend, not a fabricated platform-independent physical measurement. Neither
+includes unknown allocator-internal bookkeeping or RSS. Admission and physical
+release use the same complete known extent. The exposed payload capacity is
+not enlarged merely because the backend pads its request.
+
+`NativeOwnerStatistics.RetainedBytes`, `RetiredBytes` and `TrimmedBytes` now
+describe complete known owned extents. `UsableCapacityBytes` reports exposed
+owned payload capacity: typed capacity for pools and bump payload capacity for
+arenas/regions, excluding native headers, unusable tails and borrowed ranges.
+`BorrowedBytes` and `RetiredBorrowedBytes` report provider-owned ranges separately;
+they do not pretend those ranges were acquired by NAM or charged to its domain.
+Requested bytes retain their existing owner-specific meaning: fast arenas
+include occupied inter-range alignment, while typed pool demand is logical
+element bytes. Capture these owner snapshots at quiescence for reconciliation.
 
 ```csharp
 NativeMemoryBudget budget = new(64 * 1024);

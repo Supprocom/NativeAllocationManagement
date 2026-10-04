@@ -214,3 +214,15 @@ internal readonly record struct NativeBlock(
     nuint ByteLength,
     long MetricsEpoch,
     NativeMemoryBudget? Budget = null);
+
+internal static class NativeAlignedAllocation
+{
+    // The Unix NativeMemory backend rounds size to the alignment before its
+    // native call. Win32 passes size to _aligned_malloc unchanged. Neither
+    // figure claims to measure opaque allocator headers or process RSS.
+    internal static nuint GetBackingByteLength(nuint byteLength) =>
+        byteLength == 0 || OperatingSystem.IsWindows()
+            ? byteLength
+            : checked(byteLength + NativeSegment.Alignment - 1)
+                & ~(NativeSegment.Alignment - 1);
+}

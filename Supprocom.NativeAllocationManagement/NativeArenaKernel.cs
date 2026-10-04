@@ -14,6 +14,7 @@ internal sealed unsafe class NativeArenaKernel
         SegmentAlignment);
 
     private readonly NativeMemoryReturn _returnMemoryOnDispose;
+    private readonly NativeMemoryBudget? _budget;
     private readonly int _ownerThreadId;
     private ArenaLane _ordinary;
     private ArenaLane _scoped;
@@ -30,9 +31,11 @@ internal sealed unsafe class NativeArenaKernel
 
     internal NativeArenaKernel(
         nuint preAllocateBytes,
-        NativeMemoryReturn returnMemoryOnDispose)
+        NativeMemoryReturn returnMemoryOnDispose,
+        NativeMemoryBudget? budget = null)
     {
         _returnMemoryOnDispose = returnMemoryOnDispose;
+        _budget = budget;
         _ownerThreadId = Environment.CurrentManagedThreadId;
         _lifecycle = NativeOwnerLifecycle.Active;
         if (preAllocateBytes != 0)
@@ -202,6 +205,15 @@ internal sealed unsafe class NativeArenaKernel
         int available = checked(
             CountUnusedSegments(_ordinary)
             + CountUnusedSegments(_scoped));
+        long usableCapacityBytes = 0;
+        for (ArenaSegmentHeader* segment = _ordinary.First; segment != null; segment = segment->Next)
+        {
+            usableCapacityBytes = checked(usableCapacityBytes + (long)segment->Capacity);
+        }
+        for (ArenaSegmentHeader* segment = _scoped.First; segment != null; segment = segment->Next)
+        {
+            usableCapacityBytes = checked(usableCapacityBytes + (long)segment->Capacity);
+        }
         return new NativeOwnerStatistics(
             _lifecycle,
             Generation: unchecked((long)_generation),
@@ -213,7 +225,10 @@ internal sealed unsafe class NativeArenaKernel
             RetiredSegmentCount: 0,
             _trimmedBytes,
             _trimCallCount,
-            _freshSegmentAllocationCount);
+            _freshSegmentAllocationCount)
+        {
+            UsableCapacityBytes = usableCapacityBytes
+        };
     }
 
     internal nuint TrimRetainedMemory(nuint byteBudget)
@@ -401,7 +416,9 @@ internal sealed unsafe class NativeArenaKernel
             Math.Max(DefaultSegmentBytes, growth));
         ArenaSegmentHeader* segment = AllocateSegment(
             capacity,
-            operation);
+            operation,
+            requiredCapacity);
+        capacity = segment->Capacity;
         if (lane.Current == null)
         {
             segment->Next = lane.First;
@@ -422,7 +439,7 @@ internal sealed unsafe class NativeArenaKernel
         }
 
         _retainedBytes = checked(
-            _retainedBytes + checked((long)capacity));
+            _retainedBytes + checked((long)segment->AllocationBytes));
         _segmentCount = checked(_segmentCount + 1);
         _freshSegmentAllocationCount = checked(
             _freshSegmentAllocationCount + 1);
@@ -448,7 +465,7 @@ internal sealed unsafe class NativeArenaKernel
 
         lane.Tail = segment;
         _retainedBytes = checked(
-            _retainedBytes + checked((long)capacity));
+            _retainedBytes + checked((long)segment->AllocationBytes));
         _segmentCount = checked(_segmentCount + 1);
         _freshSegmentAllocationCount = checked(
             _freshSegmentAllocationCount + 1);
@@ -457,22 +474,36 @@ internal sealed unsafe class NativeArenaKernel
 
     private ArenaSegmentHeader* AllocateSegment(
         nuint capacity,
-        string operation)
+        string operation,
+        nuint minimumCapacity = 0)
     {
-        nuint allocationBytes = checked(HeaderBytes + capacity);
-        if (NativeMemoryTestHooks.ConsumeForcedFailure())
+        nuint allocationBytes = NativeAlignedAllocation.GetBackingByteLength(checked(HeaderBytes + capacity));
+        if (_budget is not null)
         {
-            throw new NativeAllocationFailedException(
-                allocationBytes,
-                OwnerKind,
-                generation: unchecked((long)_generation),
-                operation,
-                _lifecycle);
+            nuint preferredBytes = allocationBytes;
+            nuint minimumBytes = minimumCapacity == 0
+                ? allocationBytes : NativeAlignedAllocation.GetBackingByteLength(checked(HeaderBytes + minimumCapacity));
+            if (!_budget.TryReservePreferred(preferredBytes, minimumBytes, out allocationBytes, out long availableBytes))
+            {
+                throw new NativeMemoryBudgetExceededException(_budget.Id, _budget.CapacityBytes, minimumBytes, availableBytes);
+            }
+            if (allocationBytes != preferredBytes)
+            {
+                capacity = minimumCapacity;
+            }
         }
 
         void* memory = null;
+        bool acquired = false;
+        bool recorded = false;
+        long metricsEpoch = 0;
         try
         {
+            if (NativeMemoryTestHooks.ConsumeForcedFailure())
+            {
+                throw new NativeAllocationFailedException(allocationBytes, OwnerKind,
+                    generation: unchecked((long)_generation), operation, _lifecycle);
+            }
             memory = NativeMemory.AlignedAlloc(
                 allocationBytes,
                 SegmentAlignment);
@@ -489,19 +520,15 @@ internal sealed unsafe class NativeArenaKernel
             *segment = default;
             segment->Capacity = capacity;
             segment->AllocationBytes = allocationBytes;
-            segment->MetricsEpoch =
-                NativeMemoryTestHooks.RecordAllocation(
-                    allocationBytes,
-                    zeroed: false);
+            metricsEpoch = NativeMemoryTestHooks.RecordAllocation(allocationBytes, zeroed: false);
+            recorded = true;
+            segment->MetricsEpoch = metricsEpoch;
+            _budget?.Commit(allocationBytes);
+            acquired = true;
             return segment;
         }
         catch (OutOfMemoryException exception)
         {
-            if (memory != null)
-            {
-                NativeMemory.AlignedFree(memory);
-            }
-
             throw new NativeAllocationFailedException(
                 allocationBytes,
                 OwnerKind,
@@ -510,14 +537,20 @@ internal sealed unsafe class NativeArenaKernel
                 _lifecycle,
                 exception);
         }
-        catch
+        finally
         {
-            if (memory != null)
+            if (!acquired)
             {
-                NativeMemory.AlignedFree(memory);
+                if (memory != null)
+                {
+                    NativeMemory.AlignedFree(memory);
+                    if (recorded)
+                    {
+                        NativeMemoryTestHooks.RecordFree(allocationBytes, detached: false, metricsEpoch);
+                    }
+                }
+                _budget?.Cancel(allocationBytes);
             }
-
-            throw;
         }
     }
 
@@ -564,7 +597,7 @@ internal sealed unsafe class NativeArenaKernel
             ArenaSegmentHeader* next = segment->Next;
             if (released < byteBudget)
             {
-                released = checked(released + segment->Capacity);
+                released = checked(released + segment->AllocationBytes);
                 FreeSegment(segment);
             }
             else
@@ -692,16 +725,16 @@ internal sealed unsafe class NativeArenaKernel
 
     private void FreeSegment(ArenaSegmentHeader* segment)
     {
-        nuint capacity = segment->Capacity;
         nuint allocationBytes = segment->AllocationBytes;
         long metricsEpoch = segment->MetricsEpoch;
         bool detached = segment->Detached != 0;
         NativeMemory.AlignedFree(segment);
+        _budget?.Release(allocationBytes);
         NativeMemoryTestHooks.RecordFree(
             allocationBytes,
             detached,
             metricsEpoch);
-        _retainedBytes -= checked((long)capacity);
+        _retainedBytes -= checked((long)allocationBytes);
         _segmentCount--;
     }
 

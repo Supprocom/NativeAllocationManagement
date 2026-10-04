@@ -61,6 +61,7 @@ public sealed class NativeConcurrentArena : IDisposable
     /// <param name="preAllocateBytes">Optional initial byte reservation.</param>
     /// <param name="returnMemoryOnDispose">The physical cleanup policy used by <see cref="Dispose"/>.</param>
     /// <param name="doNotLeaseOnDeclaration">When true, defer the first generation until <see cref="LeaseFromMemory"/>.</param>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "RS0027", Justification = "Preserve the published optional signature; the budget-first overload has only required arguments and strictly greater arity, so it cannot capture any existing call.")]
     public NativeConcurrentArena(
         nuint preAllocateBytes = 0,
         NativeMemoryReturn returnMemoryOnDispose = NativeMemoryReturn.ToGarbageCollector,
@@ -72,6 +73,22 @@ public sealed class NativeConcurrentArena : IDisposable
             "NativeConcurrentArena",
             returnMemoryOnDispose,
             doNotLeaseOnDeclaration);
+    }
+
+    /// <summary>Creates a synchronized arena with backing admitted by a shared ceiling.</summary>
+    /// <param name="budget">The backing admission domain.</param>
+    /// <param name="preAllocateBytes">The initial byte reservation.</param>
+    /// <param name="returnMemoryOnDispose">The final storage cleanup policy.</param>
+    /// <param name="doNotLeaseOnDeclaration">Defers the first generation when true.</param>
+    public NativeConcurrentArena(
+        NativeMemoryBudget budget, nuint preAllocateBytes,
+        NativeMemoryReturn returnMemoryOnDispose, bool doNotLeaseOnDeclaration)
+    {
+        ArgumentNullException.ThrowIfNull(budget);
+        NativeMemoryReturnValidation.Validate(returnMemoryOnDispose, nameof(returnMemoryOnDispose));
+        _kernel = NativeOwnerKernel.CreateArena(
+            preAllocateBytes, "NativeConcurrentArena", returnMemoryOnDispose,
+            doNotLeaseOnDeclaration, budget);
     }
 
     /// <summary>Initializes an ordinary heterogeneous range before publication.</summary>

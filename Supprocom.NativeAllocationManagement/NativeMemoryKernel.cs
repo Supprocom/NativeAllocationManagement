@@ -270,8 +270,10 @@ public readonly record struct NativeMemoryStatistics(
 
 /// <summary>Reports the current physical and logical state of one native owner.</summary>
 /// <remarks>
-/// Requested bytes describe live logical lease demand. Retained bytes describe
-/// physical segments still held by the owner, including idle reusable capacity.
+/// Requested bytes describe live lease demand; fast arenas report occupied bump
+/// bytes, including inter-range alignment. Retained bytes describe known owned
+/// backing extents, including native headers and backend size-alignment padding.
+/// Provider-owned ranges are reported separately in BorrowedBytes.
 /// Growth slack is therefore derived only while a request is live; retained idle
 /// capacity must not be interpreted as geometric growth slack.
 /// </remarks>
@@ -287,7 +289,17 @@ public readonly record struct NativeOwnerStatistics(
     int RetiredSegmentCount,
     long TrimmedBytes,
     long TrimCallCount,
-    long FreshSegmentAllocationCount);
+    long FreshSegmentAllocationCount)
+{
+    /// <summary>Gets exposed owned payload capacity, excluding headers, tail padding and borrowed ranges.</summary>
+    public long UsableCapacityBytes { get; init; }
+
+    /// <summary>Gets provider-owned range bytes currently borrowed, excluded from owned backing.</summary>
+    public long BorrowedBytes { get; init; }
+
+    /// <summary>Gets provider-owned range bytes still held by retired or quarantined banks.</summary>
+    public long RetiredBorrowedBytes { get; init; }
+}
 
 /// <summary>Reports structural state from one synchronized native owner.</summary>
 /// <remarks>
@@ -936,24 +948,31 @@ internal sealed class NativeSegment
     private IntPtr _pointer;
     private SafeBuffer? _externalBuffer;
     private int _detached;
-    private readonly long _metricsEpoch;
+    private long _metricsEpoch;
     private readonly bool _ownsNativeMemory;
+    private readonly NativeMemoryBudget? _budget;
 
     private NativeSegment(
         IntPtr pointer,
         nuint byteLength,
         long metricsEpoch,
         bool ownsNativeMemory,
-        SafeBuffer? externalBuffer = null)
+        SafeBuffer? externalBuffer = null,
+        NativeMemoryBudget? budget = null)
     {
         _pointer = pointer;
         ByteLength = byteLength;
         _metricsEpoch = metricsEpoch;
         _ownsNativeMemory = ownsNativeMemory;
         _externalBuffer = externalBuffer;
+        _budget = budget;
+        AllocationByteLength = ownsNativeMemory
+            ? NativeAlignedAllocation.GetBackingByteLength(byteLength) : 0;
     }
 
     internal nuint ByteLength { get; }
+
+    internal nuint AllocationByteLength { get; }
 
     internal long MetricsEpoch => _metricsEpoch;
 
@@ -976,24 +995,49 @@ internal sealed class NativeSegment
         long generation,
         string operation,
         NativeOwnerLifecycle currentLifecycle,
-        bool zeroed)
+        bool zeroed,
+        NativeMemoryBudget? budget = null,
+        nuint minimumByteLength = 0)
     {
         if (byteLength == 0)
         {
             throw new ArgumentOutOfRangeException(nameof(byteLength), "A native segment must contain at least one byte.");
         }
 
-        if (NativeMemoryTestHooks.ConsumeForcedFailure())
+        nuint allocationBytes = NativeAlignedAllocation.GetBackingByteLength(byteLength);
+        if (budget is not null)
         {
-            throw new NativeAllocationFailedException(byteLength, ownerKind, generation, operation, currentLifecycle);
+            nuint preferredBytes = allocationBytes;
+            nuint minimumBytes = minimumByteLength == 0 ? allocationBytes
+                : NativeAlignedAllocation.GetBackingByteLength(minimumByteLength);
+            if (!budget.TryReservePreferred(preferredBytes, minimumBytes, out allocationBytes, out long availableBytes))
+            {
+                throw new NativeMemoryBudgetExceededException(budget.Id, budget.CapacityBytes, minimumBytes, availableBytes);
+            }
+            if (allocationBytes != preferredBytes)
+            {
+                byteLength = minimumByteLength;
+            }
         }
 
+        IntPtr pointer = IntPtr.Zero;
+        bool acquired = false;
+        bool recorded = false;
+        long metricsEpoch = 0;
         try
         {
+            // Allocate the control before payload. Its finalizer has no native
+            // authority until admission, acquisition and accounting succeed.
+            NativeSegment segment = new(IntPtr.Zero, byteLength, metricsEpoch: 0,
+                ownsNativeMemory: true, budget: budget);
+            if (NativeMemoryTestHooks.ConsumeForcedFailure())
+            {
+                throw new NativeAllocationFailedException(allocationBytes, ownerKind, generation, operation, currentLifecycle);
+            }
             unsafe
             {
-                IntPtr pointer = (IntPtr)NativeMemory.AlignedAlloc(
-                    byteLength,
+                pointer = (IntPtr)NativeMemory.AlignedAlloc(
+                    allocationBytes,
                     Alignment);
                 if (pointer == IntPtr.Zero)
                 {
@@ -1007,18 +1051,36 @@ internal sealed class NativeSegment
                         byteLength);
                 }
 
-                return new NativeSegment(
-                    pointer,
-                    byteLength,
-                    NativeMemoryTestHooks.RecordAllocation(
-                        byteLength,
-                        zeroed),
-                    ownsNativeMemory: true);
+                metricsEpoch = NativeMemoryTestHooks.RecordAllocation(allocationBytes, zeroed);
+                recorded = true;
+                budget?.Commit(allocationBytes);
+                segment._metricsEpoch = metricsEpoch;
+                segment._pointer = pointer;
+                acquired = true;
+                return segment;
             }
         }
         catch (OutOfMemoryException exception)
         {
             throw new NativeAllocationFailedException(byteLength, ownerKind, generation, operation, currentLifecycle, exception);
+        }
+        finally
+        {
+            if (!acquired)
+            {
+                if (pointer != IntPtr.Zero)
+                {
+                    unsafe
+                    {
+                        NativeMemory.AlignedFree((void*)pointer);
+                    }
+                    if (recorded)
+                    {
+                        NativeMemoryTestHooks.RecordFree(allocationBytes, detached: false, metricsEpoch);
+                    }
+                }
+                budget?.Cancel(allocationBytes);
+            }
         }
     }
 
@@ -1101,7 +1163,8 @@ internal sealed class NativeSegment
             NativeMemory.AlignedFree((void*)pointer);
         }
 
-        NativeMemoryTestHooks.RecordFree(ByteLength, Volatile.Read(ref _detached) != 0, _metricsEpoch);
+        _budget?.Release(AllocationByteLength);
+        NativeMemoryTestHooks.RecordFree(AllocationByteLength, Volatile.Read(ref _detached) != 0, _metricsEpoch);
     }
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "MA0055", Justification = "Emergency native-memory cleanup supplements mandatory deterministic disposal.")]
@@ -2327,7 +2390,7 @@ internal sealed class NativeGenerationOwner
                 if (segment.MarkDetached())
                 {
                     NativeMemoryTestHooks.RecordDetachedBytes(
-                        segment.ByteLength,
+                        segment.AllocationByteLength,
                         segment.MetricsEpoch);
                 }
             }
@@ -3222,6 +3285,7 @@ internal sealed class NativeOwnerKernel
     private readonly NativeOwnerKind _kind;
     private readonly string _ownerKind;
     private readonly NativeMemoryReturn _returnMemoryOnDispose;
+    private readonly NativeMemoryBudget? _budget;
     private readonly int _storageElementSize;
     private readonly nuint _preLease;
     private readonly nuint _preAllocateBytes;
@@ -3285,7 +3349,10 @@ internal sealed class NativeOwnerKernel
                     CountRetiredSegmentsLocked(),
                     _trimmedBytes,
                     _trimCallCount,
-                    _freshSegmentAllocationCount);
+                    _freshSegmentAllocationCount)
+                {
+                    RetiredBorrowedBytes = SumRetiredBorrowedBytesLocked()
+                };
             }
 
             long requestedBytes = 0;
@@ -3314,17 +3381,23 @@ internal sealed class NativeOwnerKernel
                 + current.FastArenaRequestedBytes);
 
             long retainedBytes = 0;
+            long usableCapacityBytes = 0;
 #pragma warning disable HLQ012 // Retain the enumerator's mutation checks during ownership cleanup; a span removes them.
             foreach (NativeSlab slab in current.Slabs)
             {
-                retainedBytes = checked(retainedBytes + (long)slab.Segment.ByteLength);
+                retainedBytes = checked(retainedBytes + (long)slab.Segment.AllocationByteLength);
+                usableCapacityBytes = checked(usableCapacityBytes + (long)slab.Capacity * _storageElementSize);
             }
 #pragma warning restore HLQ012
 
 #pragma warning disable HLQ012 // Retain the enumerator's mutation checks during ownership cleanup; a span removes them.
             foreach (NativeBumpSegment bump in current.BumpSegments)
             {
-                retainedBytes = checked(retainedBytes + (long)bump.Segment.ByteLength);
+                retainedBytes = checked(retainedBytes + (long)bump.Segment.AllocationByteLength);
+                if (bump.Segment.AllocationByteLength != 0)
+                {
+                    usableCapacityBytes = checked(usableCapacityBytes + (long)bump.Segment.ByteLength);
+                }
             }
 #pragma warning restore HLQ012
 
@@ -3350,7 +3423,12 @@ internal sealed class NativeOwnerKernel
                 CountRetiredSegmentsLocked(),
                 _trimmedBytes,
                 _trimCallCount,
-                _freshSegmentAllocationCount);
+                _freshSegmentAllocationCount)
+            {
+                UsableCapacityBytes = usableCapacityBytes,
+                BorrowedBytes = GetGenerationBorrowedBytes(current),
+                RetiredBorrowedBytes = SumRetiredBorrowedBytesLocked()
+            };
         }
     }
 
@@ -3487,16 +3565,46 @@ internal sealed class NativeOwnerKernel
             // storage still exists in these banks and remains owner-retired.
             foreach (ref readonly NativeSlab slab in generation.RetiredSlabs.AsSpan())
             {
-                total = checked(total + (long)slab.Segment.ByteLength);
+                total = checked(total + (long)slab.Segment.AllocationByteLength);
             }
 
             foreach (ref readonly NativeBumpSegment bump in generation.RetiredBumps.AsSpan())
             {
-                total = checked(total + (long)bump.Segment.ByteLength);
+                total = checked(total + (long)bump.Segment.AllocationByteLength);
             }
         }
 #pragma warning restore HLQ012
 
+        return total;
+    }
+
+    private long SumRetiredBorrowedBytesLocked()
+    {
+        long total = 0;
+        foreach (ref readonly NativeGeneration generation in CollectionsMarshal.AsSpan(_retiredGenerations))
+        {
+            total = checked(total + GetGenerationBorrowedBytes(generation, retired: true));
+        }
+        foreach (ref readonly NativeGeneration generation in CollectionsMarshal.AsSpan(_quarantinedGenerations))
+        {
+            total = checked(total + GetGenerationBorrowedBytes(generation, retired: true));
+        }
+        return total;
+    }
+
+    private static long GetGenerationBorrowedBytes(NativeGeneration generation, bool retired = false)
+    {
+        long total = 0;
+        ReadOnlySpan<NativeBumpSegment> bumps = retired
+            ? generation.RetiredBumps.AsSpan()
+            : CollectionsMarshal.AsSpan(generation.BumpSegments);
+        foreach (ref readonly NativeBumpSegment bump in bumps)
+        {
+            if (bump.Segment.AllocationByteLength == 0)
+            {
+                total = checked(total + (long)bump.Segment.ByteLength);
+            }
+        }
         return total;
     }
 
@@ -3747,11 +3855,13 @@ internal sealed class NativeOwnerKernel
         nuint preLease,
         nuint preAllocateBytes,
         bool containsReferences,
-        bool doNotLeaseOnDeclaration)
+        bool doNotLeaseOnDeclaration,
+        NativeMemoryBudget? budget = null)
     {
         _kind = kind;
         _ownerKind = ownerKind;
         _returnMemoryOnDispose = returnMemoryOnDispose;
+        _budget = budget;
         _storageElementSize = storageElementSize;
         _preLease = preLease;
         _preAllocateBytes = preAllocateBytes;
@@ -3788,7 +3898,8 @@ internal sealed class NativeOwnerKernel
         string ownerKind,
         NativeMemoryReturn returnMemoryOnDispose,
         bool containsReferences,
-        bool doNotLeaseOnDeclaration)
+        bool doNotLeaseOnDeclaration,
+        NativeMemoryBudget? budget = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(preLease);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(storageElementSize);
@@ -3801,7 +3912,8 @@ internal sealed class NativeOwnerKernel
             (nuint)preLease,
             preAllocateBytes,
             containsReferences,
-            doNotLeaseOnDeclaration);
+            doNotLeaseOnDeclaration,
+            budget);
     }
 
     internal static NativeOwnerKernel CreateRegion(
@@ -3809,7 +3921,8 @@ internal sealed class NativeOwnerKernel
         string ownerKind,
         NativeMemoryReturn returnMemoryOnDispose,
         bool containsReferences,
-        bool doNotLeaseOnDeclaration)
+        bool doNotLeaseOnDeclaration,
+        NativeMemoryBudget? budget = null)
     {
         NativeMemoryReturnValidation.Validate(returnMemoryOnDispose, nameof(returnMemoryOnDispose));
         return new NativeOwnerKernel(
@@ -3820,14 +3933,16 @@ internal sealed class NativeOwnerKernel
             preLease: 0,
             preAllocateBytes: preAllocateBytes,
             containsReferences: containsReferences,
-            doNotLeaseOnDeclaration: doNotLeaseOnDeclaration);
+            doNotLeaseOnDeclaration: doNotLeaseOnDeclaration,
+            budget: budget);
     }
 
     internal static NativeOwnerKernel CreateArena(
         nuint preAllocateBytes,
         string ownerKind,
         NativeMemoryReturn returnMemoryOnDispose,
-        bool doNotLeaseOnDeclaration)
+        bool doNotLeaseOnDeclaration,
+        NativeMemoryBudget? budget = null)
     {
         NativeMemoryReturnValidation.Validate(returnMemoryOnDispose, nameof(returnMemoryOnDispose));
         return new NativeOwnerKernel(
@@ -3838,7 +3953,8 @@ internal sealed class NativeOwnerKernel
             preLease: 0,
             preAllocateBytes: preAllocateBytes,
             containsReferences: false,
-            doNotLeaseOnDeclaration: doNotLeaseOnDeclaration);
+            doNotLeaseOnDeclaration: doNotLeaseOnDeclaration,
+            budget: budget);
     }
 
     internal long ArenaFastSlowPathCountForTest()
@@ -4817,22 +4933,10 @@ internal sealed class NativeOwnerKernel
             nuint segmentBytes = ChooseBumpSegmentBytes(
                 generation,
                 requiredBytes);
-            generation.BumpSegments.EnsureCapacity(
-                checked(generation.BumpSegments.Count + 1));
-            generation.Owner.PrepareAddSegmentCapacity(1);
-            NativeSegment segment = NativeSegment.Allocate(
-                segmentBytes,
-                _ownerKind,
-                generation.Number,
-                "arena lane growth",
-                _lifecycle,
-                zeroed: false);
-            NativeBumpSegment bump = new(
-                segment,
-                NextSegmentOrdinalLocked())
-            {
-                IsArenaFastSegment = true
-            };
+            NativeBumpSegment bump = AllocateBumpSegmentLocked(
+                generation, segmentBytes, requiredBytes, "arena lane growth", _lifecycle);
+            NativeSegment segment = bump.Segment;
+            bump.IsArenaFastSegment = true;
             try
             {
                 AppendBumpSegmentLocked(generation, bump);
@@ -4918,22 +5022,10 @@ internal sealed class NativeOwnerKernel
             nuint segmentBytes = ChooseBumpSegmentBytes(
                 generation,
                 requiredBytes);
-            generation.BumpSegments.EnsureCapacity(
-                checked(generation.BumpSegments.Count + 1));
-            generation.Owner.PrepareAddSegmentCapacity(1);
-            NativeSegment segment = NativeSegment.Allocate(
-                segmentBytes,
-                _ownerKind,
-                generation.Number,
-                "arena scoped lane growth",
-                _lifecycle,
-                zeroed: false);
-            NativeBumpSegment bump = new(
-                segment,
-                NextSegmentOrdinalLocked())
-            {
-                IsArenaFastSegment = true
-            };
+            NativeBumpSegment bump = AllocateBumpSegmentLocked(
+                generation, segmentBytes, requiredBytes, "arena scoped lane growth", _lifecycle);
+            NativeSegment segment = bump.Segment;
+            bump.IsArenaFastSegment = true;
             try
             {
                 AppendBumpSegmentLocked(generation, bump);
@@ -5286,22 +5378,11 @@ internal sealed class NativeOwnerKernel
         nuint segmentBytes = Math.Max(
             RequiredFreshBumpBytes(totalBytes, alignment),
             DefaultBumpSegmentBytes);
-        generation.BumpSegments.EnsureCapacity(
-            checked(generation.BumpSegments.Count + 1));
-        generation.Owner.PrepareAddSegmentCapacity(1);
-        NativeSegment nativeSegment = NativeSegment.Allocate(
-            segmentBytes,
-            _ownerKind,
-            generation.Number,
-            "arena transfer batch growth",
-            _lifecycle,
-            zeroed: false);
-        NativeBumpSegment created = new(
-            nativeSegment,
-            NextSegmentOrdinalLocked())
-        {
-            IsArenaTransferSegment = true
-        };
+        NativeBumpSegment created = AllocateBumpSegmentLocked(
+            generation, segmentBytes, RequiredFreshBumpBytes(totalBytes, alignment),
+            "arena transfer batch growth", _lifecycle);
+        NativeSegment nativeSegment = created.Segment;
+        created.IsArenaTransferSegment = true;
         try
         {
             AppendBumpSegmentLocked(generation, created);
@@ -6582,16 +6663,10 @@ internal sealed class NativeOwnerKernel
                     nuint segmentBytes = ChooseBumpSegmentBytes(
                         generation,
                         RequiredFreshBumpBytes(byteLength, alignment));
-                    generation.BumpSegments.EnsureCapacity(checked(generation.BumpSegments.Count + 1));
-                    generation.Owner.PrepareAddSegmentCapacity(1);
-                    NativeSegment segment = NativeSegment.Allocate(
-                        segmentBytes,
-                        _ownerKind,
-                        generation.Number,
-                        scoped ? "scoped growth" : "allocation growth",
-                        _lifecycle,
-                        zeroed: false);
-                    createdSegment = new NativeBumpSegment(segment, NextSegmentOrdinalLocked());
+                    createdSegment = AllocateBumpSegmentLocked(
+                        generation, segmentBytes, RequiredFreshBumpBytes(byteLength, alignment),
+                        scoped ? "scoped growth" : "allocation growth", _lifecycle);
+                    NativeSegment segment = createdSegment.Segment;
                     bumpSegment = createdSegment;
                     AppendBumpSegmentLocked(generation, createdSegment);
                     generation.Owner.AddSegment(segment);
@@ -8529,19 +8604,9 @@ internal sealed class NativeOwnerKernel
 
             try
             {
-                generation.BumpSegments.EnsureCapacity(
-                    checked(generation.BumpSegments.Count + 1));
-                generation.Owner.PrepareAddSegmentCapacity(1);
-                NativeSegment segment = NativeSegment.Allocate(
-                    byteLength,
-                    _ownerKind,
-                    generation.Number,
-                    "retained reservation",
-                    _lifecycle,
-                    zeroed: false);
-                NativeBumpSegment bump = new(
-                    segment,
-                    NextSegmentOrdinalLocked());
+                NativeBumpSegment bump = AllocateBumpSegmentLocked(
+                    generation, byteLength, byteLength, "retained reservation", _lifecycle);
+                NativeSegment segment = bump.Segment;
                 try
                 {
                     AppendBumpSegmentLocked(generation, bump);
@@ -8899,19 +8964,35 @@ internal sealed class NativeOwnerKernel
         else if (_kind is NativeOwnerKind.Region or NativeOwnerKind.Arena
             && _preAllocateBytes > 0)
         {
-            generation.BumpSegments.EnsureCapacity(checked(generation.BumpSegments.Count + 1));
-            generation.Owner.PrepareAddSegmentCapacity(1);
-            NativeSegment segment = NativeSegment.Allocate(
-                _preAllocateBytes,
-                _ownerKind,
-                generation.Number,
-                operation,
-                observedLifecycle,
-                zeroed: false);
-            NativeBumpSegment bump = new(segment, NextSegmentOrdinalLocked());
+            NativeBumpSegment bump = AllocateBumpSegmentLocked(
+                generation, _preAllocateBytes, _preAllocateBytes, operation, observedLifecycle);
+            NativeSegment segment = bump.Segment;
             AppendBumpSegmentLocked(generation, bump);
             generation.Owner.AddSegment(segment);
             _freshSegmentAllocationCount++;
+        }
+    }
+
+    private NativeBumpSegment AllocateBumpSegmentLocked(
+        NativeGeneration generation, nuint preferredBytes, nuint minimumBytes,
+        string operation, NativeOwnerLifecycle observedLifecycle)
+    {
+        NativeSegment segment = NativeSegment.Allocate(
+            preferredBytes, _ownerKind, generation.Number, operation,
+            observedLifecycle, zeroed: false, budget: _budget,
+            minimumByteLength: minimumBytes);
+        try
+        {
+            // Admission precedes bank/control growth. A metadata failure must
+            // physically release its payload and return its charge as well.
+            generation.BumpSegments.EnsureCapacity(checked(generation.BumpSegments.Count + 1));
+            generation.Owner.PrepareAddSegmentCapacity(1);
+            return new NativeBumpSegment(segment, NextSegmentOrdinalLocked());
+        }
+        catch
+        {
+            segment.FreeNow();
+            throw;
         }
     }
 
@@ -8959,7 +9040,8 @@ internal sealed class NativeOwnerKernel
             generation.Number,
             operation,
             observedLifecycle,
-            zeroed: false);
+            zeroed: false,
+            budget: _budget);
         try
         {
             generation.Owner.AddSegment(segment);
@@ -10354,7 +10436,7 @@ internal sealed class NativeOwnerKernel
                 current.Slabs.Remove(slab);
                 current.Owner.RemoveSegment(slab.Segment);
                 slab.Segment.FreeNow();
-                released = checked(released + slab.Segment.ByteLength);
+                released = checked(released + slab.Segment.AllocationByteLength);
             }
 
             return released;
@@ -10402,7 +10484,7 @@ internal sealed class NativeOwnerKernel
             generation.BumpSegments.RemoveAt(index);
             generation.Owner.RemoveSegment(segment.Segment);
             segment.Segment.FreeNow();
-            released = checked(released + segment.Segment.ByteLength);
+            released = checked(released + segment.Segment.AllocationByteLength);
             ResetBumpTraversal(generation);
         }
 
@@ -10417,7 +10499,7 @@ internal sealed class NativeOwnerKernel
         {
             if (IsSegmentBusy(generation, slab))
             {
-                total = checked(total + slab.Segment.ByteLength);
+                total = checked(total + slab.Segment.AllocationByteLength);
             }
         }
 #pragma warning restore HLQ012
@@ -10427,7 +10509,7 @@ internal sealed class NativeOwnerKernel
         {
             if (IsSegmentBusy(generation, bump))
             {
-                total = checked(total + bump.Segment.ByteLength);
+                total = checked(total + bump.Segment.AllocationByteLength);
             }
         }
 #pragma warning restore HLQ012
@@ -10442,14 +10524,14 @@ internal sealed class NativeOwnerKernel
 #pragma warning disable HLQ012 // Retain the enumerator's mutation checks during ownership cleanup; a span removes them.
         foreach (NativeSlab slab in generation.Slabs)
         {
-            total = checked(total + slab.Segment.ByteLength);
+            total = checked(total + slab.Segment.AllocationByteLength);
         }
 #pragma warning restore HLQ012
 
 #pragma warning disable HLQ012 // Retain the enumerator's mutation checks during ownership cleanup; a span removes them.
         foreach (NativeBumpSegment bump in generation.BumpSegments)
         {
-            total = checked(total + bump.Segment.ByteLength);
+            total = checked(total + bump.Segment.AllocationByteLength);
         }
 #pragma warning restore HLQ012
 

@@ -16,6 +16,7 @@ public readonly ref struct NativeRegion
     /// <summary>Creates one active Region with the specified native reservation.</summary>
     /// <param name="preAllocateBytes">The initial native byte capacity.</param>
     /// <param name="returnMemoryOnDispose">The cleanup policy for the complete Region.</param>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "RS0027", Justification = "Preserve the published optional signature; the budget-first overload has only required arguments and strictly greater arity, so it cannot capture any existing call.")]
     public NativeRegion(
         nuint preAllocateBytes = 0,
         NativeMemoryReturn returnMemoryOnDispose = NativeMemoryReturn.ToGarbageCollector)
@@ -26,6 +27,17 @@ public readonly ref struct NativeRegion
         _kernel = new NativeRegionKernel(
             preAllocateBytes,
             returnMemoryOnDispose);
+    }
+
+    /// <summary>Creates a lexical owner with complete backing admitted by a shared ceiling.</summary>
+    /// <param name="budget">The backing admission domain.</param>
+    /// <param name="preAllocateBytes">The initial usable byte reservation; native headers are charged too.</param>
+    /// <param name="returnMemoryOnDispose">The final storage cleanup policy.</param>
+    public NativeRegion(NativeMemoryBudget budget, nuint preAllocateBytes, NativeMemoryReturn returnMemoryOnDispose)
+    {
+        ArgumentNullException.ThrowIfNull(budget);
+        NativeMemoryReturnValidation.Validate(returnMemoryOnDispose, nameof(returnMemoryOnDispose));
+        _kernel = new NativeRegionKernel(preAllocateBytes, returnMemoryOnDispose, budget);
     }
 
     internal NativeOwnerLifecycle CurrentLifecycle =>
