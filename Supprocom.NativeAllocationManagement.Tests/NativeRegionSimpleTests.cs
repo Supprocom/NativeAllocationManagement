@@ -221,7 +221,8 @@ public sealed class NativeRegionSimpleTests
 
         local.Access(view =>
         {
-            Assert.Throws<InvalidOperationException>(kernel.Dispose);
+            NativeAllocationInUseException failure = Assert.Throws<NativeAllocationInUseException>(kernel.Dispose);
+            Assert.Equal(1, failure.ActiveOperationCount);
             Assert.Equal(10, view[0]);
         });
 

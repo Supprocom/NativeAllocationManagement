@@ -55,20 +55,29 @@ internal sealed unsafe class NativeRegionKernel
         ArgumentNullException.ThrowIfNull(initializer);
         ArgumentOutOfRangeException.ThrowIfNegative(length);
         ValidateActive(nameof(NativeRegion.Lease));
+        if (_activeBorrowCount < 0)
+        {
+            ThrowActiveOperation(nameof(NativeRegion.Lease));
+        }
 
         nuint byteLength = CalculateByteLength<T>(length);
         nuint alignment = CalculateAlignment<T>();
         long requestedBytes = checked(
             _requestedBytes + checked((long)byteLength));
-        RegionReservation reservation = Reserve(
-            byteLength,
-            alignment);
-        Initialize(reservation, length, initializer);
-        _requestedBytes = requestedBytes;
-        return new Local<T>(
-            this,
-            reservation.Pointer,
-            length);
+        // The high bit is initializer admission; lower bits remain the local
+        // bounded-borrow count. No per-range control or owner field is needed.
+        _activeBorrowCount |= int.MinValue;
+        try
+        {
+            RegionReservation reservation = Reserve(byteLength, alignment);
+            Initialize(reservation, length, initializer);
+            _requestedBytes = requestedBytes;
+            return new Local<T>(this, reservation.Pointer, length);
+        }
+        finally
+        {
+            _activeBorrowCount &= int.MaxValue;
+        }
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
@@ -204,7 +213,7 @@ internal sealed unsafe class NativeRegionKernel
 
         if (_activeBorrowCount != 0)
         {
-            ThrowActiveBorrow();
+            ThrowActiveOperation(nameof(Dispose));
         }
 
         _lifecycle = NativeOwnerLifecycle.Disposed;
@@ -442,7 +451,7 @@ internal sealed unsafe class NativeRegionKernel
             generation: 0,
             currentGeneration: 0,
             operation,
-            activeOperationCount: 0,
+            activeOperationCount: ActiveOperationCount,
             allocationId: 0,
             _lifecycle);
 
@@ -454,14 +463,19 @@ internal sealed unsafe class NativeRegionKernel
             generation: 0,
             currentGeneration: 0,
             operation,
-            activeOperationCount: 0,
+            activeOperationCount: ActiveOperationCount,
             allocationId: 0,
             _lifecycle);
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static void ThrowActiveBorrow() =>
-        throw new InvalidOperationException(
-            "NativeRegion cannot dispose during a bounded access callback.");
+    private void ThrowActiveOperation(string operation) =>
+        throw new NativeAllocationInUseException(
+            "NativeRegion cannot initialize recursively or dispose during an entered initializer or bounded callback.",
+            OwnerKind, generation: 0, currentGeneration: 0, operation,
+            activeOperationCount: ActiveOperationCount, allocationId: 0, _lifecycle);
+
+    private int ActiveOperationCount =>
+        (_activeBorrowCount & int.MaxValue) + (_activeBorrowCount < 0 ? 1 : 0);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static nuint CalculateByteLength<T>(int length)

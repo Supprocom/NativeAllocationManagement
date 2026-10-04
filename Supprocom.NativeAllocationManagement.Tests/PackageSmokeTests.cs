@@ -509,6 +509,26 @@ public sealed class PackageSmokeTests
                         }
                         if (mappedBudget.CaptureStatistics().CommittedBytes != 0) return 10;
                         System.Console.WriteLine("mapped-group-output=19; final-charge=0");
+                        NativeMemoryBudget regionBudget = new(512);
+                        using (NativeRegion region = new(regionBudget, 16, NativeMemoryReturn.ToNativeMemory))
+                        {
+                            Local<int> value = region.Lease<int>(1, static writer => writer.Write(23));
+                            if (value.Read(static view => view[0]) != 23) return 12;
+                            bool failed = false;
+                            try
+                            {
+                                Local<int> incomplete = region.Lease<int>(2, static writer => writer.Write(1));
+                                incomplete.Clear();
+                            }
+                            catch (System.InvalidOperationException) { failed = true; }
+                            if (!failed || region.GetStatistics().RequestedBytes != 4) return 13;
+                            Local<int> reused = region.Lease<int>(3, static writer => writer.Fill(29));
+                            if (reused.Read(static view => view[2]) != 29
+                                || region.GetStatistics().RequestedBytes != 16
+                                || regionBudget.CaptureStatistics().AllocationCount != 1) return 14;
+                        }
+                        if (regionBudget.CaptureStatistics().CommittedBytes != 0) return 15;
+                        System.Console.WriteLine("region-reused-output=29; final-charge=0");
                         return 0;
                     }
                     private sealed class MappedBuffer : SafeBuffer
