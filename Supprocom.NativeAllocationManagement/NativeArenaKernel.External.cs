@@ -56,7 +56,7 @@ internal sealed unsafe partial class NativeArenaKernel
                     unchecked((long)_generation), "external preparation", _lifecycle);
             }
             NativeMemory.Clear(headers, headerBytes);
-            metricsEpoch = NativeMemoryTestHooks.RecordAllocation(headerBytes, zeroed: false);
+            metricsEpoch = NativeMemoryAccounting.RecordAllocation(headerBytes, zeroed: false);
             recorded = true;
             budget.Commit(headerBytes, Id, allocationOrdinal: 1);
             committed = true;
@@ -103,7 +103,7 @@ internal sealed unsafe partial class NativeArenaKernel
                 NativeMemory.AlignedFree(headers);
                 if (recorded)
                 {
-                    NativeMemoryTestHooks.RecordFree(headerBytes, detached: false, metricsEpoch);
+                    NativeMemoryAccounting.RecordFree(headerBytes, detached: false, metricsEpoch);
                 }
             }
             if (committed)
@@ -145,7 +145,7 @@ internal sealed unsafe partial class NativeArenaKernel
         NativeMemory.AlignedFree((void*)_externalHeaderMemory);
         _externalHeaderMemory = IntPtr.Zero;
         _budget?.Release(_externalHeaderBytes, Id, traceKind, allocationOrdinal: 1);
-        NativeMemoryTestHooks.RecordFree(_externalHeaderBytes, detached: false, metricsEpoch);
+        NativeMemoryAccounting.RecordFree(_externalHeaderBytes, detached: false, metricsEpoch);
         _retainedBytes -= checked((long)_externalHeaderBytes);
         _externalHeaderBytes = 0;
         NativeSegment? external = _externalBuffer;

@@ -183,7 +183,7 @@ internal sealed unsafe class NativeRegionKernel
             index = checked(index + 1);
         }
         NativeOwnerDiagnosticSnapshot snapshot = new(
-            _lifecycle, 0, 0, NativeMemoryTestHooks.CurrentMetricsEpoch,
+            _lifecycle, 0, 0, NativeMemoryAccounting.CurrentMetricsEpoch,
             0, 0, 0, currentIndex, -1, _segmentCount,
             _lifecycle == NativeOwnerLifecycle.Active ? GetAvailableSegmentCount() : 0,
             0, 0, 0, 0, 0, false)
@@ -363,7 +363,7 @@ internal sealed unsafe class NativeRegionKernel
             *segment = default;
             segment->Capacity = capacity;
             segment->AllocationBytes = allocationBytes;
-            metricsEpoch = NativeMemoryTestHooks.RecordAllocation(allocationBytes, zeroed: false);
+            metricsEpoch = NativeMemoryAccounting.RecordAllocation(allocationBytes, zeroed: false);
             recorded = true;
             segment->MetricsEpoch = metricsEpoch;
             _budget?.Commit(allocationBytes, Id);
@@ -389,7 +389,7 @@ internal sealed unsafe class NativeRegionKernel
                     NativeMemory.AlignedFree(memory);
                     if (recorded)
                     {
-                        NativeMemoryTestHooks.RecordFree(allocationBytes, detached: false, metricsEpoch);
+                        NativeMemoryAccounting.RecordFree(allocationBytes, detached: false, metricsEpoch);
                     }
                 }
                 _budget?.Cancel(allocationBytes, Id);
@@ -409,14 +409,14 @@ internal sealed unsafe class NativeRegionKernel
         while (segment != null)
         {
             segment->Detached = 1;
-            NativeMemoryTestHooks.RecordDetachedBytes(
+            NativeMemoryAccounting.RecordDetachedBytes(
                 segment->AllocationBytes,
                 segment->MetricsEpoch);
             segment = segment->Next;
         }
 
-        NativeMemoryTestHooks.RecordDetachedGeneration(
-            NativeMemoryTestHooks.CurrentMetricsEpoch);
+        NativeMemoryAccounting.RecordDetachedGeneration(
+            NativeMemoryAccounting.CurrentMetricsEpoch);
     }
 
     private void FreeSegments()
@@ -436,7 +436,7 @@ internal sealed unsafe class NativeRegionKernel
             bool detached = segment->Detached != 0;
             NativeMemory.AlignedFree(segment);
             _budget?.Release(allocationBytes, Id);
-            NativeMemoryTestHooks.RecordFree(
+            NativeMemoryAccounting.RecordFree(
                 allocationBytes,
                 detached,
                 metricsEpoch);

@@ -530,6 +530,26 @@ public sealed class PackageSmokeTests
                         }
                         if (regionBudget.CaptureStatistics().CommittedBytes != 0) return 15;
                         System.Console.WriteLine("region-reused-output=29; final-charge=0");
+                        NativeMemoryStatistics beforeClear = NativeMemoryDiagnostics.Snapshot();
+                        using (NativeWorkspace<int> workspace = new(preLease: 2))
+                        {
+                            workspace.Initialize(2, static writer => writer.Fill(42));
+                            workspace.Access(static view => view.Clear());
+                            if (workspace.Read(static view => view[1]) != 0) return 17;
+                        }
+                        NativeMemoryStatistics afterClear = NativeMemoryDiagnostics.Snapshot();
+                        if (afterClear.MetricsEpoch != beforeClear.MetricsEpoch
+                            || afterClear.HistoryOverflowed
+                            || afterClear.AllocationCount != beforeClear.AllocationCount + 1
+                            || afterClear.FreeCount != beforeClear.FreeCount + 1
+                            || afterClear.OutstandingNativeBytes != beforeClear.OutstandingNativeBytes
+                            || afterClear.StorageClearCount != beforeClear.StorageClearCount + 2
+                            || afterClear.StorageClearBytes != beforeClear.StorageClearBytes + 16
+                            || afterClear.WrittenClearBytes != beforeClear.WrittenClearBytes + 16
+                            || afterClear.ZeroedAllocationCount < beforeClear.ZeroedAllocationCount
+                            || afterClear.DetachedGenerationCount < beforeClear.DetachedGenerationCount
+                            || afterClear.BumpTraversalVisitCount < beforeClear.BumpTraversalVisitCount) return 18;
+                        System.Console.WriteLine("accounted-clears=2; cleared-bytes=16; final-backing=unchanged");
                         return 0;
                     }
                     private sealed class MappedBuffer : SafeBuffer

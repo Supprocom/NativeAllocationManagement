@@ -251,7 +251,7 @@ internal sealed unsafe partial class NativeArenaKernel
         ValidateThread(nameof(NativeArena.CaptureDiagnosticSnapshot));
         NativeOwnerDiagnosticSnapshot snapshot = new(
             _lifecycle, unchecked((long)_generation), unchecked((long)_scopeEpoch),
-            NativeMemoryTestHooks.CurrentMetricsEpoch,
+            NativeMemoryAccounting.CurrentMetricsEpoch,
             0, 0, 0, GetCurrentSegmentIndex(_ordinary), GetCurrentSegmentIndex(_scoped),
             _segmentCount,
             _lifecycle == NativeOwnerLifecycle.Active
@@ -337,8 +337,8 @@ internal sealed unsafe partial class NativeArenaKernel
 
         MarkDetached(_ordinary);
         MarkDetached(_scoped);
-        NativeMemoryTestHooks.RecordDetachedGeneration(
-            NativeMemoryTestHooks.CurrentMetricsEpoch);
+        NativeMemoryAccounting.RecordDetachedGeneration(
+            NativeMemoryAccounting.CurrentMetricsEpoch);
     }
 
     private ulong GetNextEpochOrClose(
@@ -578,7 +578,7 @@ internal sealed unsafe partial class NativeArenaKernel
             segment->DataStart = (byte*)segment + HeaderBytes;
             segment->Capacity = capacity;
             segment->AllocationBytes = allocationBytes;
-            metricsEpoch = NativeMemoryTestHooks.RecordAllocation(allocationBytes, zeroed: false);
+            metricsEpoch = NativeMemoryAccounting.RecordAllocation(allocationBytes, zeroed: false);
             recorded = true;
             segment->MetricsEpoch = metricsEpoch;
             segment->AllocationOrdinal = allocationOrdinal;
@@ -605,7 +605,7 @@ internal sealed unsafe partial class NativeArenaKernel
                     NativeMemory.AlignedFree(memory);
                     if (recorded)
                     {
-                        NativeMemoryTestHooks.RecordFree(allocationBytes, detached: false, metricsEpoch);
+                        NativeMemoryAccounting.RecordFree(allocationBytes, detached: false, metricsEpoch);
                     }
                 }
                 _budget?.Cancel(allocationBytes, Id);
@@ -755,7 +755,7 @@ internal sealed unsafe partial class NativeArenaKernel
         while (segment != null)
         {
             segment->Detached = 1;
-            NativeMemoryTestHooks.RecordDetachedBytes(
+            NativeMemoryAccounting.RecordDetachedBytes(
                 segment->AllocationBytes,
                 segment->MetricsEpoch);
             segment = segment->Next;
@@ -795,7 +795,7 @@ internal sealed unsafe partial class NativeArenaKernel
         long allocationOrdinal = segment->AllocationOrdinal;
         NativeMemory.AlignedFree(segment);
         _budget?.Release(allocationBytes, Id, traceKind, allocationOrdinal);
-        NativeMemoryTestHooks.RecordFree(
+        NativeMemoryAccounting.RecordFree(
             allocationBytes,
             detached,
             metricsEpoch);

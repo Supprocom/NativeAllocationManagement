@@ -326,6 +326,10 @@ public sealed class NativeWorkspace<T> : IDisposable
     private unsafe void ClearBlock()
     {
         new Span<T>((void*)_block.Pointer, _capacity).Clear();
+        if (_capacity != 0)
+        {
+            NativeMemoryAccounting.RecordStorageClear(_block.ByteLength, _block.ByteLength);
+        }
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]

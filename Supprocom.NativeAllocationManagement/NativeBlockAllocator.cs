@@ -47,7 +47,7 @@ internal static unsafe class NativeBlockAllocator
 #pragma warning restore CA2201
             }
 
-            metricsEpoch = NativeMemoryTestHooks.RecordAllocation(byteLength, zeroed: false);
+            metricsEpoch = NativeMemoryAccounting.RecordAllocation(byteLength, zeroed: false);
             recorded = true;
             budget?.Commit(byteLength, ownerId);
             acquired = true;
@@ -75,7 +75,7 @@ internal static unsafe class NativeBlockAllocator
                     NativeMemory.Free(memory);
                     if (recorded)
                     {
-                        NativeMemoryTestHooks.RecordFree(byteLength, detached: false, metricsEpoch);
+                        NativeMemoryAccounting.RecordFree(byteLength, detached: false, metricsEpoch);
                     }
                 }
 
@@ -155,7 +155,7 @@ internal static unsafe class NativeBlockAllocator
                 throw new OutOfMemoryException();
 #pragma warning restore CA2201
             }
-            long metricsEpoch = NativeMemoryTestHooks.RecordReallocation(
+            long metricsEpoch = NativeMemoryAccounting.RecordReallocation(
                 block.ByteLength, byteLength, block.MetricsEpoch);
             budget?.CommitReallocation(byteLength, block.ByteLength, ownerId);
             acquired = true;
@@ -186,7 +186,7 @@ internal static unsafe class NativeBlockAllocator
         block.Budget?.Release(block.ByteLength, block.OwnerId);
         try
         {
-            NativeMemoryTestHooks.RecordFree(
+            NativeMemoryAccounting.RecordFree(
                 block.ByteLength,
                 detached: false,
                 block.MetricsEpoch);

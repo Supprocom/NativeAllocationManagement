@@ -83,6 +83,7 @@ public readonly ref struct NativeLeaseView<T>
         if (_allocation is null)
         {
             GetDirectSpan().Clear();
+            RecordDirectClear(_length);
             return;
         }
 
@@ -95,12 +96,22 @@ public readonly ref struct NativeLeaseView<T>
         if (_allocation.ReferenceRoots is null)
         {
             _allocation.AsSpan<T>()[.._length].Clear();
+            RecordDirectClear(_length);
             return;
         }
 
-        for (int index = 0; index < _length; index++)
+        if (_length != 0)
         {
-            _allocation.SetValue(index, default(T)!);
+            _allocation.ReferenceRoots.ClearRange(_allocation.Segment!, _allocation.OffsetBytes, _length);
+        }
+    }
+
+    private static void RecordDirectClear(int length)
+    {
+        if (length != 0)
+        {
+            nuint bytes = checked((nuint)length * (nuint)Unsafe.SizeOf<T>());
+            NativeMemoryAccounting.RecordStorageClear(bytes, bytes);
         }
     }
 

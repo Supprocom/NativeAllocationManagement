@@ -8,6 +8,7 @@ internal static class NativeOwnerIdentity
     // checked sequence cannot wrap and turn an old identity into a new owner.
     internal static long Next()
     {
+        NativeMemoryAccounting.PrepareThread();
         while (true)
         {
             long current = Volatile.Read(ref _nextId);

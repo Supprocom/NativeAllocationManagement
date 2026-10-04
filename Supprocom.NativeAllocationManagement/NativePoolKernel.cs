@@ -136,7 +136,7 @@ internal sealed unsafe class NativePoolKernel<T>
                     {
                         throw CreateAllocationFailure(bytes, "page preparation");
                     }
-                    epoch = NativeMemoryTestHooks.RecordAllocation(bytes, zeroed: false);
+                    epoch = NativeMemoryAccounting.RecordAllocation(bytes, zeroed: false);
                     _budget?.Commit(bytes, Id, NativeMemoryTraceKind.PageAcquired, ordinal);
                     remainingReservation -= bytes;
                     committed = true;
@@ -163,7 +163,7 @@ internal sealed unsafe class NativePoolKernel<T>
                     if (!committed && memory != null)
                     {
                         NativeMemory.AlignedFree(memory);
-                        NativeMemoryTestHooks.RecordFree(bytes, detached: false, epoch);
+                        NativeMemoryAccounting.RecordFree(bytes, detached: false, epoch);
                     }
                 }
             }
@@ -403,7 +403,7 @@ internal sealed unsafe class NativePoolKernel<T>
         ValidateThread(nameof(NativePool<T>.CaptureDiagnosticSnapshot));
         var counts = GetStorageCounts();
         NativeOwnerDiagnosticSnapshot snapshot = new(
-            _lifecycle, 0, 0, NativeMemoryTestHooks.CurrentMetricsEpoch,
+            _lifecycle, 0, 0, NativeMemoryAccounting.CurrentMetricsEpoch,
             _liveLeaseCount, 0, 0,
             _lifecycle == NativeOwnerLifecycle.Active ? _returnedSlabIndex : -1,
             -1, counts.Retained,
@@ -712,7 +712,7 @@ internal sealed unsafe class NativePoolKernel<T>
                         operation);
                 }
 
-                metricsEpoch = NativeMemoryTestHooks.RecordAllocation(
+                metricsEpoch = NativeMemoryAccounting.RecordAllocation(
                     backingBytes,
                     zeroed: false);
             }
@@ -757,7 +757,7 @@ internal sealed unsafe class NativePoolKernel<T>
                     NativeMemory.AlignedFree(memory);
                     if (metricsEpoch != 0)
                     {
-                        NativeMemoryTestHooks.RecordFree(backingBytes, detached: false, metricsEpoch);
+                        NativeMemoryAccounting.RecordFree(backingBytes, detached: false, metricsEpoch);
                     }
                 }
 
@@ -998,14 +998,14 @@ internal sealed unsafe class NativePoolKernel<T>
             }
 
             slab.Detached = true;
-            NativeMemoryTestHooks.RecordDetachedBytes(
+            NativeMemoryAccounting.RecordDetachedBytes(
                 slab.AllocationBytes,
                 slab.MetricsEpoch);
         }
 #pragma warning restore HLQ013
 
-        NativeMemoryTestHooks.RecordDetachedGeneration(
-            NativeMemoryTestHooks.CurrentMetricsEpoch);
+        NativeMemoryAccounting.RecordDetachedGeneration(
+            NativeMemoryAccounting.CurrentMetricsEpoch);
     }
 
     private void FreeAll()
@@ -1039,7 +1039,7 @@ internal sealed unsafe class NativePoolKernel<T>
         long ordinal = slab.Ordinal;
         NativeMemory.AlignedFree((void*)slab.Pointer);
         _budget?.Release(bytes, Id, allocationOrdinal: ordinal);
-        NativeMemoryTestHooks.RecordFree(
+        NativeMemoryAccounting.RecordFree(
             bytes,
             detached,
             metricsEpoch);
@@ -1197,7 +1197,7 @@ internal sealed unsafe class NativePoolKernel<T>
         _budget?.Release(bytes, Id,
             trimmed ? NativeMemoryTraceKind.Trimmed : NativeMemoryTraceKind.Released,
             page.Ordinal);
-        NativeMemoryTestHooks.RecordFree(bytes, detached: false, page.MetricsEpoch);
+        NativeMemoryAccounting.RecordFree(bytes, detached: false, page.MetricsEpoch);
         _retainedBytes -= checked((long)bytes);
         page = default;
     }

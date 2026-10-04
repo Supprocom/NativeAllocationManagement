@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
@@ -241,6 +240,8 @@ internal readonly record struct NativeMemoryTestMetrics(
     long WrittenClearBytes = 0,
     long ReallocationCount = 0)
 {
+    internal bool HistoryOverflowed { get; init; }
+    internal long MetricsEpoch { get; init; }
     internal long RetainedNativeBytes => OutstandingNativeBytes - DetachedNativeBytes;
 }
 
@@ -263,6 +264,30 @@ public readonly record struct NativeMemoryStatistics(
 
     /// <summary>Gets actual physical free calls accounted in this epoch.</summary>
     public long FreeCount { get; init; }
+
+    /// <summary>Gets the accounting epoch; only internal quiescent measurement resets advance it.</summary>
+    public long MetricsEpoch { get; init; }
+
+    /// <summary>Gets whether a completed event or byte history has saturated; current gauges remain exact.</summary>
+    public bool HistoryOverflowed { get; init; }
+
+    /// <summary>Gets fresh zeroed backing acquisitions accounted in this epoch.</summary>
+    public long ZeroedAllocationCount { get; init; }
+
+    /// <summary>Gets generation detach events accounted in this epoch.</summary>
+    public long DetachedGenerationCount { get; init; }
+
+    /// <summary>Gets actual bump-search segment visits accounted in this epoch.</summary>
+    public long BumpTraversalVisitCount { get; init; }
+
+    /// <summary>Gets NAM-controlled nonempty storage-clear operations, not arbitrary consumer span clears.</summary>
+    public long StorageClearCount { get; init; }
+
+    /// <summary>Gets bytes visited by NAM-controlled clears, including already-empty reference slots.</summary>
+    public long StorageClearBytes { get; init; }
+
+    /// <summary>Gets bytes actually zero-written by NAM-controlled clears; empty reference slots require no write.</summary>
+    public long WrittenClearBytes { get; init; }
 
     /// <summary>Gets storage still owned by active or retained allocator generations.</summary>
     public long RetainedNativeBytes => OutstandingNativeBytes - DetachedNativeBytes;
@@ -366,63 +391,23 @@ public readonly record struct NativeOwnerDiagnosticSnapshot(
 }
 
 /// <summary>Provides process-local physical storage counters for measurement and diagnostics.</summary>
+/// <remarks>
+/// Counters are always active. Owned extents include native headers and known
+/// backend alignment, but exclude provider-owned buffers and opaque allocator
+/// overhead. Detached and retired categories overlap outstanding storage and
+/// must not be added to it. Snapshots allocate no managed storage; capture at a
+/// quiescent boundary to reconcile fields while concurrent producers advance.
+/// Hot history uses a fixed thread-local bank with atomic fallback, never an
+/// unbounded registry of owners or historical threads.
+/// </remarks>
 public static class NativeMemoryDiagnostics
 {
     /// <summary>Reads the current physical native storage counters.</summary>
-    public static NativeMemoryStatistics Snapshot() => NativeMemoryTestHooks.SnapshotPublic();
+    public static NativeMemoryStatistics Snapshot() => NativeMemoryAccounting.SnapshotPublic();
 }
 
 internal static class NativeMemoryTestHooks
 {
-    private sealed class NativeHotMetrics
-    {
-        internal long Epoch = long.MinValue;
-        internal long BumpTraversalVisitCount;
-        internal long ReusedNativeSegmentCount;
-        internal long ReclaimedRangeReuseCount;
-        internal long ReclaimedRangeReuseBytes;
-        internal long StorageClearCount;
-        internal long StorageClearBytes;
-        internal long WrittenClearBytes;
-
-        internal void Reset(long epoch)
-        {
-            BumpTraversalVisitCount = 0;
-            ReusedNativeSegmentCount = 0;
-            ReclaimedRangeReuseCount = 0;
-            ReclaimedRangeReuseBytes = 0;
-            StorageClearCount = 0;
-            StorageClearBytes = 0;
-            WrittenClearBytes = 0;
-            Volatile.Write(ref Epoch, epoch);
-        }
-    }
-
-    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
-    private readonly record struct NativeHotMetricsSnapshot(
-        long BumpTraversalVisitCount,
-        long ReusedNativeSegmentCount,
-        long ReclaimedRangeReuseCount,
-        long ReclaimedRangeReuseBytes,
-        long StorageClearCount,
-        long StorageClearBytes,
-        long WrittenClearBytes);
-
-    private static readonly ConcurrentBag<NativeHotMetrics> HotMetrics = [];
-
-    [ThreadStatic]
-    private static NativeHotMetrics? _threadHotMetrics;
-
-    private static long _allocationCount;
-    private static long _reallocationCount;
-    private static long _zeroedAllocationCount;
-    private static long _freeCount;
-    private static long _detachedGenerationCount;
-    private static long _outstandingNativeBytes;
-    private static long _peakOutstandingNativeBytes;
-    private static long _detachedNativeBytes;
-    private static long _retiredNativeBytes;
-    private static long _metricsEpoch;
     private static int _forcedFailures;
     private static int _forcedClearFailures;
     private static int _forcedCommitBoundary;
@@ -432,6 +417,7 @@ internal static class NativeMemoryTestHooks
     private static int _forcedRetiredSnapshotPreparation;
     private static int _forcedQuarantineReservation;
     private static int _forcedManagedPublicationBoundary;
+    private static int _forcedAccountingClaimBoundary;
     private static Action<string>? _operationEntered;
     private static Action<string>? _beforeOperationEntry;
     private static Action<string, NativeOwnerKernel>? _beforeOperationEntryWithKernel;
@@ -441,16 +427,7 @@ internal static class NativeMemoryTestHooks
 
     internal static void Reset()
     {
-        Interlocked.Increment(ref _metricsEpoch);
-        Interlocked.Exchange(ref _allocationCount, 0);
-        Interlocked.Exchange(ref _reallocationCount, 0);
-        Interlocked.Exchange(ref _zeroedAllocationCount, 0);
-        Interlocked.Exchange(ref _freeCount, 0);
-        Interlocked.Exchange(ref _detachedGenerationCount, 0);
-        Interlocked.Exchange(ref _outstandingNativeBytes, 0);
-        Interlocked.Exchange(ref _peakOutstandingNativeBytes, 0);
-        Interlocked.Exchange(ref _detachedNativeBytes, 0);
-        Interlocked.Exchange(ref _retiredNativeBytes, 0);
+        NativeMemoryAccounting.ResetForTests();
         Interlocked.Exchange(ref _forcedFailures, 0);
         Interlocked.Exchange(ref _forcedClearFailures, 0);
         Interlocked.Exchange(ref _forcedCommitBoundary, 0);
@@ -460,6 +437,7 @@ internal static class NativeMemoryTestHooks
         Interlocked.Exchange(ref _forcedRetiredSnapshotPreparation, 0);
         Interlocked.Exchange(ref _forcedQuarantineReservation, 0);
         Interlocked.Exchange(ref _forcedManagedPublicationBoundary, 0);
+        Interlocked.Exchange(ref _forcedAccountingClaimBoundary, 0);
         Volatile.Write(ref _operationEntered, null);
         Volatile.Write(ref _beforeOperationEntry, null);
         Volatile.Write(ref _beforeOperationEntryWithKernel, null);
@@ -468,7 +446,24 @@ internal static class NativeMemoryTestHooks
         Volatile.Write(ref _operationHooksEnabled, 0);
     }
 
-    internal static long CurrentMetricsEpoch => Volatile.Read(ref _metricsEpoch);
+    internal static long CurrentMetricsEpoch => NativeMemoryAccounting.CurrentMetricsEpoch;
+
+    internal static void FailAccountingClaimAt(int boundary)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(boundary, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(boundary, 3);
+        Interlocked.Exchange(ref _forcedAccountingClaimBoundary, boundary);
+    }
+
+    internal static void AccountingClaimBoundary(int boundary)
+    {
+        if (Interlocked.CompareExchange(ref _forcedAccountingClaimBoundary, 0, boundary) == boundary)
+        {
+#pragma warning disable CA2201 // Cold metadata OOM is injected to prove non-throwing production accounting fallback.
+            throw new OutOfMemoryException("Injected cold accounting metadata failure.");
+#pragma warning restore CA2201
+        }
+    }
 
     internal static void FailNextAllocation() => Interlocked.Increment(ref _forcedFailures);
 
@@ -612,252 +607,19 @@ internal static class NativeMemoryTestHooks
         }
     }
 
-    internal static long RecordAllocation(nuint byteLength, bool zeroed)
-    {
-        long metricsEpoch = CurrentMetricsEpoch;
-        Interlocked.Increment(ref _allocationCount);
-        long current = Interlocked.Add(ref _outstandingNativeBytes, checked((long)byteLength));
-        RecordPeak(current);
-        if (zeroed)
-        {
-            Interlocked.Increment(ref _zeroedAllocationCount);
-        }
-
-        return metricsEpoch;
-    }
-
-    internal static long RecordReallocation(
-        nuint previousByteLength,
-        nuint byteLength,
-        long previousMetricsEpoch)
-    {
-        Interlocked.Increment(ref _reallocationCount);
-        if (previousByteLength == 0 || previousMetricsEpoch != CurrentMetricsEpoch)
-        {
-            // A pre-measurement block enters this epoch on successful resizing.
-            return RecordAllocation(byteLength, zeroed: false);
-        }
-
-        long difference = checked((long)byteLength - (long)previousByteLength);
-        long current = Interlocked.Add(ref _outstandingNativeBytes, difference);
-        RecordPeak(current);
-        return previousMetricsEpoch;
-    }
-
-    private static void RecordPeak(long current)
-    {
-        while (true)
-        {
-            long peak = Volatile.Read(ref _peakOutstandingNativeBytes);
-            if (current <= peak || Interlocked.CompareExchange(ref _peakOutstandingNativeBytes, current, peak) == peak)
-            {
-                break;
-            }
-        }
-    }
-
-    internal static void RecordFree(nuint byteLength, bool detached, long metricsEpoch)
-    {
-        if (metricsEpoch != CurrentMetricsEpoch)
-        {
-            return;
-        }
-
-        Interlocked.Increment(ref _freeCount);
-        long bytes = checked((long)byteLength);
-        Interlocked.Add(ref _outstandingNativeBytes, -bytes);
-        if (detached)
-        {
-            Interlocked.Add(ref _detachedNativeBytes, -bytes);
-        }
-    }
-
-    internal static void RecordDetachedGeneration(long metricsEpoch)
-    {
-        if (metricsEpoch == CurrentMetricsEpoch)
-        {
-            Interlocked.Increment(ref _detachedGenerationCount);
-        }
-    }
-
-    internal static void RecordDetachedBytes(nuint byteLength, long metricsEpoch)
-    {
-        if (metricsEpoch == CurrentMetricsEpoch)
-        {
-            Interlocked.Add(ref _detachedNativeBytes, checked((long)byteLength));
-        }
-    }
-
-    internal static void RecordRetiredBytes(nuint byteLength, bool add, long metricsEpoch)
-    {
-        if (metricsEpoch != CurrentMetricsEpoch)
-        {
-            return;
-        }
-
-        long bytes = checked((long)byteLength);
-        Interlocked.Add(ref _retiredNativeBytes, add ? bytes : -bytes);
-    }
-
-    internal static NativeMemoryTestMetrics Snapshot()
-    {
-        NativeHotMetricsSnapshot hot = SnapshotHotMetrics();
-        return new NativeMemoryTestMetrics(
-            Volatile.Read(ref _allocationCount),
-            Volatile.Read(ref _zeroedAllocationCount),
-            Volatile.Read(ref _freeCount),
-            Volatile.Read(ref _detachedGenerationCount),
-            Volatile.Read(ref _outstandingNativeBytes),
-            Volatile.Read(ref _detachedNativeBytes),
-            Volatile.Read(ref _retiredNativeBytes),
-            hot.BumpTraversalVisitCount,
-            hot.ReusedNativeSegmentCount,
-            hot.ReclaimedRangeReuseCount,
-            hot.ReclaimedRangeReuseBytes,
-            hot.StorageClearCount,
-            hot.StorageClearBytes,
-            hot.WrittenClearBytes,
-            Volatile.Read(ref _reallocationCount));
-    }
-
-    internal static NativeMemoryStatistics SnapshotPublic()
-    {
-        NativeHotMetricsSnapshot hot = SnapshotHotMetrics();
-        return new NativeMemoryStatistics(
-            Volatile.Read(ref _outstandingNativeBytes),
-            Volatile.Read(ref _peakOutstandingNativeBytes),
-            Volatile.Read(ref _detachedNativeBytes),
-            Volatile.Read(ref _retiredNativeBytes),
-            hot.ReusedNativeSegmentCount,
-            hot.ReclaimedRangeReuseCount,
-            hot.ReclaimedRangeReuseBytes)
-        {
-            AllocationCount = Volatile.Read(ref _allocationCount),
-            ReallocationCount = Volatile.Read(ref _reallocationCount),
-            FreeCount = Volatile.Read(ref _freeCount)
-        };
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static void RecordBumpTraversalVisit()
-    {
-        CurrentHotMetrics().BumpTraversalVisitCount++;
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static void RecordReusedNativeSegment()
-    {
-        CurrentHotMetrics().ReusedNativeSegmentCount++;
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static void RecordReclaimedRangeReuse(nuint byteLength)
-    {
-        RecordReclaimedRangeReuse(1, byteLength);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static void RecordReclaimedRangeReuse(
-        int rangeCount,
-        nuint byteLength)
-    {
-        NativeHotMetrics metrics = CurrentHotMetrics();
-        metrics.ReclaimedRangeReuseCount = checked(
-            metrics.ReclaimedRangeReuseCount
-            + rangeCount);
-        metrics.ReclaimedRangeReuseBytes = checked(
-            metrics.ReclaimedRangeReuseBytes
-            + (long)byteLength);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static void RecordStorageClear(
-        nuint byteLength,
-        nuint writtenBytes)
-    {
-        NativeHotMetrics metrics = CurrentHotMetrics();
-        metrics.StorageClearCount++;
-        metrics.StorageClearBytes = checked(
-            metrics.StorageClearBytes
-            + (long)byteLength);
-        metrics.WrittenClearBytes = checked(
-            metrics.WrittenClearBytes
-            + (long)writtenBytes);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static NativeHotMetrics CurrentHotMetrics()
-    {
-        long epoch = CurrentMetricsEpoch;
-        NativeHotMetrics? metrics = _threadHotMetrics;
-        if (metrics is null)
-        {
-            metrics = new NativeHotMetrics();
-            HotMetrics.Add(metrics);
-            _threadHotMetrics = metrics;
-        }
-
-        if (Volatile.Read(ref metrics.Epoch) != epoch)
-        {
-            metrics.Reset(epoch);
-        }
-
-        return metrics;
-    }
-
-    private static NativeHotMetricsSnapshot SnapshotHotMetrics()
-    {
-        long epoch = CurrentMetricsEpoch;
-        long bumpTraversalVisitCount = 0;
-        long reusedNativeSegmentCount = 0;
-        long reclaimedRangeReuseCount = 0;
-        long reclaimedRangeReuseBytes = 0;
-        long storageClearCount = 0;
-        long storageClearBytes = 0;
-        long writtenClearBytes = 0;
-        foreach (NativeHotMetrics metrics in HotMetrics)
-        {
-            if (Volatile.Read(ref metrics.Epoch) != epoch)
-            {
-                continue;
-            }
-
-            bumpTraversalVisitCount = checked(
-                bumpTraversalVisitCount
-                + Volatile.Read(
-                    ref metrics.BumpTraversalVisitCount));
-            reusedNativeSegmentCount = checked(
-                reusedNativeSegmentCount
-                + Volatile.Read(
-                    ref metrics.ReusedNativeSegmentCount));
-            reclaimedRangeReuseCount = checked(
-                reclaimedRangeReuseCount
-                + Volatile.Read(
-                    ref metrics.ReclaimedRangeReuseCount));
-            reclaimedRangeReuseBytes = checked(
-                reclaimedRangeReuseBytes
-                + Volatile.Read(
-                    ref metrics.ReclaimedRangeReuseBytes));
-            storageClearCount = checked(
-                storageClearCount
-                + Volatile.Read(ref metrics.StorageClearCount));
-            storageClearBytes = checked(
-                storageClearBytes
-                + Volatile.Read(ref metrics.StorageClearBytes));
-            writtenClearBytes = checked(
-                writtenClearBytes
-                + Volatile.Read(ref metrics.WrittenClearBytes));
-        }
-
-        return new NativeHotMetricsSnapshot(
-            bumpTraversalVisitCount,
-            reusedNativeSegmentCount,
-            reclaimedRangeReuseCount,
-            reclaimedRangeReuseBytes,
-            storageClearCount,
-            storageClearBytes,
-            writtenClearBytes);
-    }
+    internal static long RecordAllocation(nuint bytes, bool zeroed) => NativeMemoryAccounting.RecordAllocation(bytes, zeroed);
+    internal static long RecordReallocation(nuint previous, nuint bytes, long epoch) => NativeMemoryAccounting.RecordReallocation(previous, bytes, epoch);
+    internal static void RecordFree(nuint bytes, bool detached, long epoch) => NativeMemoryAccounting.RecordFree(bytes, detached, epoch);
+    internal static void RecordDetachedGeneration(long epoch) => NativeMemoryAccounting.RecordDetachedGeneration(epoch);
+    internal static void RecordDetachedBytes(nuint bytes, long epoch) => NativeMemoryAccounting.RecordDetachedBytes(bytes, epoch);
+    internal static void RecordRetiredBytes(nuint bytes, bool add, long epoch) => NativeMemoryAccounting.RecordRetiredBytes(bytes, add, epoch);
+    internal static NativeMemoryTestMetrics Snapshot() => NativeMemoryAccounting.Snapshot();
+    internal static NativeMemoryStatistics SnapshotPublic() => NativeMemoryAccounting.SnapshotPublic();
+    internal static void RecordBumpTraversalVisit() => NativeMemoryAccounting.RecordBumpTraversalVisit();
+    internal static void RecordReusedNativeSegment() => NativeMemoryAccounting.RecordReusedNativeSegment();
+    internal static void RecordReclaimedRangeReuse(nuint bytes) => NativeMemoryAccounting.RecordReclaimedRangeReuse(bytes);
+    internal static void RecordReclaimedRangeReuse(int ranges, nuint bytes) => NativeMemoryAccounting.RecordReclaimedRangeReuse(ranges, bytes);
+    internal static void RecordStorageClear(nuint bytes, nuint written) => NativeMemoryAccounting.RecordStorageClear(bytes, written);
 
     internal static bool HasForcedCommitBoundary => Volatile.Read(ref _forcedCommitBoundary) != 0;
 
@@ -958,7 +720,7 @@ internal static class NativeStorageClear
             NativeMemory.Clear((void*)pointer, byteLength);
         }
 
-        NativeMemoryTestHooks.RecordStorageClear(byteLength, byteLength);
+        NativeMemoryAccounting.RecordStorageClear(byteLength, byteLength);
     }
 }
 
@@ -1075,7 +837,7 @@ internal sealed class NativeSegment
                         byteLength);
                 }
 
-                metricsEpoch = NativeMemoryTestHooks.RecordAllocation(allocationBytes, zeroed);
+                metricsEpoch = NativeMemoryAccounting.RecordAllocation(allocationBytes, zeroed);
                 recorded = true;
                 budget?.Commit(allocationBytes, ownerId);
                 segment._metricsEpoch = metricsEpoch;
@@ -1100,7 +862,7 @@ internal sealed class NativeSegment
                     }
                     if (recorded)
                     {
-                        NativeMemoryTestHooks.RecordFree(allocationBytes, detached: false, metricsEpoch);
+                        NativeMemoryAccounting.RecordFree(allocationBytes, detached: false, metricsEpoch);
                     }
                 }
                 budget?.Cancel(allocationBytes, ownerId);
@@ -1190,7 +952,7 @@ internal sealed class NativeSegment
         }
 
         _budget?.Release(AllocationByteLength, _ownerId);
-        NativeMemoryTestHooks.RecordFree(AllocationByteLength, Volatile.Read(ref _detached) != 0, _metricsEpoch);
+        NativeMemoryAccounting.RecordFree(AllocationByteLength, Volatile.Read(ref _detached) != 0, _metricsEpoch);
     }
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "MA0055", Justification = "Emergency native-memory cleanup supplements mandatory deterministic disposal.")]
@@ -1369,7 +1131,9 @@ internal sealed class NativeReferenceRootTable
         lock (_gate)
         {
             _availableIds.EnsureCapacity(checked(_availableIds.Count + 1));
+            int roots = _roots.Count;
             ClearLocked(segment, offsetBytes);
+            NativeMemoryAccounting.RecordStorageClear((nuint)IntPtr.Size, (nuint)(roots - _roots.Count) * (nuint)IntPtr.Size);
         }
     }
 
@@ -1380,9 +1144,15 @@ internal sealed class NativeReferenceRootTable
         lock (_gate)
         {
             _availableIds.EnsureCapacity(checked(_availableIds.Count + slotCount));
+            int roots = _roots.Count;
             for (int index = 0; index < slotCount; index++)
             {
                 ClearLocked(segment, ComputeSlotOffset(offsetBytes, index, slotCount));
+            }
+            if (slotCount != 0)
+            {
+                NativeMemoryAccounting.RecordStorageClear((nuint)slotCount * (nuint)IntPtr.Size,
+                    (nuint)(roots - _roots.Count) * (nuint)IntPtr.Size);
             }
         }
     }
@@ -1393,9 +1163,15 @@ internal sealed class NativeReferenceRootTable
         ValidateSlotRange(offsetBytes, slotCount);
         lock (_gate)
         {
+            int roots = _roots.Count;
             for (int index = 0; index < slotCount; index++)
             {
                 ClearLocked(segment, ComputeSlotOffset(offsetBytes, index, slotCount));
+            }
+            if (slotCount != 0)
+            {
+                NativeMemoryAccounting.RecordStorageClear((nuint)slotCount * (nuint)IntPtr.Size,
+                    (nuint)(roots - _roots.Count) * (nuint)IntPtr.Size);
             }
         }
     }
@@ -2344,7 +2120,7 @@ internal sealed class NativeGenerationOwner
     internal NativeGenerationOwner(long generation)
     {
         Generation = generation;
-        _metricsEpoch = NativeMemoryTestHooks.CurrentMetricsEpoch;
+        _metricsEpoch = NativeMemoryAccounting.CurrentMetricsEpoch;
     }
 
     internal long Generation { get; }
@@ -2415,7 +2191,7 @@ internal sealed class NativeGenerationOwner
             {
                 if (segment.MarkDetached())
                 {
-                    NativeMemoryTestHooks.RecordDetachedBytes(
+                    NativeMemoryAccounting.RecordDetachedBytes(
                         segment.AllocationByteLength,
                         segment.MetricsEpoch);
                 }
@@ -2423,7 +2199,7 @@ internal sealed class NativeGenerationOwner
 #pragma warning restore HLQ012
         }
 
-        NativeMemoryTestHooks.RecordDetachedGeneration(_metricsEpoch);
+        NativeMemoryAccounting.RecordDetachedGeneration(_metricsEpoch);
     }
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA1816", Justification = "Explicit generation release disarms the emergency finalizer.")]
@@ -3543,7 +3319,7 @@ internal sealed class NativeOwnerKernel
                 _lifecycle,
                 current?.Number ?? _generation,
                 current?.ScopeEpoch ?? 0,
-                NativeMemoryTestHooks.CurrentMetricsEpoch,
+                NativeMemoryAccounting.CurrentMetricsEpoch,
                 activeRecords,
                 scopedRecords,
                 current?.ReferenceRoots.Count ?? 0,
@@ -4251,7 +4027,7 @@ internal sealed class NativeOwnerKernel
             {
                 if (slab.HasBeenUsed)
                 {
-                    NativeMemoryTestHooks.RecordReusedNativeSegment();
+                    NativeMemoryAccounting.RecordReusedNativeSegment();
                 }
 
                 slab.HasBeenUsed = true;
@@ -4299,7 +4075,7 @@ internal sealed class NativeOwnerKernel
             allocationId,
             allocation);
         generation.BeginInitialization();
-        NativeMemoryTestHooks.RecordReusedNativeSegment();
+        NativeMemoryAccounting.RecordReusedNativeSegment();
         return (
             generation,
             allocation,
@@ -6522,7 +6298,7 @@ internal sealed class NativeOwnerKernel
             segmentIndex >= 0;
             segmentIndex--)
         {
-            NativeMemoryTestHooks.RecordBumpTraversalVisit();
+            NativeMemoryAccounting.RecordBumpTraversalVisit();
             NativeBumpSegment segment =
                 generation.BumpSegments[segmentIndex];
             if (segment.IsArenaTransferSegment)
@@ -7001,7 +6777,7 @@ internal sealed class NativeOwnerKernel
 
         if (reclaimedRangeCount != 0)
         {
-            NativeMemoryTestHooks.RecordReclaimedRangeReuse(
+            NativeMemoryAccounting.RecordReclaimedRangeReuse(
                 reclaimedRangeCount,
                 reclaimedRangeBytes);
         }
@@ -7071,7 +6847,7 @@ internal sealed class NativeOwnerKernel
                     generation.ScopeEpoch);
             if (reclaimedBytes != 0)
             {
-                NativeMemoryTestHooks.RecordReclaimedRangeReuse(
+                NativeMemoryAccounting.RecordReclaimedRangeReuse(
                     reclaimedBytes);
             }
         }
@@ -8586,7 +8362,7 @@ internal sealed class NativeOwnerKernel
 
         if (rangeCount != 0)
         {
-            NativeMemoryTestHooks.RecordReclaimedRangeReuse(
+            NativeMemoryAccounting.RecordReclaimedRangeReuse(
                 rangeCount,
                 rangeBytes);
         }
@@ -9176,7 +8952,7 @@ internal sealed class NativeOwnerKernel
                 generation.BumpSegments.Count - 1);
             for (int index = start; index >= 0; index--)
             {
-                NativeMemoryTestHooks.RecordBumpTraversalVisit();
+                NativeMemoryAccounting.RecordBumpTraversalVisit();
                 NativeBumpSegment segment = generation.BumpSegments[index];
                 if (segment.IsArenaTransferSegment
                     || segment.HighCursor < segment.LowCursor
@@ -9200,7 +8976,7 @@ internal sealed class NativeOwnerKernel
                 generation.BumpSegments.Count - 1);
             for (int index = start; index < generation.BumpSegments.Count; index++)
             {
-                NativeMemoryTestHooks.RecordBumpTraversalVisit();
+                NativeMemoryAccounting.RecordBumpTraversalVisit();
                 NativeBumpSegment segment = generation.BumpSegments[index];
                 if (segment.IsArenaFastSegment
                     || segment.IsArenaTransferSegment)
@@ -9551,7 +9327,7 @@ internal sealed class NativeOwnerKernel
                             checked((long)GetGenerationSegmentBytes(current));
                         if (current.RetiredNativeBytes != 0)
                         {
-                            NativeMemoryTestHooks.RecordRetiredBytes((nuint)current.RetiredNativeBytes, add: true, metricsEpoch: current.Owner.MetricsEpoch);
+                            NativeMemoryAccounting.RecordRetiredBytes((nuint)current.RetiredNativeBytes, add: true, metricsEpoch: current.Owner.MetricsEpoch);
                         }
 
                         _retiredGenerations.Add(current);
@@ -9632,7 +9408,7 @@ internal sealed class NativeOwnerKernel
                 _retiredGenerations.Remove(generation);
                 if (generation.RetiredNativeBytes != 0)
                 {
-                    NativeMemoryTestHooks.RecordRetiredBytes((nuint)generation.RetiredNativeBytes, add: false, metricsEpoch: generation.Owner.MetricsEpoch);
+                    NativeMemoryAccounting.RecordRetiredBytes((nuint)generation.RetiredNativeBytes, add: false, metricsEpoch: generation.Owner.MetricsEpoch);
                     generation.RetiredNativeBytes = 0;
                 }
 
@@ -9672,7 +9448,7 @@ internal sealed class NativeOwnerKernel
             _retiredGenerations.Remove(generation);
             if (generation.RetiredNativeBytes != 0)
             {
-                NativeMemoryTestHooks.RecordRetiredBytes((nuint)generation.RetiredNativeBytes, add: false, metricsEpoch: generation.Owner.MetricsEpoch);
+                NativeMemoryAccounting.RecordRetiredBytes((nuint)generation.RetiredNativeBytes, add: false, metricsEpoch: generation.Owner.MetricsEpoch);
                 generation.RetiredNativeBytes = 0;
             }
 
@@ -9684,7 +9460,7 @@ internal sealed class NativeOwnerKernel
             QuarantineGenerationStorageLocked(generation, current, slabs, bumps);
             if (generation.RetiredNativeBytes != 0)
             {
-                NativeMemoryTestHooks.RecordRetiredBytes((nuint)generation.RetiredNativeBytes, add: false, metricsEpoch: generation.Owner.MetricsEpoch);
+                NativeMemoryAccounting.RecordRetiredBytes((nuint)generation.RetiredNativeBytes, add: false, metricsEpoch: generation.Owner.MetricsEpoch);
                 generation.RetiredNativeBytes = 0;
             }
 
@@ -9732,7 +9508,7 @@ internal sealed class NativeOwnerKernel
             ClearScopedRangesLocked(generation);
             if (generation.RetiredNativeBytes != 0)
             {
-                NativeMemoryTestHooks.RecordRetiredBytes(
+                NativeMemoryAccounting.RecordRetiredBytes(
                     (nuint)generation.RetiredNativeBytes,
                     add: false,
                     metricsEpoch: generation.Owner.MetricsEpoch);
@@ -10384,7 +10160,7 @@ internal sealed class NativeOwnerKernel
     {
         if (generation.RetiredNativeBytes != 0)
         {
-            NativeMemoryTestHooks.RecordRetiredBytes(
+            NativeMemoryAccounting.RecordRetiredBytes(
                 (nuint)generation.RetiredNativeBytes,
                 add: false,
                 metricsEpoch: generation.Owner.MetricsEpoch);
@@ -10409,7 +10185,7 @@ internal sealed class NativeOwnerKernel
             generation.Owner.Detach();
             if (generation.ActiveOperations == 0 && generation.RetiredNativeBytes != 0)
             {
-                NativeMemoryTestHooks.RecordRetiredBytes(
+                NativeMemoryAccounting.RecordRetiredBytes(
                     (nuint)generation.RetiredNativeBytes,
                     add: false,
                     metricsEpoch: generation.Owner.MetricsEpoch);
@@ -10425,7 +10201,7 @@ internal sealed class NativeOwnerKernel
             generation.Owner.Detach();
             if (generation.ActiveOperations == 0 && generation.RetiredNativeBytes != 0)
             {
-                NativeMemoryTestHooks.RecordRetiredBytes(
+                NativeMemoryAccounting.RecordRetiredBytes(
                     (nuint)generation.RetiredNativeBytes,
                     add: false,
                     metricsEpoch: generation.Owner.MetricsEpoch);
