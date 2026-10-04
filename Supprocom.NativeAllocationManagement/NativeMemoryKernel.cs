@@ -291,6 +291,9 @@ public readonly record struct NativeOwnerStatistics(
     long TrimCallCount,
     long FreshSegmentAllocationCount)
 {
+    /// <summary>Gets whether a completed owner event or byte history has exceeded Int64.MaxValue; current gauges remain exact.</summary>
+    public bool HistoryOverflowed { get; init; }
+
     /// <summary>Gets the actual allocator storage/lifecycle model.</summary>
     public NativeOwnerModel Model { get; init; }
 
@@ -352,6 +355,9 @@ public readonly record struct NativeOwnerDiagnosticSnapshot(
     int QuarantinedSegmentCount,
     bool CurrentGenerationQuarantined)
 {
+    /// <summary>Gets whether an owner lifetime history has saturated; current structural observations remain exact.</summary>
+    public bool HistoryOverflowed { get; init; }
+
     /// <summary>Gets the actual allocator storage/lifecycle model.</summary>
     public NativeOwnerModel Model { get; init; }
 
@@ -3327,6 +3333,7 @@ internal sealed class NativeOwnerKernel
     private long _trimmedBytes;
     private long _trimCallCount;
     private long _freshSegmentAllocationCount;
+    private bool _historyOverflowed;
     private long _arenaFastSlowPathCount;
     private readonly int _arenaFastThreadId;
     private NativeGeneration? _arenaFastGeneration;
@@ -3380,6 +3387,7 @@ internal sealed class NativeOwnerKernel
                 {
                     OwnerId = Id,
                     Model = Model,
+                    HistoryOverflowed = _historyOverflowed,
                     RetiredBorrowedBytes = SumRetiredBorrowedBytesLocked()
                 };
             }
@@ -3456,6 +3464,7 @@ internal sealed class NativeOwnerKernel
             {
                 OwnerId = Id,
                 Model = Model,
+                HistoryOverflowed = _historyOverflowed,
                 UsableCapacityBytes = usableCapacityBytes,
                 BorrowedBytes = GetGenerationBorrowedBytes(current),
                 RetiredBorrowedBytes = SumRetiredBorrowedBytesLocked()
@@ -3554,7 +3563,8 @@ internal sealed class NativeOwnerKernel
                 current?.IsQuarantined == true)
             {
                 OwnerId = Id,
-                Model = Model
+                Model = Model,
+                HistoryOverflowed = _historyOverflowed
             };
         }
     }
@@ -4660,8 +4670,7 @@ internal sealed class NativeOwnerKernel
     {
         lock (_gate)
         {
-            _arenaFastSlowPathCount = checked(
-                _arenaFastSlowPathCount + 1);
+            NativeOwnerHistory.Increment(ref _arenaFastSlowPathCount, ref _historyOverflowed);
             NativeGeneration generation = EnsureActiveLocked(
                 operation);
             if (_kind != NativeOwnerKind.Arena)
@@ -4900,8 +4909,7 @@ internal sealed class NativeOwnerKernel
     {
         lock (_gate)
         {
-            _arenaFastSlowPathCount = checked(
-                _arenaFastSlowPathCount + 1);
+            NativeOwnerHistory.Increment(ref _arenaFastSlowPathCount, ref _historyOverflowed);
             if (!ReferenceEquals(generation, _current)
                 || _lifecycle != NativeOwnerLifecycle.Active)
             {
@@ -4976,7 +4984,7 @@ internal sealed class NativeOwnerKernel
             {
                 AppendBumpSegmentLocked(generation, bump);
                 generation.Owner.AddSegment(segment);
-                _freshSegmentAllocationCount++;
+                NativeOwnerHistory.Increment(ref _freshSegmentAllocationCount, ref _historyOverflowed);
                 _arenaFastSegment = bump;
                 _arenaFastCursor = 0;
                 createdSegment = bump;
@@ -5002,8 +5010,7 @@ internal sealed class NativeOwnerKernel
     {
         lock (_gate)
         {
-            _arenaFastSlowPathCount = checked(
-                _arenaFastSlowPathCount + 1);
+            NativeOwnerHistory.Increment(ref _arenaFastSlowPathCount, ref _historyOverflowed);
             if (!ReferenceEquals(generation, _current)
                 || _lifecycle != NativeOwnerLifecycle.Active)
             {
@@ -5065,7 +5072,7 @@ internal sealed class NativeOwnerKernel
             {
                 AppendBumpSegmentLocked(generation, bump);
                 generation.Owner.AddSegment(segment);
-                _freshSegmentAllocationCount++;
+                NativeOwnerHistory.Increment(ref _freshSegmentAllocationCount, ref _historyOverflowed);
                 _arenaFastScopedSegment = bump;
                 createdSegment = bump;
                 return bump;
@@ -5422,7 +5429,7 @@ internal sealed class NativeOwnerKernel
         {
             AppendBumpSegmentLocked(generation, created);
             generation.Owner.AddSegment(nativeSegment);
-            _freshSegmentAllocationCount++;
+            NativeOwnerHistory.Increment(ref _freshSegmentAllocationCount, ref _historyOverflowed);
             offset = AlignUp(created.LowCursor, alignment);
             created.LowCursor = checked(offset + totalBytes);
             _arenaTransferCentralSegment = created;
@@ -6705,7 +6712,7 @@ internal sealed class NativeOwnerKernel
                     bumpSegment = createdSegment;
                     AppendBumpSegmentLocked(generation, createdSegment);
                     generation.Owner.AddSegment(segment);
-                    _freshSegmentAllocationCount++;
+                    NativeOwnerHistory.Increment(ref _freshSegmentAllocationCount, ref _historyOverflowed);
                 }
 
                 if (scoped)
@@ -8646,7 +8653,7 @@ internal sealed class NativeOwnerKernel
                 {
                     AppendBumpSegmentLocked(generation, bump);
                     generation.Owner.AddSegment(segment);
-                    _freshSegmentAllocationCount++;
+                    NativeOwnerHistory.Increment(ref _freshSegmentAllocationCount, ref _historyOverflowed);
                     return byteLength;
                 }
                 catch
@@ -8747,9 +8754,8 @@ internal sealed class NativeOwnerKernel
             try
             {
                 nuint released = TrimRetainedMemoryLocked(null);
-                _trimCallCount++;
-                _trimmedBytes =
-                    checked(_trimmedBytes + (long)released);
+                NativeOwnerHistory.Increment(ref _trimCallCount, ref _historyOverflowed);
+                NativeOwnerHistory.Add(ref _trimmedBytes, checked((long)released), ref _historyOverflowed);
                 return released;
             }
             finally
@@ -8784,9 +8790,8 @@ internal sealed class NativeOwnerKernel
             {
                 nuint released =
                     TrimRetainedMemoryLocked(bytesToRelease);
-                _trimCallCount++;
-                _trimmedBytes =
-                    checked(_trimmedBytes + (long)released);
+                NativeOwnerHistory.Increment(ref _trimCallCount, ref _historyOverflowed);
+                NativeOwnerHistory.Add(ref _trimmedBytes, checked((long)released), ref _historyOverflowed);
                 return released;
             }
             finally
@@ -8830,9 +8835,8 @@ internal sealed class NativeOwnerKernel
                         RequiredFreshBumpBytes(byteLength, alignment));
                 nuint released =
                     TrimRetainedMemoryLocked(requested);
-                _trimCallCount++;
-                _trimmedBytes =
-                    checked(_trimmedBytes + (long)released);
+                NativeOwnerHistory.Increment(ref _trimCallCount, ref _historyOverflowed);
+                NativeOwnerHistory.Add(ref _trimmedBytes, checked((long)released), ref _historyOverflowed);
                 return released;
             }
             finally
@@ -9004,7 +9008,7 @@ internal sealed class NativeOwnerKernel
             NativeSegment segment = bump.Segment;
             AppendBumpSegmentLocked(generation, bump);
             generation.Owner.AddSegment(segment);
-            _freshSegmentAllocationCount++;
+            NativeOwnerHistory.Increment(ref _freshSegmentAllocationCount, ref _historyOverflowed);
         }
     }
 
@@ -9091,7 +9095,7 @@ internal sealed class NativeOwnerKernel
         try
         {
             NativeSlab slab = new(segment, capacity, _containsReferences, NextSegmentOrdinalLocked());
-            _freshSegmentAllocationCount++;
+            NativeOwnerHistory.Increment(ref _freshSegmentAllocationCount, ref _historyOverflowed);
             return slab;
         }
         catch

@@ -29,6 +29,7 @@ internal sealed unsafe partial class NativeArenaKernel
     private long _trimCallCount;
     private long _freshSegmentAllocationCount;
     private long _nextAllocationOrdinal;
+    private bool _historyOverflowed;
     private int _segmentCount;
 
     internal NativeArenaKernel(
@@ -239,6 +240,7 @@ internal sealed unsafe partial class NativeArenaKernel
         {
             OwnerId = Id,
             Model = NativeOwnerModel.ThreadConfinedArena,
+            HistoryOverflowed = _historyOverflowed,
             UsableCapacityBytes = usableCapacityBytes - _externalActiveBytes,
             BorrowedBytes = _externalRetainedBytes
         };
@@ -257,7 +259,8 @@ internal sealed unsafe partial class NativeArenaKernel
             0, 0, 0, 0, 0, false)
         {
             OwnerId = Id,
-            Model = NativeOwnerModel.ThreadConfinedArena
+            Model = NativeOwnerModel.ThreadConfinedArena,
+            HistoryOverflowed = _historyOverflowed
         };
         GC.KeepAlive(this);
         return snapshot;
@@ -280,11 +283,11 @@ internal sealed unsafe partial class NativeArenaKernel
     internal nuint TrimRetainedMemory(nuint byteBudget)
     {
         ValidateBoundary(nameof(NativeArena.TrimRetainedMemory));
-        _trimCallCount++;
+        NativeOwnerHistory.Increment(ref _trimCallCount, ref _historyOverflowed);
         if (_prepared)
         {
             nuint preparedReleased = TrimPrepared(byteBudget);
-            _trimmedBytes = checked(_trimmedBytes + checked((long)preparedReleased));
+            NativeOwnerHistory.Add(ref _trimmedBytes, checked((long)preparedReleased), ref _historyOverflowed);
             return preparedReleased;
         }
         nuint released = 0;
@@ -300,8 +303,7 @@ internal sealed unsafe partial class NativeArenaKernel
                     byteBudget - released));
         }
 
-        _trimmedBytes = checked(
-            _trimmedBytes + checked((long)released));
+        NativeOwnerHistory.Add(ref _trimmedBytes, checked((long)released), ref _historyOverflowed);
         return released;
     }
 
@@ -493,8 +495,7 @@ internal sealed unsafe partial class NativeArenaKernel
         _retainedBytes = checked(
             _retainedBytes + checked((long)segment->AllocationBytes));
         _segmentCount = checked(_segmentCount + 1);
-        _freshSegmentAllocationCount = checked(
-            _freshSegmentAllocationCount + 1);
+        NativeOwnerHistory.Increment(ref _freshSegmentAllocationCount, ref _historyOverflowed);
         return segment;
     }
 
@@ -521,8 +522,7 @@ internal sealed unsafe partial class NativeArenaKernel
         _retainedBytes = checked(
             _retainedBytes + checked((long)segment->AllocationBytes));
         _segmentCount = checked(_segmentCount + 1);
-        _freshSegmentAllocationCount = checked(
-            _freshSegmentAllocationCount + 1);
+        NativeOwnerHistory.Increment(ref _freshSegmentAllocationCount, ref _historyOverflowed);
         return segment;
     }
 

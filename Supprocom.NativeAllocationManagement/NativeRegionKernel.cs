@@ -25,6 +25,7 @@ internal sealed unsafe class NativeRegionKernel
     private int _segmentCount;
     private int _activeBorrowCount;
     private long _freshSegmentAllocationCount;
+    private bool _historyOverflowed;
 
     internal NativeRegionKernel(
         nuint preAllocateBytes,
@@ -158,6 +159,7 @@ internal sealed unsafe class NativeRegionKernel
         {
             OwnerId = Id,
             Model = NativeOwnerModel.ThreadConfinedRegion,
+            HistoryOverflowed = _historyOverflowed,
             UsableCapacityBytes = usableCapacityBytes
         };
     }
@@ -187,7 +189,8 @@ internal sealed unsafe class NativeRegionKernel
             0, 0, 0, 0, 0, false)
         {
             OwnerId = Id,
-            Model = NativeOwnerModel.ThreadConfinedRegion
+            Model = NativeOwnerModel.ThreadConfinedRegion,
+            HistoryOverflowed = _historyOverflowed
         };
         GC.KeepAlive(this);
         return snapshot;
@@ -307,8 +310,7 @@ internal sealed unsafe class NativeRegionKernel
         _retainedBytes = checked(
             _retainedBytes + checked((long)segment->AllocationBytes));
         _segmentCount = checked(_segmentCount + 1);
-        _freshSegmentAllocationCount = checked(
-            _freshSegmentAllocationCount + 1);
+        NativeOwnerHistory.Increment(ref _freshSegmentAllocationCount, ref _historyOverflowed);
         return segment;
     }
 

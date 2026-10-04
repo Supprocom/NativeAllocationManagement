@@ -464,6 +464,7 @@ public sealed class PackageSmokeTests
                             try { if (lease.Read(static view => view[0]) != 42) return 2; }
                             finally { lease.Dispose(); }
                             NativePreparedPoolStatistics snapshot = pool.CapturePreparedSnapshot();
+                            if (pool.GetStatistics().HistoryOverflowed || pool.CaptureDiagnosticSnapshot().HistoryOverflowed) return 16;
                             if (snapshot.AvailableSlotCount != 2 || snapshot.RetainedPageCount != 1
                                 || snapshot.PeakOccupiedSlotCount != 1 || snapshot.SuccessfulRentCount != 1
                                 || snapshot.RetainedBytes != 128 || snapshot.ManagedBankBytes <= 0) return 3;

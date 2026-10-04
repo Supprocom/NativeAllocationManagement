@@ -86,6 +86,7 @@ public readonly record struct PressureAllocatorDiagnosticSnapshot(
 {
     public long? OwnerId { get; init; }
     public string? Model { get; init; }
+    public bool? HistoryOverflowed { get; init; }
 }
 
 public readonly record struct PressureWorkerDiagnostic(

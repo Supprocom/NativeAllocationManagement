@@ -11,7 +11,6 @@ internal sealed unsafe partial class NativeArenaKernel
     private long _preparedPeakOrdinaryUsedBytes;
     private long _preparedPeakScopedUsedBytes;
     private long _preparedPeakRetainedBytes;
-    private bool _preparedHistoryOverflowed;
 
     internal NativeArenaKernel(NativeArenaPreparation preparation, NativeMemoryBudget budget)
     {
@@ -71,7 +70,7 @@ internal sealed unsafe partial class NativeArenaKernel
             _lifecycle == NativeOwnerLifecycle.Active ? LaneAvailable(_scoped) : 0,
             _preparedPeakOrdinaryUsedBytes, _preparedPeakScopedUsedBytes,
             _retainedBytes, _preparedPeakRetainedBytes, _preparedSuccessCount,
-            _preparedRefusalCount, _preparedInitializerFailureCount, _preparedHistoryOverflowed);
+            _preparedRefusalCount, _preparedInitializerFailureCount, _historyOverflowed);
         snapshot = snapshot with
         {
             ActiveBorrowedBytes = _externalActiveBytes,
@@ -157,17 +156,8 @@ internal sealed unsafe partial class NativeArenaKernel
         return true;
     }
 
-    private void IncrementPreparedHistory(ref long counter)
-    {
-        if (counter == long.MaxValue)
-        {
-            _preparedHistoryOverflowed = true;
-        }
-        else
-        {
-            counter++;
-        }
-    }
+    private void IncrementPreparedHistory(ref long counter) =>
+        NativeOwnerHistory.Increment(ref counter, ref _historyOverflowed);
 
     private void EnsurePrepared()
     {

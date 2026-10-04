@@ -639,7 +639,8 @@ internal sealed class NativePressureSession :
             snapshot.CurrentGenerationQuarantined)
         {
             OwnerId = snapshot.OwnerId,
-            Model = snapshot.Model.ToString()
+            Model = snapshot.Model.ToString(),
+            HistoryOverflowed = snapshot.HistoryOverflowed
         };
     }
 
