@@ -16,7 +16,7 @@ public sealed class NativeTransferTests
         NativeTransfer<int>? source = pool.RentTransferable(
             4,
             static writer => writer.Write([1, 2, 3, 4]));
-        NativeTransfer<int> alias = source;
+        NativeTransfer<int> alias = source.Value;
         TransferHolder<int> holder = new();
 
         holder.Destination = NativeTransfer<int>.Move(ref source);
@@ -155,7 +155,7 @@ public sealed class NativeTransferTests
         NativeTransfer<int>? source = pool.RentTransferable(
             1,
             static writer => writer.Write(41));
-        NativeTransfer<int> alias = source;
+        NativeTransfer<int> alias = source.Value;
         using ManualResetEventSlim entered = new(false);
         using ManualResetEventSlim release = new(false);
         Task access = Task.Run(
@@ -319,7 +319,7 @@ public sealed class NativeTransferTests
         NativeTransfer<int>? source = pool.RentTransferable(
             1,
             static writer => writer.Write(31));
-        NativeTransfer<int> alias = source;
+        NativeTransfer<int> alias = source.Value;
 
         pool.Dispose();
 
@@ -340,7 +340,7 @@ public sealed class NativeTransferTests
         NativeTransfer<int>? source = pool.RentTransferable(
             1,
             static writer => writer.Write(43));
-        NativeTransfer<int> alias = source;
+        NativeTransfer<int> alias = source.Value;
         using ManualResetEventSlim moveReachedOwner = new(false);
         using ManualResetEventSlim releaseMove = new(false);
         NativeMemoryTestHooks.SetBeforeOperationEntry(
@@ -439,13 +439,13 @@ public sealed class NativeTransferTests
             static writer => writer.Fill(31));
         NativeTransfer<int> receiver =
             NativeTransfer<int>.Move(ref source);
-        return new WeakReference(receiver);
+        return new WeakReference(receiver.ControlForTest!);
     }
 
     private sealed class TransferHolder<T>
         where T : unmanaged
     {
-        internal NativeTransfer<T> Destination { get; set; } = null!;
+        internal NativeTransfer<T> Destination { get; set; }
     }
 
     private sealed class TransferRaceHolder<T>

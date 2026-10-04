@@ -1071,11 +1071,11 @@ public sealed class NativeBuilderTests
                     or InvalidOperationException);
                 Assert.Equal(
                     new[] { 47, 53, 59, 61 },
-                    transfer.Read(
+                    transfer.Value.Read(
                         static view => view.AsSpan().ToArray()));
-                transfer.Dispose();
+                transfer.Value.Dispose();
                 Assert.Throws<ObjectDisposedException>(
-                    transfer.Dispose);
+                    transfer.Value.Dispose);
             }
             else
             {

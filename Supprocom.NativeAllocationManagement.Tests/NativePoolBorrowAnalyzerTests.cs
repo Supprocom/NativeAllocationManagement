@@ -8,8 +8,7 @@ public sealed class NativePoolBorrowAnalyzerTests
     [Fact]
     public async Task SourceVisiblePoolHelpersCanRentAndReturnOwnership()
     {
-        ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
-            """
+        const string source = """
             using Supprocom.NativeAllocationManagement;
 
             public static class Sample
@@ -19,6 +18,8 @@ public sealed class NativePoolBorrowAnalyzerTests
                     using NativePool<int> pool = new();
                     RunBatch(pool, 4);
                     Forward(pool);
+                    using NativeConcurrentPool<int> concurrent = new();
+                    RunTransferBatch(concurrent);
                 }
 
                 private static void RunBatch<T>(NativePool<T> pool, int rounds)
@@ -26,18 +27,20 @@ public sealed class NativePoolBorrowAnalyzerTests
                 {
                     for (int index = 0; index < rounds; index++)
                     {
-                        NativeTransfer<T>? transfer = pool.RentTransferable(
+                        using Pooled<T> transfer = pool.Rent(
                             8,
                             static writer => writer.Fill(default));
-                        try
-                        {
-                            transfer.Access(static values => values[0] = default);
-                        }
-                        finally
-                        {
-                            transfer.Dispose();
-                        }
+                        transfer.Access(static values => values[0] = default);
                     }
+                }
+
+                private static void RunTransferBatch<T>(NativeConcurrentPool<T> pool)
+                    where T : unmanaged
+                {
+                    NativeTransfer<T> transfer = pool.RentTransferable(
+                        8, static writer => writer.Fill(default));
+                    try { transfer.Access(static values => values[0] = default); }
+                    finally { transfer.Dispose(); }
                 }
 
                 private static void Forward(NativePool<int> pool)
@@ -54,7 +57,9 @@ public sealed class NativePoolBorrowAnalyzerTests
                     }
                 }
             }
-            """);
+            """;
+        Assert.DoesNotContain(AnalyzerContractTests.Compile(source), static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(source);
 
         Assert.True(
             AnalyzerContractTests.NativeDiagnostics(diagnostics).Length == 0,

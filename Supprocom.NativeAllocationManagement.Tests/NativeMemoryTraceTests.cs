@@ -122,7 +122,7 @@ public sealed class NativeMemoryTraceTests
         using NativeBuilder<int> builder = new(budget, 0);
         long id = builder.Id;
         NativeTransfer<int>? transfer = builder.Complete();
-        Assert.Equal(id, transfer.Id);
+        Assert.Equal(id, transfer.Value.Id);
         NativeTransfer<int> moved = NativeTransfer<int>.Move(ref transfer);
         try
         {

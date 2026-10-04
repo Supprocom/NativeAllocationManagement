@@ -230,6 +230,10 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             ITypeSymbol? candidate,
             INamedTypeSymbol? expected)
         {
+            if (candidate is INamedTypeSymbol { OriginalDefinition.SpecialType: SpecialType.System_Nullable_T } nullable)
+            {
+                candidate = nullable.TypeArguments[0];
+            }
             return candidate is INamedTypeSymbol named
                 && SymbolEqualityComparer.Default.Equals(
                     named.OriginalDefinition,
@@ -2184,6 +2188,11 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         public override void VisitInvocation(IInvocationOperation operation)
         {
             _context.CancellationToken.ThrowIfCancellationRequested();
+            if (operation.IsImplicit && IsNullableValueExtraction(operation) && IsNativeTransfer(operation.Type))
+            {
+                base.VisitInvocation(operation);
+                return;
+            }
             bool transferWasPreprocessed = _preprocessedTransferInvocations.Remove(operation);
             if (!transferWasPreprocessed && IsTransferMoveInvocation(operation))
             {
@@ -2532,6 +2541,21 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
         public override void VisitPropertyReference(IPropertyReferenceOperation operation)
         {
+            if (operation.Property.ContainingType.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T
+                && string.Equals(operation.Property.Name, "HasValue", StringComparison.Ordinal)
+                && IsNativeTransfer(operation.Instance?.Type))
+            {
+                // Presence of a nullable binding is not payload-use authority.
+                base.VisitPropertyReference(operation);
+                return;
+            }
+            if (IsNullableValueExtraction(operation) && IsNativeTransfer(operation.Type))
+            {
+                // Extraction preserves the binding's identity. Its outer payload
+                // use, copy, destination or escape performs the ownership check.
+                base.VisitPropertyReference(operation);
+                return;
+            }
             if (_symbols.IsStableOwnershipIdentity(operation.Property))
             {
                 // Identity is immutable metadata, not payload borrowing authority.
@@ -3367,6 +3391,15 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 return false;
             }
 
+            SemanticModel model = _context.Compilation.GetSemanticModel(condition.SyntaxTree);
+            if (Unwrap(model.GetOperation(condition, _context.CancellationToken)) is IPropertyReferenceOperation property
+                && property.Property.ContainingType.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T
+                && string.Equals(property.Property.Name, "HasValue", StringComparison.Ordinal)
+                && SymbolEqualityComparer.Default.Equals(GetSymbol(Unwrap(property.Instance)), transferSymbol))
+            {
+                return true;
+            }
+
             if (condition is BinaryExpressionSyntax binary
                 && binary.IsKind(SyntaxKind.NotEqualsExpression))
             {
@@ -3879,7 +3912,9 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 return;
             }
 
-            if (value is null || IsNullValue(value))
+            if (value is null || IsNullValue(value)
+                || value is IDefaultValueOperation && IsNativeTransfer(value.Type)
+                || value is IObjectCreationOperation creation && IsNativeTransfer(creation.Type) && creation.Arguments.Length == 0)
             {
                 ReportActiveTransferOverwrite(target);
                 _transfers[target.Symbol] = TransferState.Create(
@@ -6451,15 +6486,31 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             BasicBlock destination,
             IFieldSymbol field)
         {
-            if (source.BranchValue is not IIsNullOperation isNull
-                || !SymbolEqualityComparer.Default.Equals(
-                    GetSemanticSymbol(isNull.Operand),
-                    field))
+            IOperation? operand;
+            bool trueMeansNull;
+            if (source.BranchValue is IIsNullOperation isNull)
+            {
+                operand = isNull.Operand;
+                trueMeansNull = true;
+            }
+            else if (source.BranchValue is IPropertyReferenceOperation property
+                && property.Property.ContainingType.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T
+                && string.Equals(property.Property.Name, "HasValue", StringComparison.Ordinal))
+            {
+                operand = property.Instance;
+                trueMeansNull = false;
+            }
+            else
+            {
+                return false;
+            }
+            if (operand is null || !SymbolEqualityComparer.Default.Equals(
+                    GetSymbol(Unwrap(operand)) ?? GetSemanticSymbol(operand), field))
             {
                 return false;
             }
 
-            BasicBlock? nullDestination = source.ConditionKind switch
+            BasicBlock? trueDestination = source.ConditionKind switch
             {
                 ControlFlowConditionKind.WhenTrue =>
                     source.ConditionalSuccessor?.Destination,
@@ -6467,6 +6518,18 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     source.FallThroughSuccessor?.Destination,
                 _ => null
             };
+            // Roslyn can merge an empty presence branch into the same successor.
+            // That successor is then reachable with a live field as well as null;
+            // the null edge alone cannot establish cleanup for the merged block.
+            if (trueDestination is null
+                || ReferenceEquals(source.ConditionalSuccessor?.Destination,
+                    source.FallThroughSuccessor?.Destination))
+            {
+                return false;
+            }
+            BasicBlock? nullDestination = trueMeansNull ? trueDestination
+                : ReferenceEquals(trueDestination, source.ConditionalSuccessor?.Destination)
+                    ? source.FallThroughSuccessor?.Destination : source.ConditionalSuccessor?.Destination;
             return ReferenceEquals(
                 nullDestination,
                 destination);
@@ -7299,12 +7362,23 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
         private static IOperation? Unwrap(IOperation? operation)
         {
-            while (operation is IConversionOperation conversion)
+            while (true)
             {
-                operation = conversion.Operand;
+                switch (operation)
+                {
+                    case IConversionOperation conversion:
+                        operation = conversion.Operand;
+                        break;
+                    case IPropertyReferenceOperation property when IsNullableValueExtraction(property):
+                        operation = property.Instance;
+                        break;
+                    case IInvocationOperation invocation when IsNullableValueExtraction(invocation):
+                        operation = invocation.Instance;
+                        break;
+                    default:
+                        return operation;
+                }
             }
-
-            return operation;
         }
 
         private static ISymbol? GetSymbol(IOperation? operation)
@@ -7314,10 +7388,21 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 ILocalReferenceOperation local => local.Local,
                 IFieldReferenceOperation field => field.Field,
                 IParameterReferenceOperation parameter => parameter.Parameter,
+                IPropertyReferenceOperation property when IsNullableValueExtraction(property) => GetSymbol(Unwrap(property.Instance)),
+                IInvocationOperation invocation when IsNullableValueExtraction(invocation) => GetSymbol(Unwrap(invocation.Instance)),
                 IPropertyReferenceOperation property => property.Property,
                 _ => null
             };
         }
+
+        private static bool IsNullableValueExtraction(IPropertyReferenceOperation operation) =>
+            operation.Property.ContainingType.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T
+            && string.Equals(operation.Property.Name, "Value", StringComparison.Ordinal);
+
+        private static bool IsNullableValueExtraction(IInvocationOperation operation) =>
+            operation.TargetMethod.ContainingType.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T
+            && string.Equals(operation.TargetMethod.Name, "GetValueOrDefault", StringComparison.Ordinal)
+            && operation.Arguments.Length == 0;
 
         private static ITypeSymbol? GetSymbolType(ISymbol symbol)
         {

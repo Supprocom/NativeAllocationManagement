@@ -1,4 +1,11 @@
 #nullable enable
+Supprocom.NativeAllocationManagement.NativeTransfer<T>.NativeTransfer() -> void
+*REMOVED*static Supprocom.NativeAllocationManagement.NativeTransfer<T>.Move(ref Supprocom.NativeAllocationManagement.NativeTransfer<T>? source) -> Supprocom.NativeAllocationManagement.NativeTransfer<T>!
+static Supprocom.NativeAllocationManagement.NativeTransfer<T>.Move(ref Supprocom.NativeAllocationManagement.NativeTransfer<T>? source) -> Supprocom.NativeAllocationManagement.NativeTransfer<T>
+*REMOVED*static Supprocom.NativeAllocationManagement.NativeTransferPoolExtensions.RentTransferable<T>(this Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>! pool, int length, Supprocom.NativeAllocationManagement.NativeLeaseInitializer<T>! initializer) -> Supprocom.NativeAllocationManagement.NativeTransfer<T>!
+static Supprocom.NativeAllocationManagement.NativeTransferPoolExtensions.RentTransferable<T>(this Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>! pool, int length, Supprocom.NativeAllocationManagement.NativeLeaseInitializer<T>! initializer) -> Supprocom.NativeAllocationManagement.NativeTransfer<T>
+*REMOVED*Supprocom.NativeAllocationManagement.NativeBuilder<T>.Complete(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> Supprocom.NativeAllocationManagement.NativeTransfer<T>!
+Supprocom.NativeAllocationManagement.NativeBuilder<T>.Complete(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> Supprocom.NativeAllocationManagement.NativeTransfer<T>
 Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.HistoryOverflowed.get -> bool
 Supprocom.NativeAllocationManagement.NativeMemoryTraceEvent.AllocationOrdinal.get -> long?
 Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.PageAcquired = 6 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind

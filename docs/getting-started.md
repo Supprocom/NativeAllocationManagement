@@ -178,8 +178,26 @@ dotnet run `
 
 ## Transfer ownership across threads
 
-`NativeTransfer<T>` stores one initialized unmanaged lease on the managed heap. The
-object can cross a thread boundary without exposing an unbounded pointer.
+`NativeTransfer<T>` is a value capability for one initialized unmanaged lease. It
+can be stored on the heap or cross a thread boundary without exposing an unbounded
+pointer. One acquisition-time control validates its unique binding and provides
+emergency cleanup. `Move` changes authority without allocating another wrapper or
+registering another finalizer. Copies of the previous value cannot access or
+release the new binding; they do not create another owner.
+
+This is a representation change in 0.3.0, not binary compatibility with the old
+class. Rebuild consumers. A nullable binding uses `binding.Value` after checking
+presence, or `binding?.Dispose()` at a proven cleanup boundary. Default values are
+uninitialized and reject use, including disposal. Passing the same source variable
+to concurrent moves requires caller synchronization; independent aliases compete
+for one authority in the control. A failed move consumes its source binding as
+before. Value and nullable channel/field slots are larger than object references;
+include their storage and the acquisition control in workload comparisons.
+Emergency cleanup runs when the acquisition control becomes unreachable, not
+when an individual copied value disappears. Even a stale copy retains that small
+control; deterministic disposal by the current binding releases the payload
+regardless of surviving stale copies. Never use finalization as timely budget
+relief, and do not manufacture aliases to manage a unique lifetime.
 
 Acquire the lease into a local variable. Then move that local into its next ownership
 location.
@@ -240,14 +258,14 @@ callback consumes the source and returns its storage after that callback exits.
 Run cancellation checks before the move when possible. After the move, the destination
 owns cleanup and must be disposed if the next operation rejects it.
 
-If no code retains the rejected destination, its finalizer returns the lease later.
+If no code retains the acquisition control, its finalizer returns the lease later.
 Finalization prevents a permanent leak, but it does not give prompt reuse.
 
 An exception from `Access` or `Read` releases the operation token. The destination stays
 active and still requires disposal.
 
 An owner can dispose while a live transfer is idle. This action invalidates the
-transfer, and the receiver must still dispose its transfer object.
+transfer, and the receiver must still dispose its current binding.
 
 An entered receiver callback blocks strict owner disposal. Retry owner disposal after
 the callback exits.

@@ -1148,24 +1148,24 @@ internal static class NativeBuilderBenchmark
         }
 
         internal NativeBuilderExactOutput CopyExactOutput() => new(
-            _opaque!.Read(
+            _opaque!.Value.Read(
                 static view => view.AsSpan().ToArray()),
-            _transparent!.Read(
+            _transparent!.Value.Read(
                 static view => view.AsSpan().ToArray()));
 
         internal long Consume()
         {
-            long opaque = _opaque!.Read(
+            long opaque = _opaque!.Value.Read(
                 static view => ConsumeUpload(
                     MemoryMarshal.AsBytes(view.AsSpan())));
-            long transparent = _transparent!.Read(
+            long transparent = _transparent!.Value.Read(
                 static view => ConsumeUpload(
                     MemoryMarshal.AsBytes(view.AsSpan())));
             return unchecked(
                 opaque
                 + RotateLeft(transparent, 17)
-                + _opaque.Length * sizeof(uint)
-                + ((long)_transparent.Length * sizeof(uint) << 32));
+                + _opaque.Value.Length * sizeof(uint)
+                + ((long)_transparent.Value.Length * sizeof(uint) << 32));
         }
 
         public void Dispose()

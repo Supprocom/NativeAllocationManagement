@@ -23,12 +23,79 @@ public static class NativeTransferPoolExtensions
     }
 }
 
-/// <summary>A heap-storable native lease with destructive move ownership.</summary>
+/// <summary>A heap-storable value capability with destructive unique ownership.</summary>
 /// <typeparam name="T">The unmanaged element type in the native range.</typeparam>
-public sealed class NativeTransfer<T> : IDisposable
+[System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+[System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1815", Justification = "A linear ownership capability deliberately has no value-equality contract; copying it does not acquire another owner.")]
+public readonly struct NativeTransfer<T> : IDisposable
     where T : unmanaged
 {
-    private const int Unowned = 0;
+    private readonly NativeTransferControl<T>? _control;
+    private readonly long _authorityVersion;
+
+    private NativeTransfer(NativeTransferControl<T> control, long authorityVersion)
+    {
+        _control = control;
+        _authorityVersion = authorityVersion;
+    }
+
+    /// <summary>Gets the stable backing-ownership lineage, retained through move.</summary>
+    public long Id => GetControl(nameof(Id)).Id;
+
+    /// <summary>Gets the initialized logical element count.</summary>
+    public int Length => GetControl(nameof(Length)).GetLength(_authorityVersion);
+
+    /// <summary>Gets the physical element capacity.</summary>
+    public int Capacity => GetControl(nameof(Capacity)).GetCapacity(_authorityVersion);
+
+    /// <summary>Moves unique authority without allocating and clears the source binding.</summary>
+    /// <remarks>
+    /// Copies of the previous capability become stale. The binding is consumed even
+    /// when the move fails. Concurrent access to the same source variable requires
+    /// caller synchronization; competing independent aliases arbitrate in the control.
+    /// </remarks>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1000", Justification = "Destructive transfer uses the exact element type and invalidates a ref source.")]
+    public static NativeTransfer<T> Move(ref NativeTransfer<T>? source)
+    {
+        NativeTransfer<T> observed = source ?? throw new ArgumentNullException(
+            nameof(source), "The transfer source has no ownership.");
+        source = null;
+        NativeTransferControl<T> control = observed.GetControl(nameof(Move));
+        long nextVersion = control.Move(observed._authorityVersion);
+        return new NativeTransfer<T>(control, nextVersion);
+    }
+
+    /// <summary>Runs one synchronous bounded callback over the initialized native span.</summary>
+    public void Access(NativeLeaseAction<T> action) =>
+        GetControl(nameof(Access)).Access(_authorityVersion, action);
+
+    /// <summary>Runs one synchronous bounded callback and returns its managed result.</summary>
+    public TResult Read<TResult>(NativeLeaseFunc<T, TResult> action) =>
+        GetControl(nameof(Read)).Read(_authorityVersion, action);
+
+    /// <summary>Releases this unique binding exactly once.</summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1065", Justification = "Disposal rejects stale authority and active bounded use before freeing native memory.")]
+    public void Dispose() => GetControl(nameof(Dispose)).Dispose(_authorityVersion);
+
+    internal object? ControlForTest => _control;
+
+    internal static NativeTransfer<T> Create(NativeOwnerKernel kernel, NativePoolLease lease, string operation) =>
+        new(NativeTransferControl<T>.Create(kernel, lease, operation), authorityVersion: 1);
+
+    internal static NativeTransfer<T> Create(NativeOwnerKernel kernel, NativeRegionAllocation allocation, string operation) =>
+        new(NativeTransferControl<T>.Create(kernel, allocation, operation), authorityVersion: 1);
+
+    internal static NativeTransfer<T> CreateOwnedBlock(NativeBlock block, int length, int capacity) =>
+        new(NativeTransferControl<T>.CreateOwnedBlock(block, length, capacity), authorityVersion: 1);
+
+    private NativeTransferControl<T> GetControl(string operation) =>
+        _control ?? throw new NativeAllocationUninitializedException(nameof(NativeTransfer<T>), operation);
+}
+
+// One acquisition-time control, not one wrapper/finalizer per move.
+internal sealed class NativeTransferControl<T>
+    where T : unmanaged
+{
     private const int Active = 1;
     private const int Moving = 2;
     private const int Moved = 3;
@@ -47,14 +114,14 @@ public sealed class NativeTransfer<T> : IDisposable
     private readonly int _capacity;
     private int _state;
     private int _operationAdmission;
+    private long _authorityVersion = 1;
 
-    private NativeTransfer(
+    private NativeTransferControl(
         NativeOwnerKernel kernel,
         NativeGeneration generationState,
         NativeAllocation allocationState,
         long generation,
-        long allocationId,
-        bool active)
+        long allocationId)
     {
         _kernel = kernel;
         _generationState = generationState;
@@ -64,79 +131,31 @@ public sealed class NativeTransfer<T> : IDisposable
         _block = default;
         _length = allocationState.Length;
         _capacity = allocationState.Capacity;
-        _state = active ? Active : Unowned;
+        _state = Active;
     }
 
-    private NativeTransfer(
+    private NativeTransferControl(
         NativeBlock block,
         int length,
-        int capacity,
-        bool active)
+        int capacity)
     {
         _block = block;
         _length = length;
         _capacity = capacity;
-        _state = active ? Active : Unowned;
+        _state = Active;
     }
 
-    private NativeTransfer(
-        NativeTransfer<T> source,
-        bool active)
-    {
-        _kernel = source._kernel;
-        _generationState = source._generationState;
-        _allocationState = source._allocationState;
-        _generation = source._generation;
-        _allocationId = source._allocationId;
-        _block = source._block;
-        _length = source._length;
-        _capacity = source._capacity;
-        _state = active ? Active : Unowned;
-    }
+    internal long Id => _kernel?.Id ?? _block.OwnerId;
 
-    /// <summary>Gets the stable backing-ownership lineage, retained through move.</summary>
-    public long Id => _kernel?.Id ?? _block.OwnerId;
+    internal int GetLength(long authorityVersion) => Validate(authorityVersion, nameof(NativeTransfer<T>.Length)).Length;
 
-    /// <summary>Gets the logical element count.</summary>
-    public int Length => Validate(nameof(Length)).Length;
-
-    /// <summary>Gets the physical element capacity.</summary>
-    public int Capacity => Validate(nameof(Capacity)).Capacity;
-
-    /// <summary>Moves ownership and sets the source variable to null.</summary>
-    /// <remarks>All aliases of the old object become invalid after a successful move.</remarks>
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1000", Justification = "Destructive transfer uses the exact element type and invalidates a ref source.")]
-    public static NativeTransfer<T> Move(
-        ref NativeTransfer<T>? source)
-    {
-        NativeTransfer<T> observed =
-            source
-            ?? throw new ArgumentNullException(
-                nameof(source),
-                "The transfer source has no ownership.");
-        NativeTransfer<T> destination = new(
-            observed,
-            active: false);
-        if (!ReferenceEquals(
-            Interlocked.CompareExchange(
-                ref source,
-                null,
-                observed),
-            observed))
-        {
-            throw new InvalidOperationException(
-                "The transfer source changed during the move.");
-        }
-
-        observed.MoveTo(destination);
-        return destination;
-    }
+    internal int GetCapacity(long authorityVersion) => Validate(authorityVersion, nameof(NativeTransfer<T>.Capacity)).Capacity;
 
     /// <summary>Runs one synchronous bounded callback over the native span.</summary>
-    public void Access(NativeLeaseAction<T> action)
+    internal void Access(long authorityVersion, NativeLeaseAction<T> action)
     {
         ArgumentNullException.ThrowIfNull(action);
-        EnterTransferOperation(nameof(Access));
+        EnterTransferOperation(authorityVersion, nameof(Access));
         try
         {
             if (_kernel is null)
@@ -167,10 +186,10 @@ public sealed class NativeTransfer<T> : IDisposable
     }
 
     /// <summary>Runs one synchronous bounded callback and returns its managed result.</summary>
-    public TResult Read<TResult>(NativeLeaseFunc<T, TResult> action)
+    internal TResult Read<TResult>(long authorityVersion, NativeLeaseFunc<T, TResult> action)
     {
         ArgumentNullException.ThrowIfNull(action);
-        EnterTransferOperation(nameof(Read));
+        EnterTransferOperation(authorityVersion, nameof(Read));
         try
         {
             if (_kernel is null)
@@ -200,7 +219,8 @@ public sealed class NativeTransfer<T> : IDisposable
 
     /// <summary>Returns this transfer's storage exactly once.</summary>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1065", Justification = "Disposal must reject active bounded use before freeing native memory.")]
-    public void Dispose()
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA1816", Justification = "The public unique capability delegates terminal release to its acquisition-time finalizable control.")]
+    internal void Dispose(long authorityVersion)
     {
         int observed = Interlocked.CompareExchange(
             ref _state,
@@ -209,6 +229,12 @@ public sealed class NativeTransfer<T> : IDisposable
         if (observed != Active)
         {
             ThrowInactive(nameof(Dispose), observed);
+        }
+
+        if (Volatile.Read(ref _authorityVersion) != authorityVersion)
+        {
+            Volatile.Write(ref _state, Active);
+            ThrowInactive(nameof(Dispose), Moved);
         }
 
         int activeOperations =
@@ -235,7 +261,7 @@ public sealed class NativeTransfer<T> : IDisposable
         }
     }
 
-    internal static NativeTransfer<T> Create(
+    internal static NativeTransferControl<T> Create(
         NativeOwnerKernel kernel,
         NativePoolLease lease,
         string operation) =>
@@ -247,7 +273,7 @@ public sealed class NativeTransfer<T> : IDisposable
             lease.AllocationId,
             operation);
 
-    internal static NativeTransfer<T> Create(
+    internal static NativeTransferControl<T> Create(
         NativeOwnerKernel kernel,
         NativeRegionAllocation allocation,
         string operation) =>
@@ -259,7 +285,7 @@ public sealed class NativeTransfer<T> : IDisposable
             allocation.AllocationId,
             operation);
 
-    private static NativeTransfer<T> Create(
+    private static NativeTransferControl<T> Create(
         NativeOwnerKernel kernel,
         NativeGeneration generationState,
         NativeAllocation allocationState,
@@ -269,13 +295,12 @@ public sealed class NativeTransfer<T> : IDisposable
     {
         try
         {
-            return new NativeTransfer<T>(
+            return new NativeTransferControl<T>(
                 kernel,
                 generationState,
                 allocationState,
                 generation,
-                allocationId,
-                active: true);
+                allocationId);
         }
         catch
         {
@@ -287,19 +312,18 @@ public sealed class NativeTransfer<T> : IDisposable
         }
     }
 
-    internal static NativeTransfer<T> CreateOwnedBlock(
+    internal static NativeTransferControl<T> CreateOwnedBlock(
         NativeBlock block,
         int length,
         int capacity) =>
         new(
             block,
             length,
-            capacity,
-            active: true);
+            capacity);
 
-    private NativeHandleMetadata Validate(string operation)
+    private NativeHandleMetadata Validate(long authorityVersion, string operation)
     {
-        EnsureActive(operation);
+        EnsureActive(authorityVersion, operation);
         if (_kernel is null)
         {
             return new NativeHandleMetadata(
@@ -324,9 +348,9 @@ public sealed class NativeTransfer<T> : IDisposable
             _allocationId,
             operation);
 
-    private void EnterTransferOperation(string operation)
+    private void EnterTransferOperation(long authorityVersion, string operation)
     {
-        EnsureActive(operation);
+        EnsureActive(authorityVersion, operation);
         if (!NativeOperationAdmission.TryEnter(
             ref _operationAdmission))
         {
@@ -336,13 +360,13 @@ public sealed class NativeTransfer<T> : IDisposable
         }
 
         int state = Volatile.Read(ref _state);
-        if (state == Active)
+        if (state == Active && Volatile.Read(ref _authorityVersion) == authorityVersion)
         {
             return;
         }
 
         NativeOperationAdmission.Exit(ref _operationAdmission);
-        ThrowInactive(operation, state);
+        ThrowInactive(operation, state == Active ? Moved : state);
     }
 
     private void ExitTransferOperation()
@@ -352,13 +376,22 @@ public sealed class NativeTransfer<T> : IDisposable
         if (remaining == 0
             && Volatile.Read(ref _state) == Retiring)
         {
+            CompleteRetirement();
+        }
+    }
+
+    private void CompleteRetirement()
+    {
+        if (NativeOperationAdmission.Count(ref _operationAdmission) == 0
+            && Interlocked.CompareExchange(ref _state, Disposing, Retiring) == Retiring)
+        {
             ReturnStorageFromFinalizer();
             Volatile.Write(ref _state, Disposed);
         }
     }
 
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA1816", Justification = "Moving native ownership disarms the source finalizer.")]
-    private void MoveTo(NativeTransfer<T> destination)
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA1816", Justification = "Failed consumed moves release storage and disarm the acquisition-time finalizer.")]
+    internal long Move(long authorityVersion)
     {
         int observed = Interlocked.CompareExchange(
             ref _state,
@@ -369,11 +402,29 @@ public sealed class NativeTransfer<T> : IDisposable
             ThrowInactive(nameof(Move), observed);
         }
 
+        // Validate after claiming the state, not only before the CAS: a competing
+        // move can finish and reopen Active between those two observations.
+        if (Volatile.Read(ref _authorityVersion) != authorityVersion)
+        {
+            Volatile.Write(ref _state, Active);
+            ThrowInactive(nameof(Move), Moved);
+        }
+
         int activeOperations =
             NativeOperationAdmission.Close(ref _operationAdmission);
         if (activeOperations != 0)
         {
-            Volatile.Write(ref _state, Retiring);
+            try
+            {
+                NativeMemoryTestHooks.NotifyBeforeOperationEntry("NativeTransfer.Retire");
+            }
+            finally
+            {
+                Volatile.Write(ref _state, Retiring);
+                // The last callback may have exited while the state was Moving.
+                // Recheck after publication; the terminal CAS arbitrates with its exit.
+                CompleteRetirement();
+            }
             throw new InvalidOperationException(
                 "NativeTransfer.Move found an active callback. The source will return after that callback ends.");
         }
@@ -382,7 +433,7 @@ public sealed class NativeTransfer<T> : IDisposable
         {
             MovePublication publication = new(
                 this,
-                destination);
+                checked(authorityVersion + 1));
             if (_kernel is null)
             {
                 publication.Publish();
@@ -398,6 +449,7 @@ public sealed class NativeTransfer<T> : IDisposable
                     publication,
                     static state => state.Publish());
             }
+            return publication.AuthorityVersion;
         }
         catch
         {
@@ -408,14 +460,11 @@ public sealed class NativeTransfer<T> : IDisposable
         }
     }
 
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA1816", Justification = "Publishing a moved owner disarms the source finalizer.")]
-    private void PublishMove(NativeTransfer<T> destination)
+    private void PublishMove(long authorityVersion)
     {
-        NativeOperationAdmission.Reset(
-            ref destination._operationAdmission);
-        Volatile.Write(ref destination._state, Active);
-        Volatile.Write(ref _state, Moved);
-        GC.SuppressFinalize(this);
+        Volatile.Write(ref _authorityVersion, authorityVersion);
+        NativeOperationAdmission.Reset(ref _operationAdmission);
+        Volatile.Write(ref _state, Active);
     }
 
     private void ReturnStorage(string operation)
@@ -444,12 +493,16 @@ public sealed class NativeTransfer<T> : IDisposable
         }
     }
 
-    private void EnsureActive(string operation)
+    private void EnsureActive(long authorityVersion, string operation)
     {
         int state = Volatile.Read(ref _state);
         if (state != Active)
         {
             ThrowInactive(operation, state);
+        }
+        if (Volatile.Read(ref _authorityVersion) != authorityVersion)
+        {
+            ThrowInactive(operation, Moved);
         }
     }
 
@@ -492,7 +545,7 @@ public sealed class NativeTransfer<T> : IDisposable
     /// <summary>Returns storage when a receiver abandons the active transfer.</summary>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "MA0055", Justification = "Emergency native-memory cleanup supplements mandatory deterministic disposal.")]
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "An emergency finalizer must never let cleanup exceptions terminate the process.")]
-    ~NativeTransfer()
+    ~NativeTransferControl()
     {
         try
         {
@@ -504,9 +557,9 @@ public sealed class NativeTransfer<T> : IDisposable
     }
 
     private readonly record struct MovePublication(
-        NativeTransfer<T> Source,
-        NativeTransfer<T> Destination)
+        NativeTransferControl<T> Source,
+        long AuthorityVersion)
     {
-        internal void Publish() => Source.PublishMove(Destination);
+        internal void Publish() => Source.PublishMove(AuthorityVersion);
     }
 }

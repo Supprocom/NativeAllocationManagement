@@ -367,18 +367,18 @@ internal static class NativeBuilderPairRegression
             ref transparentSource);
         phase.Stop();
         double transfer = phase.Elapsed.TotalMilliseconds;
-        string hash = ComputeHash(opaqueTransfer, transparentTransfer);
+        string hash = ComputeHash(opaqueTransfer.Value, transparentTransfer.Value);
         bool parity = VerifyValues(
-            opaqueTransfer,
+            opaqueTransfer.Value,
             opaqueWords,
             OpaqueSalt)
             && VerifyValues(
-                transparentTransfer,
+                transparentTransfer.Value,
                 transparentWords,
                 TransparentSalt);
         phase.Restart();
-        opaqueTransfer.Dispose();
-        transparentTransfer.Dispose();
+        opaqueTransfer.Value.Dispose();
+        transparentTransfer.Value.Dispose();
         opaqueBuilder.Dispose();
         transparentBuilder.Dispose();
         phase.Stop();

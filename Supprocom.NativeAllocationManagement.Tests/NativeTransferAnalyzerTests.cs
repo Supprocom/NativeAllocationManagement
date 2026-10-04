@@ -65,8 +65,8 @@ public sealed class NativeTransferAnalyzerTests
                         static writer => writer.Fill(7));
                     Holder holder = new();
                     holder.Transfer = NativeTransfer<int>.Move(ref first);
-                    holder.Transfer.Access(static view => view[0] = 11);
-                    holder.Transfer.Dispose();
+                    holder.Transfer.Value.Access(static view => view[0] = 11);
+                    holder.Transfer.Value.Dispose();
 
                     NativeTransfer<int>? second = pool.RentTransferable(
                         4,
@@ -105,7 +105,7 @@ public sealed class NativeTransferAnalyzerTests
                         static writer => writer.Fill(1));
                     NativeTransfer<int> destination =
                         NativeTransfer<int>.Move(ref source);
-                    _ = source!.Length;
+                    _ = source!.Value.Length;
                     destination.Dispose();
                 }
             }
@@ -179,7 +179,7 @@ public sealed class NativeTransferAnalyzerTests
                     NativeTransfer<int>? source = pool.RentTransferable(
                         1,
                         static writer => writer.Fill(1));
-                    NativeTransfer<int> alias = source;
+                    NativeTransfer<int> alias = source.Value;
                     NativeTransfer<int> destination =
                         NativeTransfer<int>.Move(ref source);
                     alias.Access(static view => view[0] = 2);
@@ -399,7 +399,7 @@ public sealed class NativeTransferAnalyzerTests
                         destination = NativeTransfer<int>.Move(ref source);
                     }
 
-                    _ = source!.Length;
+                    _ = source!.Value.Length;
                     destination?.Dispose();
                     source?.Dispose();
                 }
@@ -1192,7 +1192,7 @@ public sealed class NativeTransferAnalyzerTests
                         {
                             if (transfer is not null)
                             {
-                                transfer.Dispose();
+                                transfer.Value.Dispose();
                             }
                         }
                     }
@@ -1385,7 +1385,7 @@ public sealed class NativeTransferAnalyzerTests
                         {
                             if (transfer != null)
                             {
-                                transfer.Dispose();
+                                transfer.Value.Dispose();
                             }
                         }
                     }).GetAwaiter().GetResult();
@@ -1419,7 +1419,7 @@ public sealed class NativeTransferAnalyzerTests
                                 static writer => writer.Fill(1));
                         NativeTransfer<float> destination =
                             NativeTransfer<float>.Move(ref source);
-                        source!.Access(static view => view[0] = 2);
+                        source!.Value.Access(static view => view[0] = 2);
                         destination.Dispose();
                     });
                 }
@@ -1476,7 +1476,7 @@ public sealed class NativeTransferAnalyzerTests
                         static writer => writer.Fill(1));
                     NativeTransfer<float> destination =
                         NativeTransfer<float>.Move(ref source);
-                    source!.Access(static view => view[0] = 2);
+                    source!.Value.Access(static view => view[0] = 2);
                     destination.Dispose();
                 }
             }
