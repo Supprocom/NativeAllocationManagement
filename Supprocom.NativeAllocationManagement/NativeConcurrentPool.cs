@@ -6,6 +6,9 @@ public sealed class NativeConcurrentPool<T> : IDisposable
 {
     private readonly NativeOwnerKernel _kernel;
 
+    /// <summary>Gets the stable process-local allocator identity, independent of generation.</summary>
+    public long Id => _kernel.Id;
+
     internal NativeOwnerKernel KernelForTransfer => _kernel;
 
     internal NativeOwnerLifecycle CurrentLifecycle => _kernel.Lifecycle;

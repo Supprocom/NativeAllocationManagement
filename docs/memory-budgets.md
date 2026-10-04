@@ -9,7 +9,7 @@ and preparation limits.
 The current integration covers direct builders/workspaces/completed transfers,
 thread-confined pools/arenas/regions, and synchronized pools/arenas. Storage keeps
 its domain through retention, retirement, quarantine and finalizable detachment.
-Prepared execution, page slots, shared-pointer controls and tracing are still
+Prepared execution, page slots and shared-pointer controls are still
 required before the complete 0.3.0 boundary is eligible for release.
 
 Budgeted owner constructors require all arguments explicitly. Existing optional
@@ -91,6 +91,43 @@ not addresses. Budget state is never reset by internal process-measurement reset
 | `ActiveAllocationCount` | Derived exactly from successful acquisitions minus physical releases. No redundant mutation counter. |
 | `RejectedAllocationCount` | Requests whose minimum complete extent did not fit, before native allocation. A failed preference with a successful exact fallback is not a rejection. |
 | `FailedAllocationCount` | Admitted acquisition attempts cancelled after failure. Ceiling refusal never acquired a reservation and is not counted here. |
+| `TraceCapacity` | Fixed managed event-array capacity chosen at construction; zero disables event construction. This array is managed metadata, not native backing charged to the ceiling. |
+| `TraceCount` | Events currently retained in the ring, never larger than its capacity. |
+| `DroppedTraceEventCount` | Events overwritten or omitted after sequence exhaustion, not those omitted by a short copy destination. Saturates at `long.MaxValue`; check `TraceOverflowed`. |
+| `TraceOverflowed` | True if event identities were exhausted or the dropped count ceased to be exact. This diagnostic condition never interrupts a successful allocation or physical release. |
+
+## Owner identities and optional tracing
+
+Every owner is assigned a positive, checked, process-local identity once, without
+a global owner registry or a reference to that owner. Owner statistics and
+structural snapshots carry `OwnerId`. A builder's completed transfer and its
+subsequent moves keep that backing-lineage identity; identity does not confer
+authority to access a lease. Resetting a generation or disposing an owner does
+not reuse its identity. A budget has a separate domain identity.
+
+Tracing is opt-in: `new NativeMemoryBudget(capacityBytes, traceCapacity)` allocates
+one bounded managed event array during construction. The default constructor
+uses no event storage. Disabled tracing returns before constructing an event
+or reading the clock. Enabled tracing records only native admission, refusal,
+acquisition, realloc, acquisition rollback and physical release under the
+existing budget lock. Reusing backing does not take that lock or emit an event.
+It does not trace every element, callback or warmed lease.
+
+`CopyTraceTo(Span<NativeMemoryTraceEvent>)` copies without allocating or resetting
+history. Events are chronological; a short destination receives the newest
+suffix. Each event holds values only: domain and optional backing-owner IDs,
+sequence, monotonic `Stopwatch` timestamp ticks, transition kind, complete
+requested/previous extents, and post-transition committed/reserved bytes.
+Use `Stopwatch.Frequency` to interpret ticks; they are not UTC timestamps.
+Production backing transitions supply their real owner ID; ownerless internal
+domain operations report `null`, never a fabricated owner zero.
+
+Sequence exhaustion stops new event recording rather than wrapping an identity.
+Dropped-count exhaustion saturates and sets `TraceOverflowed`; after that flag,
+the count is a lower bound, not a claimed exact measurement. Memory admission
+and release continue independently of diagnostic overflow. Copying retains no
+owner, pointer or borrowing authority. Native-acquisition failures are distinct
+from ceiling refusals and release the admitted reservation before being traced.
 
 The runtime exposes actual acquisition, realloc and free counters through
 `NativeMemoryDiagnostics.Snapshot()`. Existing-block realloc now updates the

@@ -8,6 +8,9 @@ public sealed class NativeConcurrentArena : IDisposable
 {
     private readonly NativeOwnerKernel _kernel;
 
+    /// <summary>Gets the stable process-local allocator identity, independent of generation.</summary>
+    public long Id => _kernel.Id;
+
     internal NativeOwnerKernel KernelForInitialization => _kernel;
 
     internal NativeOwnerLifecycle CurrentLifecycle => _kernel.Lifecycle;

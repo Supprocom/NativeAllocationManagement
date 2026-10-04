@@ -13,6 +13,7 @@ public sealed class NativeWorkspace<T> : IDisposable
     private NativeBlock _block;
     private readonly int _capacity;
     private readonly int _ownerThreadId;
+    private readonly long _id = NativeOwnerIdentity.Next();
     private int _state;
     private int _activeUse;
     private int _length;
@@ -41,10 +42,14 @@ public sealed class NativeWorkspace<T> : IDisposable
             preLease,
             nameof(NativeWorkspace<T>),
             "NativeWorkspace.Constructor",
-            budget);
+            budget,
+            ownerId: _id);
         _capacity = preLease;
         ClearBlock();
     }
+
+    /// <summary>Gets the stable process-local backing owner identity.</summary>
+    public long Id => _id;
 
     /// <summary>Gets the fixed physical element capacity.</summary>
     public int Capacity

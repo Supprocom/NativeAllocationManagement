@@ -9,7 +9,8 @@ internal static unsafe class NativeBlockAllocator
         int capacity,
         string ownerKind,
         string operation,
-        NativeMemoryBudget? budget = null)
+        NativeMemoryBudget? budget = null,
+        long ownerId = 0)
         where T : unmanaged
     {
         ArgumentOutOfRangeException.ThrowIfNegative(capacity);
@@ -18,10 +19,14 @@ internal static unsafe class NativeBlockAllocator
         ValidateMetricsLength(byteLength);
         if (byteLength == 0)
         {
-            return default;
+            return new NativeBlock(IntPtr.Zero, 0, 0, budget, ownerId);
         }
 
-        budget?.Reserve(byteLength);
+        if (ownerId == 0)
+        {
+            ownerId = NativeOwnerIdentity.Next();
+        }
+        budget?.Reserve(byteLength, ownerId);
         void* memory = null;
         bool acquired = false;
         bool recorded = false;
@@ -44,13 +49,14 @@ internal static unsafe class NativeBlockAllocator
 
             metricsEpoch = NativeMemoryTestHooks.RecordAllocation(byteLength, zeroed: false);
             recorded = true;
-            budget?.Commit(byteLength);
+            budget?.Commit(byteLength, ownerId);
             acquired = true;
             return new NativeBlock(
                 (IntPtr)memory,
                 byteLength,
                 metricsEpoch,
-                budget);
+                budget,
+                ownerId);
         }
         catch (OutOfMemoryException exception)
         {
@@ -73,7 +79,7 @@ internal static unsafe class NativeBlockAllocator
                     }
                 }
 
-                budget?.Cancel(byteLength);
+                budget?.Cancel(byteLength, ownerId);
             }
         }
     }
@@ -87,7 +93,8 @@ internal static unsafe class NativeBlockAllocator
         NativeMemoryBudget? budget,
         bool throwOnBudgetFailure,
         out NativeBlock replacement,
-        out int capacity)
+        out int capacity,
+        long ownerId = 0)
         where T : unmanaged
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(minimumCapacity);
@@ -97,9 +104,14 @@ internal static unsafe class NativeBlockAllocator
         nuint minimumBytes = checked((nuint)minimumCapacity * elementSize);
         ValidateMetricsLength(preferredBytes);
         budget ??= block.Budget;
+        ownerId = block.OwnerId != 0 ? block.OwnerId : ownerId;
+        if (ownerId == 0)
+        {
+            ownerId = NativeOwnerIdentity.Next();
+        }
         nuint admittedBytes = preferredBytes;
         if (budget is not null
-            && !budget.TryReservePreferred(preferredBytes, minimumBytes, out admittedBytes, out long availableBytes))
+            && !budget.TryReservePreferred(preferredBytes, minimumBytes, out admittedBytes, out long availableBytes, ownerId))
         {
             if (throwOnBudgetFailure)
             {
@@ -113,7 +125,7 @@ internal static unsafe class NativeBlockAllocator
         }
 
         capacity = checked((int)(admittedBytes / elementSize));
-        replacement = ResizeAdmitted(block, admittedBytes, ownerKind, operation, budget);
+        replacement = ResizeAdmitted(block, admittedBytes, ownerKind, operation, budget, ownerId);
         return true;
     }
 
@@ -122,7 +134,8 @@ internal static unsafe class NativeBlockAllocator
         nuint byteLength,
         string ownerKind,
         string operation,
-        NativeMemoryBudget? budget)
+        NativeMemoryBudget? budget,
+        long ownerId)
     {
         bool acquired = false;
         try
@@ -144,9 +157,9 @@ internal static unsafe class NativeBlockAllocator
             }
             long metricsEpoch = NativeMemoryTestHooks.RecordReallocation(
                 block.ByteLength, byteLength, block.MetricsEpoch);
-            budget?.CommitReallocation(byteLength, block.ByteLength);
+            budget?.CommitReallocation(byteLength, block.ByteLength, ownerId);
             acquired = true;
-            return new NativeBlock((IntPtr)memory, byteLength, metricsEpoch, budget);
+            return new NativeBlock((IntPtr)memory, byteLength, metricsEpoch, budget, ownerId);
         }
         catch (OutOfMemoryException exception)
         {
@@ -156,7 +169,7 @@ internal static unsafe class NativeBlockAllocator
         {
             if (!acquired)
             {
-                budget?.Cancel(byteLength);
+                budget?.Cancel(byteLength, ownerId);
             }
         }
     }
@@ -170,7 +183,7 @@ internal static unsafe class NativeBlockAllocator
         }
 
         NativeMemory.Free((void*)block.Pointer);
-        block.Budget?.Release(block.ByteLength);
+        block.Budget?.Release(block.ByteLength, block.OwnerId);
         try
         {
             NativeMemoryTestHooks.RecordFree(
@@ -213,7 +226,8 @@ internal readonly record struct NativeBlock(
     IntPtr Pointer,
     nuint ByteLength,
     long MetricsEpoch,
-    NativeMemoryBudget? Budget = null);
+    NativeMemoryBudget? Budget = null,
+    long OwnerId = 0);
 
 internal static class NativeAlignedAllocation
 {

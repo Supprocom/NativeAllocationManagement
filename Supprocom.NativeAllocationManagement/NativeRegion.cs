@@ -5,6 +5,9 @@ public readonly ref struct NativeRegion
 {
     private readonly NativeRegionKernel? _kernel;
 
+    /// <summary>Gets the stable process-local allocator identity.</summary>
+    public long Id => GetKernel(nameof(Id)).Id;
+
     /// <summary>Creates one active Region with finalizable emergency cleanup.</summary>
     public NativeRegion()
     {

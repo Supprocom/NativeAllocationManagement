@@ -20,6 +20,7 @@ public sealed class NativeBuilder<T> : IDisposable
     private int _capacity;
     private NativeBlock _block;
     private readonly NativeMemoryBudget? _budget;
+    private readonly long _id = NativeOwnerIdentity.Next();
 
     /// <summary>Creates an empty direct native builder.</summary>
     public NativeBuilder()
@@ -50,9 +51,13 @@ public sealed class NativeBuilder<T> : IDisposable
             preLease,
             nameof(NativeBuilder<T>),
             "NativeBuilder.Constructor",
-            budget);
+            budget,
+            ownerId: _id);
         _capacity = preLease;
     }
+
+    /// <summary>Gets the stable backing-ownership lineage, retained through completion and move.</summary>
+    public long Id => _id;
 
     /// <summary>Gets the initialized element count.</summary>
     public int Count => ReadState(
@@ -882,7 +887,8 @@ public sealed class NativeBuilder<T> : IDisposable
             _budget,
             throwOnBudgetFailure,
             out NativeBlock replacement,
-            out int capacity))
+            out int capacity,
+            ownerId: _id))
         {
             return false;
         }

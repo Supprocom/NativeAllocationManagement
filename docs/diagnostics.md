@@ -21,6 +21,7 @@ not an assertion that a segment is occupied at that index.
 
 | Field | Definition and lifetime |
 | --- | --- |
+| `OwnerId` | Stable positive process-local allocator identity, assigned once without a global owner registry. It remains the same across generations and disposal; it is not an address or borrowing capability. The demo copies it directly and uses `null` when no NAM owner is available. |
 | `Lifecycle` | Actual owner gate state at capture, including unleased, returned and disposed owners. |
 | `Generation` | Current or most recent owner generation identity, starting at zero. Generation transitions precompute overflow before changing authority; identifiers are not addresses. |
 | `ScopeEpoch` | Current generation's scoped epoch, advanced by scoped-lifetime transitions. Zero when there is no current generation. Overflow is checked before committing a transition. |
@@ -49,3 +50,15 @@ not a memory reservation or permission to access a stale lease.
 complete retained backing, and borrowed external ranges. See
 [native backing budgets](memory-budgets.md) for backend differences, units and
 the distinction between known extents, opaque allocator bookkeeping and RSS.
+
+The fast typed pool's internal initialization and entered-operation probes scan
+actual slab states and borrow counts at capture; they do not maintain redundant
+hot-path counters. Its metadata capacity probe reports the allocated slab-bank
+length, not live/available slab usage. Free-list membership is stored inside that
+same bank, so both slab-capacity fields describe the same capacity. There are
+genuinely no bump bank, separate segment-owner bank, reference-root bank or
+generational quarantine bank in this unmanaged thread-confined model. These
+model-specific absences are not a license to zero-fill synchronized-owner fields.
+
+See [bounded budget tracing](memory-budgets.md#owner-identities-and-optional-tracing)
+for peaks, refused acquisitions, event units, overflow disclosure and copying.

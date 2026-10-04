@@ -94,6 +94,9 @@ public sealed class NativeTransfer<T> : IDisposable
         _state = active ? Active : Unowned;
     }
 
+    /// <summary>Gets the stable backing-ownership lineage, retained through move.</summary>
+    public long Id => _kernel?.Id ?? _block.OwnerId;
+
     /// <summary>Gets the logical element count.</summary>
     public int Length => Validate(nameof(Length)).Length;
 

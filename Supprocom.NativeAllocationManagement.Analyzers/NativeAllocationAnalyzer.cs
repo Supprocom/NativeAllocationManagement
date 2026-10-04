@@ -190,6 +190,17 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     || Is(parameter.Type, Workspace));
         }
 
+        internal bool IsStableOwnershipIdentity(IPropertySymbol property) =>
+            string.Equals(property.Name, "Id", StringComparison.Ordinal)
+            && !property.IsStatic
+            && !property.IsIndexer
+            && property.GetMethod is not null
+            && property.SetMethod is null
+            && property.Type.SpecialType == SpecialType.System_Int64
+            && (Is(property.ContainingType, Builder)
+                || Is(property.ContainingType, Workspace)
+                || Is(property.ContainingType, Transfer));
+
         private bool IsTrackedType(ITypeSymbol? type)
         {
             return IsOwnerType(type)
@@ -2479,6 +2490,14 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
         public override void VisitPropertyReference(IPropertyReferenceOperation operation)
         {
+            if (_symbols.IsStableOwnershipIdentity(operation.Property))
+            {
+                // Identity is immutable metadata, not payload borrowing authority.
+                // Still visit the receiver so nested calls/copies retain their checks.
+                base.VisitPropertyReference(operation);
+                return;
+            }
+
             if (IsNativeTransfer(operation.Instance?.Type)
                 && GetTransfer(Unwrap(operation.Instance)) is TransferState transfer)
             {

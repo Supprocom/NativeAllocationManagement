@@ -8,6 +8,9 @@ public sealed class NativeArena : IDisposable
 {
     private readonly NativeArenaKernel _kernel;
 
+    /// <summary>Gets the stable process-local allocator identity.</summary>
+    public long Id => _kernel.Id;
+
     /// <summary>Creates one active Arena with an optional raw byte reservation.</summary>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "RS0027", Justification = "Preserve the published optional signature; the budget-first overload has only required arguments and strictly greater arity, so it cannot capture any existing call.")]
     public NativeArena(

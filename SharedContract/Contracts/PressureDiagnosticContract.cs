@@ -82,7 +82,10 @@ public readonly record struct PressureAllocatorDiagnosticSnapshot(
     long RetiredBytes,
     int QuarantinedGenerationCount,
     int QuarantinedSegmentCount,
-    bool CurrentGenerationQuarantined);
+    bool CurrentGenerationQuarantined)
+{
+    public long? OwnerId { get; init; }
+}
 
 public readonly record struct PressureWorkerDiagnostic(
     int WorkerIndex,

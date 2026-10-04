@@ -7,17 +7,24 @@ public sealed class NativePool<T> : IDisposable
 {
     private readonly NativePoolKernel<T> _kernel;
 
+    /// <summary>Gets the stable process-local allocator identity.</summary>
+    public long Id => _kernel.Id;
+
     internal NativeOwnerLifecycle CurrentLifecycle => _kernel.Lifecycle;
 
     internal int CurrentAllocationRecordCountForTest =>
         _kernel.LiveLeaseCount;
 
-    // Zero-valued compatibility probes are intentionally read from an owner instance.
+    internal int CurrentInitializationCountForTest => _kernel.InitializationCount;
+
+    internal int CurrentGenerationActiveOperationsForTest => _kernel.ActiveOperationCount;
+
+    internal (int Slabs, int AvailableSlabs, int Bumps, int OwnerSegments)
+        CurrentBankCapacitiesForTest => _kernel.BankCapacities;
+
+    // These structures genuinely do not exist in the unmanaged, thread-confined
+    // pool model. There is no reference-root bank or generational retirement.
 #pragma warning disable CA1822
-    internal int CurrentInitializationCountForTest => 0;
-
-    internal int CurrentGenerationActiveOperationsForTest => 0;
-
     internal int CurrentReferenceRootCountForTest => 0;
 
     internal int QuarantinedSegmentCountForTest => 0;
@@ -27,20 +34,6 @@ public sealed class NativePool<T> : IDisposable
     internal int RetiredGenerationCountForTest => 0;
 
     internal int QuarantineCapacityForTest => 0;
-
-    internal (int Slabs, int AvailableSlabs, int Bumps, int OwnerSegments)
-        CurrentBankCapacitiesForTest
-    {
-        get
-        {
-            NativeOwnerStatistics statistics = _kernel.GetStatistics();
-            return (
-                statistics.SegmentCount,
-                statistics.AvailableSegmentCount,
-                0,
-                0);
-        }
-    }
 
     internal long CurrentScopeEpochForTest => 0;
 

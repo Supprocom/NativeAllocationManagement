@@ -203,7 +203,7 @@ public sealed class PackageSmokeTests
                 {
                     public static int Main()
                     {
-                        NativeMemoryBudget budget = new(64);
+                        NativeMemoryBudget budget = new(64, traceCapacity: 8);
                         using NativeBuilder<int> builder = new(budget, preLease: 4);
                         using (NativeWorkspace<int> workspace = new(budget, preLease: 8))
                         {
@@ -224,7 +224,8 @@ public sealed class PackageSmokeTests
                         NativeTransfer<int> transfer = builder.Complete();
                         try
                         {
-                            if (transfer.Read(static view => view[0]) != 42
+                            if (transfer.Id != builder.Id
+                                || transfer.Read(static view => view[0]) != 42
                                 || budget.CaptureStatistics().CommittedBytes != 32)
                             {
                                 return 3;
@@ -235,7 +236,20 @@ public sealed class PackageSmokeTests
                             transfer.Dispose();
                         }
 
-                        return budget.CaptureStatistics().CommittedBytes == 0 ? 0 : 4;
+                        NativeMemoryBudgetStatistics snapshot = budget.CaptureStatistics();
+                        System.Span<NativeMemoryTraceEvent> events = stackalloc NativeMemoryTraceEvent[4];
+                        if (snapshot.CommittedBytes != 0
+                            || snapshot.TraceCapacity != 8
+                            || snapshot.TraceCount != 8
+                            || snapshot.DroppedTraceEventCount != 1
+                            || snapshot.TraceOverflowed
+                            || budget.CopyTraceTo(events) != 4
+                            || events[3].Kind != NativeMemoryTraceKind.Released
+                            || events[3].OwnerId != builder.Id)
+                        {
+                            return 4;
+                        }
+                        return 0;
                     }
                 }
                 """);

@@ -1,4 +1,46 @@
 #nullable enable
+Supprocom.NativeAllocationManagement.NativePool<T>.Id.get -> long
+Supprocom.NativeAllocationManagement.NativeArena.Id.get -> long
+Supprocom.NativeAllocationManagement.NativeRegion.Id.get -> long
+Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>.Id.get -> long
+Supprocom.NativeAllocationManagement.NativeConcurrentArena.Id.get -> long
+Supprocom.NativeAllocationManagement.NativeBuilder<T>.Id.get -> long
+Supprocom.NativeAllocationManagement.NativeWorkspace<T>.Id.get -> long
+Supprocom.NativeAllocationManagement.NativeTransfer<T>.Id.get -> long
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.OwnerId.get -> long
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.OwnerId.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.OwnerId.get -> long
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.OwnerId.init -> void
+Supprocom.NativeAllocationManagement.NativeMemoryBudget.NativeMemoryBudget(long capacityBytes, int traceCapacity) -> void
+Supprocom.NativeAllocationManagement.NativeMemoryBudget.CopyTraceTo(scoped System.Span<Supprocom.NativeAllocationManagement.NativeMemoryTraceEvent> destination) -> int
+Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.TraceCapacity.get -> int
+Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.TraceCount.get -> int
+Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.DroppedTraceEventCount.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.TraceOverflowed.get -> bool
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.Admitted = 0 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.Allocated = 1 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.Reallocated = 2 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.Released = 3 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.Rejected = 4 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.AcquisitionFailed = 5 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceEvent
+Supprocom.NativeAllocationManagement.NativeMemoryTraceEvent.NativeMemoryTraceEvent() -> void
+Supprocom.NativeAllocationManagement.NativeMemoryTraceEvent.Sequence.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryTraceEvent.TimestampTicks.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryTraceEvent.BudgetId.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryTraceEvent.OwnerId.get -> long?
+Supprocom.NativeAllocationManagement.NativeMemoryTraceEvent.Kind.get -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceEvent.RequestedBytes.get -> nuint
+Supprocom.NativeAllocationManagement.NativeMemoryTraceEvent.PreviousBytes.get -> nuint
+Supprocom.NativeAllocationManagement.NativeMemoryTraceEvent.CommittedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryTraceEvent.ReservedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryTraceEvent.Equals(Supprocom.NativeAllocationManagement.NativeMemoryTraceEvent other) -> bool
+override Supprocom.NativeAllocationManagement.NativeMemoryTraceEvent.GetHashCode() -> int
+~override Supprocom.NativeAllocationManagement.NativeMemoryTraceEvent.Equals(object obj) -> bool
+~override Supprocom.NativeAllocationManagement.NativeMemoryTraceEvent.ToString() -> string
+static Supprocom.NativeAllocationManagement.NativeMemoryTraceEvent.operator ==(Supprocom.NativeAllocationManagement.NativeMemoryTraceEvent left, Supprocom.NativeAllocationManagement.NativeMemoryTraceEvent right) -> bool
+static Supprocom.NativeAllocationManagement.NativeMemoryTraceEvent.operator !=(Supprocom.NativeAllocationManagement.NativeMemoryTraceEvent left, Supprocom.NativeAllocationManagement.NativeMemoryTraceEvent right) -> bool
 Supprocom.NativeAllocationManagement.NativeOwnerStatistics.UsableCapacityBytes.get -> long
 Supprocom.NativeAllocationManagement.NativeOwnerStatistics.UsableCapacityBytes.init -> void
 Supprocom.NativeAllocationManagement.NativePool<T>.NativePool(Supprocom.NativeAllocationManagement.NativeMemoryBudget! budget, int preLease, nuint preAllocateBytes, Supprocom.NativeAllocationManagement.NativeMemoryReturn returnMemoryOnDispose) -> void

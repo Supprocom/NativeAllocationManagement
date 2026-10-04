@@ -626,7 +626,7 @@ internal sealed class NativePressureSession :
         ]);
     }
 
-    private static PressureAllocatorDiagnosticSnapshot
+    internal static PressureAllocatorDiagnosticSnapshot
         CaptureAllocatorDiagnostic(
             NativeOwnerDiagnosticSnapshot snapshot)
     {
@@ -648,7 +648,10 @@ internal sealed class NativePressureSession :
             snapshot.RetiredBytes,
             snapshot.QuarantinedGenerationCount,
             snapshot.QuarantinedSegmentCount,
-            snapshot.CurrentGenerationQuarantined);
+            snapshot.CurrentGenerationQuarantined)
+        {
+            OwnerId = snapshot.OwnerId
+        };
     }
 
     private PressureSessionState ResetLogicalState(

@@ -11,6 +11,12 @@ public sealed class NativeMemoryBudget
 {
     private static long _nextId;
     private readonly Lock _gate = new();
+    private readonly NativeMemoryTraceEvent[] _trace;
+    private int _traceWriteIndex;
+    private int _traceCount;
+    private long _droppedTraceEventCount;
+    private long _traceSequence;
+    private bool _traceOverflowed;
     private long _committedBytes;
     private long _reservedBytes;
     private long _peakCommittedBytes;
@@ -24,8 +30,18 @@ public sealed class NativeMemoryBudget
     /// <summary>Creates a shared domain with an immutable native extent limit.</summary>
     /// <param name="capacityBytes">The maximum admitted NAM-requested extent in bytes.</param>
     public NativeMemoryBudget(long capacityBytes)
+        : this(capacityBytes, traceCapacity: 0)
+    {
+    }
+
+    /// <summary>Creates a domain with an optional preallocated, bounded diagnostic ring.</summary>
+    /// <param name="capacityBytes">The immutable native extent ceiling.</param>
+    /// <param name="traceCapacity">The maximum retained events; zero disables event construction.</param>
+    public NativeMemoryBudget(long capacityBytes, int traceCapacity)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(capacityBytes);
+        ArgumentOutOfRangeException.ThrowIfNegative(traceCapacity);
+        _trace = traceCapacity == 0 ? [] : new NativeMemoryTraceEvent[traceCapacity];
         CapacityBytes = capacityBytes;
         Id = NextId();
     }
@@ -45,27 +61,56 @@ public sealed class NativeMemoryBudget
                 Id, CapacityBytes, _committedBytes, _reservedBytes,
                 _peakCommittedBytes, _peakAdmittedBytes, _allocationCount,
                 _reallocationCount, _freeCount, _allocationCount - _freeCount,
-                _rejectedAllocationCount, _failedAllocationCount);
+                _rejectedAllocationCount, _failedAllocationCount,
+                _trace.Length, _traceCount, _droppedTraceEventCount, _traceOverflowed);
         }
     }
 
-    internal void Reserve(nuint byteLength)
+    /// <summary>Copies the newest retained events in chronological order without allocating.</summary>
+    /// <remarks>A short destination receives the newest suffix. Copying does not reset or remove events.</remarks>
+    /// <param name="destination">Caller-provided event storage.</param>
+    /// <returns>The number of events copied.</returns>
+    public int CopyTraceTo(scoped Span<NativeMemoryTraceEvent> destination)
     {
-        if (!TryReserve(byteLength, out long availableBytes))
+        lock (_gate)
+        {
+            int count = Math.Min(destination.Length, _traceCount);
+            int index = _traceWriteIndex - count;
+            if (index < 0)
+            {
+                index += _trace.Length;
+            }
+            if (count != 0)
+            {
+                int firstCount = Math.Min(count, _trace.Length - index);
+                _trace.AsSpan(index, firstCount).CopyTo(destination);
+                if (firstCount != count)
+                {
+                    _trace.AsSpan(0, count - firstCount).CopyTo(destination[firstCount..]);
+                }
+            }
+            return count;
+        }
+    }
+
+    internal void Reserve(nuint byteLength, long ownerId = 0)
+    {
+        if (!TryReserve(byteLength, out long availableBytes, ownerId))
         {
             throw new NativeMemoryBudgetExceededException(
                 Id, CapacityBytes, byteLength, availableBytes);
         }
     }
 
-    internal bool TryReserve(nuint byteLength, out long availableBytes) =>
-        TryReservePreferred(byteLength, byteLength, out _, out availableBytes);
+    internal bool TryReserve(nuint byteLength, out long availableBytes, long ownerId = 0) =>
+        TryReservePreferred(byteLength, byteLength, out _, out availableBytes, ownerId);
 
     internal bool TryReservePreferred(
         nuint preferredByteLength,
         nuint minimumByteLength,
         out nuint admittedByteLength,
-        out long availableBytes)
+        out long availableBytes,
+        long ownerId = 0)
     {
         ArgumentOutOfRangeException.ThrowIfGreaterThan(minimumByteLength, preferredByteLength);
 
@@ -78,6 +123,7 @@ public sealed class NativeMemoryBudget
             if (bytes > availableBytes)
             {
                 _rejectedAllocationCount = checked(_rejectedAllocationCount + 1);
+                RecordTrace(NativeMemoryTraceKind.Rejected, ownerId, minimumByteLength);
                 admittedByteLength = 0;
                 return false;
             }
@@ -86,11 +132,15 @@ public sealed class NativeMemoryBudget
             _peakAdmittedBytes = Math.Max(
                 _peakAdmittedBytes, _committedBytes + _reservedBytes);
             admittedByteLength = checked((nuint)bytes);
+            if (bytes != 0)
+            {
+                RecordTrace(NativeMemoryTraceKind.Admitted, ownerId, admittedByteLength);
+            }
             return true;
         }
     }
 
-    internal void Commit(nuint byteLength)
+    internal void Commit(nuint byteLength, long ownerId = 0)
     {
         if (byteLength == 0)
         {
@@ -106,10 +156,11 @@ public sealed class NativeMemoryBudget
             _committedBytes += bytes;
             _peakCommittedBytes = Math.Max(_peakCommittedBytes, _committedBytes);
             _allocationCount = allocationCount;
+            RecordTrace(NativeMemoryTraceKind.Allocated, ownerId, byteLength);
         }
     }
 
-    internal void CommitReallocation(nuint byteLength, nuint previousByteLength)
+    internal void CommitReallocation(nuint byteLength, nuint previousByteLength, long ownerId = 0)
     {
         long bytes = checked((long)byteLength);
         long previousBytes = checked((long)previousByteLength);
@@ -128,10 +179,11 @@ public sealed class NativeMemoryBudget
             _peakCommittedBytes = Math.Max(_peakCommittedBytes, _committedBytes);
             _reallocationCount = reallocationCount;
             _allocationCount = allocationCount;
+            RecordTrace(NativeMemoryTraceKind.Reallocated, ownerId, byteLength, previousByteLength);
         }
     }
 
-    internal void Cancel(nuint byteLength)
+    internal void Cancel(nuint byteLength, long ownerId = 0)
     {
         if (byteLength == 0)
         {
@@ -145,10 +197,11 @@ public sealed class NativeMemoryBudget
             long failedCount = checked(_failedAllocationCount + 1);
             _reservedBytes -= bytes;
             _failedAllocationCount = failedCount;
+            RecordTrace(NativeMemoryTraceKind.AcquisitionFailed, ownerId, byteLength);
         }
     }
 
-    internal void Release(nuint byteLength)
+    internal void Release(nuint byteLength, long ownerId = 0)
     {
         if (byteLength == 0)
         {
@@ -166,7 +219,53 @@ public sealed class NativeMemoryBudget
             long freeCount = checked(_freeCount + 1);
             _committedBytes -= bytes;
             _freeCount = freeCount;
+            RecordTrace(NativeMemoryTraceKind.Released, ownerId, byteLength);
         }
+    }
+
+    private void RecordTrace(NativeMemoryTraceKind kind, long ownerId, nuint bytes, nuint previousBytes = 0)
+    {
+        if (_trace.Length == 0)
+        {
+            return;
+        }
+
+        // Diagnostics must never throw after a successful storage transition.
+        // Exhausting sequence identity stops recording rather than wrapping it.
+        if (_traceSequence == long.MaxValue)
+        {
+            _traceOverflowed = true;
+            RecordDroppedTraceEvent();
+            return;
+        }
+        _traceSequence++;
+        _trace[_traceWriteIndex] = new NativeMemoryTraceEvent(
+            _traceSequence, System.Diagnostics.Stopwatch.GetTimestamp(), Id,
+            ownerId == 0 ? null : ownerId, kind, bytes, previousBytes,
+            _committedBytes, _reservedBytes);
+        _traceWriteIndex++;
+        if (_traceWriteIndex == _trace.Length)
+        {
+            _traceWriteIndex = 0;
+        }
+        if (_traceCount == _trace.Length)
+        {
+            RecordDroppedTraceEvent();
+        }
+        else
+        {
+            _traceCount++;
+        }
+    }
+
+    private void RecordDroppedTraceEvent()
+    {
+        if (_droppedTraceEventCount == long.MaxValue)
+        {
+            _traceOverflowed = true;
+            return;
+        }
+        _droppedTraceEventCount++;
     }
 
     private void ValidateReservation(long bytes)
@@ -199,7 +298,8 @@ public readonly record struct NativeMemoryBudgetStatistics
         long id, long capacityBytes, long committedBytes, long reservedBytes,
         long peakCommittedBytes, long peakAdmittedBytes, long allocationCount,
         long reallocationCount, long freeCount, long activeAllocationCount,
-        long rejectedAllocationCount, long failedAllocationCount)
+        long rejectedAllocationCount, long failedAllocationCount,
+        int traceCapacity, int traceCount, long droppedTraceEventCount, bool traceOverflowed)
     {
         Id = id;
         CapacityBytes = capacityBytes;
@@ -213,6 +313,10 @@ public readonly record struct NativeMemoryBudgetStatistics
         ActiveAllocationCount = activeAllocationCount;
         RejectedAllocationCount = rejectedAllocationCount;
         FailedAllocationCount = failedAllocationCount;
+        TraceCapacity = traceCapacity;
+        TraceCount = traceCount;
+        DroppedTraceEventCount = droppedTraceEventCount;
+        TraceOverflowed = traceOverflowed;
     }
 
     /// <summary>Gets the observed domain's stable identity.</summary>
@@ -239,6 +343,14 @@ public readonly record struct NativeMemoryBudgetStatistics
     public long RejectedAllocationCount { get; }
     /// <summary>Gets admitted acquisition attempts rolled back after failure.</summary>
     public long FailedAllocationCount { get; }
+    /// <summary>Gets the fixed preallocated event capacity, or zero when tracing is disabled.</summary>
+    public int TraceCapacity { get; }
+    /// <summary>Gets retained events currently available for copying.</summary>
+    public int TraceCount { get; }
+    /// <summary>Gets overwritten or sequence-exhausted events, saturating at long.MaxValue.</summary>
+    public long DroppedTraceEventCount { get; }
+    /// <summary>Gets whether event identities were exhausted or the dropped count ceased being exact.</summary>
+    public bool TraceOverflowed { get; }
 }
 
 /// <summary>Raised before allocation when a domain cannot admit a complete backing extent.</summary>

@@ -14,6 +14,7 @@ internal sealed unsafe class NativePoolKernel<T>
 
     private readonly NativeMemoryReturn _returnMemoryOnDispose;
     private readonly NativeMemoryBudget? _budget;
+    internal long Id { get; } = NativeOwnerIdentity.Next();
     private readonly int _ownerThreadId;
     private readonly int[] _freeHeads;
     private Slab[] _slabs;
@@ -80,6 +81,35 @@ internal sealed unsafe class NativePoolKernel<T>
     internal NativeOwnerLifecycle Lifecycle => _lifecycle;
 
     internal int LiveLeaseCount => _liveLeaseCount;
+
+    internal (int Slabs, int AvailableSlabs, int Bumps, int OwnerSegments) BankCapacities =>
+        (_slabs.Length, _slabs.Length, 0, 0);
+
+    internal int ActiveOperationCount
+    {
+        get
+        {
+            int count = 0;
+            foreach (ref readonly Slab slab in _slabs.AsSpan(0, _slabCount))
+            {
+                count = checked(count + slab.BorrowCount + (slab.State == SlabState.Initializing ? 1 : 0));
+            }
+            return count;
+        }
+    }
+
+    internal int InitializationCount
+    {
+        get
+        {
+            int count = 0;
+            foreach (ref readonly Slab slab in _slabs.AsSpan(0, _slabCount))
+            {
+                count += slab.State == SlabState.Initializing ? 1 : 0;
+            }
+            return count;
+        }
+    }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal Pooled<T> Rent(
@@ -213,6 +243,7 @@ internal sealed unsafe class NativePoolKernel<T>
             _trimCallCount,
             _freshSegmentAllocationCount)
         {
+            OwnerId = Id,
             UsableCapacityBytes = usableCapacityBytes
         };
     }
@@ -416,7 +447,7 @@ internal sealed unsafe class NativePoolKernel<T>
         string operation)
     {
         nuint backingBytes = NativeAlignedAllocation.GetBackingByteLength(allocationBytes);
-        _budget?.Reserve(backingBytes);
+        _budget?.Reserve(backingBytes, Id);
         int index = -1;
         void* memory = null;
         long metricsEpoch = 0;
@@ -464,7 +495,7 @@ internal sealed unsafe class NativePoolKernel<T>
             {
                 _freshSegmentAllocationCount++;
             }
-            _budget?.Commit(backingBytes);
+            _budget?.Commit(backingBytes, Id);
             acquired = true;
             return index;
         }
@@ -495,7 +526,7 @@ internal sealed unsafe class NativePoolKernel<T>
                 {
                     ReleaseReservedSlot(index);
                 }
-                _budget?.Cancel(backingBytes);
+                _budget?.Cancel(backingBytes, Id);
             }
         }
     }
@@ -788,7 +819,7 @@ internal sealed unsafe class NativePoolKernel<T>
         long metricsEpoch = slab.MetricsEpoch;
         bool detached = slab.Detached;
         NativeMemory.AlignedFree((void*)slab.Pointer);
-        _budget?.Release(bytes);
+        _budget?.Release(bytes, Id);
         NativeMemoryTestHooks.RecordFree(
             bytes,
             detached,

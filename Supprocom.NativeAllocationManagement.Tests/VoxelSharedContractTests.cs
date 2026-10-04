@@ -3559,6 +3559,26 @@ public sealed class VoxelSharedContractTests
     }
 
     [VoxelDemonstrationFact]
+    public void NamDiagnosticMappingPreservesTheRealOwnerIdentity()
+    {
+        using NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeOwnerDiagnosticSnapshot source = arena.CaptureDiagnosticSnapshot();
+        PressureAllocatorDiagnosticSnapshot mapped =
+            Demos.VoxelChunkPipeline.NAM.NativePressureSession.CaptureAllocatorDiagnostic(source);
+        Assert.True(mapped.Available);
+        Assert.Equal(arena.Id, mapped.OwnerId);
+        Assert.Equal(source.Generation, mapped.Generation);
+        Assert.Equal(source.ReferenceRoots, mapped.ReferenceRoots);
+        string json = JsonSerializer.Serialize(mapped, VoxelJson.Options);
+        PressureAllocatorDiagnosticSnapshot restored =
+            JsonSerializer.Deserialize<PressureAllocatorDiagnosticSnapshot>(json, VoxelJson.Options);
+        Assert.Equal(mapped, restored);
+        PressureAllocatorDiagnosticSnapshot unavailable = default;
+        Assert.False(unavailable.Available);
+        Assert.Null(unavailable.OwnerId);
+    }
+
+    [VoxelDemonstrationFact]
     public void HostStabilityRequiresThreeValidTailSamples()
     {
         PressureHostProcessorSample[] baseline =

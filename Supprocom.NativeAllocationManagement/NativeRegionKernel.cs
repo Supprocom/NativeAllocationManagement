@@ -13,6 +13,7 @@ internal sealed unsafe class NativeRegionKernel
 
     private readonly NativeMemoryReturn _returnMemoryOnDispose;
     private readonly NativeMemoryBudget? _budget;
+    internal long Id { get; } = NativeOwnerIdentity.Next();
     private readonly int _ownerThreadId;
     private NativeOwnerLifecycle _lifecycle;
     private RegionSegmentHeader* _firstSegment;
@@ -146,6 +147,7 @@ internal sealed unsafe class NativeRegionKernel
             TrimCallCount: 0,
             _freshSegmentAllocationCount)
         {
+            OwnerId = Id,
             UsableCapacityBytes = usableCapacityBytes
         };
     }
@@ -277,7 +279,7 @@ internal sealed unsafe class NativeRegionKernel
             nuint preferredBytes = allocationBytes;
             nuint minimumBytes = minimumCapacity == 0
                 ? allocationBytes : NativeAlignedAllocation.GetBackingByteLength(checked(HeaderBytes + minimumCapacity));
-            if (!_budget.TryReservePreferred(preferredBytes, minimumBytes, out allocationBytes, out long availableBytes))
+            if (!_budget.TryReservePreferred(preferredBytes, minimumBytes, out allocationBytes, out long availableBytes, Id))
             {
                 throw new NativeMemoryBudgetExceededException(_budget.Id, _budget.CapacityBytes, minimumBytes, availableBytes);
             }
@@ -318,7 +320,7 @@ internal sealed unsafe class NativeRegionKernel
             metricsEpoch = NativeMemoryTestHooks.RecordAllocation(allocationBytes, zeroed: false);
             recorded = true;
             segment->MetricsEpoch = metricsEpoch;
-            _budget?.Commit(allocationBytes);
+            _budget?.Commit(allocationBytes, Id);
             acquired = true;
             return segment;
         }
@@ -344,7 +346,7 @@ internal sealed unsafe class NativeRegionKernel
                         NativeMemoryTestHooks.RecordFree(allocationBytes, detached: false, metricsEpoch);
                     }
                 }
-                _budget?.Cancel(allocationBytes);
+                _budget?.Cancel(allocationBytes, Id);
             }
         }
     }
@@ -387,7 +389,7 @@ internal sealed unsafe class NativeRegionKernel
             long metricsEpoch = segment->MetricsEpoch;
             bool detached = segment->Detached != 0;
             NativeMemory.AlignedFree(segment);
-            _budget?.Release(allocationBytes);
+            _budget?.Release(allocationBytes, Id);
             NativeMemoryTestHooks.RecordFree(
                 allocationBytes,
                 detached,
