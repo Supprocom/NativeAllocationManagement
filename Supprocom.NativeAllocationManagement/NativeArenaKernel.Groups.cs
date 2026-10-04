@@ -20,9 +20,14 @@ internal sealed unsafe partial class NativeArenaKernel
         }
     }
 
-    internal ArenaGroupCheckpoint BeginScopedGroup()
+    internal ArenaGroupCheckpoint BeginScopedGroup(bool requirePrepared = false)
     {
-        ValidateActive(nameof(NativeLeaseOperations.InitializeScoped));
+        ValidateActive(requirePrepared ? nameof(NativeLeaseOperations.TryInitializeScoped)
+            : nameof(NativeLeaseOperations.InitializeScoped));
+        if (requirePrepared)
+        {
+            EnsurePrepared();
+        }
         if (_initializerActive != 0)
         {
             ThrowNestedInitializer();
@@ -36,22 +41,30 @@ internal sealed unsafe partial class NativeArenaKernel
     internal Span<T> ReserveScopedGroupRange<T>(int length) where T : unmanaged
     {
         ArgumentOutOfRangeException.ThrowIfNegative(length);
-        nuint bytes = CalculateByteLength<T>(length);
-        ArenaReservation reservation;
         if (_prepared)
         {
-            if (!TryReservePrepared(ref _scoped, bytes, CalculateAlignment<T>(), scoped: true, out reservation))
+            if (!TryReserveScopedGroupRange(length, out Span<T> span))
             {
-                IncrementPreparedHistory(ref _preparedRefusalCount);
                 throw new InvalidOperationException("The prepared scoped group exceeds the declared byte bound.");
             }
-            _preparedPeakScopedUsedBytes = Math.Max(_preparedPeakScopedUsedBytes, checked((long)_scoped.UsedBytes));
+            return span;
         }
-        else
-        {
-            reservation = Reserve(ref _scoped, bytes, CalculateAlignment<T>(), scoped: true);
-        }
+        ArenaReservation reservation = Reserve(ref _scoped, CalculateByteLength<T>(length), CalculateAlignment<T>(), scoped: true);
         return new Span<T>((void*)reservation.Pointer, length);
+    }
+
+    internal bool TryReserveScopedGroupRange<T>(int length, out Span<T> span) where T : unmanaged
+    {
+        if (!TryReservePrepared(ref _scoped, CalculateByteLength<T>(length),
+            CalculateAlignment<T>(), scoped: true, out ArenaReservation reservation))
+        {
+            IncrementPreparedHistory(ref _preparedRefusalCount);
+            span = default;
+            return false;
+        }
+        _preparedPeakScopedUsedBytes = Math.Max(_preparedPeakScopedUsedBytes, checked((long)_scoped.UsedBytes));
+        span = new Span<T>((void*)reservation.Pointer, length);
+        return true;
     }
 
     internal ArenaLease<T> PublishScopedGroupRange<T>(Span<T> span) where T : unmanaged

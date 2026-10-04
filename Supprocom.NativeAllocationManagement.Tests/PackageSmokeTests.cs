@@ -491,11 +491,11 @@ public sealed class PackageSmokeTests
                             ArenaLease<int> input = arena.Scratch<int>(1, static writer => writer.Write(19));
                             try
                             {
-                                NativeLeaseOperations.InitializeScoped<int, int, int, int, int>(input, arena,
+                                if (!NativeLeaseOperations.TryInitializeScoped<int, int, int, int, int>(input, arena,
                                     1, 1, 1, 1, static (source, a, b, c, d) =>
                                     { a.Fill(source[0]); b.Fill(2); c.Fill(3); d.Fill(4); },
                                     out ArenaLease<int> a, out ArenaLease<int> b,
-                                    out ArenaLease<int> c, out ArenaLease<int> d);
+                                    out ArenaLease<int> c, out ArenaLease<int> d)) return 11;
                                 NativeLeaseOperations.Access(input, a, b, c, d, static (source, a, b, c, d) =>
                                 {
                                     if (a[0] != source[0] || b[0] != 2 || c[0] != 3 || d[0] != 4)
@@ -574,6 +574,31 @@ public sealed class PackageSmokeTests
             _output.WriteLine(invalidArena.Output);
             Assert.NotEqual(0, invalidArena.ExitCode);
             Assert.Contains("error NAM1050", invalidArena.Output, StringComparison.OrdinalIgnoreCase);
+            await File.WriteAllTextAsync(program,
+                """
+                using Supprocom.NativeAllocationManagement;
+                public static class Consumer
+                {
+                    public static void Main()
+                    {
+                        using NativeArena arena = new(new NativeArenaPreparation(16, 16), new NativeMemoryBudget(512));
+                        ArenaLease<int> input = arena.Scratch<int>(1, static writer => writer.Write(17));
+                        try
+                        {
+                            NativeLeaseOperations.TryInitializeScoped<int, int, int, int, int>(input, arena,
+                                1, 1, 1, 1, static (_, a, b, c, d) =>
+                                { a.Fill(1); b.Fill(2); c.Fill(3); d.Fill(4); },
+                                out ArenaLease<int> a, out ArenaLease<int> b, out ArenaLease<int> c, out ArenaLease<int> d);
+                            d.Clear();
+                        }
+                        finally { arena.RecycleScoped(); }
+                    }
+                }
+                """);
+            CommandResult invalidGroup = await RunDotnetAsync($"build \"{project}\" --no-restore --nologo -t:Rebuild", consumerRoot);
+            _output.WriteLine(invalidGroup.Output);
+            Assert.NotEqual(0, invalidGroup.ExitCode);
+            Assert.Contains("error NAM1050", invalidGroup.Output, StringComparison.OrdinalIgnoreCase);
         }
         finally
         {

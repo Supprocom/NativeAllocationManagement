@@ -1158,16 +1158,26 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             bool conditionTrue = source.ConditionKind == ControlFlowConditionKind.WhenTrue
                 ? branch.IsConditionalSuccessor : !branch.IsConditionalSuccessor;
             bool acquired = conditionTrue != negated;
-            IArgumentOperation leaseArgument = invocation.Arguments.First(argument => argument.Parameter?.Ordinal == 2);
-            ISymbol? symbol = GetPreparedOutSymbol(leaseArgument.Value);
-            if (symbol is not null && state.Handles.TryGetValue(symbol, out HandleState? handle)
-                && handle.Syntax.SyntaxTree == invocation.Syntax.SyntaxTree
-                && handle.Syntax.Span == invocation.Syntax.Span)
+            foreach (IArgumentOperation argument in invocation.Arguments)
             {
-                handle.Returned = !acquired;
-                handle.ConditionalPending = false;
-                handle.Ambiguous = false;
-                handle.GenerationRelation = GenerationRelationKind.Exact;
+                if (argument.Parameter?.RefKind != RefKind.Out || !IsHandleType(argument.Parameter.Type))
+                {
+                    continue;
+                }
+                ISymbol? symbol = GetPreparedOutSymbol(argument.Value);
+                if (symbol is not null && state.Handles.TryGetValue(symbol, out HandleState? handle)
+                    && handle.Syntax.SyntaxTree == invocation.Syntax.SyntaxTree
+                    && handle.Syntax.Span == invocation.Syntax.Span)
+                {
+                    handle.Returned = !acquired;
+                    handle.ConditionalPending = false;
+                    handle.Ambiguous = false;
+                    handle.GenerationRelation = GenerationRelationKind.Exact;
+                    if (!acquired && handle.IsScoped)
+                    {
+                        handle.Owner.ScopedPending = handle.ScopedPendingBeforeAcquisition;
+                    }
+                }
             }
         }
 
@@ -1749,6 +1759,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     merged.ScopedOwnerEligible &= owner.ScopedOwnerEligible;
                     merged.Ambiguous |= owner.Ambiguous;
                     merged.ScopedPending |= owner.ScopedPending;
+                    merged.ScopedPendingPreparedOnly &= owner.ScopedPendingPreparedOnly;
                     merged.ScopedPendingAmbiguous |= owner.ScopedPendingAmbiguous;
 #pragma warning disable HLQ012 // CollectionsMarshal is unavailable on the analyzer's netstandard2.0 target.
                     foreach (GenerationLivenessFact fact in owner.LivenessFacts)
@@ -1782,7 +1793,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     merged.Ambiguous = true;
                 }
 
-                if (paths.Any(path => path.Owners.TryGetValue(symbol, out OwnerState? owner) && owner.ScopedPending != merged.ScopedPending))
+                if (paths.Any(path => path.Owners.TryGetValue(symbol, out OwnerState? owner) && owner.ScopedPending != merged.ScopedPending)
+                    && !merged.ScopedPendingPreparedOnly)
                 {
                     merged.ScopedPendingAmbiguous = true;
                 }
@@ -1837,6 +1849,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     mergedHandle.Returned &= handle.Returned;
                     mergedHandle.Ambiguous |= handle.Ambiguous;
                     mergedHandle.ConditionalPending |= handle.ConditionalPending;
+                    mergedHandle.ScopedPendingBeforeAcquisition |= handle.ScopedPendingBeforeAcquisition;
                 }
 
                 if (!presentOnEveryPath)
@@ -2102,6 +2115,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     || pair.Value.ScopedOwnerEligible != other.ScopedOwnerEligible
                     || pair.Value.Ambiguous != other.Ambiguous
                     || pair.Value.ScopedPending != other.ScopedPending
+                    || pair.Value.ScopedPendingPreparedOnly != other.ScopedPendingPreparedOnly
                     || pair.Value.ScopedPendingAmbiguous != other.ScopedPendingAmbiguous
                     || pair.Value.Generation != other.Generation
                     || pair.Value.GenerationRelation != other.GenerationRelation
@@ -2117,6 +2131,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     || pair.Value.Returned != other.Returned
                     || pair.Value.Ambiguous != other.Ambiguous
                     || pair.Value.ConditionalPending != other.ConditionalPending
+                    || pair.Value.ScopedPendingBeforeAcquisition != other.ScopedPendingBeforeAcquisition
                     || pair.Value.Generation != other.Generation
                     || pair.Value.GenerationRelation != other.GenerationRelation)
                 {
@@ -5278,6 +5293,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 else
                 {
                     handle.IsScoped = true;
+                    owner.ScopedPendingPreparedOnly = false;
                     owner.ScopedPending = true;
                 }
             }
@@ -5355,6 +5371,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     IsScoped = true
                 };
                 _handles[symbol] = handle;
+                owner.ScopedPendingPreparedOnly = false;
                 owner.ScopedPending = true;
             }
         }
@@ -5371,10 +5388,18 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             bool arena = NativeSymbols.Is(invocation.TargetMethod.ContainingType, _symbols.Arena)
                 && invocation.TargetMethod.Name is "TryScratch" or "TryScratchScoped"
                 && invocation.Arguments.Length == 3;
-            return (pool || arena)
+            return IsPreparedTryGroupAcquisition(invocation) || (pool || arena)
                 && invocation.Arguments.Any(argument => argument.Parameter is { Ordinal: 2, RefKind: RefKind.Out }
                     && NativeSymbols.Is(argument.Parameter.Type, pool ? _symbols.Pooled : _symbols.ArenaLease));
         }
+
+        private bool IsPreparedTryGroupAcquisition(IInvocationOperation invocation) =>
+            string.Equals(invocation.TargetMethod.Name, "TryInitializeScoped", StringComparison.Ordinal)
+            && invocation.TargetMethod.ReturnType.SpecialType == SpecialType.System_Boolean
+            && NativeSymbols.Is(invocation.TargetMethod.ContainingType, _symbols.LeaseOperations)
+            && invocation.TargetMethod.Parameters.Length is 11 or 19
+            && NativeSymbols.Is(invocation.TargetMethod.Parameters[0].Type, _symbols.ArenaLease)
+            && NativeSymbols.Is(invocation.TargetMethod.Parameters[1].Type, _symbols.Arena);
 
         private static ISymbol? GetPreparedOutSymbol(IOperation operation) =>
             operation is IDeclarationExpressionOperation declaration
@@ -5382,35 +5407,46 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
         private void RegisterPreparedHandle(IInvocationOperation operation)
         {
-            OwnerState? owner = GetOwner(Unwrap(operation.Instance));
+            bool group = IsPreparedTryGroupAcquisition(operation);
+            OwnerState? owner = GetOwner(Unwrap(group
+                ? operation.Arguments.First(argument => argument.Parameter?.Ordinal == 1).Value : operation.Instance));
             if (owner is null || !CheckOwnerActive(owner, operation.Syntax, operation.TargetMethod.Name))
             {
                 return;
             }
-            ISymbol? symbol = GetPreparedOutSymbol(operation.Arguments.First(argument => argument.Parameter?.Ordinal == 2).Value);
-            if (symbol is not ILocalSymbol)
-            {
-                Report(NativeAllocationDiagnosticDescriptors.PooledEscape, operation.Syntax,
-                    "the prepared allocation", symbol?.Name ?? "an escaping destination");
-                return;
-            }
-            bool scopedAcquisition = string.Equals(operation.TargetMethod.Name, "TryScratchScoped", StringComparison.Ordinal);
+            bool scopedAcquisition = group || string.Equals(operation.TargetMethod.Name, "TryScratchScoped", StringComparison.Ordinal);
             if (scopedAcquisition && !owner.ScopedOwnerEligible)
             {
                 Report(NativeAllocationDiagnosticDescriptors.ScopedAcquisitionEscape, operation.Syntax,
                     operation.TargetMethod.Name + " (receiver is not an exclusive local owner)");
             }
-            _handles[symbol] = new HandleState(symbol, owner, owner.Generation,
-                isUsing: false, operation.Syntax)
+            foreach (IArgumentOperation argument in operation.Arguments)
             {
-                GenerationRelation = owner.GenerationRelation,
-                ConditionalPending = true,
-                IsScoped = scopedAcquisition && owner.ScopedOwnerEligible
-            };
+                if (argument.Parameter?.RefKind != RefKind.Out || !IsHandleType(argument.Parameter.Type))
+                {
+                    continue;
+                }
+                ISymbol? symbol = GetPreparedOutSymbol(argument.Value);
+                if (symbol is not ILocalSymbol)
+                {
+                    Report(NativeAllocationDiagnosticDescriptors.PooledEscape, operation.Syntax,
+                        "the prepared allocation", symbol?.Name ?? "an escaping destination");
+                    continue;
+                }
+                _handles[symbol] = new HandleState(symbol, owner, owner.Generation,
+                    isUsing: false, operation.Syntax)
+                {
+                    GenerationRelation = owner.GenerationRelation,
+                    ConditionalPending = true,
+                    ScopedPendingBeforeAcquisition = owner.ScopedPending,
+                    IsScoped = scopedAcquisition && owner.ScopedOwnerEligible
+                };
+            }
             if (scopedAcquisition && owner.ScopedOwnerEligible)
             {
                 // The complete potentially acquired scoped set is known even
                 // when capacity refusal means its physical set is empty.
+                owner.ScopedPendingPreparedOnly |= !owner.ScopedPending;
                 owner.ScopedPending = true;
             }
         }
@@ -5580,6 +5616,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
                 owner.ScopedPending = false;
                 owner.ScopedPendingAmbiguous = false;
+                owner.ScopedPendingPreparedOnly = false;
                 foreach (HandleState handle in _handles.Values)
                 {
                     if (ReferenceEquals(handle.Owner, owner)
@@ -7373,7 +7410,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         }
 
         private bool IsNonRetainingCompositeLeaseOperation(IInvocationOperation operation) =>
-            (operation.TargetMethod.Name is "Access" or "InitializeScoped")
+            (operation.TargetMethod.Name is "Access" or "InitializeScoped" or "TryInitializeScoped")
             && NativeSymbols.Is(operation.TargetMethod.ContainingType, _symbols.LeaseOperations);
 
         private bool IsScopedGroupInitialization(IInvocationOperation operation) =>
@@ -7825,6 +7862,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             internal bool Ambiguous { get; set; }
             internal bool ScopedPending { get; set; }
             internal bool ScopedPendingAmbiguous { get; set; }
+            internal bool ScopedPendingPreparedOnly { get; set; }
             internal int Generation { get; set; }
             internal GenerationRelationKind GenerationRelation { get; set; } = GenerationRelationKind.Exact;
             internal SyntaxNode Syntax { get; }
@@ -7854,6 +7892,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 copy.Ambiguous = Ambiguous;
                 copy.ScopedPending = ScopedPending;
                 copy.ScopedPendingAmbiguous = ScopedPendingAmbiguous;
+                copy.ScopedPendingPreparedOnly = ScopedPendingPreparedOnly;
                 copy.Generation = Generation;
                 copy.GenerationRelation = GenerationRelation;
                 copy.LivenessFacts.AddRange(LivenessFacts);
@@ -7880,6 +7919,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             internal bool Returned { get; set; }
             internal bool Ambiguous { get; set; }
             internal bool ConditionalPending { get; set; }
+            internal bool ScopedPendingBeforeAcquisition { get; set; }
             internal GenerationRelationKind GenerationRelation { get; set; } = GenerationRelationKind.Exact;
             internal SyntaxNode Syntax { get; }
             internal string DisplayName => Symbol?.Name ?? Owner.Type.Name;
@@ -7893,6 +7933,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 };
                 copy.Ambiguous = Ambiguous;
                 copy.ConditionalPending = ConditionalPending;
+                copy.ScopedPendingBeforeAcquisition = ScopedPendingBeforeAcquisition;
                 copy.GenerationRelation = GenerationRelation;
                 return copy;
             }

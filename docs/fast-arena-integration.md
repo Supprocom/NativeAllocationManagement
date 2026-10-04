@@ -32,9 +32,14 @@ under one owner and invoke one span initializer. Returning from that initializer
 declares all spans completely initialized, matching the existing unmanaged span
 initializer contract. An exception or capacity failure rewinds the whole scoped
 checkpoint and leaves outputs default; earlier ordinary leases remain valid.
-Reservation failure is an error on these throwing convenience overloads. The
-allocation-free prepared group Try counterpart remains required unfinished
-0.3.0 work; these overloads alone do not complete prepared execution.
+Reservation failure is an error on these throwing convenience overloads.
+TryInitializeScoped provides the same four/eight arities for prepared owners:
+false means capacity exhaustion before invoking the initializer. It rewinds all
+reservations and leaves every output default. Invalid authority, invalid lengths,
+an unprepared owner and producer failure remain exceptions, not false-full
+results. Prove success directly in the conditional before using any output;
+negated early return and named/short-circuit guards retain that proof. Scoped
+recycling still requires the complete lexical batch to end.
 
 Fast Access overloads cover two, three, four, five, seven and eight arena leases.
 All must belong to the same owner. One callback admission validates every epoch
