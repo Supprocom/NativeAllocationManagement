@@ -1,4 +1,46 @@
 #nullable enable
+*REMOVED*Supprocom.NativeAllocationManagement.NativeBuilder<T>.NativeBuilder(int preLease = 0) -> void
+Supprocom.NativeAllocationManagement.NativeBuilder<T>.NativeBuilder() -> void
+Supprocom.NativeAllocationManagement.NativeBuilder<T>.NativeBuilder(int preLease) -> void
+Supprocom.NativeAllocationManagement.NativeBuilder<T>.NativeBuilder(Supprocom.NativeAllocationManagement.NativeMemoryBudget! budget, int preLease) -> void
+Supprocom.NativeAllocationManagement.NativeBuilder<T>.TryEnsureCapacity(int capacity) -> bool
+Supprocom.NativeAllocationManagement.NativeWorkspace<T>.NativeWorkspace(Supprocom.NativeAllocationManagement.NativeMemoryBudget! budget, int preLease) -> void
+Supprocom.NativeAllocationManagement.NativeMemoryBudget
+Supprocom.NativeAllocationManagement.NativeMemoryBudget.NativeMemoryBudget(long capacityBytes) -> void
+Supprocom.NativeAllocationManagement.NativeMemoryBudget.CapacityBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryBudget.Id.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryBudget.CaptureStatistics() -> Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics
+Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics
+Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.NativeMemoryBudgetStatistics() -> void
+Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.Id.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.CapacityBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.CommittedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.ReservedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.PeakCommittedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.PeakAdmittedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.AllocationCount.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.ReallocationCount.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.FreeCount.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.ActiveAllocationCount.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.RejectedAllocationCount.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.FailedAllocationCount.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.Equals(Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics other) -> bool
+override Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.GetHashCode() -> int
+~override Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.Equals(object obj) -> bool
+~override Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.ToString() -> string
+static Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.operator ==(Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics left, Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics right) -> bool
+static Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.operator !=(Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics left, Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics right) -> bool
+Supprocom.NativeAllocationManagement.NativeMemoryBudgetExceededException
+Supprocom.NativeAllocationManagement.NativeMemoryBudgetExceededException.BudgetId.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryBudgetExceededException.CapacityBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryBudgetExceededException.RequestedBytes.get -> nuint
+Supprocom.NativeAllocationManagement.NativeMemoryBudgetExceededException.AvailableBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryStatistics.AllocationCount.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryStatistics.AllocationCount.init -> void
+Supprocom.NativeAllocationManagement.NativeMemoryStatistics.FreeCount.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryStatistics.FreeCount.init -> void
+Supprocom.NativeAllocationManagement.NativeMemoryStatistics.ReallocationCount.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryStatistics.ReallocationCount.init -> void
 Supprocom.NativeAllocationManagement.NativeConcurrentArena.CaptureDiagnosticSnapshot() -> Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot
 Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>.CaptureDiagnosticSnapshot() -> Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot
 Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot

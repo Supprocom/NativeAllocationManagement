@@ -19,16 +19,38 @@ public sealed class NativeBuilder<T> : IDisposable
     private int _count;
     private int _capacity;
     private NativeBlock _block;
+    private readonly NativeMemoryBudget? _budget;
 
-    /// <summary>Creates one direct native builder with an optional element reservation.</summary>
-    /// <param name="preLease">The initial reservation in elements of <typeparamref name="T"/>.</param>
-    public NativeBuilder(int preLease = 0)
+    /// <summary>Creates an empty direct native builder.</summary>
+    public NativeBuilder()
+        : this(0, budget: null)
+    {
+    }
+
+    /// <summary>Creates a direct native builder with the specified element reservation.</summary>
+    /// <param name="preLease">The initial element capacity.</param>
+    public NativeBuilder(int preLease)
+        : this(preLease, budget: null)
+    {
+    }
+
+    /// <summary>Creates a builder with an initial capacity charged to one admission ceiling.</summary>
+    /// <param name="budget">The shared native extent domain.</param>
+    /// <param name="preLease">The initial element capacity.</param>
+    public NativeBuilder(NativeMemoryBudget budget, int preLease)
+        : this(preLease, budget ?? throw new ArgumentNullException(nameof(budget)))
+    {
+    }
+
+    private NativeBuilder(int preLease, NativeMemoryBudget? budget)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(preLease);
+        _budget = budget;
         _block = NativeBlockAllocator.Allocate<T>(
             preLease,
             nameof(NativeBuilder<T>),
-            "NativeBuilder.Constructor");
+            "NativeBuilder.Constructor",
+            budget);
         _capacity = preLease;
     }
 
@@ -41,6 +63,34 @@ public sealed class NativeBuilder<T> : IDisposable
     public int Capacity => ReadState(
         nameof(Capacity),
         readCapacity: true);
+
+    /// <summary>Reserves total element capacity before production, returning false on budget exhaustion.</summary>
+    /// <remarks>
+    /// A budget refusal allocates nothing and preserves the builder's prefix and backing.
+    /// Actual allocation failure retains the existing terminal-failure policy.
+    /// Preferred geometric growth falls back to exact capacity near the ceiling.
+    /// </remarks>
+    /// <param name="capacity">The required total element capacity, not additional elements.</param>
+    /// <returns>True when the requested capacity is ready; false only for budget refusal.</returns>
+    public bool TryEnsureCapacity(int capacity)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(capacity);
+        EnterOperation(nameof(TryEnsureCapacity));
+        try
+        {
+            return capacity <= _capacity || Grow(capacity, throwOnBudgetFailure: false);
+        }
+        catch (Exception failure)
+        {
+            FailOperation(failure);
+            throw;
+        }
+        finally
+        {
+            ExitOperation();
+            GC.KeepAlive(this);
+        }
+    }
 
     /// <summary>Appends one value directly to native storage.</summary>
     public void Append(
@@ -809,6 +859,12 @@ public sealed class NativeBuilder<T> : IDisposable
             return;
         }
 
+        _ = Grow(required, throwOnBudgetFailure: true);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private bool Grow(int required, bool throwOnBudgetFailure)
+    {
         int next = _capacity == 0 ? 4 : _capacity;
         while (next < required)
         {
@@ -817,13 +873,23 @@ public sealed class NativeBuilder<T> : IDisposable
                 : checked(next * 2);
         }
 
-        NativeBlock replacement = NativeBlockAllocator.Resize<T>(
+        if (!NativeBlockAllocator.TryResize<T>(
             _block,
             next,
+            required,
             nameof(NativeBuilder<T>),
-            "NativeBuilder.Grow");
+            "NativeBuilder.Grow",
+            _budget,
+            throwOnBudgetFailure,
+            out NativeBlock replacement,
+            out int capacity))
+        {
+            return false;
+        }
+
         _block = replacement;
-        _capacity = next;
+        _capacity = capacity;
+        return true;
     }
 
     private void ReleaseBlock()

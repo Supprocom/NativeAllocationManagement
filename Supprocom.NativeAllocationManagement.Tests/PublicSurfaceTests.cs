@@ -123,8 +123,19 @@ public sealed class PublicSurfaceTests
             constructor => Assert.Contains(
                 constructor.GetParameters(),
                 parameter => string.Equals(parameter.Name, "doNotLeaseOnDeclaration", StringComparison.Ordinal)));
-        ConstructorInfo builderConstructor =
-            SingleExpected(typeof(NativeBuilder<int>).GetConstructors());
+        ConstructorInfo[] builderConstructors = typeof(NativeBuilder<int>).GetConstructors();
+        Assert.Equal(3, builderConstructors.Length);
+        ConstructorInfo builderConstructor = SingleExpected(
+            builderConstructors,
+            static constructor => constructor.GetParameters().Length == 1
+                && constructor.GetParameters()[0].ParameterType == typeof(int));
+        Assert.Contains(builderConstructors,
+            static constructor => constructor.GetParameters().Length == 0);
+        ConstructorInfo budgetedBuilderConstructor = SingleExpected(
+            builderConstructors,
+            static constructor => constructor.GetParameters().Length == 2);
+        Assert.Equal(typeof(NativeMemoryBudget), budgetedBuilderConstructor.GetParameters()[0].ParameterType);
+        Assert.Equal("preLease", budgetedBuilderConstructor.GetParameters()[1].Name);
         Assert.Equal(
             "preLease",
             SingleExpected(builderConstructor.GetParameters()).Name);

@@ -238,7 +238,8 @@ internal readonly record struct NativeMemoryTestMetrics(
     long ReclaimedRangeReuseBytes = 0,
     long StorageClearCount = 0,
     long StorageClearBytes = 0,
-    long WrittenClearBytes = 0)
+    long WrittenClearBytes = 0,
+    long ReallocationCount = 0)
 {
     internal long RetainedNativeBytes => OutstandingNativeBytes - DetachedNativeBytes;
 }
@@ -254,6 +255,15 @@ public readonly record struct NativeMemoryStatistics(
     long ReclaimedRangeReuseCount = 0,
     long ReclaimedRangeReuseBytes = 0)
 {
+    /// <summary>Gets fresh backing acquisitions accounted in this measurement epoch, including realloc from null.</summary>
+    public long AllocationCount { get; init; }
+
+    /// <summary>Gets successful realloc calls; replacement is not counted as an invented free and allocation pair.</summary>
+    public long ReallocationCount { get; init; }
+
+    /// <summary>Gets actual physical free calls accounted in this epoch.</summary>
+    public long FreeCount { get; init; }
+
     /// <summary>Gets storage still owned by active or retained allocator generations.</summary>
     public long RetainedNativeBytes => OutstandingNativeBytes - DetachedNativeBytes;
 }
@@ -372,6 +382,7 @@ internal static class NativeMemoryTestHooks
     private static NativeHotMetrics? _threadHotMetrics;
 
     private static long _allocationCount;
+    private static long _reallocationCount;
     private static long _zeroedAllocationCount;
     private static long _freeCount;
     private static long _detachedGenerationCount;
@@ -400,6 +411,7 @@ internal static class NativeMemoryTestHooks
     {
         Interlocked.Increment(ref _metricsEpoch);
         Interlocked.Exchange(ref _allocationCount, 0);
+        Interlocked.Exchange(ref _reallocationCount, 0);
         Interlocked.Exchange(ref _zeroedAllocationCount, 0);
         Interlocked.Exchange(ref _freeCount, 0);
         Interlocked.Exchange(ref _detachedGenerationCount, 0);
@@ -573,6 +585,35 @@ internal static class NativeMemoryTestHooks
         long metricsEpoch = CurrentMetricsEpoch;
         Interlocked.Increment(ref _allocationCount);
         long current = Interlocked.Add(ref _outstandingNativeBytes, checked((long)byteLength));
+        RecordPeak(current);
+        if (zeroed)
+        {
+            Interlocked.Increment(ref _zeroedAllocationCount);
+        }
+
+        return metricsEpoch;
+    }
+
+    internal static long RecordReallocation(
+        nuint previousByteLength,
+        nuint byteLength,
+        long previousMetricsEpoch)
+    {
+        Interlocked.Increment(ref _reallocationCount);
+        if (previousByteLength == 0 || previousMetricsEpoch != CurrentMetricsEpoch)
+        {
+            // A pre-measurement block enters this epoch on successful resizing.
+            return RecordAllocation(byteLength, zeroed: false);
+        }
+
+        long difference = checked((long)byteLength - (long)previousByteLength);
+        long current = Interlocked.Add(ref _outstandingNativeBytes, difference);
+        RecordPeak(current);
+        return previousMetricsEpoch;
+    }
+
+    private static void RecordPeak(long current)
+    {
         while (true)
         {
             long peak = Volatile.Read(ref _peakOutstandingNativeBytes);
@@ -581,12 +622,6 @@ internal static class NativeMemoryTestHooks
                 break;
             }
         }
-        if (zeroed)
-        {
-            Interlocked.Increment(ref _zeroedAllocationCount);
-        }
-
-        return metricsEpoch;
     }
 
     internal static void RecordFree(nuint byteLength, bool detached, long metricsEpoch)
@@ -649,7 +684,8 @@ internal static class NativeMemoryTestHooks
             hot.ReclaimedRangeReuseBytes,
             hot.StorageClearCount,
             hot.StorageClearBytes,
-            hot.WrittenClearBytes);
+            hot.WrittenClearBytes,
+            Volatile.Read(ref _reallocationCount));
     }
 
     internal static NativeMemoryStatistics SnapshotPublic()
@@ -662,7 +698,12 @@ internal static class NativeMemoryTestHooks
             Volatile.Read(ref _retiredNativeBytes),
             hot.ReusedNativeSegmentCount,
             hot.ReclaimedRangeReuseCount,
-            hot.ReclaimedRangeReuseBytes);
+            hot.ReclaimedRangeReuseBytes)
+        {
+            AllocationCount = Volatile.Read(ref _allocationCount),
+            ReallocationCount = Volatile.Read(ref _reallocationCount),
+            FreeCount = Volatile.Read(ref _freeCount)
+        };
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

@@ -746,7 +746,7 @@ public sealed class NativeBuilderTests
         MethodInfo resize = SingleExpected(
             allocatorType.GetMethods(
                 BindingFlags.Static | BindingFlags.NonPublic),
-            static method => string.Equals(method.Name, "Resize", StringComparison.Ordinal) && method.IsGenericMethodDefinition);
+            static method => string.Equals(method.Name, "TryResize", StringComparison.Ordinal) && method.IsGenericMethodDefinition);
 
         OpCode[] instructions = ReadOpCodes(resize).ToArray();
 
@@ -755,6 +755,12 @@ public sealed class NativeBuilderTests
             instructions,
             static instruction =>
                 instruction.Value == OpCodes.Newarr.Value);
+        MethodInfo admitted = SingleExpected(
+            allocatorType.GetMethods(BindingFlags.Static | BindingFlags.NonPublic),
+            static method => string.Equals(method.Name, "ResizeAdmitted", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            ReadOpCodes(admitted),
+            static instruction => instruction.Value == OpCodes.Newarr.Value);
     }
 
     [Fact]
@@ -1132,7 +1138,8 @@ public sealed class NativeBuilderTests
 
             NativeMemoryTestMetrics metrics =
                 NativeMemoryTestHooks.Snapshot();
-            Assert.True(metrics.AllocationCount > 1);
+            Assert.Equal(1, metrics.AllocationCount);
+            Assert.Equal(7, metrics.ReallocationCount);
             Assert.Equal(
                 metrics.AllocationCount,
                 metrics.FreeCount);

@@ -184,6 +184,106 @@ public sealed class PackageSmokeTests
     }
 
     [Fact]
+    public async Task PackageBudgetedOwnersRunAndBundledAnalyzerRejectsPostCompletionPreflight()
+    {
+        PackageEvidence package = await GetPackageAsync();
+        WriteEvidence(package);
+        string consumerRoot = CreateConsumerRoot();
+        try
+        {
+            WriteConsumerProject(consumerRoot, package,
+                excludeAnalyzer: false, suppressDiagnostics: false,
+                executable: true, treatWarningsAsErrors: true);
+            string program = Path.Combine(consumerRoot, "Program.cs");
+            await File.WriteAllTextAsync(program,
+                """
+                using Supprocom.NativeAllocationManagement;
+
+                public static class Consumer
+                {
+                    public static int Main()
+                    {
+                        NativeMemoryBudget budget = new(64);
+                        using NativeBuilder<int> builder = new(budget, preLease: 4);
+                        using (NativeWorkspace<int> workspace = new(budget, preLease: 8))
+                        {
+                            builder.Append(42);
+                            if (builder.TryEnsureCapacity(5)
+                                || budget.CaptureStatistics().CommittedBytes != 48
+                                || builder.Count != 1)
+                            {
+                                return 1;
+                            }
+                        }
+
+                        if (!builder.TryEnsureCapacity(5))
+                        {
+                            return 2;
+                        }
+
+                        NativeTransfer<int> transfer = builder.Complete();
+                        try
+                        {
+                            if (transfer.Read(static view => view[0]) != 42
+                                || budget.CaptureStatistics().CommittedBytes != 32)
+                            {
+                                return 3;
+                            }
+                        }
+                        finally
+                        {
+                            transfer.Dispose();
+                        }
+
+                        return budget.CaptureStatistics().CommittedBytes == 0 ? 0 : 4;
+                    }
+                }
+                """);
+            string project = Path.Combine(consumerRoot, "Consumer.csproj");
+            CommandResult restore = await RunDotnetAsync(
+                $"restore \"{project}\" --nologo --force --no-cache --packages \"{Path.Combine(consumerRoot, ".packages")}\" --source \"{package.SourceDirectory}\"",
+                consumerRoot);
+            Assert.True(restore.ExitCode == 0, restore.Output);
+            CommandResult build = await RunDotnetAsync($"build \"{project}\" --no-restore --nologo", consumerRoot);
+            Assert.True(build.ExitCode == 0, build.Output);
+            CommandResult run = await RunDotnetAsync($"run \"{project}\" --no-build --no-restore --nologo", consumerRoot);
+            Assert.True(run.ExitCode == 0, run.Output);
+            await File.WriteAllTextAsync(program,
+                """
+                using Supprocom.NativeAllocationManagement;
+
+                public static class Consumer
+                {
+                    public static int Main()
+                    {
+                        NativeMemoryBudget budget = new(64);
+                        using NativeBuilder<int> builder = new(budget, preLease: 4);
+                        builder.Append(42);
+                        NativeTransfer<int> transfer = builder.Complete();
+                        try
+                        {
+                            _ = builder.TryEnsureCapacity(8);
+                            return 0;
+                        }
+                        finally
+                        {
+                            transfer.Dispose();
+                        }
+                    }
+                }
+                """);
+            CommandResult invalid = await RunDotnetAsync($"build \"{project}\" --no-restore --nologo -t:Rebuild", consumerRoot);
+            _output.WriteLine(invalid.Output);
+            Assert.NotEqual(0, invalid.ExitCode);
+            Assert.Contains("error NAM1029", invalid.Output, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            DeleteConsumerRoot(consumerRoot);
+        }
+    }
+
+    [Fact]
     public async Task PackageBuilderRunsAndBundledAnalyzerRejectsDoubleCompletion()
     {
         PackageEvidence package = await GetPackageAsync();

@@ -21,13 +21,27 @@ public sealed class NativeWorkspace<T> : IDisposable
     /// <summary>Creates one workspace with a fixed element reservation.</summary>
     /// <param name="preLease">The fixed reservation in elements of <typeparamref name="T"/>.</param>
     public NativeWorkspace(int preLease)
+        : this(preLease, budget: null)
+    {
+    }
+
+    /// <summary>Creates a fixed workspace charged to the shared native extent ceiling.</summary>
+    /// <param name="budget">The shared admission domain.</param>
+    /// <param name="preLease">The fixed element capacity.</param>
+    public NativeWorkspace(NativeMemoryBudget budget, int preLease)
+        : this(preLease, budget ?? throw new ArgumentNullException(nameof(budget)))
+    {
+    }
+
+    private NativeWorkspace(int preLease, NativeMemoryBudget? budget)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(preLease);
         _ownerThreadId = Environment.CurrentManagedThreadId;
         _block = NativeBlockAllocator.Allocate<T>(
             preLease,
             nameof(NativeWorkspace<T>),
-            "NativeWorkspace.Constructor");
+            "NativeWorkspace.Constructor",
+            budget);
         _capacity = preLease;
         ClearBlock();
     }
