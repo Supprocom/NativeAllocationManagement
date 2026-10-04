@@ -195,6 +195,10 @@ internal sealed unsafe partial class NativeArenaKernel
         ResetLane(ref _scoped);
         _generation = nextGeneration;
         _scopeEpoch = nextScopeEpoch;
+        if (_retentionEnabled)
+        {
+            ApplyRetentionPolicy();
+        }
     }
 
     internal void RecycleScoped()
@@ -205,6 +209,10 @@ internal sealed unsafe partial class NativeArenaKernel
             nameof(NativeArena.RecycleScoped));
         ResetLane(ref _scoped);
         _scopeEpoch = nextScopeEpoch;
+        if (_retentionEnabled)
+        {
+            ApplyRetentionPolicy();
+        }
     }
 
     internal NativeOwnerStatistics GetStatistics()
@@ -452,22 +460,27 @@ internal sealed unsafe partial class NativeArenaKernel
         nuint requiredCapacity,
         string operation)
     {
-        nuint growth = DefaultSegmentBytes;
-        if (lane.Current != null)
+        nuint capacity;
+        if (_retentionEnabled)
         {
-            try
-            {
-                growth = checked(lane.Current->Capacity * 2);
-            }
-            catch (OverflowException)
-            {
-                growth = requiredCapacity;
-            }
+            capacity = SelectPolicyGrowthCapacity(requiredCapacity, lane.Current == null ? 0 : lane.Current->Capacity);
         }
-
-        nuint capacity = Math.Max(
-            requiredCapacity,
-            Math.Max(DefaultSegmentBytes, growth));
+        else
+        {
+            nuint growth = DefaultSegmentBytes;
+            if (lane.Current != null)
+            {
+                try
+                {
+                    growth = checked(lane.Current->Capacity * 2);
+                }
+                catch (OverflowException)
+                {
+                    growth = requiredCapacity;
+                }
+            }
+            capacity = Math.Max(requiredCapacity, Math.Max(DefaultSegmentBytes, growth));
+        }
         ArenaSegmentHeader* segment = AllocateSegment(
             capacity,
             operation,
@@ -496,6 +509,7 @@ internal sealed unsafe partial class NativeArenaKernel
             _retainedBytes + checked((long)segment->AllocationBytes));
         _segmentCount = checked(_segmentCount + 1);
         NativeOwnerHistory.Increment(ref _freshSegmentAllocationCount, ref _historyOverflowed);
+        RecordPolicyAcquisition(segment);
         return segment;
     }
 
@@ -523,6 +537,7 @@ internal sealed unsafe partial class NativeArenaKernel
             _retainedBytes + checked((long)segment->AllocationBytes));
         _segmentCount = checked(_segmentCount + 1);
         NativeOwnerHistory.Increment(ref _freshSegmentAllocationCount, ref _historyOverflowed);
+        RecordPolicyAcquisition(segment);
         return segment;
     }
 
@@ -793,6 +808,7 @@ internal sealed unsafe partial class NativeArenaKernel
         long metricsEpoch = segment->MetricsEpoch;
         bool detached = segment->Detached != 0;
         long allocationOrdinal = segment->AllocationOrdinal;
+        RecordPolicyRelease(segment);
         NativeMemory.AlignedFree(segment);
         _budget?.Release(allocationBytes, Id, traceKind, allocationOrdinal);
         NativeMemoryAccounting.RecordFree(

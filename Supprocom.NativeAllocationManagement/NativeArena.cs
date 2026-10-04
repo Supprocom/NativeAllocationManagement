@@ -42,6 +42,26 @@ public sealed class NativeArena : IDisposable
         _kernel = new NativeArenaKernel(preAllocateBytes, returnMemoryOnDispose, budget);
     }
 
+    /// <summary>Creates an exact initial reservation with opt-in cold growth and whole-idle-unit retention limits.</summary>
+    /// <param name="budget">The complete native backing admission ceiling.</param>
+    /// <param name="retentionPolicy">The immutable ordinary growth and native idle-extent policy.</param>
+    /// <param name="preAllocateBytes">The exact initial usable reservation, which may itself be an outlier.</param>
+    /// <param name="returnMemoryOnDispose">The final cleanup policy.</param>
+    public NativeArena(NativeMemoryBudget budget, NativeArenaRetentionPolicy retentionPolicy,
+        nuint preAllocateBytes, NativeMemoryReturn returnMemoryOnDispose)
+    {
+        ArgumentNullException.ThrowIfNull(budget);
+        NativeMemoryReturnValidation.Validate(returnMemoryOnDispose, nameof(returnMemoryOnDispose));
+        _kernel = new NativeArenaKernel(budget, retentionPolicy, preAllocateBytes, returnMemoryOnDispose);
+    }
+
+    /// <summary>Captures actual whole-unit idle retention, outlier extents and maintenance history without allocating.</summary>
+    public NativeArenaRetentionStatistics CaptureRetentionSnapshot() => _kernel.GetRetentionSnapshot();
+
+    /// <summary>Applies the explicit policy to genuinely idle segments without invalidating any live scratch.</summary>
+    /// <remarks>Rejects unconfigured owners and entered borrows or initializers before release.</remarks>
+    public nuint MaintainRetention() => _kernel.MaintainRetention();
+
     /// <summary>Prepares both bounded lanes and prohibits fresh backing during execution.</summary>
     /// <param name="preparation">Exact ordinary and scoped usable-byte bounds.</param>
     /// <param name="budget">The shared ceiling for complete header and aligned backing extents.</param>

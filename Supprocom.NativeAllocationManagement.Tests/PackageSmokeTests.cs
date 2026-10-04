@@ -562,6 +562,25 @@ public sealed class PackageSmokeTests
                         }
                         if (NativeMemoryDiagnostics.Snapshot().CopiedBytes != beforeCopy.CopiedBytes + 16) return 20;
                         System.Console.WriteLine("accounted-copy-bytes=16; exported-output=17,19");
+                        NativeMemoryBudget retentionBudget = new(2_000_000);
+                        using (NativeArena retention = new(retentionBudget, new NativeArenaRetentionPolicy(4096, 4160), 0, NativeMemoryReturn.ToNativeMemory))
+                        {
+                            {
+                                ArenaLease<int> normal = retention.Scratch<int>(1, static writer => writer.Write(17));
+                                ArenaLease<byte> outlier = retention.Scratch<byte>(65536, static writer => writer.Fill(23));
+                                if (normal.Read(static view => view[0]) != 17 || outlier.Read(static view => view[65535]) != 23) return 21;
+                            }
+                            retention.Reset();
+                            NativeArenaRetentionStatistics snapshot = retention.CaptureRetentionSnapshot();
+                            if (!snapshot.Enabled || snapshot.RetainedBytes != 4160 || snapshot.IdleBytes != 4160
+                                || snapshot.OversizedBytes != 0 || snapshot.PeakOversizedBytes != 65600
+                                || snapshot.ReleasedBytes != 65600 || snapshot.MaintenanceCount != 1) return 22;
+                            ArenaLease<int> next = retention.Scratch<int>(1, static writer => writer.Write(29));
+                            retention.MaintainRetention();
+                            if (next.Read(static view => view[0]) != 29 || retentionBudget.CaptureStatistics().AllocationCount != 2) return 23;
+                        }
+                        if (retentionBudget.CaptureStatistics().CommittedBytes != 0) return 24;
+                        System.Console.WriteLine("outlier-released=65600; normal-retained=4160; final-charge=0");
                         return 0;
                     }
                     private sealed class MappedBuffer : SafeBuffer

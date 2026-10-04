@@ -1,4 +1,37 @@
 #nullable enable
+Supprocom.NativeAllocationManagement.NativeArena.NativeArena(Supprocom.NativeAllocationManagement.NativeMemoryBudget! budget, Supprocom.NativeAllocationManagement.NativeArenaRetentionPolicy retentionPolicy, nuint preAllocateBytes, Supprocom.NativeAllocationManagement.NativeMemoryReturn returnMemoryOnDispose) -> void
+Supprocom.NativeAllocationManagement.NativeArena.CaptureRetentionSnapshot() -> Supprocom.NativeAllocationManagement.NativeArenaRetentionStatistics
+Supprocom.NativeAllocationManagement.NativeArena.MaintainRetention() -> nuint
+Supprocom.NativeAllocationManagement.NativeArenaRetentionPolicy
+Supprocom.NativeAllocationManagement.NativeArenaRetentionPolicy.NativeArenaRetentionPolicy() -> void
+Supprocom.NativeAllocationManagement.NativeArenaRetentionPolicy.NativeArenaRetentionPolicy(nuint ordinarySegmentCeilingBytes, nuint idleRetentionBytes) -> void
+Supprocom.NativeAllocationManagement.NativeArenaRetentionPolicy.OrdinarySegmentCeilingBytes.get -> nuint
+Supprocom.NativeAllocationManagement.NativeArenaRetentionPolicy.IdleRetentionBytes.get -> nuint
+Supprocom.NativeAllocationManagement.NativeArenaRetentionPolicy.Equals(Supprocom.NativeAllocationManagement.NativeArenaRetentionPolicy other) -> bool
+~override Supprocom.NativeAllocationManagement.NativeArenaRetentionPolicy.Equals(object obj) -> bool
+override Supprocom.NativeAllocationManagement.NativeArenaRetentionPolicy.GetHashCode() -> int
+~override Supprocom.NativeAllocationManagement.NativeArenaRetentionPolicy.ToString() -> string
+static Supprocom.NativeAllocationManagement.NativeArenaRetentionPolicy.operator ==(Supprocom.NativeAllocationManagement.NativeArenaRetentionPolicy left, Supprocom.NativeAllocationManagement.NativeArenaRetentionPolicy right) -> bool
+static Supprocom.NativeAllocationManagement.NativeArenaRetentionPolicy.operator !=(Supprocom.NativeAllocationManagement.NativeArenaRetentionPolicy left, Supprocom.NativeAllocationManagement.NativeArenaRetentionPolicy right) -> bool
+Supprocom.NativeAllocationManagement.NativeArenaRetentionStatistics
+Supprocom.NativeAllocationManagement.NativeArenaRetentionStatistics.NativeArenaRetentionStatistics() -> void
+Supprocom.NativeAllocationManagement.NativeArenaRetentionStatistics.OwnerId.get -> long
+Supprocom.NativeAllocationManagement.NativeArenaRetentionStatistics.Lifecycle.get -> Supprocom.NativeAllocationManagement.NativeOwnerLifecycle
+Supprocom.NativeAllocationManagement.NativeArenaRetentionStatistics.Enabled.get -> bool
+Supprocom.NativeAllocationManagement.NativeArenaRetentionStatistics.Policy.get -> Supprocom.NativeAllocationManagement.NativeArenaRetentionPolicy
+Supprocom.NativeAllocationManagement.NativeArenaRetentionStatistics.RetainedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeArenaRetentionStatistics.IdleBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeArenaRetentionStatistics.OversizedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeArenaRetentionStatistics.PeakOversizedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeArenaRetentionStatistics.MaintenanceCount.get -> long
+Supprocom.NativeAllocationManagement.NativeArenaRetentionStatistics.ReleasedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeArenaRetentionStatistics.HistoryOverflowed.get -> bool
+Supprocom.NativeAllocationManagement.NativeArenaRetentionStatistics.Equals(Supprocom.NativeAllocationManagement.NativeArenaRetentionStatistics other) -> bool
+~override Supprocom.NativeAllocationManagement.NativeArenaRetentionStatistics.Equals(object obj) -> bool
+override Supprocom.NativeAllocationManagement.NativeArenaRetentionStatistics.GetHashCode() -> int
+~override Supprocom.NativeAllocationManagement.NativeArenaRetentionStatistics.ToString() -> string
+static Supprocom.NativeAllocationManagement.NativeArenaRetentionStatistics.operator ==(Supprocom.NativeAllocationManagement.NativeArenaRetentionStatistics left, Supprocom.NativeAllocationManagement.NativeArenaRetentionStatistics right) -> bool
+static Supprocom.NativeAllocationManagement.NativeArenaRetentionStatistics.operator !=(Supprocom.NativeAllocationManagement.NativeArenaRetentionStatistics left, Supprocom.NativeAllocationManagement.NativeArenaRetentionStatistics right) -> bool
 Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.HistoryOverflowed.get -> bool
 Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.HistoryOverflowed.init -> void
 Supprocom.NativeAllocationManagement.NativeOwnerStatistics.HistoryOverflowed.get -> bool

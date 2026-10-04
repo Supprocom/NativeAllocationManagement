@@ -5453,6 +5453,15 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
         private void ProcessOwnerLifecycle(OwnerState owner, string name, SyntaxNode syntax)
         {
+            if (string.Equals(name, "MaintainRetention", StringComparison.Ordinal)
+                && IsNativeArena(owner.Type))
+            {
+                if (CheckOwnerActive(owner, syntax, name) && _borrowedOwners.Contains(owner))
+                {
+                    Report(NativeAllocationDiagnosticDescriptors.InvalidLifecycle, syntax, owner.DisplayName, name);
+                }
+                return;
+            }
             if (name is "Rent" or "TryRent" or "TryScratch" or "TryScratchScoped" or "Lease" or "Scratch" or "LeaseScoped" or "ScratchScoped")
             {
                 CheckOwnerActive(owner, syntax, name);
@@ -5832,7 +5841,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     string lifecycleName = member.Name.Identifier.ValueText;
                     if (lifecycleName is not ("ReturnMemoryToNativeMemory" or "ReturnMemoryToGarbageCollector"
                         or "ReleaseLeasesToNativeMemory" or "ReleaseLeasesToGarbageCollector" or "Dispose"
-                        or "Reset" or "RecycleScoped"))
+                        or "Reset" or "RecycleScoped" or "MaintainRetention"))
                     {
                         continue;
                     }
@@ -5843,7 +5852,11 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                         continue;
                     }
 
-                    if (owner.IsUsing && !owner.IsRegion && lifecycleName is not ("Reset" or "RecycleScoped"))
+                    if (string.Equals(lifecycleName, "MaintainRetention", StringComparison.Ordinal))
+                    {
+                        Report(NativeAllocationDiagnosticDescriptors.InvalidLifecycle, invocation, owner.DisplayName, lifecycleName);
+                    }
+                    else if (owner.IsUsing && !owner.IsRegion && lifecycleName is not ("Reset" or "RecycleScoped"))
                     {
                         Report(
                             NativeAllocationDiagnosticDescriptors.ScopedLifecycle,
@@ -6931,7 +6944,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
             return IsNativeArena(invocation.TargetMethod.ContainingType)
                 && name is "GetStatistics"
-                    or "CaptureDiagnosticSnapshot";
+                    or "CaptureDiagnosticSnapshot" or "CapturePreparedSnapshot" or "CaptureRetentionSnapshot";
         }
 
         private bool IsApprovedBorrowedOwnerFactoryArgument(

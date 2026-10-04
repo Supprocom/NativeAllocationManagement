@@ -180,7 +180,7 @@ public sealed class PublicSurfaceTests
             static field => field.Name is "_borrowEpoch"
                 or "_activeBorrowAuthority");
         ConstructorInfo[] arenaConstructors = typeof(NativeArena).GetConstructors();
-        Assert.Equal(4, arenaConstructors.Length);
+        Assert.Equal(5, arenaConstructors.Length);
         ConstructorInfo arenaConstructor = SingleExpected(arenaConstructors,
             static constructor => constructor.GetParameters().Length == 2
                 && constructor.GetParameters()[0].ParameterType == typeof(nuint));
@@ -198,12 +198,20 @@ public sealed class PublicSurfaceTests
         Assert.Equal(typeof(NativeMemoryBudget), preparedArenaConstructor.GetParameters()[1].ParameterType);
         Assert.All(preparedArenaConstructor.GetParameters(), static parameter => Assert.False(parameter.IsOptional));
         ConstructorInfo mappedArenaConstructor = SingleExpected(arenaConstructors,
-            static constructor => constructor.GetParameters().Length == 4);
+            static constructor => constructor.GetParameters().Length == 4
+                && constructor.GetParameters()[0].ParameterType == typeof(System.Runtime.InteropServices.SafeBuffer));
         Assert.Equal(typeof(System.Runtime.InteropServices.SafeBuffer), mappedArenaConstructor.GetParameters()[0].ParameterType);
         Assert.Equal(typeof(nuint), mappedArenaConstructor.GetParameters()[1].ParameterType);
         Assert.Equal(typeof(NativeArenaPreparation), mappedArenaConstructor.GetParameters()[2].ParameterType);
         Assert.Equal(typeof(NativeMemoryBudget), mappedArenaConstructor.GetParameters()[3].ParameterType);
         Assert.All(mappedArenaConstructor.GetParameters(), static parameter => Assert.False(parameter.IsOptional));
+        ConstructorInfo retentionArenaConstructor = SingleExpected(arenaConstructors,
+            static constructor => constructor.GetParameters().Length == 4
+                && constructor.GetParameters()[0].ParameterType == typeof(NativeMemoryBudget));
+        Assert.Equal(typeof(NativeArenaRetentionPolicy), retentionArenaConstructor.GetParameters()[1].ParameterType);
+        Assert.Equal(typeof(nuint), retentionArenaConstructor.GetParameters()[2].ParameterType);
+        Assert.Equal(typeof(NativeMemoryReturn), retentionArenaConstructor.GetParameters()[3].ParameterType);
+        Assert.All(retentionArenaConstructor.GetParameters(), static parameter => Assert.False(parameter.IsOptional));
         ConstructorInfo[] concurrentArenaConstructors = typeof(NativeConcurrentArena).GetConstructors();
         Assert.Equal(2, concurrentArenaConstructors.Length);
         ConstructorInfo concurrentArenaConstructor = SingleExpected(concurrentArenaConstructors,
