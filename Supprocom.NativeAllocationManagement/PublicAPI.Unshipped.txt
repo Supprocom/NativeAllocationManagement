@@ -1,4 +1,42 @@
 #nullable enable
+Supprocom.NativeAllocationManagement.NativeArena.NativeArena(Supprocom.NativeAllocationManagement.NativeArenaPreparation preparation, Supprocom.NativeAllocationManagement.NativeMemoryBudget! budget) -> void
+Supprocom.NativeAllocationManagement.NativeArena.CapturePreparedSnapshot() -> Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics
+Supprocom.NativeAllocationManagement.NativeArena.TryScratch<T>(int length, Supprocom.NativeAllocationManagement.NativeLeaseInitializer<T>! initializer, out Supprocom.NativeAllocationManagement.ArenaLease<T> lease) -> bool
+Supprocom.NativeAllocationManagement.NativeArena.TryScratchScoped<T>(int length, Supprocom.NativeAllocationManagement.NativeLeaseInitializer<T>! initializer, out Supprocom.NativeAllocationManagement.ArenaLease<T> lease) -> bool
+Supprocom.NativeAllocationManagement.NativeArenaPreparation
+Supprocom.NativeAllocationManagement.NativeArenaPreparation.NativeArenaPreparation() -> void
+Supprocom.NativeAllocationManagement.NativeArenaPreparation.NativeArenaPreparation(nuint ordinaryBytes, nuint scopedBytes) -> void
+Supprocom.NativeAllocationManagement.NativeArenaPreparation.OrdinaryBytes.get -> nuint
+Supprocom.NativeAllocationManagement.NativeArenaPreparation.ScopedBytes.get -> nuint
+Supprocom.NativeAllocationManagement.NativeArenaPreparation.Equals(Supprocom.NativeAllocationManagement.NativeArenaPreparation other) -> bool
+~override Supprocom.NativeAllocationManagement.NativeArenaPreparation.Equals(object obj) -> bool
+override Supprocom.NativeAllocationManagement.NativeArenaPreparation.GetHashCode() -> int
+~override Supprocom.NativeAllocationManagement.NativeArenaPreparation.ToString() -> string
+static Supprocom.NativeAllocationManagement.NativeArenaPreparation.operator ==(Supprocom.NativeAllocationManagement.NativeArenaPreparation left, Supprocom.NativeAllocationManagement.NativeArenaPreparation right) -> bool
+static Supprocom.NativeAllocationManagement.NativeArenaPreparation.operator !=(Supprocom.NativeAllocationManagement.NativeArenaPreparation left, Supprocom.NativeAllocationManagement.NativeArenaPreparation right) -> bool
+Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics
+Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics.NativePreparedArenaStatistics() -> void
+Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics.OwnerId.get -> long
+Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics.Lifecycle.get -> Supprocom.NativeAllocationManagement.NativeOwnerLifecycle
+Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics.Preparation.get -> Supprocom.NativeAllocationManagement.NativeArenaPreparation
+Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics.OrdinaryUsedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics.ScopedUsedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics.OrdinaryAvailableBytes.get -> long
+Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics.ScopedAvailableBytes.get -> long
+Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics.PeakOrdinaryUsedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics.PeakScopedUsedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics.RetainedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics.PeakRetainedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics.SuccessfulScratchCount.get -> long
+Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics.RejectedCapacityCount.get -> long
+Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics.InitializerFailureCount.get -> long
+Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics.HistoryOverflowed.get -> bool
+Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics.Equals(Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics other) -> bool
+~override Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics.Equals(object obj) -> bool
+override Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics.GetHashCode() -> int
+~override Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics.ToString() -> string
+static Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics.operator ==(Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics left, Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics right) -> bool
+static Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics.operator !=(Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics left, Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics right) -> bool
 Supprocom.NativeAllocationManagement.NativeTransfer<T>.NativeTransfer() -> void
 *REMOVED*static Supprocom.NativeAllocationManagement.NativeTransfer<T>.Move(ref Supprocom.NativeAllocationManagement.NativeTransfer<T>? source) -> Supprocom.NativeAllocationManagement.NativeTransfer<T>!
 static Supprocom.NativeAllocationManagement.NativeTransfer<T>.Move(ref Supprocom.NativeAllocationManagement.NativeTransfer<T>? source) -> Supprocom.NativeAllocationManagement.NativeTransfer<T>

@@ -202,7 +202,7 @@ internal static class NativeAllocationDiagnosticDescriptors
     internal static readonly DiagnosticDescriptor PreparedAcquisitionGuard = Create(
         "NAM1050",
         "Prepared lease requires a successful acquisition guard",
-        "Native value '{0}' is not proven initialized by a successful TryRent and cannot be used by '{1}'. Guard the acquisition result before using or disposing its output.",
+        "Native value '{0}' is not proven initialized by a successful prepared acquisition and cannot be used by '{1}'. Guard the acquisition result before using or disposing its output.",
         helpLinkUri: "https://github.com/Supprocom/NativeAllocationManagement/blob/main/docs/diagnostics/NAM1050.md");
 
     internal static ImmutableArray<DiagnosticDescriptor> All { get; } = ImmutableArray.Create(

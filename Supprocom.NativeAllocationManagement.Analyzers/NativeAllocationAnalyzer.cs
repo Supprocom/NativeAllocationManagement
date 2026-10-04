@@ -1149,7 +1149,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 negated = !negated;
                 condition = Unwrap(unary.Operand);
             }
-            if (condition is not IInvocationOperation invocation || !IsPreparedPoolTryRent(invocation))
+            if (condition is not IInvocationOperation invocation || !IsPreparedTryAcquisition(invocation))
             {
                 return;
             }
@@ -2286,9 +2286,9 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             {
                 RegisterScopedGroupHandles(operation);
             }
-            else if (IsPreparedPoolTryRent(operation))
+            else if (IsPreparedTryAcquisition(operation))
             {
-                RegisterPreparedPoolHandle(operation);
+                RegisterPreparedHandle(operation);
             }
 
             if (borrowedOwner is not null)
@@ -2771,7 +2771,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             {
                 if (operation.Parent is IInvocationOperation composite
                     && (IsNonRetainingCompositeLeaseOperation(composite)
-                        || IsPreparedPoolTryRent(composite) && operation.Parameter?.Ordinal == 2))
+                        || IsPreparedTryAcquisition(composite) && operation.Parameter?.Ordinal == 2))
                 {
                     base.VisitArgument(operation);
                     return;
@@ -5324,19 +5324,28 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             }
         }
 
-        private bool IsPreparedPoolTryRent(IInvocationOperation invocation) =>
-            NativeSymbols.Is(invocation.TargetMethod.ContainingType, _symbols.Pool)
-            && string.Equals(invocation.TargetMethod.Name, "TryRent", StringComparison.Ordinal)
-            && invocation.TargetMethod.ReturnType.SpecialType == SpecialType.System_Boolean
-            && invocation.Arguments.Length == 4
-            && invocation.Arguments.Any(argument => argument.Parameter is { Ordinal: 2, RefKind: RefKind.Out }
-                && NativeSymbols.Is(argument.Parameter.Type, _symbols.Pooled));
+        private bool IsPreparedTryAcquisition(IInvocationOperation invocation)
+        {
+            if (invocation.TargetMethod.ReturnType.SpecialType != SpecialType.System_Boolean)
+            {
+                return false;
+            }
+            bool pool = NativeSymbols.Is(invocation.TargetMethod.ContainingType, _symbols.Pool)
+                && string.Equals(invocation.TargetMethod.Name, "TryRent", StringComparison.Ordinal)
+                && invocation.Arguments.Length == 4;
+            bool arena = NativeSymbols.Is(invocation.TargetMethod.ContainingType, _symbols.Arena)
+                && invocation.TargetMethod.Name is "TryScratch" or "TryScratchScoped"
+                && invocation.Arguments.Length == 3;
+            return (pool || arena)
+                && invocation.Arguments.Any(argument => argument.Parameter is { Ordinal: 2, RefKind: RefKind.Out }
+                    && NativeSymbols.Is(argument.Parameter.Type, pool ? _symbols.Pooled : _symbols.ArenaLease));
+        }
 
         private static ISymbol? GetPreparedOutSymbol(IOperation operation) =>
             operation is IDeclarationExpressionOperation declaration
                 ? GetSymbol(Unwrap(declaration.Expression)) : GetSymbol(Unwrap(operation));
 
-        private void RegisterPreparedPoolHandle(IInvocationOperation operation)
+        private void RegisterPreparedHandle(IInvocationOperation operation)
         {
             OwnerState? owner = GetOwner(Unwrap(operation.Instance));
             if (owner is null || !CheckOwnerActive(owner, operation.Syntax, operation.TargetMethod.Name))
@@ -5350,17 +5359,30 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     "the prepared allocation", symbol?.Name ?? "an escaping destination");
                 return;
             }
+            bool scopedAcquisition = string.Equals(operation.TargetMethod.Name, "TryScratchScoped", StringComparison.Ordinal);
+            if (scopedAcquisition && !owner.ScopedOwnerEligible)
+            {
+                Report(NativeAllocationDiagnosticDescriptors.ScopedAcquisitionEscape, operation.Syntax,
+                    operation.TargetMethod.Name + " (receiver is not an exclusive local owner)");
+            }
             _handles[symbol] = new HandleState(symbol, owner, owner.Generation,
                 isUsing: false, operation.Syntax)
             {
                 GenerationRelation = owner.GenerationRelation,
-                ConditionalPending = true
+                ConditionalPending = true,
+                IsScoped = scopedAcquisition && owner.ScopedOwnerEligible
             };
+            if (scopedAcquisition && owner.ScopedOwnerEligible)
+            {
+                // The complete potentially acquired scoped set is known even
+                // when capacity refusal means its physical set is empty.
+                owner.ScopedPending = true;
+            }
         }
 
         private void ProcessOwnerLifecycle(OwnerState owner, string name, SyntaxNode syntax)
         {
-            if (name is "Rent" or "TryRent" or "Lease" or "Scratch" or "LeaseScoped" or "ScratchScoped")
+            if (name is "Rent" or "TryRent" or "TryScratch" or "TryScratchScoped" or "Lease" or "Scratch" or "LeaseScoped" or "ScratchScoped")
             {
                 CheckOwnerActive(owner, syntax, name);
                 return;

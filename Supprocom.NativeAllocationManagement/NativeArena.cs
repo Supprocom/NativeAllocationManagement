@@ -41,6 +41,26 @@ public sealed class NativeArena : IDisposable
         _kernel = new NativeArenaKernel(preAllocateBytes, returnMemoryOnDispose, budget);
     }
 
+    /// <summary>Prepares both bounded lanes and prohibits fresh backing during execution.</summary>
+    /// <param name="preparation">Exact ordinary and scoped usable-byte bounds.</param>
+    /// <param name="budget">The shared ceiling for complete header and aligned backing extents.</param>
+    public NativeArena(NativeArenaPreparation preparation, NativeMemoryBudget budget)
+    {
+        ArgumentNullException.ThrowIfNull(budget);
+        _kernel = new NativeArenaKernel(preparation, budget);
+    }
+
+    /// <summary>Captures prepared lane capacity and recorded history without allocating or resetting it.</summary>
+    public NativePreparedArenaStatistics CapturePreparedSnapshot() => _kernel.GetPreparedSnapshot();
+
+    /// <summary>Tries a fully initialized ordinary scratch without growth; capacity refusal precedes initialization.</summary>
+    public bool TryScratch<T>(int length, NativeLeaseInitializer<T> initializer, out ArenaLease<T> lease)
+        where T : unmanaged => _kernel.TryScratch(length, scoped: false, initializer, out lease);
+
+    /// <summary>Tries a fully initialized scoped scratch without growth; capacity refusal precedes initialization.</summary>
+    public bool TryScratchScoped<T>(int length, NativeLeaseInitializer<T> initializer, out ArenaLease<T> lease)
+        where T : unmanaged => _kernel.TryScratch(length, scoped: true, initializer, out lease);
+
     internal NativeOwnerLifecycle CurrentLifecycle =>
         _kernel.Lifecycle;
 

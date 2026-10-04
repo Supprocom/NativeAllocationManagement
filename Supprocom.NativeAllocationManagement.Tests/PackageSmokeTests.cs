@@ -472,6 +472,17 @@ public sealed class PackageSmokeTests
                             || events[1].Kind != NativeMemoryTraceKind.PageAcquired || events[1].AllocationOrdinal != 1
                             || events[2].Kind != NativeMemoryTraceKind.Prepared || events[3].Kind != NativeMemoryTraceKind.Released) return 4;
                         System.Console.WriteLine("prepared-page-output=42; pages=1; peak-slots=1; final-charge=0");
+                        NativeMemoryBudget arenaBudget = new(512);
+                        using (NativeArena arena = new(new NativeArenaPreparation(16, 16), arenaBudget))
+                        {
+                            if (!arena.TryScratch<int>(4, static writer => writer.Fill(17), out ArenaLease<int> values)) return 5;
+                            if (values.Read(static view => view[3]) != 17) return 6;
+                            NativePreparedArenaStatistics snapshot = arena.CapturePreparedSnapshot();
+                            if (snapshot.SuccessfulScratchCount != 1 || snapshot.OrdinaryUsedBytes != 16
+                                || snapshot.PeakOrdinaryUsedBytes != 16 || snapshot.ScopedAvailableBytes != 16) return 7;
+                        }
+                        if (arenaBudget.CaptureStatistics().CommittedBytes != 0) return 8;
+                        System.Console.WriteLine("prepared-arena-output=17; final-charge=0");
                         return 0;
                     }
                 }
@@ -504,6 +515,23 @@ public sealed class PackageSmokeTests
             _output.WriteLine(invalid.Output);
             Assert.NotEqual(0, invalid.ExitCode);
             Assert.Contains("error NAM1050", invalid.Output, StringComparison.OrdinalIgnoreCase);
+            await File.WriteAllTextAsync(program,
+                """
+                using Supprocom.NativeAllocationManagement;
+                public static class Consumer
+                {
+                    public static void Main()
+                    {
+                        using NativeArena arena = new(new NativeArenaPreparation(16, 16), new NativeMemoryBudget(512));
+                        arena.TryScratch<int>(4, static writer => writer.Fill(17), out ArenaLease<int> values);
+                        values.Clear();
+                    }
+                }
+                """);
+            CommandResult invalidArena = await RunDotnetAsync($"build \"{project}\" --no-restore --nologo -t:Rebuild", consumerRoot);
+            _output.WriteLine(invalidArena.Output);
+            Assert.NotEqual(0, invalidArena.ExitCode);
+            Assert.Contains("error NAM1050", invalidArena.Output, StringComparison.OrdinalIgnoreCase);
         }
         finally
         {
