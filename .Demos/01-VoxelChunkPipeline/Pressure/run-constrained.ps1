@@ -407,7 +407,7 @@ $namCpuSet = $commonCpuSet
 if (-not $SkipBuild) {
     Invoke-Bounded "dotnet" @(
         "build",
-        (Join-Path $RepoRoot ".Demos\01-VoxelChunkPipeline\SharedContract\SharedContract.csproj"),
+        (Join-Path $RepoRoot "SharedContract\SharedContract.csproj"),
         "-c",
         "Release",
         "--no-restore") 60000 | Out-Null
@@ -425,13 +425,13 @@ if (-not $SkipBuild) {
         "--no-restore") 60000 | Out-Null
     Invoke-Bounded "dotnet" @(
         "build",
-        (Join-Path $RepoRoot ".Demos\01-VoxelChunkPipeline\Harness\Harness.csproj"),
+        (Join-Path $RepoRoot "Harness\Harness.csproj"),
         "-c",
         "Release",
         "--no-restore") 60000 | Out-Null
 }
 
-$harness = Join-Path $RepoRoot ".Demos\01-VoxelChunkPipeline\Harness\bin\Release\net10.0\VoxelChunkPipeline.Harness.dll"
+$harness = Join-Path $RepoRoot "Harness\bin\Release\net10.0\VoxelChunkPipeline.Harness.dll"
 $compilationArguments = @(
     $harness,
     "--compile-gate",
@@ -451,7 +451,7 @@ $compilationResult.StandardOutput
 if (-not $SkipBuild) {
     Invoke-Bounded "dotnet" @(
         "publish",
-        (Join-Path $RepoRoot ".Demos\01-VoxelChunkPipeline\SafeCSharp\SafeCSharp.csproj"),
+        (Join-Path $RepoRoot "SafeCSharp\SafeCSharp.csproj"),
         "-c",
         "Release",
         "-r",
@@ -460,7 +460,7 @@ if (-not $SkipBuild) {
         "false") 60000 | Out-Null
     Invoke-Bounded "dotnet" @(
         "publish",
-        (Join-Path $RepoRoot ".Demos\01-VoxelChunkPipeline\NAM\NAM.csproj"),
+        (Join-Path $RepoRoot "NAM\NAM.csproj"),
         "-c",
         "Release",
         "-r",
@@ -470,12 +470,12 @@ if (-not $SkipBuild) {
 }
 
 $binaryPaths = [ordered]@{
-    Harness = Join-Path $RepoRoot ".Demos\01-VoxelChunkPipeline\Harness\bin\Release\net10.0\VoxelChunkPipeline.Harness.dll"
-    SafeCSharp = Join-Path $RepoRoot ".Demos\01-VoxelChunkPipeline\SafeCSharp\bin\Release\net10.0\linux-x64\publish\VoxelChunkPipeline.SafeCSharp.dll"
-    SafeSharedContract = Join-Path $RepoRoot ".Demos\01-VoxelChunkPipeline\SafeCSharp\bin\Release\net10.0\linux-x64\publish\VoxelChunkPipeline.SharedContract.dll"
-    NAM = Join-Path $RepoRoot ".Demos\01-VoxelChunkPipeline\NAM\bin\Release\net10.0\linux-x64\publish\VoxelChunkPipeline.NAM.dll"
-    NamSharedContract = Join-Path $RepoRoot ".Demos\01-VoxelChunkPipeline\NAM\bin\Release\net10.0\linux-x64\publish\VoxelChunkPipeline.SharedContract.dll"
-    NativeAllocationManagement = Join-Path $RepoRoot ".Demos\01-VoxelChunkPipeline\NAM\bin\Release\net10.0\linux-x64\publish\Supprocom.NativeAllocationManagement.dll"
+    Harness = Join-Path $RepoRoot "Harness\bin\Release\net10.0\VoxelChunkPipeline.Harness.dll"
+    SafeCSharp = Join-Path $RepoRoot "SafeCSharp\bin\Release\net10.0\linux-x64\publish\VoxelChunkPipeline.SafeCSharp.dll"
+    SafeSharedContract = Join-Path $RepoRoot "SafeCSharp\bin\Release\net10.0\linux-x64\publish\VoxelChunkPipeline.SharedContract.dll"
+    NAM = Join-Path $RepoRoot "NAM\bin\Release\net10.0\linux-x64\publish\VoxelChunkPipeline.NAM.dll"
+    NamSharedContract = Join-Path $RepoRoot "NAM\bin\Release\net10.0\linux-x64\publish\VoxelChunkPipeline.SharedContract.dll"
+    NativeAllocationManagement = Join-Path $RepoRoot "NAM\bin\Release\net10.0\linux-x64\publish\Supprocom.NativeAllocationManagement.dll"
 }
 foreach ($component in $binaryPaths.Keys) {
     $binaryPath = $binaryPaths[$component]

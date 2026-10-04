@@ -3,4 +3,8 @@
   <Project Path="Supprocom.NativeAllocationManagement.Analyzers/Supprocom.NativeAllocationManagement.Analyzers.csproj" />
   <Project Path="Supprocom.NativeAllocationManagement.Tests/Supprocom.NativeAllocationManagement.Tests.csproj" />
   <Project Path="Supprocom.NativeAllocationManagement.Performance/Supprocom.NativeAllocationManagement.Performance.csproj" />
+  <Project Path="SharedContract/SharedContract.csproj" />
+  <Project Path="SafeCSharp/SafeCSharp.csproj" />
+  <Project Path="NAM/NAM.csproj" />
+  <Project Path="Harness/Harness.csproj" />
 </Solution>

@@ -2111,31 +2111,31 @@ string.Equals(implementation, "NAM", StringComparison.Ordinal) ? workerCount
         [
             (
                 "Harness",
-                ".Demos/01-VoxelChunkPipeline/Harness/bin/Release/"
+                "Harness/bin/Release/"
                     + "net10.0/VoxelChunkPipeline.Harness.dll"),
             (
                 "SafeCSharp",
-                ".Demos/01-VoxelChunkPipeline/SafeCSharp/bin/Release/"
+                "SafeCSharp/bin/Release/"
                     + "net10.0/linux-x64/publish/"
                     + "VoxelChunkPipeline.SafeCSharp.dll"),
             (
                 "SafeSharedContract",
-                ".Demos/01-VoxelChunkPipeline/SafeCSharp/bin/Release/"
+                "SafeCSharp/bin/Release/"
                     + "net10.0/linux-x64/publish/"
                     + "VoxelChunkPipeline.SharedContract.dll"),
             (
                 "NAM",
-                ".Demos/01-VoxelChunkPipeline/NAM/bin/Release/"
+                "NAM/bin/Release/"
                     + "net10.0/linux-x64/publish/"
                     + "VoxelChunkPipeline.NAM.dll"),
             (
                 "NamSharedContract",
-                ".Demos/01-VoxelChunkPipeline/NAM/bin/Release/"
+                "NAM/bin/Release/"
                     + "net10.0/linux-x64/publish/"
                     + "VoxelChunkPipeline.SharedContract.dll"),
             (
                 "NativeAllocationManagement",
-                ".Demos/01-VoxelChunkPipeline/NAM/bin/Release/"
+                "NAM/bin/Release/"
                     + "net10.0/linux-x64/publish/"
                     + "Supprocom.NativeAllocationManagement.dll")
         ];
@@ -2552,8 +2552,8 @@ string.Equals(implementation, "NAM", StringComparison.Ordinal) ? workerCount
             _requestOrdinal = 0;
             ContainerName =
                 $"nam-voxel-{_implementation.ToLowerInvariant()}-{Guid.NewGuid():N}";
-            string assembly = string.Equals(_implementation, "NAM", StringComparison.Ordinal) ? "/workspace/.Demos/01-VoxelChunkPipeline/NAM/bin/Release/net10.0/linux-x64/publish/VoxelChunkPipeline.NAM.dll"
-                : "/workspace/.Demos/01-VoxelChunkPipeline/SafeCSharp/bin/Release/net10.0/linux-x64/publish/VoxelChunkPipeline.SafeCSharp.dll";
+            string assembly = string.Equals(_implementation, "NAM", StringComparison.Ordinal) ? "/workspace/NAM/bin/Release/net10.0/linux-x64/publish/VoxelChunkPipeline.NAM.dll"
+                : "/workspace/SafeCSharp/bin/Release/net10.0/linux-x64/publish/VoxelChunkPipeline.SafeCSharp.dll";
             List<string> arguments =
             [
                 "run",

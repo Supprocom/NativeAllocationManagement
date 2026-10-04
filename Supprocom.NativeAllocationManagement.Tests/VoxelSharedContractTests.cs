@@ -17,8 +17,6 @@ public sealed class VoxelSharedContractTests
         string harness = File.ReadAllText(
             Path.Combine(
                 root,
-                ".Demos",
-                "01-VoxelChunkPipeline",
                 "Harness",
                 "PressureMatrixHarness.cs"));
         int profileLoop = harness.IndexOf(
@@ -172,16 +170,15 @@ public sealed class VoxelSharedContractTests
     public void BothImplementationProjectsReferenceTheSharedContractWithoutDuplicateDtos()
     {
         string root = FindRepositoryRoot();
-        string demoRoot = Path.Combine(root, ".Demos", "01-VoxelChunkPipeline");
         string sharedReference = "..\\SharedContract\\SharedContract.csproj";
         foreach (string implementation in new[] { "SafeCSharp", "NAM" })
         {
-            string projectPath = Path.Combine(demoRoot, implementation, implementation + ".csproj");
+            string projectPath = Path.Combine(root, implementation, implementation + ".csproj");
             string project = File.ReadAllText(projectPath);
             Assert.Contains(sharedReference, project, StringComparison.Ordinal);
 
             foreach (string sourcePath in Directory.EnumerateFiles(
-                Path.Combine(demoRoot, implementation),
+                Path.Combine(root, implementation),
                 "*.cs",
                 SearchOption.AllDirectories))
             {
@@ -200,9 +197,8 @@ public sealed class VoxelSharedContractTests
     public void CompilationGateUsesConsumerBinariesAndBlocksBeforePressureExecution()
     {
         string root = FindRepositoryRoot();
-        string demoRoot = Path.Combine(root, ".Demos", "01-VoxelChunkPipeline");
         string nativeProject = File.ReadAllText(
-            Path.Combine(demoRoot, "NAM", "NAM.csproj"));
+            Path.Combine(root, "NAM", "NAM.csproj"));
         Assert.Contains(
             "CompilationBenchmark",
             nativeProject,
@@ -216,7 +212,7 @@ public sealed class VoxelSharedContractTests
             nativeProject,
             StringComparison.Ordinal);
         string compilationHarness = File.ReadAllText(
-            Path.Combine(demoRoot, "Harness", "CompilationGateHarness.cs"));
+            Path.Combine(root, "Harness", "CompilationGateHarness.cs"));
         Assert.Contains(
             "\"compilation-gate\"",
             compilationHarness,
@@ -281,7 +277,7 @@ public sealed class VoxelSharedContractTests
 
         string pressureHarness = File.ReadAllText(
                 Path.Combine(
-                    demoRoot,
+                    root,
                     "Harness",
                     "PressureMatrixHarness.cs"))
             .Replace(
@@ -480,7 +476,7 @@ public sealed class VoxelSharedContractTests
             "cycleOwners[cyclePosition]",
             File.ReadAllText(
                 Path.Combine(
-                    demoRoot,
+                    root,
                     "SharedContract",
                     "WorkerLocalPressureSession.cs")),
             StringComparison.Ordinal);
@@ -513,7 +509,7 @@ public sealed class VoxelSharedContractTests
 
         string protocol = File.ReadAllText(
             Path.Combine(
-                demoRoot,
+                root,
                 "SharedContract",
                 "Contracts",
                 "PressureProtocolContract.cs"));
@@ -566,7 +562,7 @@ public sealed class VoxelSharedContractTests
                 StringSplitOptions.None).Length - 1);
 
         string runner = File.ReadAllText(
-            Path.Combine(demoRoot, "Pressure", "run-constrained.ps1"));
+            Path.Combine(root, ".Demos", "01-VoxelChunkPipeline", "Pressure", "run-constrained.ps1"));
         Assert.Contains(
             "[string]$Profiles = \"50,100,200,500,1000,10000\"",
             runner,
@@ -625,7 +621,7 @@ public sealed class VoxelSharedContractTests
         Assert.True(pressure > publish);
 
         string guide = File.ReadAllText(
-            Path.Combine(demoRoot, "README.md"));
+            Path.Combine(root, ".Demos", "01-VoxelChunkPipeline", "README.md"));
         const string derivedImage =
             "$image = \"nam-voxel-pressure:$($commit.Substring(0, 12))\"";
         Assert.Equal(
@@ -1237,8 +1233,6 @@ public sealed class VoxelSharedContractTests
         string harness = File.ReadAllText(
             Path.Combine(
                 root,
-                ".Demos",
-                "01-VoxelChunkPipeline",
                 "Harness",
                 "PressureMatrixHarness.cs"));
         int profileLoop = harness.IndexOf(
@@ -1915,28 +1909,24 @@ public sealed class VoxelSharedContractTests
     public void MeasuredProfilesDoNotCreatePerChunkEvidence()
     {
         string root = FindRepositoryRoot();
-        string demoRoot = Path.Combine(
-            root,
-            ".Demos",
-            "01-VoxelChunkPipeline");
         string safeSource = File.ReadAllText(
             Path.Combine(
-                demoRoot,
+                root,
                 "SafeCSharp",
                 "SafePressureSession.cs"));
         string nativeSource = File.ReadAllText(
             Path.Combine(
-                demoRoot,
+                root,
                 "NAM",
                 "NativePressureSession.cs"));
         string workerSource = File.ReadAllText(
             Path.Combine(
-                demoRoot,
+                root,
                 "SharedContract",
                 "WorkerLocalPressureSession.cs"));
         string harnessSource = File.ReadAllText(
             Path.Combine(
-                demoRoot,
+                root,
                 "Harness",
                 "PressureMatrixHarness.cs"));
 
@@ -2005,20 +1995,14 @@ public sealed class VoxelSharedContractTests
         string root = FindRepositoryRoot();
         string safeSource = File.ReadAllText(Path.Combine(
             root,
-            ".Demos",
-            "01-VoxelChunkPipeline",
             "SafeCSharp",
             "SafePressureSession.cs"));
         string nativeSource = File.ReadAllText(Path.Combine(
             root,
-            ".Demos",
-            "01-VoxelChunkPipeline",
             "NAM",
             "NativePressureSession.cs"));
         string sharedSource = File.ReadAllText(Path.Combine(
             root,
-            ".Demos",
-            "01-VoxelChunkPipeline",
             "SharedContract",
             "PressureWorkContract.cs"));
 
@@ -3636,19 +3620,15 @@ public sealed class VoxelSharedContractTests
     public void SustainedDiagnosticUsesTheFixedTracePlan()
     {
         string root = FindRepositoryRoot();
-        string demoRoot = Path.Combine(
-            root,
-            ".Demos",
-            "01-VoxelChunkPipeline");
         string harness = File.ReadAllText(
             Path.Combine(
-                demoRoot,
+                root,
                 "Harness",
                 "PressureMatrixHarness.cs"));
         string nativeProgram = File.ReadAllText(
-            Path.Combine(demoRoot, "NAM", "Program.cs"));
+            Path.Combine(root, "NAM", "Program.cs"));
         string safeProgram = File.ReadAllText(
-            Path.Combine(demoRoot, "SafeCSharp", "Program.cs"));
+            Path.Combine(root, "SafeCSharp", "Program.cs"));
         int safe = harness.IndexOf(
             "(\"Safe-12\", \"SafeCSharp\", 12)",
             StringComparison.Ordinal);
@@ -3696,18 +3676,14 @@ public sealed class VoxelSharedContractTests
     public void DockerChildrenUseTheHarnessLifetimeJob()
     {
         string root = FindRepositoryRoot();
-        string demoRoot = Path.Combine(
-            root,
-            ".Demos",
-            "01-VoxelChunkPipeline");
         string harness = File.ReadAllText(
             Path.Combine(
-                demoRoot,
+                root,
                 "Harness",
                 "PressureMatrixHarness.cs"));
         string lifetime = File.ReadAllText(
             Path.Combine(
-                demoRoot,
+                root,
                 "Harness",
                 "WindowsProcessLifetimeJob.cs"));
 

@@ -36,6 +36,10 @@ It does not require a garbage collection or a resident-memory threshold.
 `SharedContract` defines the input, output, workload, protocol, and result
 types. The Safe and NAM projects contain only their memory strategies.
 
+All four projects (`SharedContract`, `SafeCSharp`, `NAM`, and `Harness`) are
+direct children of the repository root and are included in the root solution.
+The demo guide and pressure scripts remain in this directory.
+
 Both implementations process the same ordered 32 by 32 by 32 chunks. They
 produce the same sections, faces, masks, vertices, indices, descriptors, and
 upload bytes.

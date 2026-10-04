@@ -33,14 +33,10 @@ internal static class CompilationGateHarness
 
         string safeProject = Path.Combine(
             options.RepositoryRoot,
-            ".Demos",
-            "01-VoxelChunkPipeline",
             "SafeCSharp",
             "SafeCSharp.csproj");
         string namProject = Path.Combine(
             options.RepositoryRoot,
-            ".Demos",
-            "01-VoxelChunkPipeline",
             "NAM",
             "NAM.csproj");
 
