@@ -49,7 +49,9 @@ public sealed class NativeConcurrentArena : IDisposable
 
     internal long[] CurrentSegmentOrdinalsForTest => _kernel.CurrentSegmentOrdinalsForTest();
 
-    internal NativeOwnerDiagnosticSnapshot CaptureDiagnosticSnapshot() =>
+    /// <summary>Captures actual structural counters without granting native access.</summary>
+    /// <remarks>Use a quiescent maintenance boundary to reconcile concurrent fast-lane progress.</remarks>
+    public NativeOwnerDiagnosticSnapshot CaptureDiagnosticSnapshot() =>
         _kernel.GetDiagnosticSnapshot();
 
     /// <summary>Reads the current logical and physical state of this owner.</summary>

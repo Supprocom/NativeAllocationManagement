@@ -162,6 +162,10 @@ public sealed class VoxelPressureResetTests
             NativeOwnerProfile owner = SingleExpected(result.NativeOwners);
             Assert.Equal(reset.PersistentAllocationBytes, owner.RequestedBytes);
             Assert.True(worker.AllocatorAfterReset.RetainedSegmentCount > 0);
+            Assert.True(worker.AllocatorBefore.ScopeEpoch > 0);
+            Assert.True(worker.AllocatorAfterProcessing.ScopeEpoch > worker.AllocatorBefore.ScopeEpoch);
+            Assert.True(worker.AllocatorAfterReset.ScopeEpoch >= worker.AllocatorAfterProcessing.ScopeEpoch);
+            Assert.Equal(worker.AllocatorBefore.MetricsEpoch, worker.AllocatorAfterReset.MetricsEpoch);
             Assert.Equal(
                 warmupWorker.AllocatorAfterReset.RetainedSegmentCount,
                 worker.AllocatorAfterReset.RetainedSegmentCount);

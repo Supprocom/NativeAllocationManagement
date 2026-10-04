@@ -279,7 +279,32 @@ public readonly record struct NativeOwnerStatistics(
     long TrimCallCount,
     long FreshSegmentAllocationCount);
 
-internal readonly record struct NativeOwnerDiagnosticSnapshot(
+/// <summary>Reports structural state from one synchronized native owner.</summary>
+/// <remarks>
+/// Captured under the owner's lifecycle gate without retaining ownership authority.
+/// Entered operations can still advance payload and fast-lane state. Capture at a
+/// quiescent maintenance boundary to reconcile fields with other snapshots.
+/// Record counts describe runtime metadata, not the number of logical bump leases.
+/// </remarks>
+/// <param name="Lifecycle">The current owner lifecycle gate state.</param>
+/// <param name="Generation">The current or most recent generation identity.</param>
+/// <param name="ScopeEpoch">The current scoped-lifetime epoch, or zero without a current generation.</param>
+/// <param name="MetricsEpoch">The process accounting epoch; resets are confined to internal measurement tests.</param>
+/// <param name="ActiveRecords">Current active allocation records, transfer slots, and the grouped fast scoped lane.</param>
+/// <param name="ScopedRecords">Current scoped records, including the grouped fast scoped lane.</param>
+/// <param name="ReferenceRoots">Current managed reference roots held for native reference slots.</param>
+/// <param name="OrdinaryTraversalIndex">The forward bump-search frontier, or minus one without a current generation.</param>
+/// <param name="ScopedTraversalIndex">The reverse scoped-search frontier; minus one denotes no candidate.</param>
+/// <param name="RetainedSegmentCount">The current generation's slab and bump segments, including attached backing.</param>
+/// <param name="AvailableSegmentCount">Current idle slabs and completely idle bump segments.</param>
+/// <param name="RetiredGenerationCount">Generations awaiting entered-operation drain, excluding quarantine.</param>
+/// <param name="RetiredSegmentCount">Segments in retired or quarantined generation banks.</param>
+/// <param name="RetiredBytes">Recorded segment extent bytes in retired or quarantined generation banks.</param>
+/// <param name="QuarantinedGenerationCount">Generations whose failed drain prevents normal reuse.</param>
+/// <param name="QuarantinedSegmentCount">Segments belonging to quarantined generations; a subset of retired segments.</param>
+/// <param name="CurrentGenerationQuarantined">Whether the current generation's quarantine flag is set.</param>
+[StructLayout(LayoutKind.Sequential)]
+public readonly record struct NativeOwnerDiagnosticSnapshot(
     NativeOwnerLifecycle Lifecycle,
     long Generation,
     long ScopeEpoch,
@@ -3294,6 +3319,7 @@ internal sealed class NativeOwnerKernel
         {
             NativeGeneration? current = _current;
             int activeRecords = 0;
+            int scopedRecords = current?.ScopedRecordCount ?? 0;
             if (current is not null)
             {
                 foreach (NativeAllocation allocation
@@ -3311,6 +3337,19 @@ internal sealed class NativeOwnerKernel
                         activeRecords
                         + CountArenaTransferRecords(current)
                         + (current.FastArenaScopedActive ? 1 : 0));
+                    scopedRecords = checked(
+                        scopedRecords + (current.FastArenaScopedActive ? 1 : 0));
+                    if (current.ArenaCompositeAllocations is { } materialized)
+                    {
+                        foreach (ref readonly NativeAllocation allocation in CollectionsMarshal.AsSpan(materialized))
+                        {
+                            if (IsCurrentAllocation(current, allocation))
+                            {
+                                activeRecords = checked(activeRecords + 1);
+                                scopedRecords = checked(scopedRecords + (allocation.IsScoped ? 1 : 0));
+                            }
+                        }
+                    }
                 }
             }
 
@@ -3347,14 +3386,10 @@ internal sealed class NativeOwnerKernel
                 current?.ScopeEpoch ?? 0,
                 NativeMemoryTestHooks.CurrentMetricsEpoch,
                 activeRecords,
-                current is null
-                    ? 0
-                    : checked(
-                        current.ScopedRecordCount
-                        + (current.FastArenaScopedActive ? 1 : 0)),
+                scopedRecords,
                 current?.ReferenceRoots.Count ?? 0,
-                current?.OrdinaryBumpTraversalIndex ?? 0,
-                current?.ScopedBumpTraversalIndex ?? -1,
+                GetBumpTraversalIndex(current, _arenaFastSegment, scoped: false),
+                GetBumpTraversalIndex(current, _arenaFastScopedSegment, scoped: true),
                 current is null
                     ? 0
                     : checked(
@@ -3370,6 +3405,30 @@ internal sealed class NativeOwnerKernel
         }
     }
 
+    private static int GetBumpTraversalIndex(
+        NativeGeneration? generation,
+        NativeBumpSegment? fastSegment,
+        bool scoped)
+    {
+        if (generation is null)
+        {
+            return -1;
+        }
+
+        if (fastSegment is not null)
+        {
+            int index = generation.BumpSegments.IndexOf(fastSegment);
+            if (index >= 0)
+            {
+                return index;
+            }
+        }
+
+        return scoped
+            ? generation.ScopedBumpTraversalIndex
+            : generation.OrdinaryBumpTraversalIndex;
+    }
+
     private long SumRetiredBytesLocked()
     {
         long total = 0;
@@ -3383,7 +3442,17 @@ internal sealed class NativeOwnerKernel
 #pragma warning disable HLQ012 // Retain the enumerator's mutation checks during ownership cleanup; a span removes them.
         foreach (NativeGeneration generation in _quarantinedGenerations)
         {
-            total = checked(total + generation.RetiredNativeBytes);
+            // The drain-only process counter is cleared on quarantine. Its
+            // storage still exists in these banks and remains owner-retired.
+            foreach (ref readonly NativeSlab slab in generation.RetiredSlabs.AsSpan())
+            {
+                total = checked(total + (long)slab.Segment.ByteLength);
+            }
+
+            foreach (ref readonly NativeBumpSegment bump in generation.RetiredBumps.AsSpan())
+            {
+                total = checked(total + (long)bump.Segment.ByteLength);
+            }
         }
 #pragma warning restore HLQ012
 
@@ -10234,7 +10303,7 @@ internal sealed class NativeOwnerKernel
                 }
 
                 foreach (NativeAllocation allocation in current.Allocations.Values
-                    .Where(allocation => allocation.Lifecycle == NativeAllocationLifecycle.Returned
+                    .Where(allocation => !IsCurrentAllocation(current, allocation)
                         && ReferenceEquals(allocation.Slab, slab))
                     .ToArray())
                 {

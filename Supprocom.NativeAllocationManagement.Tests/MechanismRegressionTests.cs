@@ -627,12 +627,24 @@ public sealed class MechanismRegressionTests
             Assert.True(entered.Wait(TimeSpan.FromSeconds(10)));
             pool.ReleaseLeasesToGarbageCollector();
             NativeMemoryTestHooks.FailAfterCommitBoundary(1);
+            NativeOwnerDiagnosticSnapshot retiring = pool.CaptureDiagnosticSnapshot();
+            Assert.Equal(1, retiring.RetiredGenerationCount);
+            Assert.Equal(1, retiring.RetiredSegmentCount);
+            Assert.True(retiring.RetiredBytes > 0);
+            Assert.Equal(0, retiring.QuarantinedGenerationCount);
             allowCallback.Set();
             NativeAllocationQuarantinedException failure = Assert.IsType<NativeAllocationQuarantinedException>(await worker.ConfigureAwait(true));
             Assert.Equal("clear", failure.Boundary);
             Assert.Equal(1, failure.SegmentOrdinal);
             Assert.Equal(1, pool.QuarantinedSegmentCountForTest);
             Assert.Equal(1, pool.QuarantinedGenerationCountForTest);
+            NativeOwnerDiagnosticSnapshot quarantined = pool.CaptureDiagnosticSnapshot();
+            Assert.Equal(0, quarantined.RetiredGenerationCount);
+            Assert.Equal(1, quarantined.RetiredSegmentCount);
+            Assert.True(quarantined.RetiredBytes > 0);
+            Assert.Equal(1, quarantined.QuarantinedGenerationCount);
+            Assert.Equal(1, quarantined.QuarantinedSegmentCount);
+            Assert.False(quarantined.CurrentGenerationQuarantined);
             Assert.Empty(pool.CurrentSegmentOrdinalsForTest);
             long freeBeforeFreshRent = NativeMemoryTestHooks.Snapshot().FreeCount;
 

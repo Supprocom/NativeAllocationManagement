@@ -2272,6 +2272,56 @@ public sealed class AnalyzerContractTests
             NativeDiagnostics(diagnostics).Count(id => string.Equals(id, "NAM1001", StringComparison.Ordinal)) >= 3);
     }
 
+    [Fact]
+    public async Task PureDiagnosticSnapshotsCanBeReturnedFromBorrowedOwners()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    using NativeConcurrentPool<int> pool = new();
+                    using NativeConcurrentArena arena = new();
+                    _ = PeekPool(pool);
+                    _ = PeekArena(arena);
+                }
+                private static NativeOwnerDiagnosticSnapshot PeekPool(NativeConcurrentPool<int> pool)
+                    => pool.CaptureDiagnosticSnapshot();
+                private static NativeOwnerDiagnosticSnapshot PeekArena(NativeConcurrentArena arena)
+                    => arena.CaptureDiagnosticSnapshot();
+            }
+            """);
+
+        Assert.Empty(NativeDiagnostics(diagnostics));
+    }
+
+    [Fact]
+    public async Task DiagnosticMethodNameDoesNotAuthorizeRetainingAnOwner()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+            public static class Sample
+            {
+                private static NativeConcurrentPool<int>? _saved;
+                public static void Run()
+                {
+                    using NativeConcurrentPool<int> pool = new();
+                    _ = CaptureDiagnosticSnapshot(pool);
+                }
+                private static NativeOwnerDiagnosticSnapshot CaptureDiagnosticSnapshot(NativeConcurrentPool<int> pool)
+                {
+                    _saved = pool;
+                    return pool.CaptureDiagnosticSnapshot();
+                }
+            }
+            """);
+
+        Assert.Contains("NAM1001", NativeDiagnostics(diagnostics), StringComparer.Ordinal);
+    }
+
     internal static string[] NativeDiagnostics(ImmutableArray<Diagnostic> diagnostics)
     {
         return diagnostics

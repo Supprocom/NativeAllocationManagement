@@ -1,1 +1,47 @@
 #nullable enable
+Supprocom.NativeAllocationManagement.NativeConcurrentArena.CaptureDiagnosticSnapshot() -> Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot
+Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>.CaptureDiagnosticSnapshot() -> Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.ActiveRecords.get -> int
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.ActiveRecords.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.AvailableSegmentCount.get -> int
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.AvailableSegmentCount.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.CurrentGenerationQuarantined.get -> bool
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.CurrentGenerationQuarantined.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.Deconstruct(out Supprocom.NativeAllocationManagement.NativeOwnerLifecycle Lifecycle, out long Generation, out long ScopeEpoch, out long MetricsEpoch, out int ActiveRecords, out int ScopedRecords, out int ReferenceRoots, out int OrdinaryTraversalIndex, out int ScopedTraversalIndex, out int RetainedSegmentCount, out int AvailableSegmentCount, out int RetiredGenerationCount, out int RetiredSegmentCount, out long RetiredBytes, out int QuarantinedGenerationCount, out int QuarantinedSegmentCount, out bool CurrentGenerationQuarantined) -> void
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.Equals(Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot other) -> bool
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.Generation.get -> long
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.Generation.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.Lifecycle.get -> Supprocom.NativeAllocationManagement.NativeOwnerLifecycle
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.Lifecycle.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.MetricsEpoch.get -> long
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.MetricsEpoch.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.NativeOwnerDiagnosticSnapshot() -> void
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.NativeOwnerDiagnosticSnapshot(Supprocom.NativeAllocationManagement.NativeOwnerLifecycle Lifecycle, long Generation, long ScopeEpoch, long MetricsEpoch, int ActiveRecords, int ScopedRecords, int ReferenceRoots, int OrdinaryTraversalIndex, int ScopedTraversalIndex, int RetainedSegmentCount, int AvailableSegmentCount, int RetiredGenerationCount, int RetiredSegmentCount, long RetiredBytes, int QuarantinedGenerationCount, int QuarantinedSegmentCount, bool CurrentGenerationQuarantined) -> void
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.OrdinaryTraversalIndex.get -> int
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.OrdinaryTraversalIndex.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.QuarantinedGenerationCount.get -> int
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.QuarantinedGenerationCount.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.QuarantinedSegmentCount.get -> int
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.QuarantinedSegmentCount.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.ReferenceRoots.get -> int
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.ReferenceRoots.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.RetainedSegmentCount.get -> int
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.RetainedSegmentCount.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.RetiredBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.RetiredBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.RetiredGenerationCount.get -> int
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.RetiredGenerationCount.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.RetiredSegmentCount.get -> int
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.RetiredSegmentCount.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.ScopeEpoch.get -> long
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.ScopeEpoch.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.ScopedRecords.get -> int
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.ScopedRecords.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.ScopedTraversalIndex.get -> int
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.ScopedTraversalIndex.init -> void
+override Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.GetHashCode() -> int
+static Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.operator !=(Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot left, Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot right) -> bool
+static Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.operator ==(Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot left, Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot right) -> bool
+~override Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.Equals(object obj) -> bool
+~override Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.ToString() -> string

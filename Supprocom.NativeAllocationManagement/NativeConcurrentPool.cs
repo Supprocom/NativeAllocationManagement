@@ -99,6 +99,11 @@ public sealed class NativeConcurrentPool<T> : IDisposable
     public NativeOwnerStatistics GetStatistics() =>
         _kernel.GetStatistics();
 
+    /// <summary>Captures actual structural counters without granting native access.</summary>
+    /// <remarks>Retired counts include quarantined segments; do not add overlapping categories.</remarks>
+    public NativeOwnerDiagnosticSnapshot CaptureDiagnosticSnapshot() =>
+        _kernel.GetDiagnosticSnapshot();
+
     /// <summary>Initializes and publishes one synchronized lease.</summary>
     public ConcurrentPooled<T> Rent(
         int length,

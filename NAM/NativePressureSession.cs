@@ -175,7 +175,7 @@ internal sealed class NativePressureSession :
                                 request.Diagnostic is null
                                     ? default
                                     : CaptureAllocatorDiagnostic(
-                                        phaseArena.GetStatistics());
+                                        phaseArena.CaptureDiagnosticSnapshot());
                         PressureRuntimeSnapshot before = PressureRuntimeSnapshot.Capture();
                         NativeMemoryStatistics nativeBefore = NativeMemoryDiagnostics.Snapshot();
                         NativeOwnerStatistics[] ownerBefore =
@@ -418,7 +418,7 @@ internal sealed class NativePressureSession :
                                 request.Diagnostic is null
                                     ? default
                                     : CaptureAllocatorDiagnostic(
-                                        phaseArena.GetStatistics());
+                                        phaseArena.CaptureDiagnosticSnapshot());
                         reportProgress(new PressureProgress(
                             Implementation,
                             request.ProfilePercent,
@@ -480,7 +480,7 @@ internal sealed class NativePressureSession :
                                 request.Diagnostic is null
                                     ? default
                                     : CaptureAllocatorDiagnostic(
-                                        phaseArena.GetStatistics());
+                                        phaseArena.CaptureDiagnosticSnapshot());
                         PressureRequestDiagnostics? diagnostics =
                             CreateRequestDiagnostics(
                                 request,
@@ -628,29 +628,27 @@ internal sealed class NativePressureSession :
 
     private static PressureAllocatorDiagnosticSnapshot
         CaptureAllocatorDiagnostic(
-            NativeOwnerStatistics snapshot)
+            NativeOwnerDiagnosticSnapshot snapshot)
     {
-        // The demo consumes only public owner statistics. Internal allocation
-        // records and epochs remain private to the runtime and report zero here.
         return new PressureAllocatorDiagnosticSnapshot(
             true,
             snapshot.Lifecycle.ToString(),
             snapshot.Generation,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            snapshot.SegmentCount,
+            snapshot.ScopeEpoch,
+            snapshot.MetricsEpoch,
+            snapshot.ActiveRecords,
+            snapshot.ScopedRecords,
+            snapshot.ReferenceRoots,
+            snapshot.OrdinaryTraversalIndex,
+            snapshot.ScopedTraversalIndex,
+            snapshot.RetainedSegmentCount,
             snapshot.AvailableSegmentCount,
-            0,
+            snapshot.RetiredGenerationCount,
             snapshot.RetiredSegmentCount,
             snapshot.RetiredBytes,
-            0,
-            0,
-            false);
+            snapshot.QuarantinedGenerationCount,
+            snapshot.QuarantinedSegmentCount,
+            snapshot.CurrentGenerationQuarantined);
     }
 
     private PressureSessionState ResetLogicalState(

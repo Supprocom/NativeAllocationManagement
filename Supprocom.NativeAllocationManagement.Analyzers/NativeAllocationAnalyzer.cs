@@ -6665,7 +6665,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             string name = invocation.TargetMethod.Name;
             if (IsNativePool(invocation.TargetMethod.ContainingType))
             {
-                return name is "Rent" or "GetStatistics";
+                return name is "Rent" or "GetStatistics"
+                    or "CaptureDiagnosticSnapshot";
             }
 
             return IsNativeArena(invocation.TargetMethod.ContainingType)
