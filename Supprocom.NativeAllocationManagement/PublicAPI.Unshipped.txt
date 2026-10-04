@@ -1,4 +1,5 @@
 #nullable enable
+Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.HistoryOverflowed.get -> bool
 Supprocom.NativeAllocationManagement.NativeMemoryTraceEvent.AllocationOrdinal.get -> long?
 Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.PageAcquired = 6 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
 Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.Prepared = 7 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind

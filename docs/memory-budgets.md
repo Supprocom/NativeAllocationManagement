@@ -90,13 +90,22 @@ not addresses. Budget state is never reset by internal process-measurement reset
 | `AllocationCount` | Successful fresh backing acquisitions, including realloc from null. |
 | `ReallocationCount` | Successful realloc calls, including realloc from null; it overlaps that acquisition case. |
 | `FreeCount` | Physical release calls; realloc is not an invented free event. |
-| `ActiveAllocationCount` | Derived exactly from successful acquisitions minus physical releases. No redundant mutation counter. |
+| `ActiveAllocationCount` | Exact current charged allocation gauge, updated at acquisition and physical release under the existing domain lock. It cannot be derived from two saturated lifetime histories. Each live allocation owns at least one byte, so admission bounds the gauge by the immutable byte ceiling. |
 | `RejectedAllocationCount` | Requests whose minimum complete extent did not fit, before native allocation. A failed preference with a successful exact fallback is not a rejection. |
 | `FailedAllocationCount` | Admitted acquisition attempts cancelled after failure. Ceiling refusal never acquired a reservation and is not counted here. |
 | `TraceCapacity` | Fixed managed event-array capacity chosen at construction; zero disables event construction. This array is managed metadata, not native backing charged to the ceiling. |
 | `TraceCount` | Events currently retained in the ring, never larger than its capacity. |
 | `DroppedTraceEventCount` | Events overwritten or omitted after sequence exhaustion, not those omitted by a short copy destination. Saturates at `long.MaxValue`; check `TraceOverflowed`. |
 | `TraceOverflowed` | True if event identities were exhausted or the dropped count ceased to be exact. This diagnostic condition never interrupts a successful allocation or physical release. |
+| `HistoryOverflowed` | A lifetime event counter exceeded Int64's representable history. Counts at `long.MaxValue` are lower bounds; other unsaturated counts remain exact. Charged allocations, bytes, reservations and peaks remain exact and do not depend on history subtraction. |
+
+Lifetime acquisition/realloc/free/refusal/failure counters saturate with the visible
+`HistoryOverflowed` flag, rather than throwing after a successful physical storage
+transition. The exact live gauge is independent of that diagnostic history, so
+exhausted histories cannot prevent cleanup or make a budget refuse real capacity.
+Owner/domain identities still advance with checked, non-reusing authority; they
+are not converted into saturated or wrapping lifetime tokens. Budget history and
+trace history are independent flags and never reset during ordinary capture.
 
 ## Owner identities and optional tracing
 

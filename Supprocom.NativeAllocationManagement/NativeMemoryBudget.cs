@@ -26,6 +26,8 @@ public sealed class NativeMemoryBudget
     private long _freeCount;
     private long _rejectedAllocationCount;
     private long _failedAllocationCount;
+    private long _activeAllocationCount;
+    private bool _historyOverflowed;
 
     /// <summary>Creates a shared domain with an immutable native extent limit.</summary>
     /// <param name="capacityBytes">The maximum admitted NAM-requested extent in bytes.</param>
@@ -60,9 +62,10 @@ public sealed class NativeMemoryBudget
             return new(
                 Id, CapacityBytes, _committedBytes, _reservedBytes,
                 _peakCommittedBytes, _peakAdmittedBytes, _allocationCount,
-                _reallocationCount, _freeCount, _allocationCount - _freeCount,
+                _reallocationCount, _freeCount, _activeAllocationCount,
                 _rejectedAllocationCount, _failedAllocationCount,
-                _trace.Length, _traceCount, _droppedTraceEventCount, _traceOverflowed);
+                _trace.Length, _traceCount, _droppedTraceEventCount, _traceOverflowed,
+                _historyOverflowed);
         }
     }
 
@@ -122,7 +125,7 @@ public sealed class NativeMemoryBudget
             long bytes = preferredBytes <= availableBytes ? preferredBytes : minimumBytes;
             if (bytes > availableBytes)
             {
-                _rejectedAllocationCount = checked(_rejectedAllocationCount + 1);
+                IncrementHistory(ref _rejectedAllocationCount);
                 RecordTrace(NativeMemoryTraceKind.Rejected, ownerId, minimumByteLength);
                 admittedByteLength = 0;
                 return false;
@@ -152,11 +155,13 @@ public sealed class NativeMemoryBudget
         lock (_gate)
         {
             ValidateReservation(bytes);
-            long allocationCount = checked(_allocationCount + 1);
             _reservedBytes -= bytes;
             _committedBytes += bytes;
             _peakCommittedBytes = Math.Max(_peakCommittedBytes, _committedBytes);
-            _allocationCount = allocationCount;
+            // Every active allocation owns at least one charged byte. Admission
+            // bounds this exact gauge by CapacityBytes, independently of history.
+            _activeAllocationCount++;
+            IncrementHistory(ref _allocationCount);
             RecordTrace(traceKind, ownerId, byteLength, allocationOrdinal: allocationOrdinal);
         }
     }
@@ -173,13 +178,15 @@ public sealed class NativeMemoryBudget
                 throw new InvalidOperationException("The replacement exceeds the committed budget charge.");
             }
 
-            long reallocationCount = checked(_reallocationCount + 1);
-            long allocationCount = checked(_allocationCount + (previousBytes == 0 ? 1 : 0));
             _reservedBytes -= bytes;
             _committedBytes = _committedBytes - previousBytes + bytes;
             _peakCommittedBytes = Math.Max(_peakCommittedBytes, _committedBytes);
-            _reallocationCount = reallocationCount;
-            _allocationCount = allocationCount;
+            IncrementHistory(ref _reallocationCount);
+            if (previousBytes == 0)
+            {
+                _activeAllocationCount++;
+                IncrementHistory(ref _allocationCount);
+            }
             RecordTrace(NativeMemoryTraceKind.Reallocated, ownerId, byteLength, previousByteLength);
         }
     }
@@ -195,9 +202,8 @@ public sealed class NativeMemoryBudget
         lock (_gate)
         {
             ValidateReservation(bytes);
-            long failedCount = checked(_failedAllocationCount + 1);
             _reservedBytes -= bytes;
-            _failedAllocationCount = failedCount;
+            IncrementHistory(ref _failedAllocationCount);
             RecordTrace(NativeMemoryTraceKind.AcquisitionFailed, ownerId, byteLength);
         }
     }
@@ -213,14 +219,14 @@ public sealed class NativeMemoryBudget
         long bytes = checked((long)byteLength);
         lock (_gate)
         {
-            if (bytes > _committedBytes || _allocationCount == _freeCount)
+            if (bytes > _committedBytes || _activeAllocationCount == 0)
             {
                 throw new InvalidOperationException("Physical release has no matching budget charge.");
             }
 
-            long freeCount = checked(_freeCount + 1);
             _committedBytes -= bytes;
-            _freeCount = freeCount;
+            _activeAllocationCount--;
+            IncrementHistory(ref _freeCount);
             RecordTrace(traceKind, ownerId, byteLength, allocationOrdinal: allocationOrdinal);
         }
     }
@@ -283,6 +289,18 @@ public sealed class NativeMemoryBudget
         _droppedTraceEventCount++;
     }
 
+    private void IncrementHistory(ref long counter)
+    {
+        if (counter == long.MaxValue)
+        {
+            _historyOverflowed = true;
+        }
+        else
+        {
+            counter++;
+        }
+    }
+
     private void ValidateReservation(long bytes)
     {
         if (bytes > _reservedBytes)
@@ -314,7 +332,8 @@ public readonly record struct NativeMemoryBudgetStatistics
         long peakCommittedBytes, long peakAdmittedBytes, long allocationCount,
         long reallocationCount, long freeCount, long activeAllocationCount,
         long rejectedAllocationCount, long failedAllocationCount,
-        int traceCapacity, int traceCount, long droppedTraceEventCount, bool traceOverflowed)
+        int traceCapacity, int traceCount, long droppedTraceEventCount, bool traceOverflowed,
+        bool historyOverflowed)
     {
         Id = id;
         CapacityBytes = capacityBytes;
@@ -332,6 +351,7 @@ public readonly record struct NativeMemoryBudgetStatistics
         TraceCount = traceCount;
         DroppedTraceEventCount = droppedTraceEventCount;
         TraceOverflowed = traceOverflowed;
+        HistoryOverflowed = historyOverflowed;
     }
 
     /// <summary>Gets the observed domain's stable identity.</summary>
@@ -352,7 +372,7 @@ public readonly record struct NativeMemoryBudgetStatistics
     public long ReallocationCount { get; }
     /// <summary>Gets physical release calls; replacing backing by realloc is not a free call.</summary>
     public long FreeCount { get; }
-    /// <summary>Gets charged backing allocations not yet physically released.</summary>
+    /// <summary>Gets the exact charged backing allocation gauge, independent of saturated lifetime histories.</summary>
     public long ActiveAllocationCount { get; }
     /// <summary>Gets requests refused by the ceiling before native allocation.</summary>
     public long RejectedAllocationCount { get; }
@@ -366,6 +386,8 @@ public readonly record struct NativeMemoryBudgetStatistics
     public long DroppedTraceEventCount { get; }
     /// <summary>Gets whether event identities were exhausted or the dropped count ceased being exact.</summary>
     public bool TraceOverflowed { get; }
+    /// <summary>Gets whether a lifetime event counter saturated; values at long.MaxValue are then lower bounds.</summary>
+    public bool HistoryOverflowed { get; }
 }
 
 /// <summary>Raised before allocation when a domain cannot admit a complete backing extent.</summary>
