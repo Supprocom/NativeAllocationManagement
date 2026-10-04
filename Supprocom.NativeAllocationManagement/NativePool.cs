@@ -43,8 +43,9 @@ public sealed class NativePool<T> : IDisposable
 
     internal long GenerationCounterForTest => 0;
 
-    internal long[] CurrentSegmentOrdinalsForTest => [];
 #pragma warning restore CA1822
+
+    internal long[] CurrentSegmentOrdinalsForTest => _kernel.GetSegmentOrdinals();
 
     internal void SetScopeEpochForTest(long value) =>
         throw new NotSupportedException(
@@ -108,6 +109,33 @@ public sealed class NativePool<T> : IDisposable
     /// <summary>Reads the current typed slab state.</summary>
     public NativeOwnerStatistics GetStatistics() =>
         _kernel.GetStatistics();
+
+    /// <summary>Prepares all fixed-shape slot metadata and backing pages without subsequent growth.</summary>
+    /// <remarks>
+    /// Preparation admits every page before acquiring backing or metadata.
+    /// Dispose returns backing deterministically after all leases return.
+    /// Trim removes idle pages without implicit refill; original bounds remain diagnostic.
+    /// </remarks>
+    /// <param name="preparation">The positive simultaneous shape and page bounds.</param>
+    /// <param name="budget">The optional shared backing domain, or null for no byte ceiling.</param>
+    public NativePool(NativePoolPreparation preparation, NativeMemoryBudget? budget)
+    {
+        _kernel = new NativePoolKernel<T>(preparation, budget);
+    }
+
+    /// <summary>Captures actual prepared capacity and recorded history without allocating.</summary>
+    public NativePreparedPoolStatistics CapturePreparedSnapshot() => _kernel.GetPreparedStatistics();
+
+    /// <summary>Publishes a prepared slot, returning false only for expected shape or slot exhaustion.</summary>
+    /// <remarks>Invalid ownership and initialization failures throw; no partial lease is published.</remarks>
+    /// <param name="length">The required initialized elements, at most the prepared shape.</param>
+    /// <param name="initializer">The bounded complete initializer, invoked only after acquiring a slot.</param>
+    /// <param name="lease">The initialized owning capability on success; default on exhaustion.</param>
+    /// <param name="reason">The exact expected capacity refusal, or None on success.</param>
+    /// <returns>True only after initialization and publication.</returns>
+    public bool TryRent(int length, NativeLeaseInitializer<T> initializer,
+        out Pooled<T> lease, out NativePoolExhaustionReason reason) =>
+        _kernel.TryRent(length, initializer, out lease, out reason);
 
     /// <summary>Initializes and publishes one pooled slab lease.</summary>
     public Pooled<T> Rent(

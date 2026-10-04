@@ -140,7 +140,8 @@ public sealed class NativeMemoryBudget
         }
     }
 
-    internal void Commit(nuint byteLength, long ownerId = 0)
+    internal void Commit(nuint byteLength, long ownerId = 0,
+        NativeMemoryTraceKind traceKind = NativeMemoryTraceKind.Allocated, long allocationOrdinal = 0)
     {
         if (byteLength == 0)
         {
@@ -156,7 +157,7 @@ public sealed class NativeMemoryBudget
             _committedBytes += bytes;
             _peakCommittedBytes = Math.Max(_peakCommittedBytes, _committedBytes);
             _allocationCount = allocationCount;
-            RecordTrace(NativeMemoryTraceKind.Allocated, ownerId, byteLength);
+            RecordTrace(traceKind, ownerId, byteLength, allocationOrdinal: allocationOrdinal);
         }
     }
 
@@ -201,7 +202,8 @@ public sealed class NativeMemoryBudget
         }
     }
 
-    internal void Release(nuint byteLength, long ownerId = 0)
+    internal void Release(nuint byteLength, long ownerId = 0,
+        NativeMemoryTraceKind traceKind = NativeMemoryTraceKind.Released, long allocationOrdinal = 0)
     {
         if (byteLength == 0)
         {
@@ -219,11 +221,24 @@ public sealed class NativeMemoryBudget
             long freeCount = checked(_freeCount + 1);
             _committedBytes -= bytes;
             _freeCount = freeCount;
-            RecordTrace(NativeMemoryTraceKind.Released, ownerId, byteLength);
+            RecordTrace(traceKind, ownerId, byteLength, allocationOrdinal: allocationOrdinal);
         }
     }
 
-    private void RecordTrace(NativeMemoryTraceKind kind, long ownerId, nuint bytes, nuint previousBytes = 0)
+    internal void RecordPreparation(nuint byteLength, long ownerId)
+    {
+        if (_trace.Length == 0)
+        {
+            return;
+        }
+        lock (_gate)
+        {
+            RecordTrace(NativeMemoryTraceKind.Prepared, ownerId, byteLength);
+        }
+    }
+
+    private void RecordTrace(NativeMemoryTraceKind kind, long ownerId, nuint bytes,
+        nuint previousBytes = 0, long allocationOrdinal = 0)
     {
         if (_trace.Length == 0)
         {
@@ -242,7 +257,7 @@ public sealed class NativeMemoryBudget
         _trace[_traceWriteIndex] = new NativeMemoryTraceEvent(
             _traceSequence, System.Diagnostics.Stopwatch.GetTimestamp(), Id,
             ownerId == 0 ? null : ownerId, kind, bytes, previousBytes,
-            _committedBytes, _reservedBytes);
+            _committedBytes, _reservedBytes, allocationOrdinal);
         _traceWriteIndex++;
         if (_traceWriteIndex == _trace.Length)
         {

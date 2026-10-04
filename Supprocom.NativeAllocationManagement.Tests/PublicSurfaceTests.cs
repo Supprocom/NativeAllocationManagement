@@ -85,7 +85,7 @@ public sealed class PublicSurfaceTests
 
         ConstructorInfo[] poolConstructors =
             typeof(NativePool<int>).GetConstructors();
-        Assert.Equal(3, poolConstructors.Length);
+        Assert.Equal(4, poolConstructors.Length);
         ConstructorInfo budgetedPoolConstructor = SingleExpected(poolConstructors,
             static constructor => constructor.GetParameters().Length == 4);
         Assert.Equal(typeof(NativeMemoryBudget), budgetedPoolConstructor.GetParameters()[0].ParameterType);

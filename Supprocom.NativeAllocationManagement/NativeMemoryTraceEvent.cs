@@ -16,7 +16,13 @@ public enum NativeMemoryTraceKind
     /// <summary>The minimum extent was refused before acquisition.</summary>
     Rejected,
     /// <summary>An admitted acquisition failed and its reservation was cancelled.</summary>
-    AcquisitionFailed
+    AcquisitionFailed,
+    /// <summary>One prepared backing page was acquired and committed.</summary>
+    PageAcquired,
+    /// <summary>Backing and metadata preparation completed and its capacity is ready.</summary>
+    Prepared,
+    /// <summary>A maintenance trim physically released backing.</summary>
+    Trimmed
 }
 
 /// <summary>A bounded value-only storage transition; it contains no owner or native authority.</summary>
@@ -26,7 +32,7 @@ public readonly record struct NativeMemoryTraceEvent
     internal NativeMemoryTraceEvent(
         long sequence, long timestampTicks, long budgetId, long? ownerId,
         NativeMemoryTraceKind kind, nuint requestedBytes, nuint previousBytes,
-        long committedBytes, long reservedBytes)
+        long committedBytes, long reservedBytes, long allocationOrdinal = 0)
     {
         Sequence = sequence;
         TimestampTicks = timestampTicks;
@@ -37,6 +43,7 @@ public readonly record struct NativeMemoryTraceEvent
         PreviousBytes = previousBytes;
         CommittedBytes = committedBytes;
         ReservedBytes = reservedBytes;
+        AllocationOrdinal = allocationOrdinal == 0 ? null : allocationOrdinal;
     }
 
     /// <summary>Gets the lifetime event sequence within the domain.</summary>
@@ -57,4 +64,6 @@ public readonly record struct NativeMemoryTraceEvent
     public long CommittedBytes { get; }
     /// <summary>Gets reserved bytes immediately after this transition.</summary>
     public long ReservedBytes { get; }
+    /// <summary>Gets the owner-local backing acquisition ordinal when supplied, otherwise unavailable.</summary>
+    public long? AllocationOrdinal { get; }
 }

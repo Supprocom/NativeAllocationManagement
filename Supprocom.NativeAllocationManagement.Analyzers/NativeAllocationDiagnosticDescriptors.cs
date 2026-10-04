@@ -199,6 +199,12 @@ internal static class NativeAllocationDiagnosticDescriptors
         "Bundled analyzer is required",
         "Supprocom.NativeAllocationManagement requires its bundled analyzer asset. Restore the package with analyzer assets enabled.");
 
+    internal static readonly DiagnosticDescriptor PreparedAcquisitionGuard = Create(
+        "NAM1050",
+        "Prepared lease requires a successful acquisition guard",
+        "Native value '{0}' is not proven initialized by a successful TryRent and cannot be used by '{1}'. Guard the acquisition result before using or disposing its output.",
+        helpLinkUri: "https://github.com/Supprocom/NativeAllocationManagement/blob/main/docs/diagnostics/NAM1050.md");
+
     internal static ImmutableArray<DiagnosticDescriptor> All { get; } = ImmutableArray.Create(
         OwnerAlias,
         HandleAlias,
@@ -237,13 +243,15 @@ internal static class NativeAllocationDiagnosticDescriptors
         WorkspaceAcquisitionEscape,
         UnsupportedWorkspaceParameter,
         ManagedAllocationInRegion,
+        PreparedAcquisitionGuard,
         AnalyzerMissing);
 
     private static DiagnosticDescriptor Create(
         string id,
         string title,
         string message,
-        DiagnosticSeverity severity = DiagnosticSeverity.Error)
+        DiagnosticSeverity severity = DiagnosticSeverity.Error,
+        string? helpLinkUri = null)
     {
         return new DiagnosticDescriptor(
             id,
@@ -253,7 +261,7 @@ internal static class NativeAllocationDiagnosticDescriptors
             severity,
             isEnabledByDefault: true,
             description: message,
-            helpLinkUri: "https://github.com/Supprocom/NativeAllocationManagement#ownership-diagnostics",
+            helpLinkUri: helpLinkUri ?? "https://github.com/Supprocom/NativeAllocationManagement#ownership-diagnostics",
             customTags: WellKnownDiagnosticTags.Telemetry);
     }
 }

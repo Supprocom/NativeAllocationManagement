@@ -9,8 +9,10 @@ and preparation limits.
 The current integration covers direct builders/workspaces/completed transfers,
 thread-confined pools/arenas/regions, and synchronized pools/arenas. Storage keeps
 its domain through retention, retirement, quarantine and finalizable detachment.
-Prepared execution, page slots and shared-pointer controls are still
-required before the complete 0.3.0 boundary is eligible for release.
+[Prepared fixed-shape page slots](prepared-pools.md) additionally reserve all
+pages before metadata acquisition and retain whole-page charges through slot
+reuse. Complete preparation across other shapes and shared-pointer controls are
+still required before the 0.3.0 boundary is eligible for release.
 
 Budgeted owner constructors require all arguments explicitly. Existing optional
 owner signatures and defaults are preserved. Their narrow RS0027 exceptions
@@ -110,7 +112,8 @@ one bounded managed event array during construction. The default constructor
 uses no event storage. Disabled tracing returns before constructing an event
 or reading the clock. Enabled tracing records only native admission, refusal,
 acquisition, realloc, acquisition rollback and physical release under the
-existing budget lock. Reusing backing does not take that lock or emit an event.
+existing budget lock. Prepared pages also emit actual page acquisition,
+preparation completion and physical trim events. Reusing backing does not take that lock or emit an event.
 It does not trace every element, callback or warmed lease.
 
 `CopyTraceTo(Span<NativeMemoryTraceEvent>)` copies without allocating or resetting
@@ -121,6 +124,11 @@ requested/previous extents, and post-transition committed/reserved bytes.
 Use `Stopwatch.Frequency` to interpret ticks; they are not UTC timestamps.
 Production backing transitions supply their real owner ID; ownerless internal
 domain operations report `null`, never a fabricated owner zero.
+`AllocationOrdinal` is the owner-local backing acquisition ordinal where supplied,
+currently fast-pool slab/page physical transitions. Aggregate preparation has no single ordinal;
+other transitions lacking an ordinal report unavailable (`null`), not an invented
+zero. Full correlation for other backing/pointer families remains required before
+the complete release boundary.
 
 Sequence exhaustion stops new event recording rather than wrapping an identity.
 Dropped-count exhaustion saturates and sets `TraceOverflowed`; after that flag,

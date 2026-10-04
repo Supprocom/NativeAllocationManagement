@@ -5,7 +5,7 @@ public enum NativeOwnerModel
 {
     /// <summary>No runtime owner supplied this default snapshot.</summary>
     Unspecified,
-    /// <summary>Unmanaged typed slabs with thread-confined lease tokens, without generations.</summary>
+    /// <summary>Unmanaged typed slots backed by slabs or prepared pages, with thread-confined tokens and no generations.</summary>
     ThreadConfinedPool,
     /// <summary>Thread-confined bump storage with one lexical lifetime.</summary>
     ThreadConfinedRegion,

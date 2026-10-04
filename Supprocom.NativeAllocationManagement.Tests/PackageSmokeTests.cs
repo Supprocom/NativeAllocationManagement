@@ -439,6 +439,79 @@ public sealed class PackageSmokeTests
     }
 
     [Fact]
+    public async Task PackagePreparedPagesRunAndBundledAnalyzerRejectsUnguardedAcquisition()
+    {
+        PackageEvidence package = await GetPackageAsync();
+        WriteEvidence(package);
+        string consumerRoot = CreateConsumerRoot();
+        try
+        {
+            WriteConsumerProject(consumerRoot, package, excludeAnalyzer: false,
+                suppressDiagnostics: false, executable: true, treatWarningsAsErrors: true);
+            string program = Path.Combine(consumerRoot, "Program.cs");
+            await File.WriteAllTextAsync(program,
+                """
+                using Supprocom.NativeAllocationManagement;
+                public static class Consumer
+                {
+                    public static int Main()
+                    {
+                        NativeMemoryBudget budget = new(128, traceCapacity: 8);
+                        using (NativePool<int> pool = new(new NativePoolPreparation(2, 4, 2), budget))
+                        {
+                            if (!pool.TryRent(4, static writer => writer.Fill(42), out Pooled<int> lease, out _)) return 1;
+                            try { if (lease.Read(static view => view[0]) != 42) return 2; }
+                            finally { lease.Dispose(); }
+                            NativePreparedPoolStatistics snapshot = pool.CapturePreparedSnapshot();
+                            if (snapshot.AvailableSlotCount != 2 || snapshot.RetainedPageCount != 1
+                                || snapshot.PeakOccupiedSlotCount != 1 || snapshot.SuccessfulRentCount != 1
+                                || snapshot.RetainedBytes != 128 || snapshot.ManagedBankBytes <= 0) return 3;
+                        }
+                        System.Span<NativeMemoryTraceEvent> events = stackalloc NativeMemoryTraceEvent[8];
+                        if (budget.CopyTraceTo(events) != 4 || budget.CaptureStatistics().CommittedBytes != 0
+                            || events[1].Kind != NativeMemoryTraceKind.PageAcquired || events[1].AllocationOrdinal != 1
+                            || events[2].Kind != NativeMemoryTraceKind.Prepared || events[3].Kind != NativeMemoryTraceKind.Released) return 4;
+                        System.Console.WriteLine("prepared-page-output=42; pages=1; peak-slots=1; final-charge=0");
+                        return 0;
+                    }
+                }
+                """);
+            string project = Path.Combine(consumerRoot, "Consumer.csproj");
+            CommandResult restore = await RunDotnetAsync(
+                $"restore \"{project}\" --nologo --force --no-cache --packages \"{Path.Combine(consumerRoot, ".packages")}\" --source \"{package.SourceDirectory}\"", consumerRoot);
+            _output.WriteLine(restore.Output);
+            Assert.True(restore.ExitCode == 0, restore.Output);
+            CommandResult build = await RunDotnetAsync($"build \"{project}\" --no-restore --nologo", consumerRoot);
+            _output.WriteLine(build.Output);
+            Assert.True(build.ExitCode == 0, build.Output);
+            CommandResult run = await RunDotnetAsync($"run \"{project}\" --no-build --no-restore --nologo", consumerRoot);
+            _output.WriteLine(run.Output);
+            Assert.True(run.ExitCode == 0, run.Output);
+            await File.WriteAllTextAsync(program,
+                """
+                using Supprocom.NativeAllocationManagement;
+                public static class Consumer
+                {
+                    public static void Main()
+                    {
+                        using NativePool<int> pool = new(new NativePoolPreparation(2, 4, 2), null);
+                        pool.TryRent(4, static writer => writer.Fill(42), out Pooled<int> lease, out _);
+                        lease.Dispose();
+                    }
+                }
+                """);
+            CommandResult invalid = await RunDotnetAsync($"build \"{project}\" --no-restore --nologo -t:Rebuild", consumerRoot);
+            _output.WriteLine(invalid.Output);
+            Assert.NotEqual(0, invalid.ExitCode);
+            Assert.Contains("error NAM1050", invalid.Output, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            DeleteConsumerRoot(consumerRoot);
+        }
+    }
+
+    [Fact]
     public async Task PackageReferenceStorageUsesNativeSlotsForReferencesAcrossReuse()
     {
         PackageEvidence package = await GetPackageAsync();

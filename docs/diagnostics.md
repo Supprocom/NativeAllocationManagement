@@ -91,9 +91,17 @@ actual slab states and borrow counts at capture; they do not maintain redundant
 hot-path counters. Its metadata capacity probe reports the allocated slab-bank
 length, not live/available slab usage. Free-list membership is stored inside that
 same bank, so both slab-capacity fields describe the same capacity. There are
-genuinely no bump bank, separate segment-owner bank, reference-root bank or
-generational quarantine bank in this unmanaged thread-confined model. These
+genuinely no bump bank, reference-root bank or generational quarantine bank in
+this unmanaged thread-confined model. Prepared fixed-shape mode has a real page
+bank, reported by the segment-owner capacity probe. In that mode physical segment
+counts are pages, available segments are completely idle pages, and active
+records are occupied slots. The actual acquisition-ordinal probe reads retained
+slab/page identities instead of returning an empty placeholder. These
 model-specific absences are not a license to zero-fill synchronized-owner fields.
+
+See [prepared page diagnostics](prepared-pools.md#prepared-snapshot-inventory)
+for full retained capacity, historical occupancy, exhaustion, managed bank costs
+and sparse-page retention.
 
 See [bounded budget tracing](memory-budgets.md#owner-identities-and-optional-tracing)
 for peaks, refused acquisitions, event units, overflow disclosure and copying.

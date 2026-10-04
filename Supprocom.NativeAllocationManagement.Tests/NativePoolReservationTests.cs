@@ -11,7 +11,8 @@ public sealed class NativePoolReservationTests
         System.Reflection.ConstructorInfo typed = SingleExpected(
             poolType.GetConstructors(),
             constructor =>
-                constructor.GetParameters().Length == 2);
+                constructor.GetParameters().Length == 2
+                    && constructor.GetParameters()[0].ParameterType == typeof(int));
         Assert.Equal("preLease", typed.GetParameters()[0].Name);
 
         System.Reflection.ConstructorInfo combined = SingleExpected(

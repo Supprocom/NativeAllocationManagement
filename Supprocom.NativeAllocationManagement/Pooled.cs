@@ -130,11 +130,11 @@ public readonly ref struct Pooled<T>
         NativeSpanStateProcessor<T, TState, TResult> processor)
     {
         ArgumentNullException.ThrowIfNull(processor);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan((uint)logicalLength, (uint)_length, nameof(logicalLength));
         NativePoolKernel<T> kernel = GetKernel(nameof(Process));
         IntPtr pointer = kernel.EnterBorrow(
             _slabIndex,
             _token,
-            logicalLength,
             nameof(Process));
         try
         {
@@ -164,7 +164,6 @@ public readonly ref struct Pooled<T>
         IntPtr pointer = kernel.EnterBorrow(
             _slabIndex,
             _token,
-            _length,
             operation);
         return new PooledBorrow<T>(
             kernel,

@@ -125,6 +125,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 Namespace + "NativeWorkspace`1");
             LeaseView = runtimeAssembly.GetTypeByMetadataName(
                 Namespace + "NativeLeaseView`1");
+            PoolPreparation = runtimeAssembly.GetTypeByMetadataName(Namespace + "NativePoolPreparation");
         }
 
         internal INamedTypeSymbol? Pool { get; }
@@ -156,6 +157,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         internal INamedTypeSymbol? Workspace { get; }
 
         internal INamedTypeSymbol? LeaseView { get; }
+        internal INamedTypeSymbol? PoolPreparation { get; }
 
         internal bool IsAvailable =>
             Pool is not null
@@ -1079,6 +1081,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             bool emitDiagnostics)
         {
             FlowSnapshot result = CloneSnapshot(state);
+            RefinePreparedAcquisition(branch, result);
             ControlFlowRegion[] finallyRegions = GetFinallyRegionsForBranch(graph, branch);
             foreach (var itemAt40386 in finallyRegions)
             {
@@ -1127,6 +1130,39 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             }
 
             return [];
+        }
+
+        private void RefinePreparedAcquisition(ControlFlowBranch branch, FlowSnapshot state)
+        {
+            if (branch.Source is not BasicBlock source || source.ConditionKind == ControlFlowConditionKind.None)
+            {
+                return;
+            }
+            IOperation? condition = Unwrap(source.BranchValue);
+            bool negated = false;
+            while (condition is IUnaryOperation { OperatorKind: UnaryOperatorKind.Not } unary)
+            {
+                negated = !negated;
+                condition = Unwrap(unary.Operand);
+            }
+            if (condition is not IInvocationOperation invocation || !IsPreparedPoolTryRent(invocation))
+            {
+                return;
+            }
+            bool conditionTrue = source.ConditionKind == ControlFlowConditionKind.WhenTrue
+                ? branch.IsConditionalSuccessor : !branch.IsConditionalSuccessor;
+            bool acquired = conditionTrue != negated;
+            IArgumentOperation leaseArgument = invocation.Arguments.First(argument => argument.Parameter?.Ordinal == 2);
+            ISymbol? symbol = GetPreparedOutSymbol(leaseArgument.Value);
+            if (symbol is not null && state.Handles.TryGetValue(symbol, out HandleState? handle)
+                && handle.Syntax.SyntaxTree == invocation.Syntax.SyntaxTree
+                && handle.Syntax.Span == invocation.Syntax.Span)
+            {
+                handle.Returned = !acquired;
+                handle.ConditionalPending = false;
+                handle.Ambiguous = false;
+                handle.GenerationRelation = GenerationRelationKind.Exact;
+            }
         }
 
         private FlowSnapshot AnalyzeFinallyRegion(
@@ -1794,6 +1830,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
                     mergedHandle.Returned &= handle.Returned;
                     mergedHandle.Ambiguous |= handle.Ambiguous;
+                    mergedHandle.ConditionalPending |= handle.ConditionalPending;
                 }
 
                 if (!presentOnEveryPath)
@@ -2073,6 +2110,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 if (!right.Handles.TryGetValue(pair.Key, out HandleState? other)
                     || pair.Value.Returned != other.Returned
                     || pair.Value.Ambiguous != other.Ambiguous
+                    || pair.Value.ConditionalPending != other.ConditionalPending
                     || pair.Value.Generation != other.Generation
                     || pair.Value.GenerationRelation != other.GenerationRelation)
                 {
@@ -2238,6 +2276,10 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             else if (IsScopedGroupInitialization(operation))
             {
                 RegisterScopedGroupHandles(operation);
+            }
+            else if (IsPreparedPoolTryRent(operation))
+            {
+                RegisterPreparedPoolHandle(operation);
             }
 
             if (borrowedOwner is not null)
@@ -2704,7 +2746,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             if (value is not null && value is not IObjectCreationOperation)
             {
                 if (operation.Parent is IInvocationOperation composite
-                    && IsNonRetainingCompositeLeaseOperation(composite))
+                    && (IsNonRetainingCompositeLeaseOperation(composite)
+                        || IsPreparedPoolTryRent(composite) && operation.Parameter?.Ordinal == 2))
                 {
                     base.VisitArgument(operation);
                     return;
@@ -5246,9 +5289,43 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             }
         }
 
+        private bool IsPreparedPoolTryRent(IInvocationOperation invocation) =>
+            NativeSymbols.Is(invocation.TargetMethod.ContainingType, _symbols.Pool)
+            && string.Equals(invocation.TargetMethod.Name, "TryRent", StringComparison.Ordinal)
+            && invocation.TargetMethod.ReturnType.SpecialType == SpecialType.System_Boolean
+            && invocation.Arguments.Length == 4
+            && invocation.Arguments.Any(argument => argument.Parameter is { Ordinal: 2, RefKind: RefKind.Out }
+                && NativeSymbols.Is(argument.Parameter.Type, _symbols.Pooled));
+
+        private static ISymbol? GetPreparedOutSymbol(IOperation operation) =>
+            operation is IDeclarationExpressionOperation declaration
+                ? GetSymbol(Unwrap(declaration.Expression)) : GetSymbol(Unwrap(operation));
+
+        private void RegisterPreparedPoolHandle(IInvocationOperation operation)
+        {
+            OwnerState? owner = GetOwner(Unwrap(operation.Instance));
+            if (owner is null || !CheckOwnerActive(owner, operation.Syntax, operation.TargetMethod.Name))
+            {
+                return;
+            }
+            ISymbol? symbol = GetPreparedOutSymbol(operation.Arguments.First(argument => argument.Parameter?.Ordinal == 2).Value);
+            if (symbol is not ILocalSymbol)
+            {
+                Report(NativeAllocationDiagnosticDescriptors.PooledEscape, operation.Syntax,
+                    "the prepared allocation", symbol?.Name ?? "an escaping destination");
+                return;
+            }
+            _handles[symbol] = new HandleState(symbol, owner, owner.Generation,
+                isUsing: false, operation.Syntax)
+            {
+                GenerationRelation = owner.GenerationRelation,
+                ConditionalPending = true
+            };
+        }
+
         private void ProcessOwnerLifecycle(OwnerState owner, string name, SyntaxNode syntax)
         {
-            if (name is "Rent" or "Lease" or "Scratch" or "LeaseScoped" or "ScratchScoped")
+            if (name is "Rent" or "TryRent" or "Lease" or "Scratch" or "LeaseScoped" or "ScratchScoped")
             {
                 CheckOwnerActive(owner, syntax, name);
                 return;
@@ -5682,6 +5759,12 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
         private bool CheckHandleUse(HandleState handle, SyntaxNode syntax, string operation)
         {
+            if (handle.ConditionalPending)
+            {
+                Report(NativeAllocationDiagnosticDescriptors.PreparedAcquisitionGuard, syntax,
+                    handle.DisplayName, operation);
+                return false;
+            }
             if (handle.Owner.IsRegion && handle.Owner.RegionScope is TextSpan scope && !scope.Contains(syntax.Span.Start))
             {
                 Report(
@@ -6684,8 +6767,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             string name = invocation.TargetMethod.Name;
             if (IsNativePool(invocation.TargetMethod.ContainingType))
             {
-                return name is "Rent" or "GetStatistics"
-                    or "CaptureDiagnosticSnapshot";
+                return name is "Rent" or "TryRent" or "GetStatistics"
+                    or "CaptureDiagnosticSnapshot" or "CapturePreparedSnapshot";
             }
 
             return IsNativeArena(invocation.TargetMethod.ContainingType)
@@ -7106,8 +7189,14 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             }
         }
 
-        private static bool RequiresDeterministicReturn(IObjectCreationOperation operation)
+        private bool RequiresDeterministicReturn(IObjectCreationOperation operation)
         {
+            if (NativeSymbols.Is(operation.Type, _symbols.Pool)
+                && operation.Constructor?.Parameters.Length == 2
+                && NativeSymbols.Is(operation.Constructor.Parameters[0].Type, _symbols.PoolPreparation))
+            {
+                return true;
+            }
             bool sawPolicy = false;
             foreach (IArgumentOperation argument in operation.Arguments)
             {
@@ -7647,6 +7736,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             internal bool IsScoped { get; set; }
             internal bool Returned { get; set; }
             internal bool Ambiguous { get; set; }
+            internal bool ConditionalPending { get; set; }
             internal GenerationRelationKind GenerationRelation { get; set; } = GenerationRelationKind.Exact;
             internal SyntaxNode Syntax { get; }
             internal string DisplayName => Symbol?.Name ?? Owner.Type.Name;
@@ -7659,6 +7749,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     IsScoped = IsScoped
                 };
                 copy.Ambiguous = Ambiguous;
+                copy.ConditionalPending = ConditionalPending;
                 copy.GenerationRelation = GenerationRelation;
                 return copy;
             }

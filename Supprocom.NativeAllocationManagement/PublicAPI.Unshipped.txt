@@ -1,4 +1,52 @@
 #nullable enable
+Supprocom.NativeAllocationManagement.NativeMemoryTraceEvent.AllocationOrdinal.get -> long?
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.PageAcquired = 6 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.Prepared = 7 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.Trimmed = 8 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativePoolPreparation
+Supprocom.NativeAllocationManagement.NativePoolPreparation.NativePoolPreparation() -> void
+Supprocom.NativeAllocationManagement.NativePoolPreparation.NativePoolPreparation(int slotCount, int slotCapacity, int slotsPerPage) -> void
+Supprocom.NativeAllocationManagement.NativePoolPreparation.SlotCount.get -> int
+Supprocom.NativeAllocationManagement.NativePoolPreparation.SlotCapacity.get -> int
+Supprocom.NativeAllocationManagement.NativePoolPreparation.SlotsPerPage.get -> int
+Supprocom.NativeAllocationManagement.NativePoolPreparation.Equals(Supprocom.NativeAllocationManagement.NativePoolPreparation other) -> bool
+~override Supprocom.NativeAllocationManagement.NativePoolPreparation.Equals(object obj) -> bool
+override Supprocom.NativeAllocationManagement.NativePoolPreparation.GetHashCode() -> int
+~override Supprocom.NativeAllocationManagement.NativePoolPreparation.ToString() -> string
+static Supprocom.NativeAllocationManagement.NativePoolPreparation.operator ==(Supprocom.NativeAllocationManagement.NativePoolPreparation left, Supprocom.NativeAllocationManagement.NativePoolPreparation right) -> bool
+static Supprocom.NativeAllocationManagement.NativePoolPreparation.operator !=(Supprocom.NativeAllocationManagement.NativePoolPreparation left, Supprocom.NativeAllocationManagement.NativePoolPreparation right) -> bool
+Supprocom.NativeAllocationManagement.NativePoolExhaustionReason
+Supprocom.NativeAllocationManagement.NativePoolExhaustionReason.None = 0 -> Supprocom.NativeAllocationManagement.NativePoolExhaustionReason
+Supprocom.NativeAllocationManagement.NativePoolExhaustionReason.ShapeExceeded = 1 -> Supprocom.NativeAllocationManagement.NativePoolExhaustionReason
+Supprocom.NativeAllocationManagement.NativePoolExhaustionReason.NoAvailableSlot = 2 -> Supprocom.NativeAllocationManagement.NativePoolExhaustionReason
+Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics
+Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics.NativePreparedPoolStatistics() -> void
+Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics.OwnerId.get -> long
+Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics.Lifecycle.get -> Supprocom.NativeAllocationManagement.NativeOwnerLifecycle
+Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics.Preparation.get -> Supprocom.NativeAllocationManagement.NativePoolPreparation
+Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics.RetainedPageCount.get -> int
+Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics.RetainedSlotCount.get -> int
+Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics.OccupiedSlotCount.get -> int
+Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics.PeakOccupiedSlotCount.get -> int
+Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics.AvailableSlotCount.get -> int
+Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics.RetainedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics.PeakRetainedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics.SuccessfulRentCount.get -> long
+Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics.RejectedShapeCount.get -> long
+Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics.RejectedFullCount.get -> long
+Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics.InitializerFailureCount.get -> long
+Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics.ManagedBankBytes.get -> long
+Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics.UnusedSlotBytes.get -> long
+Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics.HistoryOverflowed.get -> bool
+Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics.Equals(Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics other) -> bool
+~override Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics.Equals(object obj) -> bool
+override Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics.GetHashCode() -> int
+~override Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics.ToString() -> string
+static Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics.operator ==(Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics left, Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics right) -> bool
+static Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics.operator !=(Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics left, Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics right) -> bool
+Supprocom.NativeAllocationManagement.NativePool<T>.NativePool(Supprocom.NativeAllocationManagement.NativePoolPreparation preparation, Supprocom.NativeAllocationManagement.NativeMemoryBudget? budget) -> void
+Supprocom.NativeAllocationManagement.NativePool<T>.CapturePreparedSnapshot() -> Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics
+Supprocom.NativeAllocationManagement.NativePool<T>.TryRent(int length, Supprocom.NativeAllocationManagement.NativeLeaseInitializer<T>! initializer, out Supprocom.NativeAllocationManagement.Pooled<T> lease, out Supprocom.NativeAllocationManagement.NativePoolExhaustionReason reason) -> bool
 Supprocom.NativeAllocationManagement.NativeOwnerModel
 Supprocom.NativeAllocationManagement.NativeOwnerModel.Unspecified = 0 -> Supprocom.NativeAllocationManagement.NativeOwnerModel
 Supprocom.NativeAllocationManagement.NativeOwnerModel.ThreadConfinedPool = 1 -> Supprocom.NativeAllocationManagement.NativeOwnerModel
