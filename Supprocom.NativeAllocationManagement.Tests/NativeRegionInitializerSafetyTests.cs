@@ -2,6 +2,34 @@ namespace Supprocom.NativeAllocationManagement.Tests;
 
 public sealed class NativeRegionInitializerSafetyTests
 {
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(3)]
+    public void IncompleteInitializationKeepsExactFailureAndReusesTheWholeReservedRange(int written)
+    {
+        NativeMemoryBudget budget = new(512);
+        NativeRegionKernel region = new(16, NativeMemoryReturn.ToNativeMemory, budget);
+        try
+        {
+            InvalidOperationException failure = Assert.Throws<InvalidOperationException>(() =>
+                region.LeaseInitialized<int>(4, writer =>
+                {
+                    for (int index = 0; index < written; index++) writer.Write(17);
+                }));
+            Assert.Equal($"The native lease initializer wrote {written} of 4 required elements.", failure.Message);
+            Assert.Equal(0, region.GetStatistics().RequestedBytes);
+            Local<int> complete = region.LeaseInitialized<int>(4, static writer => writer.Fill(42));
+            Assert.Equal(42, complete.Read(static view => view[0]));
+            Assert.Equal(42, complete.Read(static view => view[3]));
+            Assert.Equal(16, region.GetStatistics().RequestedBytes);
+            Assert.Equal(1, region.GetStatistics().SegmentCount);
+            Assert.Equal(1, budget.CaptureStatistics().AllocationCount);
+        }
+        finally { region.Dispose(); }
+        Assert.Equal(0, budget.CaptureStatistics().CommittedBytes);
+    }
+
     [Fact]
     public void EmptyReservationsDoNotAcquireBackingAndTheFirstNonemptyLeaseStillGrows()
     {
