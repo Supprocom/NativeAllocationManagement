@@ -251,8 +251,14 @@ public sealed partial class NativeMemoryBudget
         lock (_gate) { RecordTrace(kind, ownerId, bytes, correlationId: correlationId); }
     }
 
+    internal void RecordGenerationTransition(NativeMemoryTraceKind kind, long ownerId, long generation, nuint bytes)
+    {
+        if (_trace.Length == 0) return;
+        lock (_gate) { RecordTrace(kind, ownerId, bytes, correlationId: generation); }
+    }
+
     private void RecordTrace(NativeMemoryTraceKind kind, long ownerId, nuint bytes,
-        nuint previousBytes = 0, long allocationOrdinal = 0, long correlationId = 0)
+        nuint previousBytes = 0, long allocationOrdinal = 0, long? correlationId = null)
     {
         if (_trace.Length == 0)
         {
@@ -272,7 +278,7 @@ public sealed partial class NativeMemoryBudget
             _traceSequence, System.Diagnostics.Stopwatch.GetTimestamp(), Id,
             ownerId == 0 ? null : ownerId, kind, bytes, previousBytes,
             _committedBytes, _reservedBytes, allocationOrdinal)
-        { CorrelationId = correlationId == 0 ? null : correlationId };
+        { CorrelationId = correlationId };
         _traceWriteIndex++;
         if (_traceWriteIndex == _trace.Length)
         {

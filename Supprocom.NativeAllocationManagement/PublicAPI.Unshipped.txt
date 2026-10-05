@@ -644,6 +644,11 @@ Supprocom.NativeAllocationManagement.NativeLayoutWriter.NativeLayoutWriter() -> 
 Supprocom.NativeAllocationManagement.NativeLayoutWriter.Region<T>(Supprocom.NativeAllocationManagement.NativeLayoutField<T> field) -> Supprocom.NativeAllocationManagement.NativeLeaseWriter<T>
 Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.LayoutInitialized = 32 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
 Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.LayoutPrepared = 31 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceEvent.Generation.get -> long?
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.GenerationDetached = 33 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.GenerationRetired = 34 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.GenerationQuarantined = 35 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.GenerationReleased = 36 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
 const Supprocom.NativeAllocationManagement.NativeLayoutBuilder.MaximumRegionCount = 64 -> int
 override Supprocom.NativeAllocationManagement.NativeLayoutField<T>.GetHashCode() -> int
 override Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics.GetHashCode() -> int

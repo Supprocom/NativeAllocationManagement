@@ -2133,11 +2133,15 @@ internal sealed class NativeGenerationOwner
     private int _released;
     private int _detached;
     private readonly long _metricsEpoch;
+    private readonly NativeMemoryBudget? _traceBudget;
+    private readonly long _ownerId;
 
-    internal NativeGenerationOwner(long generation)
+    internal NativeGenerationOwner(long generation, NativeMemoryBudget? budget, long ownerId)
     {
         Generation = generation;
         _metricsEpoch = NativeMemoryAccounting.CurrentMetricsEpoch;
+        _traceBudget = budget is { TraceEnabled: true } ? budget : null;
+        _ownerId = ownerId;
     }
 
     internal long Generation { get; }
@@ -2196,6 +2200,7 @@ internal sealed class NativeGenerationOwner
             return;
         }
 
+        nuint detachedBytes = 0;
         lock (_gate)
         {
             if (_segments is null)
@@ -2208,6 +2213,10 @@ internal sealed class NativeGenerationOwner
             {
                 if (segment.MarkDetached())
                 {
+                    if (_traceBudget is not null)
+                    {
+                        detachedBytes += segment.AllocationByteLength;
+                    }
                     NativeMemoryAccounting.RecordDetachedBytes(
                         segment.AllocationByteLength,
                         segment.MetricsEpoch);
@@ -2217,11 +2226,14 @@ internal sealed class NativeGenerationOwner
         }
 
         NativeMemoryAccounting.RecordDetachedGeneration(_metricsEpoch);
+        _traceBudget?.RecordGenerationTransition(
+            NativeMemoryTraceKind.GenerationDetached, _ownerId, Generation, detachedBytes);
     }
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA1816", Justification = "Explicit generation release disarms the emergency finalizer.")]
     internal void ReleaseToNative()
     {
+        nuint releasedBytes = 0;
         lock (_gate)
         {
             if (Interlocked.Exchange(ref _released, 1) != 0)
@@ -2236,12 +2248,18 @@ internal sealed class NativeGenerationOwner
 #pragma warning disable HLQ012 // Retain the enumerator's mutation checks during ownership cleanup; a span removes them.
                 foreach (NativeSegment segment in segments)
                 {
+                    if (_traceBudget is not null && segment.Pointer != IntPtr.Zero)
+                    {
+                        releasedBytes += segment.AllocationByteLength;
+                    }
                     segment.FreeNow();
                 }
 #pragma warning restore HLQ012
             }
         }
 
+        _traceBudget?.RecordGenerationTransition(
+            NativeMemoryTraceKind.GenerationReleased, _ownerId, Generation, releasedBytes);
         GC.SuppressFinalize(this);
     }
 
@@ -2475,10 +2493,10 @@ internal sealed class NativeGeneration
     private NativeArenaTransferBatchState[]
         _arenaTransferBatchSnapshot = [];
 
-    internal NativeGeneration(long number)
+    internal NativeGeneration(long number, NativeMemoryBudget? budget, long ownerId)
     {
         Number = number;
-        Owner = new NativeGenerationOwner(number);
+        Owner = new NativeGenerationOwner(number, budget, ownerId);
     }
 
     internal long Number { get; }
@@ -3725,7 +3743,7 @@ internal sealed class NativeOwnerKernel
             return;
         }
 
-        NativeGeneration generation = new(0);
+        NativeGeneration generation = new(0, _budget, Id);
         _current = generation;
         try
         {
@@ -8237,7 +8255,7 @@ internal sealed class NativeOwnerKernel
             }
 
             NativeOwnerLifecycle observed = _lifecycle;
-            NativeGeneration candidate = new(_generation);
+            NativeGeneration candidate = new(_generation, _budget, Id);
             try
             {
                 ReserveInitialStorageLocked(candidate, "activation reservation", observed);
@@ -9264,7 +9282,7 @@ internal sealed class NativeOwnerKernel
                 long nextGenerationNumber = checked(current.Number + 1);
                 NativeSlab[] slabs = SnapshotRetiredSlabsLocked(current, operation);
                 NativeBumpSegment[] bumps = SnapshotRetiredBumpsLocked(current, operation);
-                NativeGeneration next = new(nextGenerationNumber);
+                NativeGeneration next = new(nextGenerationNumber, _budget, Id);
                 try
                 {
                     int slabTransferCount = 0;
@@ -9378,6 +9396,9 @@ internal sealed class NativeOwnerKernel
                         }
 
                         _retiredGenerations.Add(current);
+                        _budget?.RecordGenerationTransition(
+                            NativeMemoryTraceKind.GenerationRetired, Id, current.Number,
+                            (nuint)current.RetiredNativeBytes);
                         if (current.ActiveOperations == 0
                             && !HasArenaFastHazard(current))
                         {
@@ -9610,6 +9631,9 @@ internal sealed class NativeOwnerKernel
         generation.BumpSegments.Clear();
         generation.IsQuarantined = true;
         _quarantinedGenerations.Add(generation);
+        _budget?.RecordGenerationTransition(
+            NativeMemoryTraceKind.GenerationQuarantined, Id, generation.Number,
+            (nuint)generation.RetiredNativeBytes);
         if (current is not null)
         {
             ResetBumpTraversal(current);

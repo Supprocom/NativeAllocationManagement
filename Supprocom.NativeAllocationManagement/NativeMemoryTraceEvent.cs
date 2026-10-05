@@ -70,7 +70,15 @@ public enum NativeMemoryTraceKind
     /// <summary>Checked typed-layout alignment is ready over actual admitted backing.</summary>
     LayoutPrepared,
     /// <summary>Every typed region and non-payload range finished initialization, before final publication.</summary>
-    LayoutInitialized
+    LayoutInitialized,
+    /// <summary>A generation relinquished deterministic cleanup to emergency finalization; its owned backing remains charged.</summary>
+    GenerationDetached,
+    /// <summary>An ended generation retained backing while an entered operation or owning control remained active.</summary>
+    GenerationRetired,
+    /// <summary>A failed cleanup removed an ended generation's backing from every reusable bank without releasing its charge.</summary>
+    GenerationQuarantined,
+    /// <summary>A generation completed native cleanup. Its remaining owned extent can be zero after transfer or prior segment finalization.</summary>
+    GenerationReleased
 }
 
 /// <summary>A bounded value-only storage transition; it contains no owner or native authority.</summary>
@@ -114,6 +122,11 @@ public readonly record struct NativeMemoryTraceEvent
     public long ReservedBytes { get; }
     /// <summary>Gets the owner-local backing acquisition ordinal when supplied, otherwise unavailable.</summary>
     public long? AllocationOrdinal { get; }
-    /// <summary>Gets the ownership control identity for ownership transitions, otherwise unavailable.</summary>
+    /// <summary>Gets the ownership control identity for ownership transitions or the actual generation for generation transitions; otherwise unavailable.</summary>
     public long? CorrelationId { get; internal init; }
+    /// <summary>Gets the actual allocator generation for generation lifecycle transitions, including generation zero; otherwise unavailable.</summary>
+    public long? Generation => Kind is NativeMemoryTraceKind.GenerationDetached
+        or NativeMemoryTraceKind.GenerationRetired
+        or NativeMemoryTraceKind.GenerationQuarantined
+        or NativeMemoryTraceKind.GenerationReleased ? CorrelationId : null;
 }

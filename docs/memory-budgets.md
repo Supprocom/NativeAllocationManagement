@@ -119,11 +119,30 @@ not reuse its identity. A budget has a separate domain identity.
 Tracing is opt-in: `new NativeMemoryBudget(capacityBytes, traceCapacity)` allocates
 one bounded managed event array during construction. The default constructor
 uses no event storage. Disabled tracing returns before constructing an event
-or reading the clock. Enabled tracing records only native admission, refusal,
+or reading the clock. Enabled tracing records native admission, refusal,
 acquisition, realloc, acquisition rollback and physical release under the
 existing budget lock. Prepared pages also emit actual page acquisition,
 preparation completion and physical trim events. Reusing backing does not take that lock or emit an event.
 It does not trace every element, callback or warmed lease.
+
+Concurrent-owner generation lifecycle events also record actual detach,
+retirement, failed-drain quarantine and successful cleanup. `Generation` is the
+real checked generation identity, including the initial zero; non-generation
+events report `null`. This view reuses `CorrelationId`, which otherwise identifies
+the ownership control on pointer/reservation events. These IDs are values, not
+references that keep an owner, generation or payload alive.
+
+For generation events, `RequestedBytes` is the complete known NAM-owned extent
+associated with that transition; provider-owned external ranges are excluded.
+Detach, retirement and quarantine do not release the backing charge.
+`GenerationReleased` follows completed generation cleanup and can carry zero
+after all backing was transferred into a successor, or segment emergency
+finalizers already freed it. Segment and generation finalizers have no relative
+ordering guarantee. It is not a physical-free
+counter: individual `Released` events and `FreeCount` record actual native frees.
+Failed cleanup emits no successful generation completion. These events use the
+same bounded ring, sequence exhaustion and dropped-event rules. Fast nongenerational
+owners are not assigned a fabricated generation merely to populate this field.
 
 `CopyTraceTo(Span<NativeMemoryTraceEvent>)` copies without allocating or resetting
 history. Events are chronological; a short destination receives the newest
