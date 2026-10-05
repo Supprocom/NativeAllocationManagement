@@ -30,6 +30,16 @@ internal static class Program
         CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;
         CultureInfo.CurrentUICulture = CultureInfo.InvariantCulture;
 
+        if (args is ["--compiler-cost-worker", "--compiler", string compiler, "--response", string response])
+        {
+            return NativeCompilerCostWorker.Run(compiler, response);
+        }
+
+        if (args is ["--analyzer-cancellation-worker", "--response", string cancellationResponse, "--project-directory", string projectDirectory])
+        {
+            return await NativeAnalyzerCancellationWorker.RunAsync(cancellationResponse, projectDirectory).ConfigureAwait(false);
+        }
+
         if (args is ["--allocator-regression-worker", "--kind", "Region"])
         {
             RegionRegressionReport report =
