@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using System.IO.Compression;
 using System.Security.Cryptography;
-using System.Text.Json;
 using System.Xml.Linq;
 using Xunit.Abstractions;
 
@@ -249,14 +248,23 @@ public sealed class PackageSmokeTests
 
                         NativeMemoryBudgetStatistics snapshot = budget.CaptureStatistics();
                         System.Span<NativeMemoryTraceEvent> events = stackalloc NativeMemoryTraceEvent[4];
+                        int copied = budget.CopyTraceTo(events);
+                        System.Console.WriteLine($"traceCount={snapshot.TraceCount};dropped={snapshot.DroppedTraceEventCount};copied={copied};committed={snapshot.CommittedBytes}");
+                        foreach (NativeMemoryTraceEvent item in events)
+                            System.Console.WriteLine($"sequence={item.Sequence};kind={item.Kind};owner={item.OwnerId};correlation={item.CorrelationId};extent={item.RequestedBytes};committed={item.CommittedBytes}");
                         if (snapshot.CommittedBytes != 0
                             || snapshot.TraceCapacity != 8
                             || snapshot.TraceCount != 8
-                            || snapshot.DroppedTraceEventCount != 1
+                            || snapshot.DroppedTraceEventCount != 2
                             || snapshot.TraceOverflowed
-                            || budget.CopyTraceTo(events) != 4
-                            || events[3].Kind != NativeMemoryTraceKind.Released
-                            || events[3].OwnerId != builder.Id)
+                            || copied != 4
+                            || events[2].Kind != NativeMemoryTraceKind.Released
+                            || events[2].OwnerId != builder.Id
+                            || events[3].Kind != NativeMemoryTraceKind.UniqueReturned
+                            || events[3].OwnerId != builder.Id
+                            || events[3].CorrelationId != transfer.Id
+                            || events[3].RequestedBytes != 32
+                            || events[3].CommittedBytes != 0)
                         {
                             return 4;
                         }
@@ -272,6 +280,7 @@ public sealed class PackageSmokeTests
             CommandResult build = await RunDotnetAsync($"build \"{project}\" --no-restore --nologo", consumerRoot);
             Assert.True(build.ExitCode == 0, build.Output);
             CommandResult run = await RunDotnetAsync($"run --project \"{project}\" --no-build --no-restore", consumerRoot);
+            _output.WriteLine(run.Output);
             Assert.True(run.ExitCode == 0, run.Output);
             await File.WriteAllTextAsync(program,
                 """
@@ -2016,7 +2025,6 @@ public sealed class PackageSmokeTests
                 <TargetFramework>net10.0</TargetFramework>
                 <ImplicitUsings>enable</ImplicitUsings>
                 <Nullable>enable</Nullable>
-                <ArtifactsPath>$(MSBuildProjectDirectory)/.build</ArtifactsPath>
                 {noWarn}
                 {warningsAsErrors}
               </PropertyGroup>
@@ -2111,7 +2119,7 @@ public sealed class PackageSmokeTests
 
     private static async Task<CommandResult> RunProcessAsync(string fileName, string arguments, string workingDirectory)
     {
-        DateTimeOffset startedAt = DateTimeOffset.UtcNow;
+        string? evidence = PackageFixtureEvidence.Begin(workingDirectory, RetainPackageEvidence);
         using Process process = new()
         {
             StartInfo = new ProcessStartInfo
@@ -2126,7 +2134,17 @@ public sealed class PackageSmokeTests
             }
         };
 
-        Assert.True(process.Start(), $"The {fileName} process did not start.");
+        DateTimeOffset startedAt = DateTimeOffset.UtcNow;
+        try
+        {
+            Assert.True(process.Start(), $"The {fileName} process did not start.");
+        }
+        catch (System.ComponentModel.Win32Exception exception)
+        {
+            await PackageFixtureEvidence.CompleteAsync(evidence, fileName, arguments, workingDirectory, startedAt,
+                exitCode: null, timedOut: false, string.Empty, exception.ToString()).ConfigureAwait(true);
+            throw;
+        }
         Task<string> stdout = process.StandardOutput.ReadToEndAsync();
         Task<string> stderr = process.StandardError.ReadToEndAsync();
         using CancellationTokenSource timeout = new(TimeSpan.FromSeconds(90));
@@ -2144,7 +2162,7 @@ public sealed class PackageSmokeTests
             {
             }
 
-            await RetainCommandAsync(fileName, arguments, workingDirectory, startedAt,
+            await PackageFixtureEvidence.CompleteAsync(evidence, fileName, arguments, workingDirectory, startedAt,
                 process.HasExited ? process.ExitCode : null, timedOut: true,
                 await stdout.ConfigureAwait(true), await stderr.ConfigureAwait(true)).ConfigureAwait(true);
             throw new TimeoutException($"{fileName} {arguments} exceeded the 90 second smoke-test timeout.", exception);
@@ -2152,45 +2170,24 @@ public sealed class PackageSmokeTests
 
         string standardOutput = await stdout.ConfigureAwait(true);
         string standardError = await stderr.ConfigureAwait(true);
-        await RetainCommandAsync(fileName, arguments, workingDirectory, startedAt,
+        await PackageFixtureEvidence.CompleteAsync(evidence, fileName, arguments, workingDirectory, startedAt,
             process.ExitCode, timedOut: false, standardOutput, standardError).ConfigureAwait(true);
         string output = standardOutput + Environment.NewLine + standardError;
         return new CommandResult(process.ExitCode, output);
     }
 
-    private static async Task RetainCommandAsync(string executable, string arguments, string workingDirectory,
-        DateTimeOffset startedAt, int? exitCode, bool timedOut, string standardOutput, string standardError)
-    {
-        if (!RetainPackageEvidence) return;
-        string directory = Path.Combine(Path.GetTempPath(), "nam-command-evidence", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(directory);
-        DateTimeOffset endedAt = DateTimeOffset.UtcNow;
-        string record = JsonSerializer.Serialize(new
-        {
-            Executable = executable,
-            Arguments = arguments,
-            WorkingDirectory = workingDirectory,
-            StartedAt = startedAt,
-            EndedAt = endedAt,
-            ElapsedMilliseconds = (endedAt - startedAt).TotalMilliseconds,
-            ExitCode = exitCode,
-            TimedOut = timedOut
-        });
-        await File.WriteAllTextAsync(Path.Combine(directory, "command.json"), record).ConfigureAwait(true);
-        await File.WriteAllTextAsync(Path.Combine(directory, "stdout.log"), standardOutput).ConfigureAwait(true);
-        await File.WriteAllTextAsync(Path.Combine(directory, "stderr.log"), standardError).ConfigureAwait(true);
-    }
-
-    private static bool RetainPackageEvidence => string.Equals(
-        Environment.GetEnvironmentVariable("NAM_RETAIN_PACKAGE_EVIDENCE"), "1", StringComparison.Ordinal);
+    private static bool RetainPackageEvidence => PackageFixtureEvidence.IsEnabled(
+        Environment.GetEnvironmentVariable("NAM_RETAIN_PACKAGE_EVIDENCE"));
 
     private static string FindRepositoryRoot()
         => RepositoryTestPaths.Root;
 
-    private static string CreateConsumerRoot()
+    private string CreateConsumerRoot()
     {
         string path = Path.Combine(Path.GetTempPath(), "nam-package-smoke-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(path);
+        File.WriteAllText(Path.Combine(path, "Directory.Build.props"), PackageFixtureEvidence.BuildProperties);
+        _output.WriteLine($"consumerRoot={path}");
         return path;
     }
 

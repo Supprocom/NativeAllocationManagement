@@ -5,6 +5,14 @@ namespace Supprocom.NativeAllocationManagement.Tests;
 public sealed class RepositoryLayoutTests
 {
     [Fact]
+    public void AgentInstructionFilesRemainExcludedByBothCaseInsensitiveRules()
+    {
+        string policy = File.ReadAllText(Path.Combine(RepositoryTestPaths.Root, ".gitignore"));
+        Assert.Contains("**/[Aa][Gg][Ee][Nn][Tt].[Mm][Dd]", policy, StringComparison.Ordinal);
+        Assert.Contains("**/[Aa][Gg][Ee][Nn][Tt][Ss].[Mm][Dd]", policy, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void SolutionContainsEveryDirectRootProjectWithoutGroupingDirectories()
     {
         string root = RepositoryTestPaths.Root;

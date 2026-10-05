@@ -10,7 +10,6 @@ internal static class CodeFixPackageFixture
             <ImplicitUsings>enable</ImplicitUsings>
             <Nullable>enable</Nullable>
             <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-            <ArtifactsPath>$(MSBuildProjectDirectory)/.build</ArtifactsPath>
           </PropertyGroup>
           <ItemGroup>
             <PackageReference Include="Supprocom.NativeAllocationManagement" Version="{{version}}" GeneratePathProperty="true" />
