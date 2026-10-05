@@ -12,7 +12,11 @@ actual NativeAOT execution are required. No skipped or failed TRX outcome passes
 Evidence lives outside the checkout. Each child retains arguments, declared
 deadline, actual exit, complete streams and original compiler inputs. Source,
 packages, caches, binaries, native runner/toolchain identities and length/SHA-256
-manifests are uploaded even when validation fails. Native labels, publishing
+manifests are uploaded even when validation fails. Native payloads are bundled in
+tar.gz before Actions upload, preserving executable modes and native cache names
+that artifact ZIP storage otherwise rejects. Bootstrap failure retention records
+missing native disposition/manifest honestly; it does not invent a passing gate.
+Native labels, publishing
 success and ordinary JIT builds are not substitutes for native execution.
 
 GitHub artifacts expire after 14 days. Required release evidence must be retrieved,

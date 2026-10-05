@@ -41,8 +41,10 @@ jobs:
         run: |
           $namEvidence = Join-Path $env:RUNNER_TEMP 'nam-evidence/${{ matrix.rid }}'
           $namTools = Join-Path $env:RUNNER_TEMP 'nam-tools/${{ matrix.rid }}'
+          $namUpload = Join-Path $env:RUNNER_TEMP 'nam-upload/${{ matrix.rid }}'
           "NAM_EVIDENCE_ROOT=$namEvidence" | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8
           "NAM_TOOL_ROOT=$namTools" | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8
+          "NAM_UPLOAD_ROOT=$namUpload" | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
@@ -67,12 +69,17 @@ jobs:
         run: |
           & $env:NAM_PWSH_PATH -NoProfile -File ./.github/ci/validate-native.ps1 -ExpectedRid '${{ matrix.rid }}' -EvidenceRoot $env:NAM_EVIDENCE_ROOT -ExpectedCommit '${{ github.sha }}'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Bundle complete native payload without path or mode loss
+        if: always()
+        run: |
+          & pwsh -NoProfile -File ./.github/ci/retain-evidence.ps1 -ExpectedRid '${{ matrix.rid }}' -EvidenceRoot $env:NAM_EVIDENCE_ROOT -UploadRoot $env:NAM_UPLOAD_ROOT -ExpectedCommit '${{ github.sha }}'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Retain exact source, packages and complete evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: nam-${{ github.sha }}-${{ matrix.rid }}-${{ github.run_attempt }}
-          path: ${{ env.NAM_EVIDENCE_ROOT }}
+          path: ${{ env.NAM_UPLOAD_ROOT }}
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 14

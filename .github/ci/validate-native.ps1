@@ -5,6 +5,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot 'validation-contract.ps1')
 $namRoot = [IO.Path]::GetFullPath($EvidenceRoot)
 $namSource = [IO.Path]::GetFullPath((Get-Location).Path)
 if ([string]::Equals($namRoot, $namSource, [StringComparison]::OrdinalIgnoreCase) -or
@@ -77,7 +78,11 @@ function Invoke-NamCommand {
         $namProcess.Dispose()
     }
     Write-Output "${Name}: observed exit $namExit, timed out $namTimedOut"
-    if ($namTimedOut -or $namExit -ne 0) { throw "Required command $Name did not pass. Full streams are retained." }
+    if ($namTimedOut -or $namExit -ne 0) {
+        Write-Output $namOutput
+        [Console]::Error.WriteLine($namError)
+        throw "Required command $Name did not pass. Full streams are retained."
+    }
 }
 
 function Assert-NamTrx {
@@ -109,19 +114,8 @@ try {
     if ($LASTEXITCODE -ne 0 -or $namHead -ne $ExpectedCommit) { throw 'Checkout does not equal the exact requested source.' }
     $namDirty = @(& git status --porcelain)
     if ($LASTEXITCODE -ne 0 -or $namDirty.Count -ne 0) { throw 'Validation requires a clean source checkout.' }
-    $namTracked = @(& git ls-files --stage)
-    if ($LASTEXITCODE -ne 0 -or $namTracked.Count -eq 0) { throw 'Exact tracked compiler inputs could not be enumerated.' }
-    $namSourceIdentities = [Collections.Generic.List[object]]::new()
-    foreach ($namTrackedEntry in $namTracked) {
-        if ($namTrackedEntry -notmatch '^(100644|100755) ([0-9a-f]{40}) 0\t([^\r\n]+)$') { throw 'Unsupported tracked input identity.' }
-        $namMode, $namBlob, $namPath = $Matches[1], $Matches[2], $Matches[3]
-        $namActualBlob = (& git hash-object --no-filters -- $namPath).Trim()
-        if ($LASTEXITCODE -ne 0 -or $namActualBlob -ne $namBlob) { throw "Checkout bytes differ from the archived source: $namPath" }
-        $namSourceFile = Get-Item -LiteralPath $namPath
-        $namSourceIdentities.Add([pscustomobject]@{ Path = $namPath; Mode = $namMode; GitBlob = $namBlob;
-            Length = $namSourceFile.Length; SHA256 = (Get-FileHash -LiteralPath $namPath -Algorithm SHA256).Hash })
-    }
-    ConvertTo-Json -InputObject $namSourceIdentities.ToArray() -Depth 4 |
+    $namSourceIdentities = @(Get-NamSourceInputIdentities -SourceRoot $namSource -RepositoryRoot $namSource -Commit $namHead)
+    ConvertTo-Json -InputObject $namSourceIdentities -Depth 4 |
         Set-Content -LiteralPath (Join-Path $namRoot 'source-input-identities.json') -Encoding utf8
     [pscustomobject]@{ Commit = $namHead; Tree = (& git rev-parse 'HEAD^{tree}').Trim(); RequestedRid = $ExpectedRid;
         Framework = [Runtime.InteropServices.RuntimeInformation]::FrameworkDescription;
@@ -133,11 +127,8 @@ try {
         ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $namRoot 'native-identity.json') -Encoding utf8
     if ((& dotnet --version).Trim() -ne '10.0.302' -or $LASTEXITCODE -ne 0) { throw 'Exact canonical SDK is required.' }
     $namRuntimes = @(& dotnet --list-runtimes)
-    if ($LASTEXITCODE -ne 0 -or $namRuntimes.Count -ne 2 -or
-        @($namRuntimes | Where-Object { $_ -match '^Microsoft\.NETCore\.App 10\.0\.10 \[' }).Count -ne 1 -or
-        @($namRuntimes | Where-Object { $_ -match '^Microsoft\.AspNetCore\.App 10\.0\.10 \[' }).Count -ne 1) {
-        throw 'Validation must use the isolated canonical runtimes, not a runner-global latest patch.'
-    }
+    if ($LASTEXITCODE -ne 0) { throw 'Actual runtime enumeration failed.' }
+    Assert-NamRuntimeInventory -ExpectedRid $ExpectedRid -Runtimes $namRuntimes
     Invoke-NamCommand source-archive git @('archive', '--format=tar.gz', "--output=$(Join-Path $namRoot 'source.tar.gz')", $namHead)
     Invoke-NamCommand dotnet-identity dotnet @('--info')
     if ([OperatingSystem]::IsWindows()) {

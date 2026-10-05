@@ -5,6 +5,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot 'validation-contract.ps1')
 $namWindows = $ExpectedRid.StartsWith('win-', [StringComparison]::Ordinal)
 $namArch = $ExpectedRid.Split('-')[1]
 if ($namWindows -ne [OperatingSystem]::IsWindows() -or
@@ -47,11 +48,9 @@ $env:DOTNET_CLI_UI_LANGUAGE = 'en-US'
 $namVersion = & $namExecutable --version
 if ($LASTEXITCODE -ne 0 -or $namVersion.Trim() -ne '10.0.302') { throw 'The exact SDK did not execute.' }
 $namRuntimes = @(& $namExecutable --list-runtimes)
-if ($LASTEXITCODE -ne 0 -or $namRuntimes.Count -ne 2 -or
-    @($namRuntimes | Where-Object { $_ -match '^Microsoft\.NETCore\.App 10\.0\.10 \[' }).Count -ne 1 -or
-    @($namRuntimes | Where-Object { $_ -match '^Microsoft\.AspNetCore\.App 10\.0\.10 \[' }).Count -ne 1) {
-    throw 'The isolated SDK does not contain only the exact canonical runtimes.'
-}
+if ($LASTEXITCODE -ne 0) { throw 'The isolated SDK did not enumerate its actual runtimes.' }
+Write-Output ($namRuntimes -join "`n")
+Assert-NamRuntimeInventory -ExpectedRid $ExpectedRid -Runtimes $namRuntimes
 $namIdentity = @(& $namExecutable --info)
 if ($LASTEXITCODE -ne 0 -or ($namIdentity -join "`n") -notmatch "(?m)^\s*RID:\s+$ExpectedRid\s*$") {
     throw 'The SDK did not execute with the requested native RID.'
