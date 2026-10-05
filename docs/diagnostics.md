@@ -155,3 +155,38 @@ for zero-length Process. One owner-local high-water field records initialized
 demand. These are owner-lifetime histories, independent of process measurement
 resets. Counts and byte products are bounded by checked capacity admission; there
 is no wrapping history or optional-counter mode.
+
+## External demo observations
+
+OS observations are distinct from NAM accounting. Missing, denied, malformed,
+negative, overflowing or unsupported values are `null` (unavailable); successfully
+measured zero remains zero. Cgroup availability requires an actual current-memory
+measurement, not a positive value. A finite limit has `LimitUnlimited=false`; an
+observed unlimited limit has `LimitUnlimited=true` and no finite `LimitBytes`;
+missing limit information leaves both unavailable. Version and source path bind
+the observation. The local reader resolves the process's cgroup membership rather
+than substituting the host mount root. Nonstandard/unresolvable mounts are
+unavailable, not measurements of a guessed group.
+
+Cgroup-v2 `memory.peak` is historical. Resetting it changes later reads through
+the same open descriptor; the harness does not claim a reset performed through
+another Docker command. `ExternalCgroupPeakBytes` is the maximum observed within
+the observation window, a sampling lower bound unless
+`ExternalCgroupPeakIsKernelHighWater` records a newly exceeded kernel high water.
+The before/after snapshots retain the historical peaks separately. Multi-file
+reads are not an atomic cross-file snapshot. V1 hierarchical RSS (including swap
+cache) and limit-hit counters have separate fields; they are not relabeled as v2
+anonymous bytes or max events.
+
+External process CPU requires observed user/system ticks and a real positive
+`CLK_TCK`. There is no assumed clock rate. Working-set conversion is range checked.
+Host CPU mean uses only valid samples, with `ExternalCpuSampleCount` disclosing
+the count; zero samples yields unavailable mean/peak. Deltas need two valid,
+nondecreasing endpoints. Missing child results leave worker-start measurements
+unavailable. Docker display quantities remain rounded observations, not exact
+native accounting or RSS guarantees.
+
+GC memory/LOH fields describe the last completed collection, identified by
+`LastCompletedGcIndex`, not instantaneous live memory. Before a completed
+collection, those fields are unavailable. Capturing diagnostics does not force a
+collection or change allocator accounting.

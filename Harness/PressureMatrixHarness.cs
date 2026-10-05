@@ -907,10 +907,8 @@ string.Equals(implementation, "NAM", StringComparison.Ordinal) ? workerCount
                     !chunk.ExactVerificationPassed)
             || !observation.ExternalBefore.Cgroup.Available
             || !observation.ExternalAfter.Cgroup.Available
-            || observation.ExternalBefore.ThreadCount <= 0
-            || observation.ExternalAfter.ThreadCount <= 0
-            || observation.ExternalBefore.ClockTicksPerSecond <= 0
-            || observation.ExternalAfter.ClockTicksPerSecond <= 0)
+            || !observation.ExternalBefore.Available
+            || !observation.ExternalAfter.Available)
         {
             return false;
         }
@@ -2391,7 +2389,6 @@ string.Equals(implementation, "NAM", StringComparison.Ordinal) ? workerCount
         private Task? _statsReader;
         private Task<string>? _statsErrorReader;
         private Task<string>? _stderrReader;
-        private bool _peakResetAttempted;
         private long _requestOrdinal;
 
         private DockerWorker(
@@ -2548,7 +2545,6 @@ string.Equals(implementation, "NAM", StringComparison.Ordinal) ? workerCount
             List<string> commands,
             int? diagnosticWorkerCount)
         {
-            _peakResetAttempted = false;
             _requestOrdinal = 0;
             ContainerName =
                 $"nam-voxel-{_implementation.ToLowerInvariant()}-{Guid.NewGuid():N}";
@@ -2666,9 +2662,9 @@ string.Equals(implementation, "NAM", StringComparison.Ordinal) ? workerCount
                     PressureCommandKind.BeginProcessing,
                     CommandOrdinal: commandOrdinal),
                 VoxelJson.Options);
-            (CgroupMemorySnapshot initialCgroup, bool peakReset) = collectTelemetry
-                ? await PrepareCgroupProfileAsync().ConfigureAwait(false)
-                : (default, false);
+            CgroupMemorySnapshot initialCgroup = collectTelemetry
+                ? await ReadCgroupAsync().ConfigureAwait(false)
+                : default;
             PressureExternalProcessSnapshot externalBefore =
                 request.Diagnostic is not null
                     ? await ReadExternalProcessSnapshotAsync(
@@ -2855,42 +2851,8 @@ string.Equals(implementation, "NAM", StringComparison.Ordinal) ? workerCount
                         startTick ?? sentTick,
                         observationEnd)
                 : [];
-            long externalPeak = Math.Max(
-                initialCgroup.CurrentBytes,
-                Math.Max(
-                    finalCgroup.CurrentBytes,
-                    samples.Count == 0
-                        ? 0
-                        : samples.Max(sample => sample.CgroupMemoryBytes)));
-            if (peakReset
-                || finalCgroup.PeakBytes > initialCgroup.PeakBytes)
-            {
-                externalPeak = Math.Max(
-                    externalPeak,
-                    finalCgroup.PeakBytes);
-            }
-            double cpuMean = samples.Count == 0
-                ? 0
-                : samples.Average(sample => sample.CpuPercent);
-            double cpuPeak = samples.Count == 0
-                ? 0
-                : samples.Max(sample => sample.CpuPercent);
-            long cgroupCpuMicroseconds = Math.Max(
-                0,
-                finalCgroup.CpuUsageMicroseconds
-                    - initialCgroup.CpuUsageMicroseconds);
-            double effectiveCpuCores =
-                elapsedMilliseconds is > 0
-                    ? (cgroupCpuMicroseconds / 1000.0)
-                        / elapsedMilliseconds.Value
-                    : 0;
-            long pageFaultsDelta = Math.Max(
-                0,
-                finalCgroup.PageFaults - initialCgroup.PageFaults);
-            long majorPageFaultsDelta = Math.Max(
-                0,
-                finalCgroup.MajorPageFaults
-                    - initialCgroup.MajorPageFaults);
+            PressureExternalSummary external = PressureExternalSummary.Capture(
+                initialCgroup, finalCgroup, samples, elapsedMilliseconds);
             PressureFailureAttribution attribution = outcome == PressureProfileOutcome.Completed
                 ? PressureFailureAttribution.None
                 : outcome == PressureProfileOutcome.HarnessFailure
@@ -2909,22 +2871,13 @@ string.Equals(implementation, "NAM", StringComparison.Ordinal) ? workerCount
             int lastChunk = childResult?.LastCompletedChunkId
                 ?? lastProgress?.LastCompletedChunkId
                 ?? -1;
-            long managedSinceStart = childResult is { } completed
-                ? Math.Max(
-                    0,
-                    completed.After.TotalAllocatedBytes - StartupRuntime.TotalAllocatedBytes)
-                : 0;
-            int gen2SinceStart = childResult is { } completedForGc
-                ? Math.Max(
-                    0,
-                    completedForGc.After.Gen2Collections - StartupRuntime.Gen2Collections)
-                : 0;
-            double cpuSinceStart = childResult is { } completedForCpu
-                ? Math.Max(
-                    0,
-                    completedForCpu.After.ProcessCpuMilliseconds
-                        - StartupRuntime.ProcessCpuMilliseconds)
-                : 0;
+            long? managedSinceStart = childResult is { } completed
+                ? ExternalObservation.Delta(StartupRuntime.TotalAllocatedBytes, completed.After.TotalAllocatedBytes) : null;
+            int? gen2SinceStart = childResult is { } completedForGc
+                ? (int?)ExternalObservation.Delta(StartupRuntime.Gen2Collections, completedForGc.After.Gen2Collections) : null;
+            double? cpuSinceStart = childResult is { } completedForCpu
+                && completedForCpu.After.ProcessCpuMilliseconds >= StartupRuntime.ProcessCpuMilliseconds
+                ? completedForCpu.After.ProcessCpuMilliseconds - StartupRuntime.ProcessCpuMilliseconds : null;
             IReadOnlyList<PressureHostProgress> hostProgress = startTick.HasValue
                 ? progress.Select(item => new PressureHostProgress(
                     item.Progress,
@@ -2967,47 +2920,18 @@ string.Equals(implementation, "NAM", StringComparison.Ordinal) ? workerCount
                 samples,
                 initialCgroup,
                 finalCgroup,
-                peakReset,
-                externalPeak,
-                cpuMean,
-                cpuPeak,
+                false,
+                external.ObservedPeakBytes,
+                external.CpuPercentMean,
+                external.CpuPercentPeak,
                 Isolation,
-                effectiveCpuCores,
-                pageFaultsDelta,
-                majorPageFaultsDelta,
+                external.EffectiveCpuCores,
+                external.PageFaultsDelta,
+                external.MajorPageFaultsDelta,
                 externalBefore,
-                externalAfter);
-        }
-
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "Cgroup capability probing is best-effort and falls back to the readable snapshot.")]
-        private async Task<(CgroupMemorySnapshot Snapshot, bool PeakReset)>
-            PrepareCgroupProfileAsync()
-        {
-            bool reset = false;
-            if (IsAlive && !_peakResetAttempted)
-            {
-                _peakResetAttempted = true;
-                try
-                {
-                    CommandResult result = await RunCommandAsync(
-                        "docker",
-                        [
-                            "exec",
-                            ContainerName,
-                            "sh",
-                            "-c",
-                            "if echo 0 > /sys/fs/cgroup/memory.peak 2>/dev/null; then echo reset; else echo cumulative; fi"
-                        ],
-                        TimeSpan.FromSeconds(3)).ConfigureAwait(false);
-                    reset = result.StandardOutput
-                        .Contains("reset", StringComparison.Ordinal);
-                }
-                catch
-                {
-                }
-            }
-
-            return (await ReadCgroupAsync().ConfigureAwait(false), reset);
+                externalAfter,
+                external.CpuSampleCount,
+                external.NewKernelHighWater);
         }
 
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "VSTHRD003", Justification = "The stderr reader task is started by this DockerWorker when its child process starts.")]
@@ -3128,14 +3052,11 @@ string.Equals(implementation, "NAM", StringComparison.Ordinal) ? workerCount
             JsonElement root = document.RootElement;
             long tick = Stopwatch.GetTimestamp();
             DateTime utc = DateTime.UtcNow;
-            (long memory, long limit) = ParseUsage(
-                root.GetProperty("MemUsage").GetString());
-            double cpu = ParsePercent(root.GetProperty("CPUPerc").GetString());
-            int pids = ParseInt(root.GetProperty("PIDs").GetString());
-            (long networkInput, long networkOutput) = ParseUsage(
-                root.GetProperty("NetIO").GetString());
-            (long blockRead, long blockWrite) = ParseUsage(
-                root.GetProperty("BlockIO").GetString());
+            (long? memory, long? limit) = ExternalObservation.ParseUsage(GetText("MemUsage"));
+            double? cpu = ExternalObservation.ParsePercent(GetText("CPUPerc"));
+            int? pids = ExternalObservation.ParseCount(GetText("PIDs"));
+            (long? networkInput, long? networkOutput) = ExternalObservation.ParseUsage(GetText("NetIO"));
+            (long? blockRead, long? blockWrite) = ExternalObservation.ParseUsage(GetText("BlockIO"));
             lock (_sampleGate)
             {
                 _samples.Add(new RawHostSample(
@@ -3150,6 +3071,9 @@ string.Equals(implementation, "NAM", StringComparison.Ordinal) ? workerCount
                     blockRead,
                     blockWrite));
             }
+
+            string? GetText(string name) => root.TryGetProperty(name, out JsonElement value)
+                && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
         }
 
         private PressureHostSample[] SelectSamples(long startTick, long endTick)
@@ -3256,7 +3180,7 @@ string.Equals(implementation, "NAM", StringComparison.Ordinal) ? workerCount
                 StartupRuntime);
         }
 
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "Cgroup sampling is optional evidence and returns an unavailable snapshot on failure.")]
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "Optional OS sampling reports unavailable on command or transport failure.")]
         private async Task<CgroupMemorySnapshot> ReadCgroupAsync()
         {
             if (!IsAlive)
@@ -3268,54 +3192,25 @@ string.Equals(implementation, "NAM", StringComparison.Ordinal) ? workerCount
             {
                 CommandResult result = await RunCommandAsync(
                     "docker",
-                    [
-                        "exec",
-                        ContainerName,
-                        "sh",
-                        "-c",
-                            "cat /sys/fs/cgroup/memory.max; cat /sys/fs/cgroup/memory.current; cat /sys/fs/cgroup/memory.peak; cat /sys/fs/cgroup/memory.events; cat /sys/fs/cgroup/memory.stat; printf 'swap_current '; cat /sys/fs/cgroup/memory.swap.current; printf 'swap_peak '; cat /sys/fs/cgroup/memory.swap.peak 2>/dev/null || echo 0; cat /sys/fs/cgroup/cpu.stat"
-                    ],
+                    ["exec", ContainerName, "sh", "-c", """
+                    root=/sys/fs/cgroup
+                    if [ -e "$root/cgroup.controllers" ] || [ -e "$root/memory.max" ]; then
+                        files='memory.max memory.current memory.peak memory.events memory.stat memory.swap.current memory.swap.peak cpu.stat'
+                    else
+                        if [ -d "$root/memory" ]; then root="$root/memory"; fi
+                        files='memory.limit_in_bytes memory.usage_in_bytes memory.max_usage_in_bytes memory.stat memory.failcnt memory.oom_control'
+                    fi
+                    printf '[source]\n%s\n' "$root"
+                    for file in $files; do
+                        if content=$(cat "$root/$file" 2>/dev/null); then
+                            printf '[%s]\n%s\n' "$file" "$content"
+                        fi
+                    done
+                    exit 0
+                    """],
                     TimeSpan.FromSeconds(3)).ConfigureAwait(false);
-                string[] lines = result.StandardOutput
-                    .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
-                long limit = ParseLong(lines.ElementAtOrDefault(0));
-                long current = ParseLong(lines.ElementAtOrDefault(1));
-                long peak = ParseLong(lines.ElementAtOrDefault(2));
-                long low = FindCounter(lines, "low");
-                long high = FindCounter(lines, "high");
-                long max = FindCounter(lines, "max");
-                long oom = FindCounter(lines, "oom");
-                long oomKill = FindCounter(lines, "oom_kill");
-                long oomGroupKill = FindCounter(lines, "oom_group_kill");
-                long anon = FindCounter(lines, "anon");
-                long file = FindCounter(lines, "file");
-                long swapCurrent = FindCounter(
-                    lines,
-                    "swap_current");
-                long swapPeak = FindCounter(lines, "swap_peak");
-                return new CgroupMemorySnapshot(
-                    true,
-                    limit,
-                    current,
-                    peak,
-                    low,
-                    high,
-                    max,
-                    oom,
-                    oomKill,
-                    oomGroupKill,
-                    anon,
-                    file,
-                    swapCurrent,
-                    swapPeak,
-                    FindCounter(lines, "usage_usec"),
-                    FindCounter(lines, "user_usec"),
-                    FindCounter(lines, "system_usec"),
-                    FindCounter(lines, "nr_periods"),
-                    FindCounter(lines, "nr_throttled"),
-                    FindCounter(lines, "throttled_usec"),
-                    FindCounter(lines, "pgfault"),
-                    FindCounter(lines, "pgmajfault"));
+                IReadOnlyDictionary<string, string> files = ExternalObservation.ParseFileSections(result.ExitCode, result.StandardOutput);
+                return CgroupMemorySnapshot.FromFiles(files) with { SourcePath = files.GetValueOrDefault("source")?.Trim() };
             }
             catch
             {
@@ -3323,179 +3218,40 @@ string.Equals(implementation, "NAM", StringComparison.Ordinal) ? workerCount
             }
         }
 
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "External process sampling is optional evidence and reports an unavailable snapshot on failure.")]
-        private async Task<PressureExternalProcessSnapshot>
-            ReadExternalProcessSnapshotAsync(
-                CgroupMemorySnapshot cgroup)
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "Optional process sampling reports unavailable on command or transport failure.")]
+        private async Task<PressureExternalProcessSnapshot> ReadExternalProcessSnapshotAsync(CgroupMemorySnapshot cgroup)
         {
+            DateTime utc = DateTime.UtcNow;
             if (!IsAlive)
             {
-                return new PressureExternalProcessSnapshot(
-                    DateTime.UtcNow,
-                    cgroup,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0);
+                return PressureExternalProcessSnapshot.FromCommand(utc, cgroup, -1, string.Empty);
             }
 
             try
             {
                 CommandResult result = await RunCommandAsync(
                     "docker",
-                    [
-                        "exec",
-                        ContainerName,
-                        "sh",
-                        "-c",
-                        "clock=$(getconf CLK_TCK 2>/dev/null || echo 100); set -- $(awk '{print $14, $15}' /proc/1/stat); echo clock_ticks $clock; echo user_ticks $1; echo system_ticks $2; awk '/^Threads:/{print \"threads \" $2} /^voluntary_ctxt_switches:/{print \"voluntary \" $2} /^nonvoluntary_ctxt_switches:/{print \"nonvoluntary \" $2} /^VmRSS:/{print \"working_set_bytes \" ($2 * 1024)}' /proc/1/status"
-                    ],
+                    ["exec", ContainerName, "sh", "-c", """
+                    if clock=$(getconf CLK_TCK 2>/dev/null); then printf 'clock_ticks %s\n' "$clock"; fi
+                    if stat=$(cat /proc/1/stat 2>/dev/null); then
+                        tail=${stat##*) }
+                        set -- $tail
+                        if [ "$#" -ge 13 ]; then
+                            shift 11
+                            printf 'user_ticks %s\nsystem_ticks %s\n' "$1" "$2"
+                        fi
+                    fi
+                    awk '/^Threads:/{print "threads " $2} /^voluntary_ctxt_switches:/{print "voluntary " $2} /^nonvoluntary_ctxt_switches:/{print "nonvoluntary " $2} /^VmRSS:/{print "working_set_kib " $2}' /proc/1/status 2>/dev/null
+                    exit 0
+                    """],
                     TimeSpan.FromSeconds(3)).ConfigureAwait(false);
-                string[] lines = result.StandardOutput.Split(
-                    ['\r', '\n'],
-                    StringSplitOptions.RemoveEmptyEntries);
-                long clockTicks = FindCounter(
-                    lines,
-                    "clock_ticks");
-                long userTicks = FindCounter(
-                    lines,
-                    "user_ticks");
-                long systemTicks = FindCounter(
-                    lines,
-                    "system_ticks");
-                double processCpuMilliseconds =
-                    clockTicks <= 0
-                        ? 0
-                        : checked(userTicks + systemTicks)
-                            * 1000.0
-                            / clockTicks;
-                return new PressureExternalProcessSnapshot(
-                    DateTime.UtcNow,
-                    cgroup,
-                    checked((int)FindCounter(lines, "threads")),
-                    FindCounter(lines, "voluntary"),
-                    FindCounter(lines, "nonvoluntary"),
-                    userTicks,
-                    systemTicks,
-                    clockTicks,
-                    processCpuMilliseconds,
-                    FindCounter(lines, "working_set_bytes"));
+                return PressureExternalProcessSnapshot.FromCommand(utc, cgroup, result.ExitCode, result.StandardOutput);
             }
             catch
             {
-                return new PressureExternalProcessSnapshot(
-                    DateTime.UtcNow,
-                    cgroup,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0);
+                return PressureExternalProcessSnapshot.FromCommand(utc, cgroup, -1, string.Empty);
             }
         }
-
-        private static long FindCounter(IEnumerable<string> lines, string name)
-        {
-            foreach (string line in lines)
-            {
-                string[] parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                if (parts.Length == 2
-                    && string.Equals(parts[0], name, StringComparison.Ordinal) && long.TryParse(
-                        parts[1],
-                        NumberStyles.Integer,
-                        CultureInfo.InvariantCulture,
-                        out long value))
-                {
-                    return value;
-                }
-            }
-
-            return 0;
-        }
-
-        private static (long First, long Second) ParseUsage(string? text)
-        {
-            string[] parts = (text ?? string.Empty).Split(
-                '/',
-                StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-            return (
-                ParseByteSize(parts.ElementAtOrDefault(0)),
-                ParseByteSize(parts.ElementAtOrDefault(1)));
-        }
-
-        private static long ParseByteSize(string? text)
-        {
-            if (string.IsNullOrWhiteSpace(text))
-            {
-                return 0;
-            }
-
-            string value = text.Trim();
-            int split = 0;
-            while (split < value.Length
-                && (char.IsDigit(value[split])
-                    || value[split] is '.' or ','))
-            {
-                split++;
-            }
-
-            if (!double.TryParse(
-                value[..split].Replace(',', '.'),
-                NumberStyles.Float,
-                CultureInfo.InvariantCulture,
-                out double number))
-            {
-                return 0;
-            }
-
-            string unit = value[split..].Trim();
-            double multiplier = unit switch
-            {
-                "B" or "" => 1,
-                "kB" or "KB" => 1_000,
-                "KiB" => 1 << 10,
-                "MB" => 1_000_000,
-                "MiB" => 1 << 20,
-                "GB" => 1_000_000_000,
-                "GiB" => 1L << 30,
-                _ => 1
-            };
-            return checked((long)(number * multiplier));
-        }
-
-        private static double ParsePercent(string? text) =>
-            double.TryParse(
-                text?.Trim().TrimEnd('%'),
-                NumberStyles.Float,
-                CultureInfo.InvariantCulture,
-                out double value)
-                ? value
-                : 0;
-
-        private static int ParseInt(string? text) =>
-            int.TryParse(
-                text,
-                NumberStyles.Integer,
-                CultureInfo.InvariantCulture,
-                out int value)
-                ? value
-                : 0;
-
-        private static long ParseLong(string? text) =>
-            long.TryParse(
-                text,
-                NumberStyles.Integer,
-                CultureInfo.InvariantCulture,
-                out long value)
-                ? value
-                : 0;
 
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "Best-effort child cleanup must continue across Docker and process-kill failures.")]
         private async Task KillAsync()
@@ -3859,14 +3615,14 @@ string.Equals(implementation, "NAM", StringComparison.Ordinal) ? workerCount
     private readonly record struct RawHostSample(
         long Tick,
         DateTime Utc,
-        long MemoryBytes,
-        long MemoryLimitBytes,
-        double CpuPercent,
-        int Pids,
-        long NetworkInputBytes,
-        long NetworkOutputBytes,
-        long BlockReadBytes,
-        long BlockWriteBytes);
+        long? MemoryBytes,
+        long? MemoryLimitBytes,
+        double? CpuPercent,
+        int? Pids,
+        long? NetworkInputBytes,
+        long? NetworkOutputBytes,
+        long? BlockReadBytes,
+        long? BlockWriteBytes);
 
     private readonly record struct CommandResult(
         int ExitCode,

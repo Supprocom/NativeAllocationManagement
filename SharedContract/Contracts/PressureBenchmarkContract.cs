@@ -16,14 +16,14 @@ public readonly record struct PressureHostProgress(
 public readonly record struct PressureHostSample(
     DateTime Utc,
     double HostElapsedMilliseconds,
-    long CgroupMemoryBytes,
-    long CgroupMemoryLimitBytes,
-    double CpuPercent,
-    int Pids,
-    long NetworkInputBytes,
-    long NetworkOutputBytes,
-    long BlockReadBytes,
-    long BlockWriteBytes);
+    long? CgroupMemoryBytes,
+    long? CgroupMemoryLimitBytes,
+    double? CpuPercent,
+    int? Pids,
+    long? NetworkInputBytes,
+    long? NetworkOutputBytes,
+    long? BlockReadBytes,
+    long? BlockWriteBytes);
 
 public readonly record struct PressureEffectiveIsolation(
     string ContainerName,
@@ -65,23 +65,25 @@ public readonly record struct PressureImplementationObservation(
     string? ExceptionType,
     string? ExceptionMessage,
     PressureProfileResult? ChildResult,
-    long ManagedAllocatedSinceWorkerStart,
-    int Gen2CollectionsSinceWorkerStart,
-    double CpuMillisecondsSinceWorkerStart,
+    long? ManagedAllocatedSinceWorkerStart,
+    int? Gen2CollectionsSinceWorkerStart,
+    double? CpuMillisecondsSinceWorkerStart,
     IReadOnlyList<PressureHostProgress> Progress,
     IReadOnlyList<PressureHostSample> HostSamples,
     CgroupMemorySnapshot InitialCgroup,
     CgroupMemorySnapshot FinalCgroup,
     bool CgroupPeakReset,
-    long ExternalCgroupPeakBytes,
-    double ExternalCpuPercentMean,
-    double ExternalCpuPercentPeak,
+    long? ExternalCgroupPeakBytes,
+    double? ExternalCpuPercentMean,
+    double? ExternalCpuPercentPeak,
     PressureEffectiveIsolation Isolation,
-    double EffectiveCpuCores = 0,
-    long PageFaultsDelta = 0,
-    long MajorPageFaultsDelta = 0,
+    double? EffectiveCpuCores = null,
+    long? PageFaultsDelta = null,
+    long? MajorPageFaultsDelta = null,
     PressureExternalProcessSnapshot ExternalBefore = default,
-    PressureExternalProcessSnapshot ExternalAfter = default);
+    PressureExternalProcessSnapshot ExternalAfter = default,
+    int ExternalCpuSampleCount = 0,
+    bool ExternalCgroupPeakIsKernelHighWater = false);
 
 public readonly record struct PressurePairedStatistics(
     int SampleCount,

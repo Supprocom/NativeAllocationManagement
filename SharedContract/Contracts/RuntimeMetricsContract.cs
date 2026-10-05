@@ -13,7 +13,7 @@ public readonly record struct ChildRunResult(
     int Gen2Collections,
     long HeapBytesAfterRun,
     long PeakWorkingSetBytes,
-    long LargeObjectHeapBytesAfterRun = 0,
+    long? LargeObjectHeapBytesAfterRun = null,
     long ColdManagedAllocatedBytes = 0,
     PressureRunMetrics? Pressure = null,
     double ColdElapsedMilliseconds = 0)
@@ -27,294 +27,170 @@ public readonly record struct ChildRunResult(
 public readonly record struct PressureRunMetrics(
     bool Enabled,
     bool CgroupAvailable,
-    long CgroupLimitBytes,
-    long CgroupCurrentBeforeBytes,
-    long CgroupCurrentAfterBytes,
-    long CgroupPeakBytes,
-    long CgroupOomEvents,
-    long CgroupOomKillEvents,
-    long CgroupAnonBytes,
-    long CgroupFileBytes,
-    long TotalAvailableMemoryBytes,
-    long MemoryLoadBytes,
-    long HighMemoryLoadThresholdBytes,
-    long CommittedHeapBytes,
-    long HeapBytes,
-    long LargeObjectHeapBytes,
-    long FragmentedHeapBytes,
+    long? CgroupLimitBytes,
+    long? CgroupCurrentBeforeBytes,
+    long? CgroupCurrentAfterBytes,
+    long? CgroupPeakBytes,
+    long? CgroupOomEvents,
+    long? CgroupOomKillEvents,
+    long? CgroupAnonBytes,
+    long? CgroupFileBytes,
+    long? TotalAvailableMemoryBytes,
+    long? MemoryLoadBytes,
+    long? HighMemoryLoadThresholdBytes,
+    long? CommittedHeapBytes,
+    long? HeapBytes,
+    long? LargeObjectHeapBytes,
+    long? FragmentedHeapBytes,
     double TotalPauseMilliseconds);
 
+/// <summary>
+/// Optional kernel observations, not an atomic cross-file snapshot. Null means
+/// unavailable; zero is a successfully parsed measurement. Peak is the kernel's
+/// historical high water, not a per-request reset. V1 RSS includes swap cache and
+/// is reported separately rather than relabeled as the v2 anonymous counter.
+/// </summary>
 public readonly record struct CgroupMemorySnapshot(
     bool Available,
-    long LimitBytes,
-    long CurrentBytes,
-    long PeakBytes,
-    long LowEvents,
-    long HighEvents,
-    long MaxEvents,
-    long OomEvents,
-    long OomKillEvents,
-    long OomGroupKillEvents,
-    long AnonBytes,
-    long FileBytes,
-    long SwapCurrentBytes = 0,
-    long SwapPeakBytes = 0,
-    long CpuUsageMicroseconds = 0,
-    long CpuUserMicroseconds = 0,
-    long CpuSystemMicroseconds = 0,
-    long CpuPeriods = 0,
-    long CpuThrottledPeriods = 0,
-    long CpuThrottledMicroseconds = 0,
-    long PageFaults = 0,
-    long MajorPageFaults = 0)
+    long? LimitBytes,
+    long? CurrentBytes,
+    long? PeakBytes,
+    long? LowEvents,
+    long? HighEvents,
+    long? MaxEvents,
+    long? OomEvents,
+    long? OomKillEvents,
+    long? OomGroupKillEvents,
+    long? AnonBytes,
+    long? FileBytes,
+    long? SwapCurrentBytes = null,
+    long? SwapPeakBytes = null,
+    long? CpuUsageMicroseconds = null,
+    long? CpuUserMicroseconds = null,
+    long? CpuSystemMicroseconds = null,
+    long? CpuPeriods = null,
+    long? CpuThrottledPeriods = null,
+    long? CpuThrottledMicroseconds = null,
+    long? PageFaults = null,
+    long? MajorPageFaults = null,
+    bool? LimitUnlimited = null,
+    int? Version = null,
+    long? V1RssBytes = null,
+    long? LimitHitEvents = null,
+    string? SourcePath = null)
 {
-    public static CgroupMemorySnapshot Read()
+    public static CgroupMemorySnapshot Read() =>
+        OperatingSystem.IsLinux() && FindCgroupRoot() is { } root
+            ? ReadFromDirectory(root)
+            : default;
+
+    public static CgroupMemorySnapshot ReadFromDirectory(string root)
     {
-        if (!OperatingSystem.IsLinux())
+        ArgumentException.ThrowIfNullOrWhiteSpace(root);
+        bool v2 = File.Exists(Path.Combine(root, "memory.current"));
+        string[] files = v2
+            ? ["memory.max", "memory.current", "memory.peak", "memory.events", "memory.stat", "memory.swap.current", "memory.swap.peak", "cpu.stat"]
+            : ["memory.limit_in_bytes", "memory.usage_in_bytes", "memory.max_usage_in_bytes", "memory.stat", "memory.failcnt", "memory.oom_control"];
+        Dictionary<string, string> contents = new(StringComparer.Ordinal);
+        foreach (string file in files)
+        {
+            if (ReadText(Path.Combine(root, file)) is { } text)
+            {
+                contents.Add(file, text);
+            }
+        }
+
+        return FromFiles(contents) with { SourcePath = root };
+    }
+
+    public static CgroupMemorySnapshot FromFiles(IReadOnlyDictionary<string, string> files)
+    {
+        ArgumentNullException.ThrowIfNull(files);
+        bool v2 = files.ContainsKey("memory.current") || files.ContainsKey("memory.max");
+        bool v1 = files.ContainsKey("memory.usage_in_bytes") || files.ContainsKey("memory.limit_in_bytes");
+        if (!v2 && !v1)
         {
             return default;
         }
 
-        string? root = FindCgroupRoot();
-        if (root is null)
-        {
-            return default;
-        }
-
-        long limit = ReadLong(Path.Combine(root, "memory.max"));
-        long current = ReadLong(Path.Combine(root, "memory.current"));
-        long peak = ReadLong(Path.Combine(root, "memory.peak"));
-        if (limit == 0 && current == 0 && peak == 0)
-        {
-            limit = ReadLong(Path.Combine(root, "memory.limit_in_bytes"));
-            current = ReadLong(Path.Combine(root, "memory.usage_in_bytes"));
-            peak = ReadLong(Path.Combine(root, "memory.max_usage_in_bytes"));
-        }
-
-        (
-            long low,
-            long high,
-            long max,
-            long oom,
-            long oomKill,
-            long oomGroupKill) = ReadEvents(root);
-        (
-            long anon,
-            long file,
-            long pageFaults,
-            long majorPageFaults) = ReadStat(root);
-        long swapCurrent = ReadLong(
-            Path.Combine(root, "memory.swap.current"));
-        long swapPeak = ReadLong(
-            Path.Combine(root, "memory.swap.peak"));
+        (long? limit, bool? unlimited) = ExternalObservation.ParseLimit(
+            files.GetValueOrDefault(v2 ? "memory.max" : "memory.limit_in_bytes"), v2);
+        long? current = ExternalObservation.ParseCounter(files.GetValueOrDefault(v2 ? "memory.current" : "memory.usage_in_bytes"));
+        IReadOnlyDictionary<string, long?> events = ExternalObservation.ParseCounters(files.GetValueOrDefault(v2 ? "memory.events" : "memory.oom_control"));
+        IReadOnlyDictionary<string, long?> stat = ExternalObservation.ParseCounters(files.GetValueOrDefault("memory.stat"));
+        IReadOnlyDictionary<string, long?> cpu = ExternalObservation.ParseCounters(files.GetValueOrDefault("cpu.stat"));
         return new CgroupMemorySnapshot(
-            limit > 0 || current > 0 || peak > 0,
-            limit,
-            current,
-            peak,
-            low,
-            high,
-            max,
-            oom,
-            oomKill,
-            oomGroupKill,
-            anon,
-            file,
-            swapCurrent,
-            swapPeak,
-            ReadCounter(root, "cpu.stat", "usage_usec"),
-            ReadCounter(root, "cpu.stat", "user_usec"),
-            ReadCounter(root, "cpu.stat", "system_usec"),
-            ReadCounter(root, "cpu.stat", "nr_periods"),
-            ReadCounter(root, "cpu.stat", "nr_throttled"),
-            ReadCounter(root, "cpu.stat", "throttled_usec"),
-            pageFaults,
-            majorPageFaults);
+            current.HasValue, limit, current,
+            ExternalObservation.ParseCounter(files.GetValueOrDefault(v2 ? "memory.peak" : "memory.max_usage_in_bytes")),
+            v2 ? events.GetValueOrDefault("low") : null,
+            v2 ? events.GetValueOrDefault("high") : null,
+            v2 ? events.GetValueOrDefault("max") : null,
+            v2 ? events.GetValueOrDefault("oom") : null,
+            events.GetValueOrDefault("oom_kill"),
+            v2 ? events.GetValueOrDefault("oom_group_kill") : null,
+            v2 ? stat.GetValueOrDefault("anon") : null,
+            stat.GetValueOrDefault(v2 ? "file" : "total_cache"),
+            v2 ? ExternalObservation.ParseCounter(files.GetValueOrDefault("memory.swap.current")) : stat.GetValueOrDefault("total_swap"),
+            v2 ? ExternalObservation.ParseCounter(files.GetValueOrDefault("memory.swap.peak")) : null,
+            v2 ? cpu.GetValueOrDefault("usage_usec") : null,
+            v2 ? cpu.GetValueOrDefault("user_usec") : null,
+            v2 ? cpu.GetValueOrDefault("system_usec") : null,
+            v2 ? cpu.GetValueOrDefault("nr_periods") : null,
+            v2 ? cpu.GetValueOrDefault("nr_throttled") : null,
+            v2 ? cpu.GetValueOrDefault("throttled_usec") : null,
+            stat.GetValueOrDefault(v2 ? "pgfault" : "total_pgfault"),
+            stat.GetValueOrDefault(v2 ? "pgmajfault" : "total_pgmajfault"),
+            unlimited, v2 ? 2 : 1,
+            v2 ? null : stat.GetValueOrDefault("total_rss"),
+            v2 ? null : ExternalObservation.ParseCounter(files.GetValueOrDefault("memory.failcnt")));
     }
 
     private static string? FindCgroupRoot()
     {
-        string[] candidates =
-        [
-            "/sys/fs/cgroup",
-            "/sys/fs/cgroup/memory"
-        ];
-        foreach (string candidate in candidates)
+        if (ReadText("/proc/self/cgroup") is { } membership)
         {
-            if (File.Exists(Path.Combine(candidate, "memory.current"))
-                || File.Exists(Path.Combine(candidate, "memory.usage_in_bytes")))
+            foreach (string line in membership.Split('\n', StringSplitOptions.RemoveEmptyEntries))
             {
-                return candidate;
+                if (line.StartsWith("0::", StringComparison.Ordinal))
+                {
+                    string root = Path.Join("/sys/fs/cgroup", line[3..].Trim().TrimStart('/'));
+                    if (File.Exists(Path.Combine(root, "memory.current")))
+                    {
+                        return root;
+                    }
+                }
+                else
+                {
+                    string[] parts = line.Split(':', 3);
+                    if (parts.Length == 3 && parts[1].Split(',').Contains("memory", StringComparer.Ordinal))
+                    {
+                        string root = Path.Join("/sys/fs/cgroup/memory", parts[2].Trim().TrimStart('/'));
+                        if (File.Exists(Path.Combine(root, "memory.usage_in_bytes")))
+                        {
+                            return root;
+                        }
+                    }
+                }
             }
         }
 
         return null;
     }
 
-    private static long ReadLong(string path)
+    private static string? ReadText(string path)
     {
         try
         {
-            string text = File.ReadAllText(path).Trim();
-            return text is "" or "max"
-                ? 0
-                : long.TryParse(text, System.Globalization.CultureInfo.InvariantCulture, out long value) && value >= 0
-                    ? value
-                    : 0;
+            return File.ReadAllText(path);
         }
         catch (IOException)
         {
-            return 0;
+            return null;
         }
         catch (UnauthorizedAccessException)
         {
-            return 0;
+            return null;
         }
-    }
-
-    private static (
-        long Low,
-        long High,
-        long Max,
-        long Oom,
-        long OomKill,
-        long OomGroupKill) ReadEvents(string root)
-    {
-        string path = Path.Combine(root, "memory.events");
-        try
-        {
-            long low = 0;
-            long high = 0;
-            long max = 0;
-            long oom = 0;
-            long oomKill = 0;
-            long oomGroupKill = 0;
-            foreach (string line in File.ReadLines(path))
-            {
-                string[] parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                if (parts.Length != 2 || !long.TryParse(parts[1], System.Globalization.CultureInfo.InvariantCulture, out long value))
-                {
-                    continue;
-                }
-
-                if (string.Equals(parts[0], "low", StringComparison.Ordinal))
-                {
-                    low = value;
-                }
-                else if (string.Equals(parts[0], "high", StringComparison.Ordinal))
-                {
-                    high = value;
-                }
-                else if (string.Equals(parts[0], "max", StringComparison.Ordinal))
-                {
-                    max = value;
-                }
-                else if (string.Equals(parts[0], "oom", StringComparison.Ordinal))
-                {
-                    oom = value;
-                }
-                else if (string.Equals(parts[0], "oom_kill", StringComparison.Ordinal))
-                {
-                    oomKill = value;
-                }
-                else if (string.Equals(parts[0], "oom_group_kill", StringComparison.Ordinal))
-                {
-                    oomGroupKill = value;
-                }
-            }
-
-            return (low, high, max, oom, oomKill, oomGroupKill);
-        }
-        catch (IOException)
-        {
-            return default;
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return default;
-        }
-    }
-
-    private static (
-        long Anon,
-        long File,
-        long PageFaults,
-        long MajorPageFaults) ReadStat(string root)
-    {
-        string path = Path.Combine(root, "memory.stat");
-        try
-        {
-            long anon = 0;
-            long file = 0;
-            long pageFaults = 0;
-            long majorPageFaults = 0;
-            foreach (string line in File.ReadLines(path))
-            {
-                string[] parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                if (parts.Length != 2 || !long.TryParse(parts[1], System.Globalization.CultureInfo.InvariantCulture, out long value))
-                {
-                    continue;
-                }
-
-                if (string.Equals(parts[0], "anon", StringComparison.Ordinal))
-                {
-                    anon = value;
-                }
-                else if (string.Equals(parts[0], "file", StringComparison.Ordinal))
-                {
-                    file = value;
-                }
-                else if (string.Equals(parts[0], "pgfault", StringComparison.Ordinal))
-                {
-                    pageFaults = value;
-                }
-                else if (string.Equals(parts[0], "pgmajfault", StringComparison.Ordinal))
-                {
-                    majorPageFaults = value;
-                }
-            }
-
-            return (anon, file, pageFaults, majorPageFaults);
-        }
-        catch (IOException)
-        {
-            return default;
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return default;
-        }
-    }
-
-    private static long ReadCounter(
-        string root,
-        string fileName,
-        string counterName)
-    {
-        string path = Path.Combine(root, fileName);
-        try
-        {
-            foreach (string line in File.ReadLines(path))
-            {
-                string[] parts = line.Split(
-                    ' ',
-                    StringSplitOptions.RemoveEmptyEntries);
-                if (parts.Length == 2
-                    && string.Equals(parts[0], counterName, StringComparison.Ordinal) && long.TryParse(parts[1], System.Globalization.CultureInfo.InvariantCulture, out long value)
-                    && value >= 0)
-                {
-                    return value;
-                }
-            }
-        }
-        catch (IOException)
-        {
-        }
-        catch (UnauthorizedAccessException)
-        {
-        }
-
-        return 0;
     }
 }
 

@@ -224,19 +224,20 @@ public readonly record struct PressureRuntimeSnapshot(
     int Gen1Collections,
     int Gen2Collections,
     double TotalPauseMilliseconds,
-    long TotalAvailableMemoryBytes,
-    long MemoryLoadBytes,
-    long HighMemoryLoadThresholdBytes,
-    long TotalCommittedBytes,
-    long HeapSizeBytes,
-    long FragmentedBytes,
-    long LargeObjectHeapBytes,
+    long? TotalAvailableMemoryBytes,
+    long? MemoryLoadBytes,
+    long? HighMemoryLoadThresholdBytes,
+    long? TotalCommittedBytes,
+    long? HeapSizeBytes,
+    long? FragmentedBytes,
+    long? LargeObjectHeapBytes,
     long ProcessWorkingSetBytes,
     double ProcessCpuMilliseconds,
     int ProcessorCount,
     CgroupMemorySnapshot Cgroup,
     IReadOnlyDictionary<string, string> GcConfiguration,
-    PressureCompilationConfiguration CompilationConfiguration = default)
+    PressureCompilationConfiguration CompilationConfiguration = default,
+    long? LastCompletedGcIndex = null)
 {
     public static PressureRuntimeSnapshot Capture()
     {
@@ -257,19 +258,20 @@ public readonly record struct PressureRuntimeSnapshot(
             GC.CollectionCount(1),
             GC.CollectionCount(2),
             GC.GetTotalPauseDuration().TotalMilliseconds,
-            memory.TotalAvailableMemoryBytes,
-            memory.MemoryLoadBytes,
-            memory.HighMemoryLoadThresholdBytes,
-            memory.TotalCommittedBytes,
-            memory.HeapSizeBytes,
-            memory.FragmentedBytes,
-            memory.GenerationInfo.Length > 3 ? memory.GenerationInfo[3].SizeAfterBytes : 0,
+            memory.Index > 0 ? memory.TotalAvailableMemoryBytes : null,
+            memory.Index > 0 ? memory.MemoryLoadBytes : null,
+            memory.Index > 0 ? memory.HighMemoryLoadThresholdBytes : null,
+            memory.Index > 0 ? memory.TotalCommittedBytes : null,
+            memory.Index > 0 ? memory.HeapSizeBytes : null,
+            memory.Index > 0 ? memory.FragmentedBytes : null,
+            memory.Index > 0 && memory.GenerationInfo.Length > 3 ? memory.GenerationInfo[3].SizeAfterBytes : null,
             process.WorkingSet64,
             process.TotalProcessorTime.TotalMilliseconds,
             Environment.ProcessorCount,
             CgroupMemorySnapshot.Read(),
             configuration,
-            PressureCompilationConfiguration.Capture());
+            PressureCompilationConfiguration.Capture(),
+            memory.Index > 0 ? memory.Index : null);
     }
 }
 

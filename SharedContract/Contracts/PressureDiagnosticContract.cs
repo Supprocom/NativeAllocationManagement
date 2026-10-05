@@ -114,14 +114,37 @@ public readonly record struct PressureRequestDiagnostics(
 public readonly record struct PressureExternalProcessSnapshot(
     DateTime Utc,
     CgroupMemorySnapshot Cgroup,
-    int ThreadCount,
-    long VoluntaryContextSwitches,
-    long NonvoluntaryContextSwitches,
-    long ProcessUserTicks,
-    long ProcessSystemTicks,
-    long ClockTicksPerSecond,
-    double ProcessCpuMilliseconds,
-    long WorkingSetBytes);
+    int? ThreadCount,
+    long? VoluntaryContextSwitches,
+    long? NonvoluntaryContextSwitches,
+    long? ProcessUserTicks,
+    long? ProcessSystemTicks,
+    long? ClockTicksPerSecond,
+    double? ProcessCpuMilliseconds,
+    long? WorkingSetBytes)
+{
+    public bool Available => ThreadCount is > 0
+        && VoluntaryContextSwitches.HasValue && NonvoluntaryContextSwitches.HasValue
+        && ProcessUserTicks.HasValue && ProcessSystemTicks.HasValue
+        && ClockTicksPerSecond is > 0 && ProcessCpuMilliseconds.HasValue
+        && WorkingSetBytes.HasValue;
+
+    public static PressureExternalProcessSnapshot FromCommand(
+        DateTime utc, CgroupMemorySnapshot cgroup, int exitCode, string text)
+    {
+        IReadOnlyDictionary<string, long?> counters = ExternalObservation.ParseCounters(exitCode == 0 ? text : null);
+        long? threads = counters.GetValueOrDefault("threads");
+        long? user = counters.GetValueOrDefault("user_ticks");
+        long? system = counters.GetValueOrDefault("system_ticks");
+        long? frequency = counters.GetValueOrDefault("clock_ticks");
+        long? workingSetKiB = counters.GetValueOrDefault("working_set_kib");
+        return new(utc, cgroup,
+            threads is >= 0 and <= int.MaxValue ? (int)threads : null,
+            counters.GetValueOrDefault("voluntary"), counters.GetValueOrDefault("nonvoluntary"),
+            user, system, frequency, ExternalObservation.CpuMilliseconds(user, system, frequency),
+            workingSetKiB is >= 0 && workingSetKiB <= long.MaxValue / 1024 ? workingSetKiB * 1024 : null);
+    }
+}
 
 public readonly record struct PressureHostProcessorSample(
     DateTime Utc,
