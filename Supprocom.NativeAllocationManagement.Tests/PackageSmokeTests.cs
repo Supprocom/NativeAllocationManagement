@@ -603,6 +603,33 @@ public sealed class PackageSmokeTests
                             || admissionBudget.CaptureStatistics().AllocationCount != 1
                             || admissionBudget.CaptureStatistics().FreeCount != 1) return 37;
                         System.Console.WriteLine("admitted=1; prepared=1; activated=1; returned=1; final-charge=0");
+                        NativeLayoutBuilder layoutBuilder = new(2);
+                        NativeLayoutField<byte> layoutBytes = layoutBuilder.Add<byte>(3);
+                        NativeLayoutField<int> layoutIntegers = layoutBuilder.Add<int>(2, 16);
+                        NativeLayout layout = layoutBuilder.Build();
+                        NativeMemoryBudget layoutBudget = new(layout.BackingBytes + 8, 32);
+                        if (!layout.TryReserve(layoutBudget, out NativeLayoutReservation? layoutPermission, out _)) return 38;
+                        try
+                        {
+                            layoutPermission.Value.PrepareBacking();
+                            using NativeLayoutOwner layoutOwner = NativeLayoutReservation.Activate(ref layoutPermission,
+                                (layoutBytes, layoutIntegers), static (writer, fields) =>
+                                { writer.Region(fields.layoutBytes).Fill(7); writer.Region(fields.layoutIntegers).Fill(47); });
+                            if (layoutOwner.Read((layoutBytes, layoutIntegers), static (view, fields) =>
+                                view.Region(fields.layoutBytes)[0] + view.Region(fields.layoutIntegers)[0] + view.Region(fields.layoutIntegers)[1]) != 101) return 39;
+                            using NativeTransfer<int> fieldCopy = layoutOwner.DetachField(layoutIntegers, layoutBudget);
+                            NativeLayoutStatistics layoutObserved = layoutOwner.CaptureSnapshot();
+                            if (fieldCopy.Read(static view => view[1]) != 47 || layoutObserved.RegionCount != 2
+                                || layoutObserved.InitializedRegionCount != 2 || layoutObserved.LogicalInitializedBytes != 11
+                                || layoutObserved.CopiedBytes != 8 || layoutObserved.DetachedOwnerCount != 1
+                                || !layoutObserved.LayoutIsPrepared || !layoutObserved.InitializationCompleted
+                                || layoutObserved.Ownership.OwnedBackingBytes != layout.BackingBytes
+                                || layout.Describe(layoutIntegers).OffsetBytes != 16) return 40;
+                        }
+                        finally { layoutPermission?.Dispose(); }
+                        if (layoutBudget.CaptureStatistics().CommittedBytes != 0 || layoutBudget.CaptureStatistics().ReservedBytes != 0
+                            || layoutBudget.CaptureStatistics().AllocationCount != 2 || layoutBudget.CaptureStatistics().FreeCount != 2) return 41;
+                        System.Console.WriteLine("typed-layout-output=101; fields=2; copied-bytes=8; final-charge=0");
                         NativeMemoryBudget retentionBudget = new(2_000_000);
                         using (NativeArena retention = new(retentionBudget, new NativeArenaRetentionPolicy(4096, 4160), 0, NativeMemoryReturn.ToNativeMemory))
                         {
@@ -747,6 +774,25 @@ public sealed class PackageSmokeTests
             _output.WriteLine(invalidAdmission.Output);
             Assert.NotEqual(0, invalidAdmission.ExitCode);
             Assert.Contains("error NAM1050", invalidAdmission.Output, StringComparison.OrdinalIgnoreCase);
+            await File.WriteAllTextAsync(program,
+                """
+                using Supprocom.NativeAllocationManagement;
+                public static class Consumer
+                {
+                    public static void Main()
+                    {
+                        NativeLayoutBuilder builder = new(1);
+                        builder.Add<int>(1);
+                        NativeLayout layout = builder.Build();
+                        layout.TryReserve(new(layout.BackingBytes), out NativeLayoutReservation? permission, out _);
+                        permission!.Value.PrepareBacking();
+                    }
+                }
+                """);
+            CommandResult invalidLayout = await RunDotnetAsync($"build \"{project}\" --no-restore --nologo -t:Rebuild", consumerRoot);
+            _output.WriteLine(invalidLayout.Output);
+            Assert.NotEqual(0, invalidLayout.ExitCode);
+            Assert.Contains("error NAM1050", invalidLayout.Output, StringComparison.OrdinalIgnoreCase);
             await File.WriteAllTextAsync(program,
                 """
                 using Supprocom.NativeAllocationManagement;

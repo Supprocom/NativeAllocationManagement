@@ -542,3 +542,127 @@ static Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.operat
 static Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.operator ==(Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot left, Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot right) -> bool
 ~override Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.Equals(object obj) -> bool
 ~override Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.ToString() -> string
+Supprocom.NativeAllocationManagement.NativeLayout
+Supprocom.NativeAllocationManagement.NativeLayout.Alignment.get -> int
+Supprocom.NativeAllocationManagement.NativeLayout.BackingBytes.get -> int
+Supprocom.NativeAllocationManagement.NativeLayout.Describe<T>(Supprocom.NativeAllocationManagement.NativeLayoutField<T> field) -> Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics
+Supprocom.NativeAllocationManagement.NativeLayout.ExtentBytes.get -> int
+Supprocom.NativeAllocationManagement.NativeLayout.Id.get -> long
+Supprocom.NativeAllocationManagement.NativeLayout.LogicalBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeLayout.MetadataFieldBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeLayout.RegionCount.get -> int
+Supprocom.NativeAllocationManagement.NativeLayout.TryReserve(Supprocom.NativeAllocationManagement.NativeMemoryBudget! budget, out Supprocom.NativeAllocationManagement.NativeLayoutReservation? reservation, out Supprocom.NativeAllocationManagement.NativeMemoryAdmissionExhaustionReason reason) -> bool
+Supprocom.NativeAllocationManagement.NativeLayoutAction<TState>
+Supprocom.NativeAllocationManagement.NativeLayoutBuilder
+Supprocom.NativeAllocationManagement.NativeLayoutBuilder.Add<T>(int length, int alignment = 0) -> Supprocom.NativeAllocationManagement.NativeLayoutField<T>
+Supprocom.NativeAllocationManagement.NativeLayoutBuilder.Build() -> Supprocom.NativeAllocationManagement.NativeLayout!
+Supprocom.NativeAllocationManagement.NativeLayoutBuilder.NativeLayoutBuilder(int regionCapacity) -> void
+Supprocom.NativeAllocationManagement.NativeLayoutField<T>
+Supprocom.NativeAllocationManagement.NativeLayoutField<T>.Equals(Supprocom.NativeAllocationManagement.NativeLayoutField<T> other) -> bool
+Supprocom.NativeAllocationManagement.NativeLayoutField<T>.Index.get -> int
+Supprocom.NativeAllocationManagement.NativeLayoutField<T>.LayoutId.get -> long
+Supprocom.NativeAllocationManagement.NativeLayoutField<T>.NativeLayoutField() -> void
+Supprocom.NativeAllocationManagement.NativeLayoutFunc<TState, TResult>
+Supprocom.NativeAllocationManagement.NativeLayoutInitializer<TState>
+Supprocom.NativeAllocationManagement.NativeLayoutOwner
+Supprocom.NativeAllocationManagement.NativeLayoutOwner.Access<TState>(TState state, Supprocom.NativeAllocationManagement.NativeLayoutAction<TState>! action) -> void
+Supprocom.NativeAllocationManagement.NativeLayoutOwner.CaptureSnapshot() -> Supprocom.NativeAllocationManagement.NativeLayoutStatistics
+Supprocom.NativeAllocationManagement.NativeLayoutOwner.DetachField<T>(Supprocom.NativeAllocationManagement.NativeLayoutField<T> field, Supprocom.NativeAllocationManagement.NativeMemoryBudget! budget, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> Supprocom.NativeAllocationManagement.NativeTransfer<T>
+Supprocom.NativeAllocationManagement.NativeLayoutOwner.Dispose() -> void
+Supprocom.NativeAllocationManagement.NativeLayoutOwner.Id.get -> long
+Supprocom.NativeAllocationManagement.NativeLayoutOwner.NativeLayoutOwner() -> void
+Supprocom.NativeAllocationManagement.NativeLayoutOwner.Read<TState, TResult>(TState state, Supprocom.NativeAllocationManagement.NativeLayoutFunc<TState, TResult>! action) -> TResult
+Supprocom.NativeAllocationManagement.NativeLayoutOwner.TryCompletePayloadReturn() -> bool
+Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics
+Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics.Alignment.get -> int
+Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics.Alignment.init -> void
+Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics.Deconstruct(out long LayoutId, out int Index, out int Length, out int ElementBytes, out int OffsetBytes, out int PayloadBytes, out int Alignment) -> void
+Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics.ElementBytes.get -> int
+Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics.ElementBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics.Equals(Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics other) -> bool
+Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics.Index.get -> int
+Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics.Index.init -> void
+Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics.LayoutId.get -> long
+Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics.LayoutId.init -> void
+Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics.Length.get -> int
+Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics.Length.init -> void
+Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics.NativeLayoutRegionStatistics() -> void
+Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics.NativeLayoutRegionStatistics(long LayoutId, int Index, int Length, int ElementBytes, int OffsetBytes, int PayloadBytes, int Alignment) -> void
+Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics.OffsetBytes.get -> int
+Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics.OffsetBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics.PayloadBytes.get -> int
+Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics.PayloadBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeLayoutReservation
+Supprocom.NativeAllocationManagement.NativeLayoutReservation.CaptureSnapshot() -> Supprocom.NativeAllocationManagement.NativeLayoutStatistics
+Supprocom.NativeAllocationManagement.NativeLayoutReservation.Dispose() -> void
+Supprocom.NativeAllocationManagement.NativeLayoutReservation.Id.get -> long
+Supprocom.NativeAllocationManagement.NativeLayoutReservation.NativeLayoutReservation() -> void
+Supprocom.NativeAllocationManagement.NativeLayoutReservation.PrepareBacking(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> void
+Supprocom.NativeAllocationManagement.NativeLayoutReservation.TryCompletePayloadReturn() -> bool
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.AlignmentSlackBytes.get -> int
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.AlignmentSlackBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.CopiedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.CopiedBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.DescriptorFieldBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.DescriptorFieldBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.DetachedOwnerCount.get -> long
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.DetachedOwnerCount.init -> void
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.Equals(Supprocom.NativeAllocationManagement.NativeLayoutStatistics other) -> bool
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.HistoryOverflowed.get -> bool
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.HistoryOverflowed.init -> void
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.InitializationCompleted.get -> bool
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.InitializationCompleted.init -> void
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.InitializedRegionCount.get -> int
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.InitializedRegionCount.init -> void
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.InterRegionPaddingBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.InterRegionPaddingBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.LayoutExtentBytes.get -> int
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.LayoutExtentBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.LayoutId.get -> long
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.LayoutId.init -> void
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.LayoutIsPrepared.get -> bool
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.LayoutIsPrepared.init -> void
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.LogicalInitializedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.LogicalInitializedBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.NativeLayoutStatistics() -> void
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.Ownership.get -> Supprocom.NativeAllocationManagement.NativeTransferStatistics
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.Ownership.init -> void
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.PayloadAlignment.get -> int
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.PayloadAlignment.init -> void
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.PayloadOffsetBytes.get -> int
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.PayloadOffsetBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.RegionCount.get -> int
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.RegionCount.init -> void
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.Reservation.get -> Supprocom.NativeAllocationManagement.NativeMemoryReservationStatistics
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.Reservation.init -> void
+Supprocom.NativeAllocationManagement.NativeLayoutView
+Supprocom.NativeAllocationManagement.NativeLayoutView.NativeLayoutView() -> void
+Supprocom.NativeAllocationManagement.NativeLayoutView.Region<T>(Supprocom.NativeAllocationManagement.NativeLayoutField<T> field) -> System.Span<T>
+Supprocom.NativeAllocationManagement.NativeLayoutWriter
+Supprocom.NativeAllocationManagement.NativeLayoutWriter.NativeLayoutWriter() -> void
+Supprocom.NativeAllocationManagement.NativeLayoutWriter.Region<T>(Supprocom.NativeAllocationManagement.NativeLayoutField<T> field) -> Supprocom.NativeAllocationManagement.NativeLeaseWriter<T>
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.LayoutInitialized = 32 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.LayoutPrepared = 31 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+const Supprocom.NativeAllocationManagement.NativeLayoutBuilder.MaximumRegionCount = 64 -> int
+override Supprocom.NativeAllocationManagement.NativeLayoutField<T>.GetHashCode() -> int
+override Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics.GetHashCode() -> int
+override Supprocom.NativeAllocationManagement.NativeLayoutStatistics.GetHashCode() -> int
+static Supprocom.NativeAllocationManagement.NativeLayoutField<T>.operator !=(Supprocom.NativeAllocationManagement.NativeLayoutField<T> left, Supprocom.NativeAllocationManagement.NativeLayoutField<T> right) -> bool
+static Supprocom.NativeAllocationManagement.NativeLayoutField<T>.operator ==(Supprocom.NativeAllocationManagement.NativeLayoutField<T> left, Supprocom.NativeAllocationManagement.NativeLayoutField<T> right) -> bool
+static Supprocom.NativeAllocationManagement.NativeLayoutOwner.Move(ref Supprocom.NativeAllocationManagement.NativeLayoutOwner? source) -> Supprocom.NativeAllocationManagement.NativeLayoutOwner
+static Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics.operator !=(Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics left, Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics right) -> bool
+static Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics.operator ==(Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics left, Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics right) -> bool
+static Supprocom.NativeAllocationManagement.NativeLayoutReservation.Activate<TState>(ref Supprocom.NativeAllocationManagement.NativeLayoutReservation? source, TState state, Supprocom.NativeAllocationManagement.NativeLayoutInitializer<TState>! initializer, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> Supprocom.NativeAllocationManagement.NativeLayoutOwner
+static Supprocom.NativeAllocationManagement.NativeLayoutReservation.Move(ref Supprocom.NativeAllocationManagement.NativeLayoutReservation? source) -> Supprocom.NativeAllocationManagement.NativeLayoutReservation
+static Supprocom.NativeAllocationManagement.NativeLayoutStatistics.operator !=(Supprocom.NativeAllocationManagement.NativeLayoutStatistics left, Supprocom.NativeAllocationManagement.NativeLayoutStatistics right) -> bool
+static Supprocom.NativeAllocationManagement.NativeLayoutStatistics.operator ==(Supprocom.NativeAllocationManagement.NativeLayoutStatistics left, Supprocom.NativeAllocationManagement.NativeLayoutStatistics right) -> bool
+virtual Supprocom.NativeAllocationManagement.NativeLayoutAction<TState>.Invoke(scoped Supprocom.NativeAllocationManagement.NativeLayoutView view, scoped TState state) -> void
+virtual Supprocom.NativeAllocationManagement.NativeLayoutFunc<TState, TResult>.Invoke(scoped Supprocom.NativeAllocationManagement.NativeLayoutView view, scoped TState state) -> TResult
+virtual Supprocom.NativeAllocationManagement.NativeLayoutInitializer<TState>.Invoke(scoped Supprocom.NativeAllocationManagement.NativeLayoutWriter writer, scoped TState state) -> void
+~override Supprocom.NativeAllocationManagement.NativeLayoutField<T>.Equals(object obj) -> bool
+~override Supprocom.NativeAllocationManagement.NativeLayoutField<T>.ToString() -> string
+~override Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics.Equals(object obj) -> bool
+~override Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics.ToString() -> string
+~override Supprocom.NativeAllocationManagement.NativeLayoutStatistics.Equals(object obj) -> bool
+~override Supprocom.NativeAllocationManagement.NativeLayoutStatistics.ToString() -> string

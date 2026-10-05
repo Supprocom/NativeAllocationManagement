@@ -496,7 +496,7 @@ internal class NativeTransferControl<T>
             _allocationId,
             operation);
 
-    private void EnterTransferOperation(long authorityVersion, string operation)
+    private protected void EnterTransferOperation(long authorityVersion, string operation)
     {
         EnsureActive(authorityVersion, operation);
         if (!NativeOperationAdmission.TryEnter(
@@ -524,7 +524,7 @@ internal class NativeTransferControl<T>
         ThrowInactive(operation, state == Active ? Moved : state);
     }
 
-    private void ExitTransferOperation()
+    private protected void ExitTransferOperation()
     {
         int remaining =
             NativeOperationAdmission.Exit(ref _operationAdmission);

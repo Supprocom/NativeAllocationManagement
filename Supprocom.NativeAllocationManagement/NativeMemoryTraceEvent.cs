@@ -66,7 +66,11 @@ public enum NativeMemoryTraceKind
     /// <summary>A real pending/prepared resource-return attempt failed without success credit.</summary>
     ReservationReturnFailed,
     /// <summary>Terminal resource return completed after a move exhausted its checked authority version.</summary>
-    ReservationAuthorityExhausted
+    ReservationAuthorityExhausted,
+    /// <summary>Checked typed-layout alignment is ready over actual admitted backing.</summary>
+    LayoutPrepared,
+    /// <summary>Every typed region and non-payload range finished initialization, before final publication.</summary>
+    LayoutInitialized
 }
 
 /// <summary>A bounded value-only storage transition; it contains no owner or native authority.</summary>

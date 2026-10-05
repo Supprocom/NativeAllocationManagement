@@ -36,6 +36,15 @@ public readonly ref struct NativeLeaseWriter<T>
         _length = length;
     }
 
+    internal void CopyDirectInitialization(scoped ReadOnlySpan<T> source)
+    {
+        if (source.Length != Remaining) throw new ArgumentException("The copy must initialize the complete remaining range.", nameof(source));
+        Span<T> destination = _directValues[_initializedLength..];
+        source.CopyTo(destination);
+        NativeMemoryAccounting.RecordCopiedRange(source, destination);
+        _initializedLength = _length;
+    }
+
     /// <summary>Gets the number of elements that the initializer must write.</summary>
     public int Length => _length;
 

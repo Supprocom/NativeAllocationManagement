@@ -66,10 +66,10 @@ public readonly struct NativeMemoryReservation<T> : IDisposable where T : unmana
 
 // One specialized acquisition-time object, later referenced by NativeTransfer.
 // Ordinary unique owners carry none of these reservation-only fields.
-internal sealed class NativeMemoryReservationControl<T> : NativeTransferControl<T> where T : unmanaged
+internal class NativeMemoryReservationControl<T> : NativeTransferControl<T> where T : unmanaged
 {
     private const int Reserved = 8;
-    private const int Preparing = 9;
+    private protected const int Preparing = 9;
     private readonly long _budgetId;
     private long _initialUniqueVersion;
     private long _preparationFailures;
@@ -85,6 +85,8 @@ internal sealed class NativeMemoryReservationControl<T> : NativeTransferControl<
 
     private nuint RequiredBytes => checked((nuint)DeclaredLength * (nuint)Unsafe.SizeOf<T>());
     private NativeMemoryBudget Budget => OwnedBlock.Budget!;
+
+    private protected bool HasActivated => Volatile.Read(ref _initialUniqueVersion) != 0;
 
     internal void PublishAdmission() => PublishControlState(Reserved);
 
@@ -232,7 +234,7 @@ internal sealed class NativeMemoryReservationControl<T> : NativeTransferControl<
         }
     }
 
-    private void PrepareBackingCore()
+    private protected virtual void PrepareBackingCore()
     {
         if (_backingPrepared) return;
         NativeBlock acquired = default;
@@ -255,7 +257,48 @@ internal sealed class NativeMemoryReservationControl<T> : NativeTransferControl<
         }
     }
 
-    private void Claim(long version, int state, string operation)
+    // Layout-only static-state adapter. Ordinary activation keeps its existing
+    // single producer dispatch and does not pay for this specialized path.
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "A consumed layout permission must reconcile any producer failure before preserving its original classification.")]
+    internal long ActivateWithState<TState>(long version, NativeAdmittedInitializer<T, TState> initializer,
+        scoped TState state, CancellationToken cancellationToken) where TState : allows ref struct
+    {
+        Claim(version, Preparing, "Activate");
+        bool producerEntered = false;
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            PrepareBackingCore();
+            cancellationToken.ThrowIfCancellationRequested();
+            int initialized = 0;
+            NativeLeaseWriter<T> writer = new(OwnedBlock.Pointer, DeclaredLength, ref initialized);
+            producerEntered = true;
+            initializer(writer, state);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (initialized != DeclaredLength)
+                throw new InvalidOperationException($"Reservation initialized {initialized} of {DeclaredLength} required elements.");
+            Budget.ActivateApplicationReservation(RequiredBytes, Id);
+            Volatile.Write(ref _initialUniqueVersion, version);
+            _outcome = NativeMemoryReservationOutcome.Activated;
+            PublishControlState(Active);
+            return version;
+        }
+        catch (Exception activationFailure)
+        {
+            if (activationFailure is OperationCanceledException) _outcome = NativeMemoryReservationOutcome.Cancelled;
+            else if (producerEntered)
+            {
+                _outcome = NativeMemoryReservationOutcome.InitializationFailed;
+                Budget.RecordApplicationInitializationFailure(RequiredBytes, Id);
+            }
+            else _outcome = NativeMemoryReservationOutcome.PreparationFailed;
+            CleanupConsumed(activationFailure);
+            throw;
+        }
+        finally { GC.KeepAlive(this); }
+    }
+
+    private protected void Claim(long version, int state, string operation)
     {
         if (!TryTransition(Reserved, state)) ThrowInactive(operation);
         if (CurrentAuthorityVersion != version)
@@ -267,6 +310,26 @@ internal sealed class NativeMemoryReservationControl<T> : NativeTransferControl<
 
     private static void ThrowInactive(string operation) => throw new InvalidOperationException(
         $"NativeMemoryReservation.{operation} requires the current idle producer permission.");
+
+    private protected void PublishActivation(long version)
+    {
+        Budget.ActivateApplicationReservation(RequiredBytes, Id);
+        Volatile.Write(ref _initialUniqueVersion, version);
+        _outcome = NativeMemoryReservationOutcome.Activated;
+        PublishControlState(Active);
+    }
+
+    private protected void ReconcileActivationFailure(Exception failure, bool producerEntered)
+    {
+        if (failure is OperationCanceledException) _outcome = NativeMemoryReservationOutcome.Cancelled;
+        else if (producerEntered)
+        {
+            _outcome = NativeMemoryReservationOutcome.InitializationFailed;
+            Budget.RecordApplicationInitializationFailure(RequiredBytes, Id);
+        }
+        else _outcome = NativeMemoryReservationOutcome.PreparationFailed;
+        CleanupConsumed(failure);
+    }
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA1816", Justification = "A consumed permission disarms emergency finalization only after its resource really returned.")]
     private void CleanupConsumed(Exception originalFailure)
@@ -317,3 +380,6 @@ internal sealed class NativeMemoryReservationControl<T> : NativeTransferControl<
         NativeMemoryTestHooks.CheckManagedPublicationBoundary(operation, 5, "reservation return observation after actual cleanup");
     }
 }
+
+internal delegate void NativeAdmittedInitializer<T, TState>(scoped NativeLeaseWriter<T> writer, scoped TState state)
+    where TState : allows ref struct;

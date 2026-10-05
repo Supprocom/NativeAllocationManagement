@@ -119,6 +119,11 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 Namespace + "NativeTransfer`1");
             Reservation = runtimeAssembly.GetTypeByMetadataName(Namespace + "NativeMemoryReservation`1");
             MemoryBudget = runtimeAssembly.GetTypeByMetadataName(Namespace + "NativeMemoryBudget");
+            Layout = runtimeAssembly.GetTypeByMetadataName(Namespace + "NativeLayout");
+            LayoutOwner = runtimeAssembly.GetTypeByMetadataName(Namespace + "NativeLayoutOwner");
+            LayoutReservation = runtimeAssembly.GetTypeByMetadataName(Namespace + "NativeLayoutReservation");
+            LayoutView = runtimeAssembly.GetTypeByMetadataName(Namespace + "NativeLayoutView");
+            LayoutWriter = runtimeAssembly.GetTypeByMetadataName(Namespace + "NativeLayoutWriter");
             Shared = runtimeAssembly.GetTypeByMetadataName(Namespace + "NativeShared`1");
             Weak = runtimeAssembly.GetTypeByMetadataName(Namespace + "NativeWeak`1");
             ReadOnlyLeaseView = runtimeAssembly.GetTypeByMetadataName(Namespace + "NativeReadOnlyLeaseView`1");
@@ -160,6 +165,11 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         internal INamedTypeSymbol? Shared { get; }
         internal INamedTypeSymbol? Weak { get; }
         internal INamedTypeSymbol? ReadOnlyLeaseView { get; }
+        internal INamedTypeSymbol? Layout { get; }
+        internal INamedTypeSymbol? LayoutOwner { get; }
+        internal INamedTypeSymbol? LayoutReservation { get; }
+        internal INamedTypeSymbol? LayoutView { get; }
+        internal INamedTypeSymbol? LayoutWriter { get; }
 
         internal INamedTypeSymbol? Builder { get; }
 
@@ -217,6 +227,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 || Is(property.ContainingType, Workspace)
                 || Is(property.ContainingType, Transfer)
                 || Is(property.ContainingType, Reservation)
+                || Is(property.ContainingType, LayoutOwner)
+                || Is(property.ContainingType, LayoutReservation)
                 || Is(property.ContainingType, Shared)
                 || Is(property.ContainingType, Weak));
 
@@ -231,6 +243,10 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 || Is(type, ConcurrentArenaLease)
                 || Is(type, Transfer)
                 || Is(type, Reservation)
+                || Is(type, LayoutOwner)
+                || Is(type, LayoutReservation)
+                || Is(type, LayoutView)
+                || Is(type, LayoutWriter)
                 || Is(type, Shared)
                 || Is(type, Weak)
                 || Is(type, ReadOnlyLeaseView)
@@ -2305,6 +2321,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             else if (!transferWasPreprocessed && IsTransferMoveInvocation(operation))
             {
                 ProcessTransferMove(operation);
+                if (string.Equals(operation.TargetMethod.Name, "Activate", StringComparison.Ordinal) && NativeSymbols.Is(operation.TargetMethod.ContainingType, _symbols.LayoutReservation))
+                    ReportTransferViewEscapes(operation);
             }
             else if (!transferWasPreprocessed && IsTransferFactoryInvocation(operation))
             {
@@ -3430,6 +3448,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             if ((NativeSymbols.Is(operation.TargetMethod.ContainingType, _symbols.Shared)
                     || NativeSymbols.Is(operation.TargetMethod.ContainingType, _symbols.Weak)
                     || NativeSymbols.Is(operation.TargetMethod.ContainingType, _symbols.Reservation)
+                    || NativeSymbols.Is(operation.TargetMethod.ContainingType, _symbols.LayoutOwner)
+                    || NativeSymbols.Is(operation.TargetMethod.ContainingType, _symbols.LayoutReservation)
                     || NativeSymbols.Is(operation.TargetMethod.ContainingType, _symbols.Transfer))
                 && operation.TargetMethod.Name is "CaptureSnapshot" or "TryCompletePayloadReturn")
             {
@@ -4084,6 +4104,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         private void RegisterTransferFactory(
             IInvocationOperation operation)
         {
+            if (NativeSymbols.Is(operation.TargetMethod.ContainingType, _symbols.LayoutOwner))
+                ProcessTransferInvocation(operation);
             Target target = FindTarget(operation);
             if (target.Symbol is not ILocalSymbol)
             {
@@ -5038,6 +5060,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             operation is IInvocationOperation invocation
             && (string.Equals(invocation.TargetMethod.Name, "Move", StringComparison.Ordinal) && NativeSymbols.Is(invocation.TargetMethod.ContainingType, _symbols.Transfer)
                 || invocation.TargetMethod.Name is "Move" or "Activate" && NativeSymbols.Is(invocation.TargetMethod.ContainingType, _symbols.Reservation)
+                || invocation.TargetMethod.Name is "Move" or "Activate" && NativeSymbols.Is(invocation.TargetMethod.ContainingType, _symbols.LayoutReservation)
+                || string.Equals(invocation.TargetMethod.Name, "Move", StringComparison.Ordinal) && NativeSymbols.Is(invocation.TargetMethod.ContainingType, _symbols.LayoutOwner)
                 || string.Equals(invocation.TargetMethod.Name, "Create", StringComparison.Ordinal) && NativeSymbols.Is(invocation.TargetMethod.ContainingType, _symbols.Shared))
             && IsNativeTransfer(invocation.Type);
 
@@ -5051,17 +5075,21 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             && invocation.Arguments.Any(argument => argument.Parameter?.RefKind == RefKind.Out && IsNativeTransfer(argument.Parameter.Type));
 
         private bool IsApplicationTryAcquisition(IInvocationOperation invocation) =>
-            NativeSymbols.Is(invocation.TargetMethod.ContainingType, _symbols.MemoryBudget)
+            (NativeSymbols.Is(invocation.TargetMethod.ContainingType, _symbols.MemoryBudget)
+                || NativeSymbols.Is(invocation.TargetMethod.ContainingType, _symbols.Layout))
             && string.Equals(invocation.TargetMethod.Name, "TryReserve", StringComparison.Ordinal)
             && invocation.TargetMethod.ReturnType.SpecialType == SpecialType.System_Boolean
             && invocation.Arguments.Any(argument => argument.Parameter?.RefKind == RefKind.Out
-                && NativeSymbols.Is(argument.Parameter.Type, _symbols.Reservation));
+                && (NativeSymbols.Is(argument.Parameter.Type, _symbols.Reservation)
+                    || NativeSymbols.Is(argument.Parameter.Type, _symbols.LayoutReservation)));
 
         private bool IsTransferFactoryInvocation(IOperation operation) =>
             operation is IInvocationOperation invocation
             && IsNativeTransfer(invocation.Type)
-            && string.Equals(invocation.TargetMethod.Name, "RentTransferable", StringComparison.Ordinal) && string.Equals(invocation.TargetMethod.ContainingType.ToDisplayString()
-, "Supprocom.NativeAllocationManagement.NativeTransferPoolExtensions", StringComparison.Ordinal);
+            && (string.Equals(invocation.TargetMethod.Name, "DetachField", StringComparison.Ordinal)
+                && NativeSymbols.Is(invocation.TargetMethod.ContainingType, _symbols.LayoutOwner)
+                || string.Equals(invocation.TargetMethod.Name, "RentTransferable", StringComparison.Ordinal) && string.Equals(invocation.TargetMethod.ContainingType.ToDisplayString()
+, "Supprocom.NativeAllocationManagement.NativeTransferPoolExtensions", StringComparison.Ordinal));
 
         private bool IsBuilderFactoryOperation(IOperation operation) =>
             operation is IObjectCreationOperation creation
@@ -7724,6 +7752,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         {
             return NativeSymbols.Is(type, _symbols.Transfer)
                 || NativeSymbols.Is(type, _symbols.Reservation)
+                || NativeSymbols.Is(type, _symbols.LayoutOwner)
+                || NativeSymbols.Is(type, _symbols.LayoutReservation)
                 || NativeSymbols.Is(type, _symbols.Shared)
                 || NativeSymbols.Is(type, _symbols.Weak);
         }
@@ -7741,6 +7771,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         private bool IsNativeLeaseView(ITypeSymbol? type)
         {
             return NativeSymbols.Is(type, _symbols.LeaseView)
+                || NativeSymbols.Is(type, _symbols.LayoutView)
+                || NativeSymbols.Is(type, _symbols.LayoutWriter)
                 || NativeSymbols.Is(type, _symbols.ReadOnlyLeaseView);
         }
 

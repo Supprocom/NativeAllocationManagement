@@ -36,6 +36,13 @@ public sealed partial class NativeMemoryBudget
     /// <param name="reason">The actual expected-capacity outcome.</param>
     public bool TryReserve<T>(int length, [NotNullWhen(true)] out NativeMemoryReservation<T>? reservation,
         out NativeMemoryAdmissionExhaustionReason reason) where T : unmanaged
+        => TryReserveCore(length, layout: null, out reservation, out reason);
+
+    internal bool TryReserveLayout(NativeLayout layout, [NotNullWhen(true)] out NativeMemoryReservation<byte>? reservation,
+        out NativeMemoryAdmissionExhaustionReason reason) => TryReserveCore(layout.BackingBytes, layout, out reservation, out reason);
+
+    private bool TryReserveCore<T>(int length, NativeLayout? layout, [NotNullWhen(true)] out NativeMemoryReservation<T>? reservation,
+        out NativeMemoryAdmissionExhaustionReason reason) where T : unmanaged
     {
         ArgumentOutOfRangeException.ThrowIfNegative(length);
         nuint byteLength = checked((nuint)length * (nuint)Unsafe.SizeOf<T>());
@@ -61,7 +68,8 @@ public sealed partial class NativeMemoryBudget
                 NativeMemoryTestHooks.CheckManagedPublicationBoundary("NativeMemoryBudget.TryReserve", 6, "application admission metadata");
                 ledger = _applicationAdmission ?? new NativeAdmissionLedger();
                 long ownerId = NativeOwnerIdentity.NextWithoutPreparation();
-                control = new(this, ownerId, length);
+                control = layout is null ? new(this, ownerId, length)
+                    : (NativeMemoryReservationControl<T>)(object)new NativeLayoutControl(this, ownerId, layout);
                 NativeMemoryAccounting.PrepareThread();
             }
             catch
