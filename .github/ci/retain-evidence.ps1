@@ -48,7 +48,16 @@ $namBundle = Join-Path $namUpload "nam-$ExpectedRid.tar.gz"
 $namStream = [IO.File]::Create($namBundle)
 try {
     $namGzip = [IO.Compression.GZipStream]::new($namStream, [IO.Compression.CompressionLevel]::Fastest, $true)
-    try { [Formats.Tar.TarFile]::CreateFromDirectory($namRoot, $namGzip, $false) }
+    try {
+        $namWriter = [Formats.Tar.TarWriter]::new($namGzip, [Formats.Tar.TarEntryFormat]::Pax, $true)
+        try {
+            foreach ($namFile in Get-ChildItem -LiteralPath $namRoot -Force -Recurse | Sort-Object FullName) {
+                if (($namFile.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Retained payloads must not contain links.' }
+                $namRelative = [IO.Path]::GetRelativePath($namRoot, $namFile.FullName).Replace('\', '/')
+                $namWriter.WriteEntry($namFile.FullName, $namRelative)
+            }
+        } finally { $namWriter.Dispose() }
+    }
     finally { $namGzip.Dispose() }
 } finally { $namStream.Dispose() }
 [pscustomobject]@{ Bundle = [IO.Path]::GetFileName($namBundle); Length = (Get-Item -LiteralPath $namBundle).Length;

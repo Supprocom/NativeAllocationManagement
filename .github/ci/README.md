@@ -16,6 +16,13 @@ manifests are uploaded even when validation fails. Native payloads are bundled i
 tar.gz before Actions upload, preserving executable modes and native cache names
 that artifact ZIP storage otherwise rejects. Bootstrap failure retention records
 missing native disposition/manifest honestly; it does not invent a passing gate.
+Every retained file is explicitly enumerated into the PAX archive, including
+hidden files and dot-directories containing isolated consumer build/cache data.
+The manifest and retrieved archive must reconcile completely before acceptance.
+Remote-dependent fixtures use a retained per-consumer NuGet.config: NAM maps only
+to the exact local candidate, while tooling/runtime prerequisites map to the
+official HTTPS feed. Inherited feeds are cleared and no restore-source URL is
+passed through filesystem normalization.
 Native labels, publishing
 success and ordinary JIT builds are not substitutes for native execution.
 

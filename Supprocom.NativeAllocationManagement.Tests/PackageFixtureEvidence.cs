@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Xml.Linq;
 
 namespace Supprocom.NativeAllocationManagement.Tests;
 
@@ -16,6 +17,20 @@ internal static class PackageFixtureEvidence
         """;
 
     internal static bool IsEnabled(string? selection) => string.Equals(selection, "1", StringComparison.Ordinal);
+
+    internal static string RestoreConfiguration(string candidateSource)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(candidateSource);
+        return new XDocument(new XElement("configuration",
+            new XElement("packageSources", new XElement("clear"),
+                new XElement("add", new XAttribute("key", "candidate"), new XAttribute("value", candidateSource)),
+                new XElement("add", new XAttribute("key", "nuget.org"), new XAttribute("value", "https://api.nuget.org/v3/index.json"))),
+            new XElement("packageSourceMapping",
+                new XElement("packageSource", new XAttribute("key", "candidate"),
+                    new XElement("package", new XAttribute("pattern", "Supprocom.NativeAllocationManagement"))),
+                new XElement("packageSource", new XAttribute("key", "nuget.org"),
+                    new XElement("package", new XAttribute("pattern", "*")))))).ToString();
+    }
 
     internal static string? Begin(string workingDirectory, bool retain)
     {

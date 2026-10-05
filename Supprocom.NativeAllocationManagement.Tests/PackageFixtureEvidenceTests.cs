@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Xml.Linq;
 
 namespace Supprocom.NativeAllocationManagement.Tests;
 
@@ -20,6 +21,48 @@ public sealed class PackageFixtureEvidenceTests
     public void DisabledRetentionDoesNotCreateOrReadAConsumerDirectory()
         => Assert.Null(PackageFixtureEvidence.Begin(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")), retain: false));
 
+    [Theory]
+    [InlineData("C:\\candidate feed\\packages")]
+    [InlineData("/candidate & quoted \"feed\"/packages")]
+    public void RestoreConfigurationPreservesSourcesAndPinsOnlyNamToTheCandidate(string candidate)
+    {
+        XDocument configuration = XDocument.Parse(PackageFixtureEvidence.RestoreConfiguration(candidate));
+        XElement sources = configuration.Root!.Element("packageSources")!;
+        Assert.NotNull(sources.Element("clear"));
+        Assert.Collection(sources.Elements("add"),
+            local =>
+            {
+                Assert.Equal("candidate", (string?)local.Attribute("key"));
+                Assert.Equal(candidate, (string?)local.Attribute("value"));
+            },
+            remote =>
+            {
+                Assert.Equal("nuget.org", (string?)remote.Attribute("key"));
+                Assert.Equal("https://api.nuget.org/v3/index.json", (string?)remote.Attribute("value"));
+            });
+        Assert.Collection(configuration.Root.Element("packageSourceMapping")!.Elements(),
+            local =>
+            {
+                Assert.Equal("candidate", (string?)local.Attribute("key"));
+                Assert.Equal("Supprocom.NativeAllocationManagement", (string?)local.Element("package")!.Attribute("pattern"));
+            },
+            remote =>
+            {
+                Assert.Equal("nuget.org", (string?)remote.Attribute("key"));
+                Assert.Equal("*", (string?)remote.Element("package")!.Attribute("pattern"));
+            });
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(" \t")]
+    public void RestoreConfigurationRejectsAnAbsentCandidate(string candidate)
+        => Assert.Throws<ArgumentException>(() => PackageFixtureEvidence.RestoreConfiguration(candidate));
+
+    [Fact]
+    public void RestoreConfigurationRejectsNullBeforeWritingAnything()
+        => Assert.Throws<ArgumentNullException>(() => PackageFixtureEvidence.RestoreConfiguration(null!));
+
     [Fact]
     public async Task CommandsKeepTheirOwnPreExecutionSourcesAndHonestFailureRecords()
     {
@@ -32,13 +75,20 @@ public sealed class PackageFixtureEvidenceTests
         await File.WriteAllTextAsync(Path.Combine(root, "Consumer.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
         await File.WriteAllTextAsync(Path.Combine(root, "Directory.Build.props"), PackageFixtureEvidence.BuildProperties);
         await File.WriteAllTextAsync(Path.Combine(root, "notes.md"), "not compiler input");
+        string configurationPath = Path.Combine(root, "NuGet.config");
+        string firstConfiguration = PackageFixtureEvidence.RestoreConfiguration(Path.Combine(root, "first-candidate"));
+        string secondConfiguration = PackageFixtureEvidence.RestoreConfiguration(Path.Combine(root, "second-candidate"));
+        await File.WriteAllTextAsync(configurationPath, firstConfiguration);
         DateTimeOffset started = DateTimeOffset.UtcNow;
         string first = PackageFixtureEvidence.Begin(root, retain: true)!;
         await File.WriteAllTextAsync(program, negative);
+        await File.WriteAllTextAsync(configurationPath, secondConfiguration);
         string second = PackageFixtureEvidence.Begin(root, retain: true)!;
         Assert.False(string.Equals(first, second, StringComparison.Ordinal));
         Assert.Equal(positive, await File.ReadAllTextAsync(Path.Combine(first, "source", "Program.cs")));
         Assert.Equal(negative, await File.ReadAllTextAsync(Path.Combine(second, "source", "Program.cs")));
+        Assert.Equal(firstConfiguration, await File.ReadAllTextAsync(Path.Combine(first, "source", "NuGet.config")));
+        Assert.Equal(secondConfiguration, await File.ReadAllTextAsync(Path.Combine(second, "source", "NuGet.config")));
         Assert.False(File.Exists(Path.Combine(first, "source", "notes.md")));
         using JsonDocument manifest = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(first, "source-manifest.json")));
         JsonElement entry = manifest.RootElement.EnumerateArray().First(static item =>

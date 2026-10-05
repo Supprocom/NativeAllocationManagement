@@ -1961,8 +1961,10 @@ public sealed class PackageSmokeTests
             string project = Path.Combine(consumerRoot, "Consumer.csproj");
             await File.WriteAllTextAsync(project, CodeFixPackageFixture.Project(package.Version));
             await File.WriteAllTextAsync(Path.Combine(consumerRoot, "Program.cs"), CodeFixPackageFixture.Program);
+            string configuration = Path.Combine(consumerRoot, "NuGet.config");
+            await File.WriteAllTextAsync(configuration, PackageFixtureEvidence.RestoreConfiguration(package.SourceDirectory));
             CommandResult restore = await RunDotnetAsync(
-                $"restore \"{project}\" --nologo --force --no-cache --packages \"{Path.Combine(consumerRoot, ".packages")}\" --source \"{package.SourceDirectory}\" --source https://api.nuget.org/v3/index.json",
+                $"restore \"{project}\" --nologo --force --no-cache --packages \"{Path.Combine(consumerRoot, ".packages")}\" --configfile \"{configuration}\"",
                 consumerRoot);
             _output.WriteLine(restore.Output);
             Assert.True(restore.ExitCode == 0, restore.Output);
@@ -2077,8 +2079,10 @@ public sealed class PackageSmokeTests
                 new XElement("TrimmerRootAssembly", new XAttribute("Include", "Supprocom.NativeAllocationManagement"))));
             deployment.Save(project);
             await WriteGeneratedRuntimeSourcesAsync(root);
+            string configuration = Path.Combine(root, "NuGet.config");
+            await File.WriteAllTextAsync(configuration, PackageFixtureEvidence.RestoreConfiguration(package.SourceDirectory));
             CommandResult restore = await RunDotnetAsync(
-                $"restore \"{project}\" --nologo --force --no-cache --packages \"{Path.Combine(root, ".packages")}\" --source \"{package.SourceDirectory}\" --source https://api.nuget.org/v3/index.json", root);
+                $"restore \"{project}\" --nologo --force --no-cache --packages \"{Path.Combine(root, ".packages")}\" --configfile \"{configuration}\"", root);
             Assert.True(restore.ExitCode == 0, restore.Output);
             string published = Path.Combine(root, "published");
             CommandResult publish = await RunDotnetAsync(
