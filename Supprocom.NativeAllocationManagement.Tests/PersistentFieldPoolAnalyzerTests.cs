@@ -470,6 +470,6 @@ public sealed class PersistentFieldPoolAnalyzerTests
             .ToArray();
         Assert.True(
             compilerErrors.Length == 0,
-            string.Join(Environment.NewLine, compilerErrors));
+            string.Join<Diagnostic>(Environment.NewLine, compilerErrors));
     }
 }

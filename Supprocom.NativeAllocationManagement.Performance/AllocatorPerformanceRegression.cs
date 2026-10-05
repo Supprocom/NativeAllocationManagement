@@ -14,15 +14,15 @@ internal static class AllocatorPerformanceRegression
     private const int RegionReservationBytesPerIteration = 320;
     private const int RegionLogicalBytesPerIteration = 284;
     private static readonly NativeLeaseFunc<byte, ulong>
-        ByteChecksum = static view => Checksum(view.AsSpan());
+        ByteChecksum = static view => Checksum<byte>(view.AsSpan());
     private static readonly NativeLeaseFunc<int, ulong>
-        IntChecksum = static view => Checksum(view.AsSpan());
+        IntChecksum = static view => Checksum<int>(view.AsSpan());
     private static readonly NativeLeaseFunc<long, ulong>
-        LongChecksum = static view => Checksum(view.AsSpan());
+        LongChecksum = static view => Checksum<long>(view.AsSpan());
     private static readonly NativeLeaseFunc<double, ulong>
-        DoubleChecksum = static view => Checksum(view.AsSpan());
+        DoubleChecksum = static view => Checksum<double>(view.AsSpan());
     private static readonly NativeLeaseFunc<MixedCell, ulong>
-        CellChecksum = static view => Checksum(view.AsSpan());
+        CellChecksum = static view => Checksum<MixedCell>(view.AsSpan());
     private static long _sink;
 
     internal static RegionRegressionReport RunRegion()
@@ -260,11 +260,11 @@ internal static class AllocatorPerformanceRegression
                     23));
                 checksum = unchecked(
                     checksum
-                    + (long)Checksum(bytes)
-                    + (long)Checksum(integers)
-                    + (long)Checksum(longs)
-                    + (long)Checksum(doubles)
-                    + (long)Checksum(cells));
+                    + (long)Checksum<byte>(bytes)
+                    + (long)Checksum<int>(integers)
+                    + (long)Checksum<long>(longs)
+                    + (long)Checksum<double>(doubles)
+                    + (long)Checksum<MixedCell>(cells));
             }
 
             for (int slot = 0; slot < RegionBatchWidth; slot++)

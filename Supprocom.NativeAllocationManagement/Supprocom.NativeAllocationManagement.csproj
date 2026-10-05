@@ -4,6 +4,7 @@
     <RootNamespace>Supprocom.NativeAllocationManagement</RootNamespace>
     <AssemblyName>Supprocom.NativeAllocationManagement</AssemblyName>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <IsAotCompatible>true</IsAotCompatible>
     <IsPackable>true</IsPackable>
     <PackageId>Supprocom.NativeAllocationManagement</PackageId>
     <Version>0.2.3</Version>

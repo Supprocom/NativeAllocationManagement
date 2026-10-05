@@ -139,7 +139,7 @@ public sealed class NativeOwnershipCodeFixTests
     private static Document CreateDocument(AdhocWorkspace workspace, string source)
     {
         Project project = workspace.AddProject("Consumer", LanguageNames.CSharp)
-            .WithParseOptions(new CSharpParseOptions(LanguageVersion.Preview))
+            .WithParseOptions(new CSharpParseOptions(LanguageVersion.CSharp13))
             .WithCompilationOptions(new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, allowUnsafe: true))
             .WithMetadataReferences(References);
         return project.AddDocument("Consumer.cs", SourceText.From(source));

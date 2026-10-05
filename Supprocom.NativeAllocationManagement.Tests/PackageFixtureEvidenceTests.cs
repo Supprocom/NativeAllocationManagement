@@ -48,12 +48,13 @@ public sealed class PackageFixtureEvidenceTests
         Assert.Equal(Convert.ToHexString(SHA256.HashData(bytes)), entry.GetProperty("SHA256").GetString());
 
         await PackageFixtureEvidence.CompleteAsync(first, "fixture", "build positive", root, started,
-            0, timedOut: false, "positive output", string.Empty);
+            0, timedOut: false, "positive output", string.Empty, deadlineSeconds: 90);
         await PackageFixtureEvidence.CompleteAsync(second, "fixture", "build negative", root, started,
-            1, timedOut: false, "negative output", "actual diagnostic");
+            1, timedOut: false, "negative output", "actual diagnostic", deadlineSeconds: 300);
         using JsonDocument failure = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(second, "command.json")));
         Assert.Equal(1, failure.RootElement.GetProperty("ExitCode").GetInt32());
         Assert.False(failure.RootElement.GetProperty("TimedOut").GetBoolean());
+        Assert.Equal(300d, failure.RootElement.GetProperty("DeadlineSeconds").GetDouble());
         Assert.Equal(root, failure.RootElement.GetProperty("WorkingDirectory").GetString());
         Assert.Equal("actual diagnostic", await File.ReadAllTextAsync(Path.Combine(second, "stderr.log")));
         Assert.True(failure.RootElement.GetProperty("EndedAt").GetDateTimeOffset() >= started);
@@ -68,6 +69,7 @@ public sealed class PackageFixtureEvidenceTests
         using JsonDocument record = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(directory, "command.json")));
         Assert.Equal(JsonValueKind.Null, record.RootElement.GetProperty("ExitCode").ValueKind);
         Assert.True(record.RootElement.GetProperty("TimedOut").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, record.RootElement.GetProperty("DeadlineSeconds").ValueKind);
         Assert.Equal("partial stdout", await File.ReadAllTextAsync(Path.Combine(directory, "stdout.log")));
     }
 }

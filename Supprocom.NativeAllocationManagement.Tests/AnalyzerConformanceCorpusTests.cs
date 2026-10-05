@@ -36,7 +36,7 @@ public sealed class AnalyzerConformanceCorpusTests
 
         foreach (CorpusCase testCase in cases)
         {
-            SyntaxTree tree = CSharpSyntaxTree.ParseText(testCase.Source, new CSharpParseOptions(LanguageVersion.Preview));
+            SyntaxTree tree = CSharpSyntaxTree.ParseText(testCase.Source, new CSharpParseOptions(LanguageVersion.CSharp13));
             CSharpCompilation compilation = CSharpCompilation.Create(
                 "NativeAllocationCorpus_" + testCase.Name,
                 [tree],
@@ -95,7 +95,7 @@ public sealed class AnalyzerConformanceCorpusTests
                     StringComparer.Ordinal)
                 .ToArray();
             Assert.True(
-                expectedIds.SequenceEqual(actualIds),
+                expectedIds.SequenceEqual(actualIds, StringComparer.Ordinal),
                 $"Corpus case '{testCase.Name}' diagnostic identifiers differ."
                     + Environment.NewLine
                     + $"Expected: {string.Join(", ", expectedIds)}"
@@ -140,9 +140,9 @@ public sealed class AnalyzerConformanceCorpusTests
                     $"Corpus case '{testCase.Name}' facts differ for "
                         + $"{expected.Id}."
                         + Environment.NewLine
-                        + $"Expected: {string.Join(", ", expectedFacts)}"
+                        + $"Expected: {string.Join<DiagnosticFact>(", ", expectedFacts)}"
                         + Environment.NewLine
-                        + $"Actual: {string.Join(", ", actualFacts)}");
+                        + $"Actual: {string.Join<DiagnosticFact>(", ", actualFacts)}");
             }
 
             analyzerCases++;

@@ -10,6 +10,7 @@ internal static class PackageFixtureEvidence
           <PropertyGroup>
             <ArtifactsPath>$(MSBuildThisFileDirectory).build</ArtifactsPath>
             <UseArtifactsOutput>true</UseArtifactsOutput>
+            <LangVersion>13.0</LangVersion>
           </PropertyGroup>
         </Project>
         """;
@@ -40,7 +41,7 @@ internal static class PackageFixtureEvidence
     }
 
     internal static async Task CompleteAsync(string? directory, string executable, string arguments, string workingDirectory,
-        DateTimeOffset startedAt, int? exitCode, bool timedOut, string standardOutput, string standardError)
+        DateTimeOffset startedAt, int? exitCode, bool timedOut, string standardOutput, string standardError, double? deadlineSeconds = null)
     {
         if (directory is null) return;
         DateTimeOffset endedAt = DateTimeOffset.UtcNow;
@@ -53,7 +54,8 @@ internal static class PackageFixtureEvidence
             EndedAt = endedAt,
             ElapsedMilliseconds = (endedAt - startedAt).TotalMilliseconds,
             ExitCode = exitCode,
-            TimedOut = timedOut
+            TimedOut = timedOut,
+            DeadlineSeconds = deadlineSeconds
         });
         await File.WriteAllTextAsync(Path.Combine(directory, "command.json"), record).ConfigureAwait(false);
         await File.WriteAllTextAsync(Path.Combine(directory, "stdout.log"), standardOutput).ConfigureAwait(false);

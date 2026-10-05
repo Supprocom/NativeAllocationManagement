@@ -12,6 +12,12 @@ Each bounded operation checks the state required by its allocator contract. The 
 Roslyn analyzer checks ownership and bounded-view rules in consumer source. The package
 targets .NET 10.
 
+The canonical source build uses .NET SDK 10.0.302 and stable C# 13, with no
+SDK feature-band roll-forward. Isolated package-consumer tests also compile with
+C# 13. Library builds require trimming and NativeAOT analysis; actual deployment
+compatibility additionally requires publishing and running the package consumers
+on each supported native target.
+
 ## Documentation
 
 The [getting-started guide][getting-started] contains installation instructions,

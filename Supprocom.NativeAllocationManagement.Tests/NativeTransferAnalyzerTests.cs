@@ -343,7 +343,7 @@ public sealed class NativeTransferAnalyzerTests
             """);
 
         Assert.True(
-            AnalyzerContractTests.NativeDiagnostics(diagnostics).Contains("NAM1024"),
+            AnalyzerContractTests.NativeDiagnostics(diagnostics).Contains("NAM1024", StringComparer.Ordinal),
             string.Join(Environment.NewLine, diagnostics));
     }
 

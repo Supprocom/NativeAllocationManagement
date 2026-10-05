@@ -1,9 +1,41 @@
+using System.Text.Json;
 using System.Xml.Linq;
 
 namespace Supprocom.NativeAllocationManagement.Tests;
 
 public sealed class RepositoryLayoutTests
 {
+    [Fact]
+    public void CanonicalToolchainUsesStableLanguageAndExactSdk()
+    {
+        string root = RepositoryTestPaths.Root;
+        XDocument properties = XDocument.Load(Path.Combine(root, "Directory.Build.props"));
+        XElement[] languages = properties.Descendants("LangVersion").ToArray();
+#pragma warning disable HLQ005 // Xunit.Assert.Single verifies required cardinality; this is not a LINQ Single/First operation.
+        Assert.Equal("13.0", Assert.Single(languages).Value);
+#pragma warning restore HLQ005
+        using JsonDocument selection = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "global.json")));
+        JsonElement sdk = selection.RootElement.GetProperty("sdk");
+        Assert.Equal("10.0.302", sdk.GetProperty("version").GetString());
+        Assert.Equal("disable", sdk.GetProperty("rollForward").GetString());
+        Assert.False(sdk.GetProperty("allowPrerelease").GetBoolean());
+        Assert.Contains("<LangVersion>13.0</LangVersion>", PackageFixtureEvidence.BuildProperties, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RuntimeDeploymentAnalysisIsRequiredRatherThanSuppressed()
+    {
+        string project = Path.Combine(RepositoryTestPaths.Root, "Supprocom.NativeAllocationManagement", "Supprocom.NativeAllocationManagement.csproj");
+        XDocument runtime = XDocument.Load(project);
+        XElement[] compatibility = runtime.Descendants("IsAotCompatible").ToArray();
+#pragma warning disable HLQ005 // Xunit.Assert.Single verifies required cardinality; First would hide duplicate configuration.
+        Assert.Equal("true", Assert.Single(compatibility).Value);
+#pragma warning restore HLQ005
+        Assert.Empty(runtime.Descendants("NoWarn"));
+        Assert.Empty(runtime.Descendants("EnableTrimAnalyzer"));
+        Assert.Empty(runtime.Descendants("EnableAotAnalyzer"));
+    }
+
     [Fact]
     public void AgentInstructionFilesRemainExcludedByBothCaseInsensitiveRules()
     {

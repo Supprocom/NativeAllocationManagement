@@ -2335,7 +2335,7 @@ public sealed class AnalyzerContractTests
         OutputKind outputKind = OutputKind.DynamicallyLinkedLibrary,
         bool treatWarningsAsErrors = false)
     {
-        CSharpParseOptions parseOptions = new(LanguageVersion.Preview);
+        CSharpParseOptions parseOptions = new(LanguageVersion.CSharp13);
         SyntaxTree tree = CSharpSyntaxTree.ParseText(source, parseOptions);
         List<MetadataReference> references =
         [
@@ -2372,7 +2372,7 @@ public sealed class AnalyzerContractTests
         string source,
         OutputKind outputKind = OutputKind.DynamicallyLinkedLibrary)
     {
-        CSharpParseOptions parseOptions = new(LanguageVersion.Preview);
+        CSharpParseOptions parseOptions = new(LanguageVersion.CSharp13);
         SyntaxTree tree = CSharpSyntaxTree.ParseText(source, parseOptions);
         List<MetadataReference> references =
         [

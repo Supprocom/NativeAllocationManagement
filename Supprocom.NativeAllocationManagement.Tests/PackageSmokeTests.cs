@@ -2038,39 +2038,7 @@ public sealed class PackageSmokeTests
         try
         {
             WriteConsumerProject(root, package, excludeAnalyzer: false, suppressDiagnostics: false, executable: true);
-            string ownershipDiagnostics = string.Join(", ", new Analyzers.NativeAllocationAnalyzer().SupportedDiagnostics
-                .Select(static descriptor => descriptor.Id).Order(StringComparer.Ordinal));
-            foreach (string source in new[] { "NativeGeneratedScenarios.cs", "NativeGeneratedScenarios.Concurrent.cs" })
-            {
-                string text = await File.ReadAllTextAsync(Path.Combine(RepositoryTestPaths.Root, "Supprocom.NativeAllocationManagement.Tests", source));
-                // These programs deliberately alias, store, forward, and misuse native
-                // values to test runtime guards; the bundled analyzer stays loaded.
-                await File.WriteAllTextAsync(Path.Combine(root, source),
-                    $"#pragma warning disable {ownershipDiagnostics}\n" + text);
-            }
-            await File.WriteAllTextAsync(Path.Combine(root, "Program.cs"), """
-                using Supprocom.NativeAllocationManagement.Tests;
-                public static class Consumer
-                {
-                    public static async System.Threading.Tasks.Task<int> Main()
-                    {
-                        foreach (int seed in new[] { 17, 101, 379 })
-                        {
-                            System.Console.WriteLine($"seed={seed}");
-                            NativeGeneratedScenarios.RunAdmission(seed, 2048, System.Console.WriteLine);
-                            NativeGeneratedScenarios.RunSharing(seed, 512, System.Console.WriteLine);
-                            NativeGeneratedScenarios.RunPreparedPool(seed, 512, System.Console.WriteLine);
-                            NativeGeneratedScenarios.RunPreparedArena(seed, 512, System.Console.WriteLine);
-                            NativeGeneratedScenarios.RunLayouts(seed, 64, System.Console.WriteLine);
-                            NativeGeneratedScenarios.RunOutliers(seed, 128, System.Console.WriteLine);
-                            await NativeGeneratedScenarios.RunSharingSchedulesAsync(seed, 32, System.Console.WriteLine);
-                            await NativeGeneratedScenarios.RunBorrowReturnSchedulesAsync(seed, 16, System.Console.WriteLine);
-                        }
-                        System.Console.WriteLine("generatedRuntimeModels=passed;seeds=3;projectReferences=0");
-                        return 0;
-                    }
-                }
-                """);
+            await WriteGeneratedRuntimeSourcesAsync(root);
             string project = Path.Combine(root, "Consumer.csproj");
             CommandResult restore = await RunDotnetAsync($"restore \"{project}\" --nologo --force --no-cache --packages \"{Path.Combine(root, ".packages")}\" --source \"{package.SourceDirectory}\"", root);
             Assert.True(restore.ExitCode == 0, restore.Output);
@@ -2081,6 +2049,94 @@ public sealed class PackageSmokeTests
             Assert.Contains("generatedRuntimeModels=passed;seeds=3;projectReferences=0", run.Output, StringComparison.Ordinal);
         }
         finally { DeleteConsumerRoot(root); }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PackageGeneratedRuntimeModelsRunAsActualTrimmedAndNativeBinaries(bool nativeAot)
+    {
+        const int ColdPublishDeadlineSeconds = 300;
+        PackageEvidence package = await GetPackageAsync();
+        WriteEvidence(package);
+        string root = CreateConsumerRoot();
+        try
+        {
+            string rid = System.Runtime.InteropServices.RuntimeInformation.RuntimeIdentifier;
+            _output.WriteLine($"deploymentRid={rid};nativeAot={nativeAot};coldPublishDeadlineSeconds={ColdPublishDeadlineSeconds}");
+            WriteConsumerProject(root, package, excludeAnalyzer: false, suppressDiagnostics: false,
+                executable: true, treatWarningsAsErrors: true);
+            string project = Path.Combine(root, "Consumer.csproj");
+            XDocument deployment = XDocument.Load(project);
+            XElement properties = deployment.Root!.Element("PropertyGroup")!;
+            properties.Add(new XElement("RuntimeIdentifier", rid), new XElement("SelfContained", "true"),
+                new XElement("PublishTrimmed", "true"), new XElement("TrimMode", "full"),
+                new XElement("PublishAot", nativeAot ? "true" : "false"),
+                new XElement("TrimmerSingleWarn", "false"), new XElement("ILLinkTreatWarningsAsErrors", "true"));
+            deployment.Root.Add(new XElement("ItemGroup",
+                new XElement("TrimmerRootAssembly", new XAttribute("Include", "Supprocom.NativeAllocationManagement"))));
+            deployment.Save(project);
+            await WriteGeneratedRuntimeSourcesAsync(root);
+            CommandResult restore = await RunDotnetAsync(
+                $"restore \"{project}\" --nologo --force --no-cache --packages \"{Path.Combine(root, ".packages")}\" --source \"{package.SourceDirectory}\" --source https://api.nuget.org/v3/index.json", root);
+            Assert.True(restore.ExitCode == 0, restore.Output);
+            string published = Path.Combine(root, "published");
+            CommandResult publish = await RunDotnetAsync(
+                $"publish \"{project}\" -c Release --no-restore --nologo --self-contained true -o \"{published}\"", root,
+                ColdPublishDeadlineSeconds);
+            Assert.True(publish.ExitCode == 0, publish.Output);
+            string executable = Path.Combine(published, OperatingSystem.IsWindows() ? "Consumer.exe" : "Consumer");
+            Assert.True(File.Exists(executable), publish.Output);
+            CommandResult execution = await RunProcessAsync(executable, string.Empty, root);
+            Assert.True(execution.ExitCode == 0, execution.Output);
+            Assert.Contains("generatedRuntimeModels=passed;seeds=3;projectReferences=0", execution.Output, StringComparison.Ordinal);
+            Assert.Contains($"dynamicCodeSupported={!nativeAot}", execution.Output, StringComparison.Ordinal);
+            Assert.Contains($"hostRid={rid}", execution.Output, StringComparison.Ordinal);
+            _output.WriteLine($"publishedExecutable={executable}");
+            using FileStream executableBytes = File.OpenRead(executable);
+            byte[] executableHash = await SHA256.HashDataAsync(executableBytes);
+            _output.WriteLine($"publishedExecutableSha256={Convert.ToHexString(executableHash)}");
+        }
+        finally { DeleteConsumerRoot(root); }
+    }
+
+    private static async Task WriteGeneratedRuntimeSourcesAsync(string root)
+    {
+        string ownershipDiagnostics = string.Join(", ", new Analyzers.NativeAllocationAnalyzer().SupportedDiagnostics
+            .Select(static descriptor => descriptor.Id).Order(StringComparer.Ordinal));
+        foreach (string source in new[] { "NativeGeneratedScenarios.cs", "NativeGeneratedScenarios.Concurrent.cs" })
+        {
+            string text = await File.ReadAllTextAsync(Path.Combine(RepositoryTestPaths.Root, "Supprocom.NativeAllocationManagement.Tests", source)).ConfigureAwait(false);
+            // Adversarial stored aliases/forwarding test runtime guards with the
+            // actual bundled analyzer loaded. No deployment warning is suppressed.
+            await File.WriteAllTextAsync(Path.Combine(root, source),
+                $"#pragma warning disable {ownershipDiagnostics}\n" + text).ConfigureAwait(false);
+        }
+        await File.WriteAllTextAsync(Path.Combine(root, "Program.cs"), """
+            using Supprocom.NativeAllocationManagement.Tests;
+            public static class Consumer
+            {
+                public static async System.Threading.Tasks.Task<int> Main()
+                {
+                    System.Console.WriteLine($"hostRid={System.Runtime.InteropServices.RuntimeInformation.RuntimeIdentifier}");
+                    System.Console.WriteLine($"dynamicCodeSupported={System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeSupported}");
+                    foreach (int seed in new[] { 17, 101, 379 })
+                    {
+                        System.Console.WriteLine($"seed={seed}");
+                        NativeGeneratedScenarios.RunAdmission(seed, 2048, System.Console.WriteLine);
+                        NativeGeneratedScenarios.RunSharing(seed, 512, System.Console.WriteLine);
+                        NativeGeneratedScenarios.RunPreparedPool(seed, 512, System.Console.WriteLine);
+                        NativeGeneratedScenarios.RunPreparedArena(seed, 512, System.Console.WriteLine);
+                        NativeGeneratedScenarios.RunLayouts(seed, 64, System.Console.WriteLine);
+                        NativeGeneratedScenarios.RunOutliers(seed, 128, System.Console.WriteLine);
+                        await NativeGeneratedScenarios.RunSharingSchedulesAsync(seed, 32, System.Console.WriteLine);
+                        await NativeGeneratedScenarios.RunBorrowReturnSchedulesAsync(seed, 16, System.Console.WriteLine);
+                    }
+                    System.Console.WriteLine("generatedRuntimeModels=passed;seeds=3;projectReferences=0");
+                    return 0;
+                }
+            }
+            """).ConfigureAwait(false);
     }
 
     private void WriteEvidence(PackageEvidence package)
@@ -2215,13 +2271,14 @@ public sealed class PackageSmokeTests
         return result.Output.Trim();
     }
 
-    private static async Task<CommandResult> RunDotnetAsync(string arguments, string workingDirectory)
+    private static async Task<CommandResult> RunDotnetAsync(string arguments, string workingDirectory, int timeoutSeconds = 90)
     {
-        return await RunProcessAsync(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet", arguments, workingDirectory).ConfigureAwait(true);
+        return await RunProcessAsync(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet", arguments, workingDirectory, timeoutSeconds).ConfigureAwait(true);
     }
 
-    private static async Task<CommandResult> RunProcessAsync(string fileName, string arguments, string workingDirectory)
+    private static async Task<CommandResult> RunProcessAsync(string fileName, string arguments, string workingDirectory, int timeoutSeconds = 90)
     {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutSeconds);
         string? evidence = PackageFixtureEvidence.Begin(workingDirectory, RetainPackageEvidence);
         using Process process = new()
         {
@@ -2245,12 +2302,12 @@ public sealed class PackageSmokeTests
         catch (System.ComponentModel.Win32Exception exception)
         {
             await PackageFixtureEvidence.CompleteAsync(evidence, fileName, arguments, workingDirectory, startedAt,
-                exitCode: null, timedOut: false, string.Empty, exception.ToString()).ConfigureAwait(true);
+                exitCode: null, timedOut: false, string.Empty, exception.ToString(), timeoutSeconds).ConfigureAwait(true);
             throw;
         }
         Task<string> stdout = process.StandardOutput.ReadToEndAsync();
         Task<string> stderr = process.StandardError.ReadToEndAsync();
-        using CancellationTokenSource timeout = new(TimeSpan.FromSeconds(90));
+        using CancellationTokenSource timeout = new(TimeSpan.FromSeconds(timeoutSeconds));
         try
         {
             await process.WaitForExitAsync(timeout.Token).ConfigureAwait(true);
@@ -2267,14 +2324,14 @@ public sealed class PackageSmokeTests
 
             await PackageFixtureEvidence.CompleteAsync(evidence, fileName, arguments, workingDirectory, startedAt,
                 process.HasExited ? process.ExitCode : null, timedOut: true,
-                await stdout.ConfigureAwait(true), await stderr.ConfigureAwait(true)).ConfigureAwait(true);
-            throw new TimeoutException($"{fileName} {arguments} exceeded the 90 second smoke-test timeout.", exception);
+                await stdout.ConfigureAwait(true), await stderr.ConfigureAwait(true), timeoutSeconds).ConfigureAwait(true);
+            throw new TimeoutException($"{fileName} {arguments} exceeded the {timeoutSeconds} second smoke-test timeout.", exception);
         }
 
         string standardOutput = await stdout.ConfigureAwait(true);
         string standardError = await stderr.ConfigureAwait(true);
         await PackageFixtureEvidence.CompleteAsync(evidence, fileName, arguments, workingDirectory, startedAt,
-            process.ExitCode, timedOut: false, standardOutput, standardError).ConfigureAwait(true);
+            process.ExitCode, timedOut: false, standardOutput, standardError, timeoutSeconds).ConfigureAwait(true);
         string output = standardOutput + Environment.NewLine + standardError;
         return new CommandResult(process.ExitCode, output);
     }

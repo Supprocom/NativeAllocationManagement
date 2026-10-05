@@ -4156,7 +4156,7 @@ public static class PressureWorkContract
                 return hash;
             }
 
-            return MixSectionContent(
+            return MixSectionContent<T>(
                 hash,
                 _values.Slice(start, length));
         }

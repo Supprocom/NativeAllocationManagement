@@ -63,7 +63,7 @@ internal static class CodeFixPackageFixture
                     .Append(typeof(NativePool<int>).Assembly.Location).Distinct(StringComparer.Ordinal)
                     .Select(static path => (MetadataReference)MetadataReference.CreateFromFile(path)).ToArray();
                 Project project = workspace.AddProject("IsolatedPackageConsumer", LanguageNames.CSharp)
-                    .WithParseOptions(new CSharpParseOptions(LanguageVersion.Preview))
+                    .WithParseOptions(new CSharpParseOptions(LanguageVersion.CSharp13))
                     .WithCompilationOptions(new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary))
                     .WithMetadataReferences(references);
                 Document original = project.AddDocument("Consumer.cs", SourceText.From("""

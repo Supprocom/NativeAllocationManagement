@@ -357,7 +357,7 @@ internal static class Program
         {
             SyntaxTree tree = CSharpSyntaxTree.ParseText(
                 CreateCorpusSource(project),
-                new CSharpParseOptions(LanguageVersion.Preview),
+                new CSharpParseOptions(LanguageVersion.CSharp13),
                 $"Project{project}.cs");
             List<MetadataReference> references = [.. commonReferences];
             if (projects.Count > 0)
@@ -397,7 +397,7 @@ internal static class Program
 
             SyntaxTree tree = CSharpSyntaxTree.ParseText(
                 CreateCorpusSource(project, editHeavyMethod: project == changedProjectId),
-                new CSharpParseOptions(LanguageVersion.Preview),
+                new CSharpParseOptions(LanguageVersion.CSharp13),
                 $"Project{project}.edited.cs");
             List<MetadataReference> references = [.. commonReferences];
             if (projects.Count > 0)
