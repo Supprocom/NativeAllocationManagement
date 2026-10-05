@@ -115,8 +115,10 @@ internal static class NativeAnalyzerCancellationWorker
                 // the callback, rather than racing an asynchronously scheduled
                 // observer against complete analysis. This never blocks on a
                 // test latch or delays NAM work to manufacture an in-flight task.
-                cancellation.Cancel();
+                // Publish the observed entry first: Cancel can synchronously
+                // complete the analysis task before the caller inspects it.
                 _entered.TrySetResult(operation);
+                cancellation.Cancel();
             });
 #pragma warning restore RS1012
         }

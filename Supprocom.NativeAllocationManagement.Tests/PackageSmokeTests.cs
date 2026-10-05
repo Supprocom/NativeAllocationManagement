@@ -10,6 +10,7 @@ public sealed class PackageSmokeTests
 {
     private static readonly SemaphoreSlim PackageGate = new(1, 1);
     private static PackageEvidence? _package;
+    private static readonly System.Text.Json.JsonSerializerOptions SymbolJsonOptions = new() { WriteIndented = true };
     private readonly ITestOutputHelper _output;
 
     public PackageSmokeTests(ITestOutputHelper output)
@@ -2180,6 +2181,9 @@ public sealed class PackageSmokeTests
         _output.WriteLine($"runtimeSha256={package.RuntimeAssemblySha256}");
         _output.WriteLine($"analyzerSha256={package.AnalyzerAssemblySha256}");
         _output.WriteLine($"codeFixSha256={package.CodeFixAssemblySha256}");
+        _output.WriteLine($"symbols={package.SymbolPath}");
+        _output.WriteLine($"symbolsSha256={package.SymbolArtifactSha256}");
+        _output.WriteLine($"symbolVerification={Path.Combine(package.SourceDirectory, "symbols-verification.json")}");
     }
 
     private static void WriteConsumerProject(
@@ -2288,7 +2292,56 @@ public sealed class PackageSmokeTests
         string analyzerHash = HashEntry(archive, "analyzers/dotnet/cs/Supprocom.NativeAllocationManagement.Analyzers.dll");
         string codeFixHash = HashEntry(archive, "analyzers/dotnet/cs/Supprocom.NativeAllocationManagement.CodeFixes.dll");
         Assert.DoesNotContain(nuspec.Descendants(), static element => string.Equals(element.Name.LocalName, "dependency", StringComparison.Ordinal));
-        return new PackageEvidence(packagePath, sourceDirectory, version, commit, artifactHash, runtimeHash, analyzerHash, codeFixHash);
+        string symbolPath = Path.ChangeExtension(packagePath, ".snupkg");
+        using FileStream symbolStream = File.OpenRead(symbolPath);
+        string symbolHash = Convert.ToHexString(SHA256.HashData(symbolStream));
+        symbolStream.Position = 0;
+        using ZipArchive symbols = new(symbolStream, ZipArchiveMode.Read, leaveOpen: false);
+        using StreamReader symbolNuspecReader = new(symbols.GetEntry("Supprocom.NativeAllocationManagement.nuspec")!.Open());
+        XDocument symbolNuspec = XDocument.Parse(symbolNuspecReader.ReadToEnd());
+        Assert.Equal("Supprocom.NativeAllocationManagement", symbolNuspec.Descendants()
+            .First(static element => string.Equals(element.Name.LocalName, "id", StringComparison.Ordinal)).Value);
+        Assert.Equal(version, symbolNuspec.Descendants().First(static element => string.Equals(element.Name.LocalName, "version", StringComparison.Ordinal)).Value);
+        Assert.Equal(commit, symbolNuspec.Descendants().First(static element => string.Equals(element.Name.LocalName, "repository", StringComparison.Ordinal)).Attribute("commit")!.Value);
+        Assert.Contains(symbolNuspec.Descendants(), static element => string.Equals(element.Name.LocalName, "packageType", StringComparison.Ordinal)
+            && string.Equals(element.Attribute("name")?.Value, "SymbolsPackage", StringComparison.Ordinal));
+        List<object> symbolEvidence = [];
+        foreach (string assemblyPath in new[] { "lib/net10.0/Supprocom.NativeAllocationManagement.dll",
+            "analyzers/dotnet/cs/Supprocom.NativeAllocationManagement.Analyzers.dll",
+            "analyzers/dotnet/cs/Supprocom.NativeAllocationManagement.CodeFixes.dll" })
+        {
+            string pdbPath = Path.ChangeExtension(assemblyPath, ".pdb");
+            byte[] assemblyBytes = ReadEntry(archive, assemblyPath);
+            byte[] pdbBytes = ReadEntry(symbols, pdbPath);
+            NativePackageSymbolVerifier.VerifyPair(assemblyBytes, pdbBytes);
+            NativeSymbolSourceEvidence sourceEvidence = NativePackageSymbolVerifier.VerifySource(pdbBytes, FindRepositoryRoot(), commit);
+            string pdbHash = Convert.ToHexString(SHA256.HashData(pdbBytes));
+            if (assemblyPath.StartsWith("analyzers/", StringComparison.Ordinal))
+                Assert.Equal(pdbHash, HashEntry(archive, pdbPath));
+            symbolEvidence.Add(new
+            {
+                AssemblyPath = assemblyPath,
+                PdbPath = pdbPath,
+                PdbLength = pdbBytes.Length,
+                PdbSHA256 = pdbHash,
+                Source = sourceEvidence
+            });
+        }
+        Assert.Equal(3, symbols.Entries.Count(static entry => entry.FullName.EndsWith(".pdb", StringComparison.Ordinal)));
+        Assert.DoesNotContain(symbols.Entries, static entry => entry.FullName.EndsWith(".dll", StringComparison.Ordinal));
+        File.WriteAllText(Path.Combine(sourceDirectory, "symbols-verification.json"),
+            System.Text.Json.JsonSerializer.Serialize(symbolEvidence, SymbolJsonOptions));
+        return new PackageEvidence(packagePath, sourceDirectory, version, commit, artifactHash, runtimeHash, analyzerHash, codeFixHash,
+            symbolPath, symbolHash);
+    }
+
+    private static byte[] ReadEntry(ZipArchive archive, string name)
+    {
+        ZipArchiveEntry entry = archive.GetEntry(name) ?? throw new InvalidDataException($"The package does not contain {name}.");
+        using Stream content = entry.Open();
+        using MemoryStream result = new();
+        content.CopyTo(result);
+        return result.ToArray();
     }
 
     private static string HashEntry(ZipArchive archive, string name)
@@ -2402,7 +2455,9 @@ public sealed class PackageSmokeTests
         string ArtifactSha256,
         string RuntimeAssemblySha256,
         string AnalyzerAssemblySha256,
-        string CodeFixAssemblySha256);
+        string CodeFixAssemblySha256,
+        string SymbolPath,
+        string SymbolArtifactSha256);
 
     internal sealed class CommandResult
     {

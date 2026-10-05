@@ -7,6 +7,8 @@
     <IsAotCompatible>true</IsAotCompatible>
     <IsPackable>true</IsPackable>
     <PackageId>Supprocom.NativeAllocationManagement</PackageId>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
     <Version>0.2.3</Version>
     <Authors>Supprocom</Authors>
     <Company>Supprocom</Company>
@@ -40,9 +42,12 @@
       <Output TaskParameter="TargetOutputs" ItemName="_BundledCodeFixTargetPath" />
     </MSBuild>
     <ItemGroup>
+      <_BundledAnalyzerSymbols Include="@(_BundledAnalyzerTargetPath->'%(RootDir)%(Directory)%(Filename).pdb');@(_BundledCodeFixTargetPath->'%(RootDir)%(Directory)%(Filename).pdb')" />
       <None Include="@(_BundledAnalyzerTargetPath)" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
       <None Include="@(_BundledCodeFixTargetPath)" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
+      <None Include="@(_BundledAnalyzerSymbols)" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
       <None Include="$(MSBuildProjectDirectory)\buildTransitive\Supprocom.NativeAllocationManagement.targets" Pack="true" PackagePath="buildTransitive/Supprocom.NativeAllocationManagement.targets" Visible="false" />
     </ItemGroup>
+    <Error Condition="!Exists('%(_BundledAnalyzerSymbols.Identity)')" Text="Required bundled portable symbols are missing: %(_BundledAnalyzerSymbols.Identity)" />
   </Target>
 </Project>
