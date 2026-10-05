@@ -197,6 +197,57 @@ public sealed class NativeAllocatorBudgetTests
     }
 
     [Fact]
+    public async Task RetiredBorrowedExtentRemainsProviderOwnedUntilEnteredUseDrains()
+    {
+        using AlignedBuffer buffer = new(128);
+        NativeMemoryBudget budget = new(0);
+        using NativeConcurrentArena arena = new(budget, 0, NativeMemoryReturn.ToNativeMemory, false);
+        arena.ReserveExternalMemory(buffer, 0, 128);
+        buffer.Dispose();
+        using ManualResetEventSlim entered = new();
+        using ManualResetEventSlim release = new();
+        Task<int> worker = Task.Run(() =>
+        {
+            ConcurrentArenaLease<int> lease = arena.Scratch<int>(4, static writer => writer.Fill(42));
+            return lease.Read(view =>
+            {
+                entered.Set();
+                Assert.True(release.Wait(TimeSpan.FromSeconds(30)));
+                return view[3];
+            });
+        });
+        try
+        {
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(30)));
+            arena.ReleaseLeasesToGarbageCollector();
+            NativeOwnerStatistics retired = arena.GetStatistics();
+            Assert.Equal(0, retired.BorrowedBytes);
+            Assert.Equal(128, retired.RetiredBorrowedBytes);
+            Assert.Equal(0, retired.RetiredBytes);
+            Assert.Equal(0, retired.OutstandingNativeBytes);
+            Assert.Equal(1, retired.RetiredSegmentCount);
+            Assert.Equal(0, budget.CaptureStatistics().CommittedBytes);
+            Assert.Equal(0, buffer.ReleaseCount);
+        }
+        finally
+        {
+            release.Set();
+            Assert.Equal(42, await worker.ConfigureAwait(true));
+        }
+
+        NativeOwnerStatistics drained = arena.GetStatistics();
+        Assert.Equal(0, drained.RetiredBorrowedBytes);
+        Assert.Equal(128, drained.BorrowedBytes);
+        Assert.Equal(0, drained.RetiredSegmentCount);
+        Assert.Equal(0, budget.CaptureStatistics().CommittedBytes);
+        Assert.Equal(0, buffer.ReleaseCount);
+        arena.Dispose();
+        Assert.Equal(0, arena.GetStatistics().RetiredBorrowedBytes);
+        Assert.Equal(0, arena.GetStatistics().BorrowedBytes);
+        Assert.Equal(1, buffer.ReleaseCount);
+    }
+
+    [Fact]
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The regression captures the deliberately injected drain exception and always joins the bounded worker before cleanup.")]
     public async Task RetiredAndQuarantinedBackingCannotEscapeItsBudgetCharge()
     {

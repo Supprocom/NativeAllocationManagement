@@ -48,6 +48,59 @@ public sealed class NativeMemoryReservationTests
     }
 
     [Fact]
+    public void PendingPreparedAndObligationPeaksSurviveFailureAndTerminalCleanup()
+    {
+        NativeMemoryBudget budget = new(20);
+        Assert.True(budget.TryReserve<int>(3, out NativeMemoryReservation<int>? first, out _));
+        Assert.True(budget.TryReserve<byte>(8, out NativeMemoryReservation<byte>? second, out _));
+        try
+        {
+            Assert.Equal(3, first.Value.CaptureSnapshot().DeclaredLength);
+            Assert.Equal(8, second.Value.CaptureSnapshot().DeclaredLength);
+            NativeMemoryAdmissionStatistics pending = budget.CaptureAdmissionStatistics();
+            Assert.Equal(2, pending.OutstandingReservationCount);
+            Assert.Equal(2, pending.PeakOutstandingReservationCount);
+            Assert.Equal(20, pending.PendingBytes);
+            Assert.Equal(20, pending.PeakPendingBytes);
+            Assert.Equal(0, pending.PreparedUnpublishedBytes);
+            Assert.Equal(0, pending.PeakPreparedUnpublishedBytes);
+
+            NativeMemoryTestHooks.FailNextAllocation();
+            Assert.Throws<NativeAllocationFailedException>(() => first.Value.PrepareBacking());
+            NativeMemoryAdmissionStatistics failed = budget.CaptureAdmissionStatistics();
+            Assert.Equal(20, failed.PendingBytes);
+            Assert.Equal(20, failed.PeakPendingBytes);
+            Assert.Equal(0, failed.PeakPreparedUnpublishedBytes);
+            Assert.Equal(2, failed.PeakOutstandingReservationCount);
+            first.Value.PrepareBacking();
+            NativeMemoryAdmissionStatistics partial = budget.CaptureAdmissionStatistics();
+            Assert.Equal(8, partial.PendingBytes);
+            Assert.Equal(12, partial.PreparedUnpublishedBytes);
+            Assert.Equal(12, partial.PeakPreparedUnpublishedBytes);
+            second.Value.PrepareBacking();
+            Assert.Equal(0, budget.CaptureAdmissionStatistics().PendingBytes);
+            Assert.Equal(20, budget.CaptureAdmissionStatistics().PreparedUnpublishedBytes);
+            Assert.Equal(20, budget.CaptureAdmissionStatistics().PeakPreparedUnpublishedBytes);
+        }
+        finally
+        {
+            first.Value.Dispose();
+            second.Value.Dispose();
+            NativeMemoryTestHooks.Reset();
+        }
+
+        NativeMemoryAdmissionStatistics returned = budget.CaptureAdmissionStatistics();
+        Assert.Equal(0, returned.OutstandingReservationCount);
+        Assert.Equal(0, returned.PendingBytes);
+        Assert.Equal(0, returned.PreparedUnpublishedBytes);
+        Assert.Equal(2, returned.PeakOutstandingReservationCount);
+        Assert.Equal(20, returned.PeakPendingBytes);
+        Assert.Equal(20, returned.PeakPreparedUnpublishedBytes);
+        Assert.Equal(0, budget.CaptureStatistics().ReservedBytes);
+        Assert.Equal(0, budget.CaptureStatistics().CommittedBytes);
+    }
+
+    [Fact]
     public void MovementAndPreparedActivationReuseOneControlWithoutDoubleAdmission()
     {
         NativeMemoryBudget budget = new(16);

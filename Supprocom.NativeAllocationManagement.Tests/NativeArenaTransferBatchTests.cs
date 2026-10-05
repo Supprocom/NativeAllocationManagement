@@ -25,6 +25,7 @@ public sealed class NativeArenaTransferBatchTests
             17,
             destination.Read(static view => view[0]));
         Assert.Equal(1, arena.CurrentAllocationRecordCountForTest);
+        Assert.Equal(1, arena.CurrentConcurrentReservationCountForTest);
         Assert.Equal(
             0,
             arena.CurrentTransferMetricsForTest.DictionaryRecords);
@@ -33,6 +34,7 @@ public sealed class NativeArenaTransferBatchTests
         destination.Dispose();
 
         Assert.Equal(0, arena.CurrentAllocationRecordCountForTest);
+        Assert.Equal(0, arena.CurrentConcurrentReservationCountForTest);
         Assert.Equal(2, arena.CurrentTransferMetricsForTest.SlotCreations);
     }
 

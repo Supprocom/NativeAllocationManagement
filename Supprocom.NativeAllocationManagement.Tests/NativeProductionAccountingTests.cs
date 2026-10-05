@@ -5,6 +5,41 @@ namespace Supprocom.NativeAllocationManagement.Tests;
 
 public sealed class NativeProductionAccountingTests
 {
+    [Fact]
+    public void RetainedExtentIncludesDirectOwnershipButExcludesDetachedStorage()
+    {
+        NativeMemoryTestHooks.Reset();
+        NativeGenerationOwner bank = new(0, null, 0);
+        try
+        {
+            using NativeBuilder<int> direct = new(2);
+            NativeSegment segment = NativeSegment.Allocate(8, "AccountingTest", 0,
+                "retained extent", NativeOwnerLifecycle.Active, zeroed: false);
+            bank.AddSegment(segment);
+            long extent = OperatingSystem.IsWindows() ? 8 : 64;
+            NativeMemoryStatistics acquired = NativeMemoryDiagnostics.Snapshot();
+            Assert.Equal(extent + 8, acquired.OutstandingNativeBytes);
+            Assert.Equal(extent + 8, acquired.RetainedNativeBytes);
+            Assert.Equal(extent + 8, NativeMemoryTestHooks.Snapshot().RetainedNativeBytes);
+            bank.Detach();
+            NativeMemoryStatistics detached = NativeMemoryDiagnostics.Snapshot();
+            Assert.Equal(extent + 8, detached.OutstandingNativeBytes);
+            Assert.Equal(extent, detached.DetachedNativeBytes);
+            Assert.Equal(8, detached.RetainedNativeBytes);
+            Assert.Equal(8, NativeMemoryTestHooks.Snapshot().RetainedNativeBytes);
+            bank.ReleaseToNative();
+            Assert.Equal(8, NativeMemoryDiagnostics.Snapshot().RetainedNativeBytes);
+            direct.Dispose();
+            Assert.Equal(0, NativeMemoryDiagnostics.Snapshot().RetainedNativeBytes);
+            Assert.Equal(0, NativeMemoryTestHooks.Snapshot().RetainedNativeBytes);
+        }
+        finally
+        {
+            bank.ReleaseToNative();
+            NativeMemoryTestHooks.Reset();
+        }
+    }
+
     [Theory]
     [InlineData(1)]
     [InlineData(2)]
@@ -29,6 +64,7 @@ public sealed class NativeProductionAccountingTests
                     NativeMemoryAccounting.RecordBumpTraversalVisit();
                     object metrics = AccountingField("_threadHotMetrics").GetValue(null)!;
                     shared = (bool)metrics.GetType().GetField("Shared", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(metrics)!;
+                    Assert.Null(metrics.GetType().GetField("OwnerThread", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(metrics));
                     long before = GC.GetAllocatedBytesForCurrentThread();
                     for (int operation = 0; operation < 1_000; operation++)
                     {

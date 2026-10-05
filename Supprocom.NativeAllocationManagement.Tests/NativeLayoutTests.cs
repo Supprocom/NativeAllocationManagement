@@ -44,6 +44,12 @@ public sealed class NativeLayoutTests
         object control = permission.Value.ControlForTest!;
         NativeBlock block = (NativeBlock)typeof(NativeTransferControl<byte>).GetField("_block", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(control)!;
         NativeLayoutStatistics prepared = permission.Value.CaptureSnapshot();
+        // Three bytes followed by an aligned pair of ints: these expectations
+        // come from the declared shape, not from the descriptor's own totals.
+        Assert.Equal(alignment + 8, prepared.LayoutExtentBytes);
+        Assert.Equal(alignment - 3, prepared.InterRegionPaddingBytes);
+        Assert.Equal(alignment - 1, prepared.AlignmentSlackBytes);
+        Assert.Equal(alignment, prepared.PayloadAlignment);
         nuint payload = (nuint)block.Pointer + (nuint)prepared.PayloadOffsetBytes;
         Assert.Equal(0u, payload % (nuint)alignment);
         Assert.Equal(0u, (payload + (nuint)layout.Describe(integers).OffsetBytes) % (nuint)alignment);
@@ -108,6 +114,9 @@ public sealed class NativeLayoutTests
         Assert.Equal(emptyField ? 1 : 0, owner.CaptureSnapshot().InitializedRegionCount);
         Assert.True(owner.CaptureSnapshot().InitializationCompleted);
         Assert.Equal(0, owner.CaptureSnapshot().Ownership.OwnedBackingBytes);
+        Assert.Equal(0, owner.CaptureSnapshot().LayoutExtentBytes);
+        Assert.Equal(0, owner.CaptureSnapshot().InterRegionPaddingBytes);
+        Assert.Equal(0, owner.CaptureSnapshot().AlignmentSlackBytes);
         Assert.Equal(0, budget.CaptureStatistics().AllocationCount);
         Assert.Equal(0, budget.CaptureStatistics().FreeCount);
         if (emptyField) Assert.Equal(0, owner.Read(field, static (view, token) => view.Region(token).Length));

@@ -311,7 +311,7 @@ public readonly record struct NativeMemoryStatistics(
     /// <summary>Gets bytes actually copied by NAM-controlled unmanaged bulk operations; excludes same-start no-ops, opaque realloc and managed-root assignment.</summary>
     public long CopiedBytes { get; init; }
 
-    /// <summary>Gets storage still owned by active or retained allocator generations.</summary>
+    /// <summary>Gets currently acquired NAM-owned extent bytes not detached for eventual release, including direct owners and retired or quarantined banks; derived as outstanding minus detached, not a separate charge.</summary>
     public long RetainedNativeBytes => OutstandingNativeBytes - DetachedNativeBytes;
 }
 

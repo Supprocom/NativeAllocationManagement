@@ -11,6 +11,31 @@ public sealed class NativeArenaFastLaneTests
         static view => view[0] + view[1] + view[2] + view[3];
 
     [Fact]
+    public void SynchronizedLaneCountsActualGrowthAttemptsButNotWarmedReuse()
+    {
+        using NativeConcurrentArena arena = new(128, NativeMemoryReturn.ToNativeMemory);
+        _ = arena.Scratch<byte>(1, static writer => writer.Write(7));
+        long warm = arena.CurrentFastLaneSlowPathCountForTest;
+        _ = arena.Scratch<byte>(1, static writer => writer.Write(7));
+        Assert.Equal(warm, arena.CurrentFastLaneSlowPathCountForTest);
+        _ = arena.Scratch<byte>(129, static writer => writer.Fill(7));
+        Assert.Equal(warm + 1, arena.CurrentFastLaneSlowPathCountForTest);
+        long grown = arena.CurrentFastLaneSlowPathCountForTest;
+        NativeMemoryTestHooks.FailNextAllocation();
+        try
+        {
+            // The preceding growth retains the 4 KiB default segment; force a
+            // genuinely new backend acquisition rather than reusing that slack.
+            Assert.Throws<NativeAllocationFailedException>(() => arena.Scratch<byte>(8192, static writer => writer.Fill(7)));
+            Assert.Equal(grown + 1, arena.CurrentFastLaneSlowPathCountForTest);
+        }
+        finally { NativeMemoryTestHooks.Reset(); }
+        arena.Dispose();
+        Assert.Equal(grown + 1, arena.CurrentFastLaneSlowPathCountForTest);
+        Assert.Equal(0, arena.CurrentConcurrentReservationCountForTest);
+    }
+
+    [Fact]
     public void WarmScratchUsesNoManagedAllocationOrFreshSegment()
     {
         NativeMemoryTestHooks.Reset();
