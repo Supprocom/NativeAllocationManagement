@@ -45,14 +45,13 @@ internal static class NativeAnalyzerCancellationWorker
         ArgumentNullException.ThrowIfNull(compilation);
         IAssemblySymbol runtime = compilation.GetTypeByMetadataName("Supprocom.NativeAllocationManagement.NativePool`1")?.ContainingAssembly
             ?? throw new InvalidDataException("The actual NAM runtime metadata reference is required.");
-        NativeOperationProbe probe = new(runtime);
+        using CancellationTokenSource cancellation = new();
+        NativeOperationProbe probe = new(runtime, cancellation);
         ImmutableArray<DiagnosticAnalyzer> analyzers =
             [new NativeAllocationAnalyzer(), new NativeBuilderWriteAnalyzer(), probe];
-        using CancellationTokenSource cancellation = new();
         CompilationWithAnalyzers driver = compilation.WithAnalyzers(analyzers);
         Task<ImmutableArray<Diagnostic>> analysis = driver.GetAnalyzerDiagnosticsAsync(cancellation.Token);
-        Task first;
-        try { first = await Task.WhenAny(analysis, probe.Entered).WaitAsync(TimeSpan.FromSeconds(30)).ConfigureAwait(false); }
+        try { _ = await Task.WhenAny(analysis, probe.Entered).WaitAsync(TimeSpan.FromSeconds(30)).ConfigureAwait(false); }
         catch (TimeoutException)
         {
             await cancellation.CancelAsync().ConfigureAwait(false);
@@ -60,18 +59,16 @@ internal static class NativeAnalyzerCancellationWorker
             catch (OperationCanceledException) { }
             throw;
         }
-        if (ReferenceEquals(first, analysis) || analysis.IsCompleted)
+        if (!probe.Entered.IsCompletedSuccessfully)
         {
             _ = await analysis.ConfigureAwait(false);
             throw new InvalidOperationException("The real consumer analysis completed before an in-flight cancellation could be triggered.");
         }
         string operation = await probe.Entered.ConfigureAwait(false);
-        long started = Stopwatch.GetTimestamp();
-        await cancellation.CancelAsync().ConfigureAwait(false);
         bool cancelled = false;
         try { _ = await analysis.ConfigureAwait(false); }
         catch (OperationCanceledException) { cancelled = true; }
-        double latency = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+        double latency = Stopwatch.GetElapsedTime(probe.CancellationStarted).TotalMilliseconds;
 
         // A new driver prevents a cancelled partial result from posing as a
         // valid cached result. This runs the same complete real consumer again.
@@ -82,33 +79,46 @@ internal static class NativeAnalyzerCancellationWorker
             compilation.SyntaxTrees.Length, probe.NativeOperationBlocks,
             operation, true, cancelled, latency,
             followUp.Select(static diagnostic => diagnostic.Id).Order(StringComparer.Ordinal).ToArray(),
-            "Real MSBuild-derived consumer input in the Roslyn analysis driver, not SDK console cancellation. The passive probe observes an operation block containing authenticated runtime metadata; it is not an observation inside NAM's own callback. No artificial blocking or synthetic result cache is used.");
+            "Real MSBuild-derived consumer input in the Roslyn analysis driver, not SDK console cancellation. The probe requests cancellation synchronously from entry to an operation block containing authenticated runtime metadata; it is not an observation inside NAM's own callback. Latency includes the waiting observer's scheduling delay. No artificial blocking or synthetic result cache is used.");
     }
 
     // A private measurement probe, never included in the shipped analyzer or
     // exposed as a consumer diagnostic. It does not need public rule releases.
 #pragma warning disable RS1001, RS1036, RS1041, RS2008
     [DiagnosticAnalyzer(LanguageNames.CSharp)]
-    private sealed class NativeOperationProbe(IAssemblySymbol runtime) : DiagnosticAnalyzer
+    private sealed class NativeOperationProbe(IAssemblySymbol runtime, CancellationTokenSource cancellation) : DiagnosticAnalyzer
     {
         private static readonly DiagnosticDescriptor Marker = new("NAMPERF0002", "Native operation entry",
             "Native operation entry", "Performance evidence", DiagnosticSeverity.Hidden, isEnabledByDefault: true);
         private readonly TaskCompletionSource<string> _entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int _nativeOperationBlocks;
+        private int _triggerClaimed;
+        private long _cancellationStarted;
         internal Task<string> Entered => _entered.Task;
         internal int NativeOperationBlocks => Volatile.Read(ref _nativeOperationBlocks);
+        internal long CancellationStarted => Volatile.Read(ref _cancellationStarted);
         public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => [Marker];
 
         public override void Initialize(AnalysisContext context)
         {
             context.EnableConcurrentExecution();
             context.ConfigureGeneratedCodeAnalysis(GeneratedCodeAnalysisFlags.None);
-            context.RegisterOperationBlockAction(observation =>
+#pragma warning disable RS1012 // The private entry observer requests cancellation; it intentionally registers no diagnostic/end action and performs no artificial no-op work.
+            context.RegisterOperationBlockStartAction(observation =>
             {
                 if (!observation.OperationBlocks.Any(ContainsNativeType)) return;
                 Interlocked.Increment(ref _nativeOperationBlocks);
-                _entered.TrySetResult(observation.OwningSymbol.ToDisplayString());
+                if (Interlocked.CompareExchange(ref _triggerClaimed, 1, 0) != 0) return;
+                string operation = observation.OwningSymbol.ToDisplayString();
+                Volatile.Write(ref _cancellationStarted, Stopwatch.GetTimestamp());
+                // The caller owns this CTS. Request cancellation before leaving
+                // the callback, rather than racing an asynchronously scheduled
+                // observer against complete analysis. This never blocks on a
+                // test latch or delays NAM work to manufacture an in-flight task.
+                cancellation.Cancel();
+                _entered.TrySetResult(operation);
             });
+#pragma warning restore RS1012
         }
 
         private bool ContainsNativeType(IOperation operation)

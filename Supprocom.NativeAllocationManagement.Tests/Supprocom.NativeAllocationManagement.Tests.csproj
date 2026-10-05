@@ -20,6 +20,7 @@
     <ProjectReference Include="..\Supprocom.NativeAllocationManagement.Analyzers\Supprocom.NativeAllocationManagement.Analyzers.csproj" />
     <ProjectReference Include="..\Supprocom.NativeAllocationManagement.CodeFixes\Supprocom.NativeAllocationManagement.CodeFixes.csproj" />
     <ProjectReference Include="..\Supprocom.NativeAllocationManagement.Performance\Supprocom.NativeAllocationManagement.Performance.csproj" />
+    <ProjectReference Include="..\Supprocom.NativeAllocationManagement.CompilerHost\Supprocom.NativeAllocationManagement.CompilerHost.csproj" />
     <ProjectReference Include="..\SharedContract\SharedContract.csproj" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" PrivateAssets="all" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="4.14.0" PrivateAssets="all" />

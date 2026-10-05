@@ -9,6 +9,8 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- The SDK compiler must not inherit this runner's Roslyn 4.14 load graph. -->
+    <Compile Remove="NativeCompilerCostWorker.cs" />
     <ProjectReference Include="..\Supprocom.NativeAllocationManagement\Supprocom.NativeAllocationManagement.csproj" />
     <ProjectReference Include="..\Supprocom.NativeAllocationManagement.Analyzers\Supprocom.NativeAllocationManagement.Analyzers.csproj" />
     <ProjectReference Include="..\SharedContract\SharedContract.csproj" />

@@ -30,9 +30,9 @@ internal static class Program
         CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;
         CultureInfo.CurrentUICulture = CultureInfo.InvariantCulture;
 
-        if (args is ["--compiler-cost-worker", "--compiler", string compiler, "--response", string response])
+        if (args.Length != 0 && string.Equals(args[0], "--compiler-cost-worker", StringComparison.Ordinal))
         {
-            return NativeCompilerCostWorker.Run(compiler, response);
+            throw new ArgumentException("SDK compiler cost measurements require the Roslyn-free Supprocom.NativeAllocationManagement.CompilerHost executable.", nameof(args));
         }
 
         if (args is ["--analyzer-cancellation-worker", "--response", string cancellationResponse, "--project-directory", string projectDirectory])

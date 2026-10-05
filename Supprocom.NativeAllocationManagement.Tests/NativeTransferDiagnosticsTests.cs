@@ -148,9 +148,14 @@ public sealed class NativeTransferDiagnosticsTests
     [Fact]
     public void EmergencyReturnFailureKeepsItsRetryObligationUntilALaterCollection()
     {
+        // The failure hook is process-wide. Finish unrelated emergency cleanup
+        // before creating its target, then arm it while that target is rooted.
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
         NativeMemoryBudget budget = new(16);
         WeakReference control = CreateAbandonedControl(budget);
-        NativeMemoryTestHooks.FailAtManagedPublicationBoundary(4);
         GC.Collect();
         GC.WaitForPendingFinalizers();
         Assert.Equal(16, budget.CaptureStatistics().CommittedBytes);
@@ -309,8 +314,14 @@ public sealed class NativeTransferDiagnosticsTests
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static WeakReference CreateAbandonedControl(NativeMemoryBudget budget) =>
-        new(CreateDirect(budget).ControlForTest!, trackResurrection: true);
+    private static WeakReference CreateAbandonedControl(NativeMemoryBudget budget)
+    {
+        NativeTransfer<int> owner = CreateDirect(budget);
+        WeakReference control = new(owner.ControlForTest!, trackResurrection: true);
+        NativeMemoryTestHooks.FailAtManagedPublicationBoundary(4);
+        GC.KeepAlive(owner);
+        return control;
+    }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static long ReadAbandonedFailureCount(WeakReference control) =>

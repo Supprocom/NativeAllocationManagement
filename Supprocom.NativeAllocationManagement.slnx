@@ -4,6 +4,7 @@
   <Project Path="Supprocom.NativeAllocationManagement.CodeFixes/Supprocom.NativeAllocationManagement.CodeFixes.csproj" />
   <Project Path="Supprocom.NativeAllocationManagement.Tests/Supprocom.NativeAllocationManagement.Tests.csproj" />
   <Project Path="Supprocom.NativeAllocationManagement.Performance/Supprocom.NativeAllocationManagement.Performance.csproj" />
+  <Project Path="Supprocom.NativeAllocationManagement.CompilerHost/Supprocom.NativeAllocationManagement.CompilerHost.csproj" />
   <Project Path="SharedContract/SharedContract.csproj" />
   <Project Path="SafeCSharp/SafeCSharp.csproj" />
   <Project Path="NAM/NAM.csproj" />
