@@ -148,6 +148,10 @@ try {
     Invoke-NamCommand solution-build dotnet @('build', $namSolution, '-c', 'Release', '--no-restore', '--nologo', '-v', 'minimal', '--disable-build-servers')
     Invoke-NamCommand explicit-test-graph dotnet @('build', $namTests, '-c', 'Release', '--no-restore', '--nologo', '-v', 'minimal', '--disable-build-servers')
     Invoke-NamCommand unchanged-format dotnet @('format', 'whitespace', $namSolution, '--no-restore', '--verify-no-changes', '--verbosity', 'diagnostic')
+    $namPerformanceWorker = Join-Path $env:ArtifactsPath 'bin/Supprocom.NativeAllocationManagement.Performance/release/Supprocom.NativeAllocationManagement.Performance.dll'
+    Invoke-NamCommand allocator-jit pwsh @('-NoProfile', '-File', (Join-Path $PSScriptRoot 'capture-allocator-jit.ps1'),
+        '-ExpectedRid', $ExpectedRid, '-Worker', $namPerformanceWorker, '-EvidenceRoot', (Join-Path $namRoot 'allocator-jit'))
+    Write-Output ([IO.File]::ReadAllText((Join-Path $namRoot 'logs/allocator-jit.stdout.log')))
     Invoke-NamCommand package-consumers dotnet @('test', $namTests, '-c', 'Release', '--no-build', '--no-restore', '--nologo', '-v', 'normal', '--filter', 'FullyQualifiedName~PackageSmokeTests', '--logger', 'trx;LogFileName=package.trx', '--results-directory', (Join-Path $namRoot 'trx'), '--disable-build-servers') -DeadlineSeconds 2400
     Assert-NamTrx (Join-Path $namRoot 'trx/package.trx')
     Invoke-NamCommand non-package-tests dotnet @('test', $namTests, '-c', 'Release', '--no-build', '--no-restore', '--nologo', '-v', 'normal', '--filter', 'FullyQualifiedName!~PackageSmokeTests', '--logger', 'trx;LogFileName=non-package.trx', '--results-directory', (Join-Path $namRoot 'trx'), '--disable-build-servers') -DeadlineSeconds 1800

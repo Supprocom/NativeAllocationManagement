@@ -9,6 +9,13 @@ All root projects use the complete Release analyzer policy; voxel coverage,
 both wrapper tests, isolated candidate consumers, rooted trimmed execution and
 actual NativeAOT execution are required. No skipped or failed TRX outcome passes.
 
+Before package/runtime test gates, separate controlled and default child processes
+capture actual Region/Arena and matched managed code generation, exact output,
+worker identity, settings and exits. Instrumented timings are not performance
+acceptance. An instrumented worker's floor failure remains exit 3 in its evidence;
+the unchanged uninstrumented test floors still determine validation. Captures are
+retained and printed in job logs even when a later floor fails.
+
 Evidence lives outside the checkout. Each child retains arguments, declared
 deadline, actual exit, complete streams and original compiler inputs. Source,
 packages, caches, binaries, native runner/toolchain identities and length/SHA-256
