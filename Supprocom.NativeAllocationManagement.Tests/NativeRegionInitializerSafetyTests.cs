@@ -2,6 +2,65 @@ namespace Supprocom.NativeAllocationManagement.Tests;
 
 public sealed class NativeRegionInitializerSafetyTests
 {
+    [Fact]
+    public void FailedBackendReservationLeavesAdmissionOpenForTheNextInitializer()
+    {
+        NativeMemoryBudget budget = new(256);
+        NativeRegionKernel region = new(0, NativeMemoryReturn.ToNativeMemory, budget);
+        try
+        {
+            NativeMemoryTestHooks.FailNextAllocation();
+            Assert.Throws<NativeAllocationFailedException>(() =>
+            {
+                region.LeaseInitialized<int>(1, static writer => writer.Write(17));
+            });
+            Assert.Equal(0, region.GetStatistics().RequestedBytes);
+            Assert.Equal(0, budget.CaptureStatistics().CommittedBytes);
+            Local<int> next = region.LeaseInitialized<int>(1, writer =>
+            {
+                NativeAllocationInUseException failure = Assert.Throws<NativeAllocationInUseException>(region.Dispose);
+                Assert.Equal(1, failure.ActiveOperationCount);
+                writer.Write(42);
+            });
+            Assert.Equal(42, next.Read(static view => view[0]));
+            Assert.Equal(sizeof(int), region.GetStatistics().RequestedBytes);
+        }
+        finally
+        {
+            region.Dispose();
+            NativeMemoryTestHooks.Reset();
+        }
+    }
+
+    [Fact]
+    public void RefusedBackingDoesNotPreventGuardedZeroLengthInitialization()
+    {
+        NativeMemoryBudget budget = new(0);
+        NativeRegionKernel region = new(0, NativeMemoryReturn.ToNativeMemory, budget);
+        try
+        {
+            Assert.Throws<NativeMemoryBudgetExceededException>(() =>
+            {
+                region.LeaseInitialized<byte>(1, static writer => writer.Write(17));
+            });
+            Local<byte> empty = region.LeaseInitialized<byte>(0, writer =>
+            {
+                NativeAllocationInUseException failure = Assert.Throws<NativeAllocationInUseException>(region.Dispose);
+                Assert.Equal(1, failure.ActiveOperationCount);
+                writer.Fill(0);
+            });
+            Assert.Equal(0, empty.Length);
+            Assert.Equal(0, empty.Read(static view => view.Length));
+            Assert.Equal(0, region.GetStatistics().RequestedBytes);
+            Assert.Equal(0, budget.CaptureStatistics().CommittedBytes);
+            Assert.Equal(0, budget.CaptureStatistics().AllocationCount);
+        }
+        finally
+        {
+            region.Dispose();
+        }
+    }
+
     [Theory]
     [InlineData(NativeMemoryReturn.ToNativeMemory)]
     [InlineData(NativeMemoryReturn.ToGarbageCollector)]
