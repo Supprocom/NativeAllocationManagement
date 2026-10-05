@@ -102,27 +102,30 @@ public readonly struct NativeTransfer<T> : IDisposable
     internal static NativeTransfer<T> CreateOwnedBlock(NativeBlock block, int length, int capacity) =>
         new(NativeTransferControl<T>.CreateOwnedBlock(block, length, capacity), authorityVersion: 1);
 
+    internal static NativeTransfer<T> CreateAdmitted(NativeTransferControl<T> control, long authorityVersion) =>
+        new(control, authorityVersion);
+
     private NativeTransferControl<T> GetControl(string operation) =>
         _control ?? throw new NativeAllocationUninitializedException(nameof(NativeTransfer<T>), operation);
 }
 
 // One acquisition-time control, not one wrapper/finalizer per move.
-internal sealed class NativeTransferControl<T>
+internal class NativeTransferControl<T>
     where T : unmanaged
 {
-    private const int Active = 1;
-    private const int Moving = 2;
+    private protected const int Active = 1;
+    private protected const int Moving = 2;
     private const int Moved = 3;
-    private const int Disposing = 4;
-    private const int Disposed = 5;
-    private const int Retiring = 6;
-    private const int Finalized = 7;
+    private protected const int Disposing = 4;
+    private protected const int Disposed = 5;
+    private protected const int Retiring = 6;
+    private protected const int Finalized = 7;
 
     private NativeOwnerKernel? _kernel;
     private NativeGeneration? _generationState;
     private NativeAllocation? _allocationState;
     private readonly long _ownerId;
-    private readonly long _backingBytes;
+    private long _backingBytes;
     private readonly bool _borrowedBacking;
     private readonly long _generation;
     private readonly long _allocationId;
@@ -159,22 +162,23 @@ internal sealed class NativeTransferControl<T>
         _state = Active;
     }
 
-    private NativeTransferControl(
+    private protected NativeTransferControl(
         NativeBlock block,
         int length,
-        int capacity)
+        int capacity,
+        bool published)
     {
         _block = block;
         _ownerId = block.OwnerId;
         _backingBytes = checked((long)block.ByteLength);
         _length = length;
         _capacity = capacity;
-        _state = Active;
+        _state = published ? Active : 0;
     }
 
     internal long Id => _ownerId;
 
-    internal NativeTransferStatistics CaptureSnapshot(long bindingVersion)
+    internal virtual NativeTransferStatistics CaptureSnapshot(long bindingVersion)
     {
         int state = Volatile.Read(ref _state);
         long authority = Volatile.Read(ref _authorityVersion);
@@ -462,7 +466,8 @@ internal sealed class NativeTransferControl<T>
         new(
             block,
             length,
-            capacity);
+            capacity,
+            published: true);
 
     private NativeHandleMetadata Validate(long authorityVersion, string operation)
     {
@@ -626,7 +631,7 @@ internal sealed class NativeTransferControl<T>
         Volatile.Write(ref _state, Active);
     }
 
-    private void ReturnStorage(string operation)
+    private protected virtual void ReturnStorage(string operation)
     {
         if (Volatile.Read(ref _payloadReturned) != 0) return;
         NativeMemoryBudget? budget = _kernel?.BudgetForSharing ?? _block.Budget;
@@ -638,16 +643,12 @@ internal sealed class NativeTransferControl<T>
         }
         catch
         {
-            NativeOwnerHistory.Increment(ref _returnFailures, ref _historyOverflowed);
+            RecordReturnFailure();
             throw;
         }
         // Stale aliases retain observation, not old pooled generations or budget
         // objects once the return obligation really ended.
-        _kernel = null;
-        _generationState = null;
-        _allocationState = null;
-        _block = default;
-        Volatile.Write(ref _payloadReturned, 1);
+        CompleteStorageReturn();
         NativeMemoryTestHooks.CheckManagedPublicationBoundary(operation, 5, "unique return trace emission after successful cleanup");
         budget?.RecordOwnershipTransition(NativeMemoryTraceKind.UniqueReturned, _ownerId,
             _allocationId == 0 ? _ownerId : _allocationId, checked((nuint)_backingBytes));
@@ -704,7 +705,7 @@ internal sealed class NativeTransferControl<T>
     private void FinalizeLease()
     {
         int observed = Volatile.Read(ref _state);
-        if (observed is not (Active or Retiring)
+        if (!CanFinalize(observed)
             || Interlocked.CompareExchange(ref _state, Finalized, observed) != observed)
         {
             return;
@@ -717,6 +718,41 @@ internal sealed class NativeTransferControl<T>
             GC.ReRegisterForFinalize(this);
         }
         else Volatile.Write(ref _state, Disposed);
+    }
+
+    private protected virtual bool CanFinalize(int state) => state is Active or Retiring;
+
+    private protected long CurrentAuthorityVersion => Volatile.Read(ref _authorityVersion);
+    private protected int CurrentControlState => Volatile.Read(ref _state);
+    private protected bool StorageReturned => Volatile.Read(ref _payloadReturned) != 0;
+    private protected int DeclaredLength => _length;
+    private protected NativeBlock OwnedBlock => _block;
+    private protected long BackingBytes => _backingBytes;
+
+    private protected bool TryTransition(int expected, int next) =>
+        Interlocked.CompareExchange(ref _state, next, expected) == expected;
+
+    private protected void PublishControlState(int state) => Volatile.Write(ref _state, state);
+    private protected void PublishAuthorityVersion(long version) => Volatile.Write(ref _authorityVersion, version);
+
+    private protected void InstallOwnedBlock(NativeBlock block)
+    {
+        _block = block;
+        _backingBytes = checked((long)block.ByteLength);
+    }
+
+    private protected void RecordReturnFailure() => NativeOwnerHistory.Increment(ref _returnFailures, ref _historyOverflowed);
+
+    private protected void IncrementControlHistory(ref long counter) =>
+        NativeOwnerHistory.Increment(ref counter, ref _historyOverflowed);
+
+    private protected void CompleteStorageReturn()
+    {
+        _kernel = null;
+        _generationState = null;
+        _allocationState = null;
+        _block = default;
+        Volatile.Write(ref _payloadReturned, 1);
     }
 
     /// <summary>Returns storage when a receiver abandons the active transfer.</summary>

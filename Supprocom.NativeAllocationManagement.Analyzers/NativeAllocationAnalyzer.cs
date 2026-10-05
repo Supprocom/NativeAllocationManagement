@@ -117,6 +117,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 Namespace + "ConcurrentArenaLease`1");
             Transfer = runtimeAssembly.GetTypeByMetadataName(
                 Namespace + "NativeTransfer`1");
+            Reservation = runtimeAssembly.GetTypeByMetadataName(Namespace + "NativeMemoryReservation`1");
+            MemoryBudget = runtimeAssembly.GetTypeByMetadataName(Namespace + "NativeMemoryBudget");
             Shared = runtimeAssembly.GetTypeByMetadataName(Namespace + "NativeShared`1");
             Weak = runtimeAssembly.GetTypeByMetadataName(Namespace + "NativeWeak`1");
             ReadOnlyLeaseView = runtimeAssembly.GetTypeByMetadataName(Namespace + "NativeReadOnlyLeaseView`1");
@@ -153,6 +155,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         internal INamedTypeSymbol? ConcurrentArenaLease { get; }
 
         internal INamedTypeSymbol? Transfer { get; }
+        internal INamedTypeSymbol? Reservation { get; }
+        internal INamedTypeSymbol? MemoryBudget { get; }
         internal INamedTypeSymbol? Shared { get; }
         internal INamedTypeSymbol? Weak { get; }
         internal INamedTypeSymbol? ReadOnlyLeaseView { get; }
@@ -212,6 +216,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             && (Is(property.ContainingType, Builder)
                 || Is(property.ContainingType, Workspace)
                 || Is(property.ContainingType, Transfer)
+                || Is(property.ContainingType, Reservation)
                 || Is(property.ContainingType, Shared)
                 || Is(property.ContainingType, Weak));
 
@@ -225,6 +230,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 || Is(type, ArenaLease)
                 || Is(type, ConcurrentArenaLease)
                 || Is(type, Transfer)
+                || Is(type, Reservation)
                 || Is(type, Shared)
                 || Is(type, Weak)
                 || Is(type, ReadOnlyLeaseView)
@@ -2292,7 +2298,11 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 return;
             }
             bool transferWasPreprocessed = _preprocessedTransferInvocations.Remove(operation);
-            if (!transferWasPreprocessed && IsTransferMoveInvocation(operation))
+            if (IsApplicationTryAcquisition(operation))
+            {
+                RegisterConditionalTransferOutputs(operation);
+            }
+            else if (!transferWasPreprocessed && IsTransferMoveInvocation(operation))
             {
                 ProcessTransferMove(operation);
             }
@@ -3419,6 +3429,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
             if ((NativeSymbols.Is(operation.TargetMethod.ContainingType, _symbols.Shared)
                     || NativeSymbols.Is(operation.TargetMethod.ContainingType, _symbols.Weak)
+                    || NativeSymbols.Is(operation.TargetMethod.ContainingType, _symbols.Reservation)
                     || NativeSymbols.Is(operation.TargetMethod.ContainingType, _symbols.Transfer))
                 && operation.TargetMethod.Name is "CaptureSnapshot" or "TryCompletePayloadReturn")
             {
@@ -3469,15 +3480,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
             if (IsSharingTryAcquisition(operation))
             {
-                foreach (IArgumentOperation argument in operation.Arguments)
-                {
-                    if (argument.Parameter?.RefKind != RefKind.Out || !IsNativeTransfer(argument.Parameter.Type)) continue;
-                    ISymbol? symbol = GetPreparedOutSymbol(argument.Value);
-                    if (symbol is null) continue;
-                    Target target = new(symbol, argument.Syntax);
-                    RegisterTransferDestination(target, operation.Syntax, mustEnd: symbol is ILocalSymbol, isUsing: false);
-                    _transfers[symbol].ConditionalPending = true;
-                }
+                RegisterConditionalTransferOutputs(operation);
             }
 
             if (string.Equals(operation.TargetMethod.Name, "Dispose", StringComparison.Ordinal))
@@ -3485,6 +3488,25 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 MarkTransferIdentity(
                     transfer.OwnershipIdentity,
                     TransferStatus.Disposed);
+            }
+        }
+
+        private void RegisterConditionalTransferOutputs(IInvocationOperation operation)
+        {
+            foreach (IArgumentOperation argument in operation.Arguments)
+            {
+                if (argument.Parameter?.RefKind != RefKind.Out || !IsNativeTransfer(argument.Parameter.Type)) continue;
+                ISymbol? symbol = GetPreparedOutSymbol(argument.Value);
+                if (IsApplicationTryAcquisition(operation) && symbol is not ILocalSymbol)
+                {
+                    Report(NativeAllocationDiagnosticDescriptors.TransferAcquisitionEscape,
+                        argument.Syntax, operation.TargetMethod.Name);
+                    continue;
+                }
+                if (symbol is null) continue;
+                Target target = new(symbol, argument.Syntax);
+                RegisterTransferDestination(target, operation.Syntax, mustEnd: symbol is ILocalSymbol, isUsing: false);
+                _transfers[symbol].ConditionalPending = true;
             }
         }
 
@@ -5015,16 +5037,25 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         private bool IsTransferMoveInvocation(IOperation operation) =>
             operation is IInvocationOperation invocation
             && (string.Equals(invocation.TargetMethod.Name, "Move", StringComparison.Ordinal) && NativeSymbols.Is(invocation.TargetMethod.ContainingType, _symbols.Transfer)
+                || invocation.TargetMethod.Name is "Move" or "Activate" && NativeSymbols.Is(invocation.TargetMethod.ContainingType, _symbols.Reservation)
                 || string.Equals(invocation.TargetMethod.Name, "Create", StringComparison.Ordinal) && NativeSymbols.Is(invocation.TargetMethod.ContainingType, _symbols.Shared))
             && IsNativeTransfer(invocation.Type);
 
         private bool IsSharingTryAcquisition(IInvocationOperation invocation) =>
-            (NativeSymbols.Is(invocation.TargetMethod.ContainingType, _symbols.Shared)
+            (IsApplicationTryAcquisition(invocation)
+                || NativeSymbols.Is(invocation.TargetMethod.ContainingType, _symbols.Shared)
                 && invocation.TargetMethod.Name is "TryShare" or "TrySlice" or "TryDowngrade" or "TryDetach"
                 || NativeSymbols.Is(invocation.TargetMethod.ContainingType, _symbols.Weak)
                 && invocation.TargetMethod.Name is "TryUpgrade")
             && invocation.TargetMethod.ReturnType.SpecialType == SpecialType.System_Boolean
             && invocation.Arguments.Any(argument => argument.Parameter?.RefKind == RefKind.Out && IsNativeTransfer(argument.Parameter.Type));
+
+        private bool IsApplicationTryAcquisition(IInvocationOperation invocation) =>
+            NativeSymbols.Is(invocation.TargetMethod.ContainingType, _symbols.MemoryBudget)
+            && string.Equals(invocation.TargetMethod.Name, "TryReserve", StringComparison.Ordinal)
+            && invocation.TargetMethod.ReturnType.SpecialType == SpecialType.System_Boolean
+            && invocation.Arguments.Any(argument => argument.Parameter?.RefKind == RefKind.Out
+                && NativeSymbols.Is(argument.Parameter.Type, _symbols.Reservation));
 
         private bool IsTransferFactoryInvocation(IOperation operation) =>
             operation is IInvocationOperation invocation
@@ -7692,6 +7723,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         private bool IsNativeTransfer(ITypeSymbol? type)
         {
             return NativeSymbols.Is(type, _symbols.Transfer)
+                || NativeSymbols.Is(type, _symbols.Reservation)
                 || NativeSymbols.Is(type, _symbols.Shared)
                 || NativeSymbols.Is(type, _symbols.Weak);
         }

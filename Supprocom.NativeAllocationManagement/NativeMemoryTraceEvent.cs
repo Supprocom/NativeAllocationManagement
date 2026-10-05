@@ -42,7 +42,31 @@ public enum NativeMemoryTraceKind
     /// <summary>A destructive unique move published its next non-reusable authority version.</summary>
     Moved,
     /// <summary>A consumed unique source awaits its last entered borrow or cleanup retry.</summary>
-    Retired
+    Retired,
+    /// <summary>Application producer permission and ownership metadata were prepared before production.</summary>
+    ReservationAdmitted,
+    /// <summary>Prospective admission failed during metadata preparation without a fabricated native charge.</summary>
+    ReservationPreparationFailed,
+    /// <summary>Backing is genuinely ready for an uninitialized producer permission.</summary>
+    ReservationBackingPrepared,
+    /// <summary>Backing preparation failed while producer permission remains charged; a post-acquisition failure can retain prepared backing.</summary>
+    ReservationBackingFailed,
+    /// <summary>Producer permission moved without another control or charge.</summary>
+    ReservationMoved,
+    /// <summary>Complete initialization transferred the same admitted control to unique ownership.</summary>
+    ReservationActivated,
+    /// <summary>Pending or prepared producer permission actually completed terminal resource return.</summary>
+    ReservationReturned,
+    /// <summary>Explicit cancellation/disposal completed actual pending/prepared resource return.</summary>
+    ReservationCancelled,
+    /// <summary>A producer failed or did not initialize its complete declared range.</summary>
+    ReservationInitializationFailed,
+    /// <summary>Emergency cleanup completed an abandoned producer permission.</summary>
+    ReservationAbandoned,
+    /// <summary>A real pending/prepared resource-return attempt failed without success credit.</summary>
+    ReservationReturnFailed,
+    /// <summary>Terminal resource return completed after a move exhausted its checked authority version.</summary>
+    ReservationAuthorityExhausted
 }
 
 /// <summary>A bounded value-only storage transition; it contains no owner or native authority.</summary>

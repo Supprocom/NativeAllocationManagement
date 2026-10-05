@@ -9,6 +9,11 @@ internal static class NativeOwnerIdentity
     internal static long Next()
     {
         NativeMemoryAccounting.PrepareThread();
+        return NextWithoutPreparation();
+    }
+
+    internal static long NextWithoutPreparation()
+    {
         while (true)
         {
             long current = Volatile.Read(ref _nextId);

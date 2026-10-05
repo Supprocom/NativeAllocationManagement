@@ -7,7 +7,7 @@ namespace Supprocom.NativeAllocationManagement;
 /// Admission includes retained, retired and detached storage until physical release.
 /// It is not a process-RSS limit. Reusing charged storage requires no budget operation.
 /// </remarks>
-public sealed class NativeMemoryBudget
+public sealed partial class NativeMemoryBudget
 {
     private static long _nextId;
     private readonly Lock _gate = new();

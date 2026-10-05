@@ -586,6 +586,23 @@ public sealed class PackageSmokeTests
                         }
                         if (uniqueBudget.CaptureStatistics().CommittedBytes != 0) return 34;
                         System.Console.WriteLine("unique-moves=1; returned=1; failures=0; final-charge=0");
+                        NativeMemoryBudget admissionBudget = new(8, 16);
+                        if (!admissionBudget.TryReserve<int>(2, out NativeMemoryReservation<int>? permission, out NativeMemoryAdmissionExhaustionReason admissionReason)) return 35;
+                        try
+                        {
+                            if (admissionReason != NativeMemoryAdmissionExhaustionReason.None) return 35;
+                            permission.Value.PrepareBacking();
+                            using NativeTransfer<int> admitted = NativeMemoryReservation<int>.Activate(ref permission, static writer => writer.Fill(43));
+                            if (admitted.Read(static view => view[1]) != 43 || admitted.CaptureSnapshot().MoveCount != 0
+                                || admissionBudget.CaptureAdmissionStatistics().ActivationCount != 1
+                                || admissionBudget.CaptureAdmissionStatistics().OutstandingReservationCount != 0) return 36;
+                        }
+                        finally { permission?.Dispose(); }
+                        if (admissionBudget.CaptureStatistics().CommittedBytes != 0
+                            || admissionBudget.CaptureStatistics().ReservedBytes != 0
+                            || admissionBudget.CaptureStatistics().AllocationCount != 1
+                            || admissionBudget.CaptureStatistics().FreeCount != 1) return 37;
+                        System.Console.WriteLine("admitted=1; prepared=1; activated=1; returned=1; final-charge=0");
                         NativeMemoryBudget retentionBudget = new(2_000_000);
                         using (NativeArena retention = new(retentionBudget, new NativeArenaRetentionPolicy(4096, 4160), 0, NativeMemoryReturn.ToNativeMemory))
                         {
@@ -713,6 +730,23 @@ public sealed class PackageSmokeTests
             _output.WriteLine(invalidArena.Output);
             Assert.NotEqual(0, invalidArena.ExitCode);
             Assert.Contains("error NAM1050", invalidArena.Output, StringComparison.OrdinalIgnoreCase);
+            await File.WriteAllTextAsync(program,
+                """
+                using Supprocom.NativeAllocationManagement;
+                public static class Consumer
+                {
+                    public static void Main()
+                    {
+                        NativeMemoryBudget budget = new(4);
+                        budget.TryReserve<int>(1, out NativeMemoryReservation<int>? permission, out _);
+                        permission!.Value.PrepareBacking();
+                    }
+                }
+                """);
+            CommandResult invalidAdmission = await RunDotnetAsync($"build \"{project}\" --no-restore --nologo -t:Rebuild", consumerRoot);
+            _output.WriteLine(invalidAdmission.Output);
+            Assert.NotEqual(0, invalidAdmission.ExitCode);
+            Assert.Contains("error NAM1050", invalidAdmission.Output, StringComparison.OrdinalIgnoreCase);
             await File.WriteAllTextAsync(program,
                 """
                 using Supprocom.NativeAllocationManagement;
