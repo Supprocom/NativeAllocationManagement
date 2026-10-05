@@ -1,0 +1,78 @@
+name: Native validation
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-validation:
+    name: ${{ matrix.rid }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            rid: linux-x64
+            arch: x64
+          - runner: ubuntu-24.04-arm
+            rid: linux-arm64
+            arch: arm64
+          - runner: windows-2025
+            rid: win-x64
+            arch: x64
+          - runner: windows-11-arm
+            rid: win-arm64
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_SKIP_FIRST_TIME_EXPERIENCE: '1'
+      POWERSHELL_TELEMETRY_OPTOUT: '1'
+    steps:
+      - name: Initialize exact external evidence paths
+        run: |
+          $namEvidence = Join-Path $env:RUNNER_TEMP 'nam-evidence/${{ matrix.rid }}'
+          $namTools = Join-Path $env:RUNNER_TEMP 'nam-tools/${{ matrix.rid }}'
+          "NAM_EVIDENCE_ROOT=$namEvidence" | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8
+          "NAM_TOOL_ROOT=$namTools" | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: '10.0.302'
+          architecture: ${{ matrix.arch }}
+      - name: Install pinned native PowerShell
+        run: ./.github/ci/install-tools.ps1 -ExpectedRid '${{ matrix.rid }}' -EvidenceRoot $env:NAM_EVIDENCE_ROOT -ToolRoot $env:NAM_TOOL_ROOT
+      - name: Install Linux native prerequisites
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$NAM_EVIDENCE_ROOT/toolchain"
+          sudo apt-get update 2>&1 | tee "$NAM_EVIDENCE_ROOT/toolchain/apt-update.log"
+          sudo apt-get install -y --no-install-recommends clang zlib1g-dev 2>&1 | tee "$NAM_EVIDENCE_ROOT/toolchain/apt-install.log"
+          dpkg-query -W clang zlib1g-dev libc6 > "$NAM_EVIDENCE_ROOT/toolchain/packages.tsv"
+          clang --version > "$NAM_EVIDENCE_ROOT/toolchain/clang-version.txt"
+      - name: Validate complete native graph and deployment consumers
+        run: |
+          & $env:NAM_PWSH_PATH -NoProfile -File ./.github/ci/validate-native.ps1 -ExpectedRid '${{ matrix.rid }}' -EvidenceRoot $env:NAM_EVIDENCE_ROOT -ExpectedCommit '${{ github.sha }}'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Retain exact source, packages and complete evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: nam-${{ github.sha }}-${{ matrix.rid }}-${{ github.run_attempt }}
+          path: ${{ env.NAM_EVIDENCE_ROOT }}
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
