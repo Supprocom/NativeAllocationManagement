@@ -164,6 +164,8 @@ internal sealed unsafe class NativeRegionKernel
             OutstandingNativeBytes = _retainedBytes,
             DetachedNativeBytes = 0,
             PeakOutstandingNativeBytes = _peakRetainedBytes,
+            InitializedPayloadBytes = _lifecycle == NativeOwnerLifecycle.Active ? _requestedBytes : 0,
+            PeakInitializedPayloadBytes = _requestedBytes,
             UsableCapacityBytes = usableCapacityBytes
         };
     }
@@ -198,7 +200,9 @@ internal sealed unsafe class NativeRegionKernel
             OutstandingNativeBytes = _retainedBytes,
             DetachedNativeBytes = _lifecycle == NativeOwnerLifecycle.Disposed
                 && _returnMemoryOnDispose == NativeMemoryReturn.ToGarbageCollector ? _retainedBytes : 0,
-            PeakOutstandingNativeBytes = _peakRetainedBytes
+            PeakOutstandingNativeBytes = _peakRetainedBytes,
+            InitializedPayloadBytes = _lifecycle == NativeOwnerLifecycle.Active ? _requestedBytes : 0,
+            PeakInitializedPayloadBytes = _requestedBytes
         };
         GC.KeepAlive(this);
         return snapshot;
@@ -228,7 +232,6 @@ internal sealed unsafe class NativeRegionKernel
         }
 
         _lifecycle = NativeOwnerLifecycle.Disposed;
-        _requestedBytes = 0;
         if (_returnMemoryOnDispose == NativeMemoryReturn.ToNativeMemory)
         {
             FreeSegments();

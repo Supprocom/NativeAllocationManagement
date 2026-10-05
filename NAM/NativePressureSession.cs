@@ -643,7 +643,9 @@ internal sealed class NativePressureSession :
             HistoryOverflowed = snapshot.HistoryOverflowed,
             OutstandingNativeBytes = snapshot.OutstandingNativeBytes,
             DetachedNativeBytes = snapshot.DetachedNativeBytes,
-            PeakOutstandingNativeBytes = snapshot.PeakOutstandingNativeBytes
+            PeakOutstandingNativeBytes = snapshot.PeakOutstandingNativeBytes,
+            InitializedPayloadBytes = snapshot.InitializedPayloadBytes,
+            PeakInitializedPayloadBytes = snapshot.PeakInitializedPayloadBytes
         };
     }
 

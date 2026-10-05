@@ -350,6 +350,12 @@ public readonly record struct NativeOwnerStatistics(
 
     /// <summary>Gets the owner lifetime high-water extent recorded at successful acquisition boundaries, including backing later released after failed publication; trim, generation changes and disposal do not reset it.</summary>
     public long PeakOutstandingNativeBytes { get; init; }
+
+    /// <summary>Gets fully initialized logical payload bytes in the active lifetime, excluding padding and unpublished initialization; aliases and materialized views do not add demand.</summary>
+    public long InitializedPayloadBytes { get; init; }
+
+    /// <summary>Gets the greatest initialized active demand recorded at successful publication accounting boundaries across the owner's lifetimes; recycle, trim, generation changes and terminal return do not reset it.</summary>
+    public long PeakInitializedPayloadBytes { get; init; }
 }
 
 /// <summary>Reports structural state from one native owner under its actual lifecycle model.</summary>
@@ -414,6 +420,12 @@ public readonly record struct NativeOwnerDiagnosticSnapshot(
 
     /// <summary>Gets the owner lifetime high-water extent recorded at successful acquisition boundaries, including backing later released after failed publication; independent finalizers may decrease gauges after capture.</summary>
     public long PeakOutstandingNativeBytes { get; init; }
+
+    /// <summary>Gets fully initialized logical payload bytes in the active lifetime, excluding padding and unpublished initialization; aliases and materialized views do not add demand.</summary>
+    public long InitializedPayloadBytes { get; init; }
+
+    /// <summary>Gets the greatest initialized active demand recorded at successful publication accounting boundaries across the owner's lifetimes; recycle, trim, generation changes and terminal return do not reset it.</summary>
+    public long PeakInitializedPayloadBytes { get; init; }
 }
 
 /// <summary>Provides process-local physical storage counters for measurement and diagnostics.</summary>
@@ -1773,15 +1785,6 @@ internal sealed class NativeArenaTransferBatchState
 
     internal bool IsValid => Volatile.Read(ref _valid) != 0;
 
-    internal long RequestedBytes
-    {
-        get
-        {
-            int activeCount = CountActiveRecords();
-            return checked((long)StorageBytes * activeCount);
-        }
-    }
-
     internal bool HasInitializer
     {
         get
@@ -2023,6 +2026,7 @@ internal sealed class NativeArenaTransferBatchState
                     NativeAllocationLifecycle.Returned),
                 active) == active)
         {
+            NativeOwnerKernel.RecordPayloadReturn(Generation, checked((long)StorageBytes), scoped: false);
             return NativeArenaTransferBatchTransition.Success;
         }
 
@@ -2163,6 +2167,7 @@ internal sealed class NativeGenerationOwner
 {
     private readonly Lock _gate = new();
     private List<NativeSegment>? _segments = [];
+    private long _payloadCapacityBytes;
     private int _released;
     private int _detached;
     private readonly long _metricsEpoch;
@@ -2192,7 +2197,12 @@ internal sealed class NativeGenerationOwner
                 throw new InvalidOperationException("The native generation owner has already been released.");
             }
 
+            // Publication gauges are bounded by these disjoint reserved ranges.
+            // Reject unrepresentable owned/borrowed aggregate capacity before
+            // any initializer can consume it, without a hot reservation ledger.
+            long capacityBytes = checked(_payloadCapacityBytes + checked((long)segment.ByteLength));
             _segments.Add(segment);
+            _payloadCapacityBytes = capacityBytes;
         }
     }
 
@@ -2222,7 +2232,10 @@ internal sealed class NativeGenerationOwner
     {
         lock (_gate)
         {
-            _segments?.Remove(segment);
+            if (_segments?.Remove(segment) == true)
+            {
+                _payloadCapacityBytes -= checked((long)segment.ByteLength);
+            }
         }
     }
 
@@ -2276,6 +2289,7 @@ internal sealed class NativeGenerationOwner
 
             List<NativeSegment>? segments = _segments;
             _segments = null;
+            _payloadCapacityBytes = 0;
             if (segments is not null)
             {
 #pragma warning disable HLQ012 // Retain the enumerator's mutation checks during ownership cleanup; a span removes them.
@@ -2599,9 +2613,9 @@ internal sealed class NativeGeneration
         NativeArenaTransferBatchState[] batches) =>
         Volatile.Write(ref _arenaTransferBatchSnapshot, batches);
 
-    internal long FastArenaRequestedBytes { get; set; }
+    internal long InitializedPayloadBytes;
 
-    internal long FastArenaScopedRequestedBaseline { get; set; }
+    internal long ScopedInitializedPayloadBytes;
 
     internal bool FastArenaScopedActive { get; set; }
 
@@ -3189,6 +3203,7 @@ internal sealed class NativeOwnerKernel
     private long _trimCallCount;
     private long _freshSegmentAllocationCount;
     private bool _historyOverflowed;
+    private long _peakInitializedPayloadBytes;
     private long _arenaFastSlowPathCount;
     private readonly int _arenaFastThreadId;
     private NativeGeneration? _arenaFastGeneration;
@@ -3247,34 +3262,13 @@ internal sealed class NativeOwnerKernel
                     OutstandingNativeBytes = backing.Outstanding,
                     DetachedNativeBytes = backing.Detached,
                     PeakOutstandingNativeBytes = backing.Peak,
+                    InitializedPayloadBytes = 0,
+                    PeakInitializedPayloadBytes = Volatile.Read(ref _peakInitializedPayloadBytes),
                     RetiredBorrowedBytes = SumRetiredBorrowedBytesLocked()
                 };
             }
 
-            long requestedBytes = 0;
-            foreach (NativeAllocation allocation in current.Allocations.Values)
-            {
-                if (!IsCurrentAllocation(current, allocation))
-                {
-                    continue;
-                }
-
-                long allocationBytes = _kind == NativeOwnerKind.Pool
-                    ? checked((long)allocation.Length * _storageElementSize)
-                    : checked((long)allocation.StorageBytes);
-                requestedBytes = checked(requestedBytes + allocationBytes);
-            }
-
-            foreach (NativeArenaTransferBatchState batch in
-                current.ArenaTransferBatchSnapshot)
-            {
-                requestedBytes = checked(
-                    requestedBytes + batch.RequestedBytes);
-            }
-
-            requestedBytes = checked(
-                requestedBytes
-                + current.FastArenaRequestedBytes);
+            long requestedBytes = Volatile.Read(ref current.InitializedPayloadBytes);
 
             long retainedBytes = 0;
             long usableCapacityBytes = 0;
@@ -3327,6 +3321,8 @@ internal sealed class NativeOwnerKernel
                 OutstandingNativeBytes = backing.Outstanding,
                 DetachedNativeBytes = backing.Detached,
                 PeakOutstandingNativeBytes = backing.Peak,
+                InitializedPayloadBytes = requestedBytes,
+                PeakInitializedPayloadBytes = Volatile.Read(ref _peakInitializedPayloadBytes),
                 UsableCapacityBytes = usableCapacityBytes,
                 BorrowedBytes = GetGenerationBorrowedBytes(current),
                 RetiredBorrowedBytes = SumRetiredBorrowedBytesLocked()
@@ -3430,7 +3426,9 @@ internal sealed class NativeOwnerKernel
                 HistoryOverflowed = _historyOverflowed,
                 OutstandingNativeBytes = backing.Outstanding,
                 DetachedNativeBytes = backing.Detached,
-                PeakOutstandingNativeBytes = backing.Peak
+                PeakOutstandingNativeBytes = backing.Peak,
+                InitializedPayloadBytes = current is null ? 0 : Volatile.Read(ref current.InitializedPayloadBytes),
+                PeakInitializedPayloadBytes = Volatile.Read(ref _peakInitializedPayloadBytes)
             };
         }
     }
@@ -4195,6 +4193,7 @@ internal sealed class NativeOwnerKernel
                 == NativeAllocationLifecycle.Initializing)
         {
             allocation.InitializedLength = 0;
+            RecordInitialization(generation, checked((long)allocation.StorageBytes), scoped: false);
             allocation.Lifecycle =
                 NativeAllocationLifecycle.Active;
             generation.EndInitialization();
@@ -4223,7 +4222,44 @@ internal sealed class NativeOwnerKernel
                 generation.ScopedCleanupPending.Add(allocation);
             }
 
+            RecordInitialization(generation, checked((long)allocation.StorageBytes), scoped);
             generation.EndInitialization();
+        }
+    }
+
+    private void RecordInitialization(NativeGeneration generation, long payloadBytes, bool scoped)
+    {
+        if (payloadBytes == 0)
+        {
+            return;
+        }
+        if (scoped)
+        {
+            Interlocked.Add(ref generation.ScopedInitializedPayloadBytes, payloadBytes);
+        }
+        long current = Interlocked.Add(ref generation.InitializedPayloadBytes, payloadBytes);
+        long observedPeak = Volatile.Read(ref _peakInitializedPayloadBytes);
+        while (current > observedPeak)
+        {
+            long actualPeak = Interlocked.CompareExchange(ref _peakInitializedPayloadBytes, current, observedPeak);
+            if (actualPeak == observedPeak)
+            {
+                break;
+            }
+            observedPeak = actualPeak;
+        }
+    }
+
+    internal static void RecordPayloadReturn(NativeGeneration generation, long payloadBytes, bool scoped)
+    {
+        if (payloadBytes == 0)
+        {
+            return;
+        }
+        Interlocked.Add(ref generation.InitializedPayloadBytes, -payloadBytes);
+        if (scoped)
+        {
+            Interlocked.Add(ref generation.ScopedInitializedPayloadBytes, -payloadBytes);
         }
     }
 
@@ -4354,9 +4390,7 @@ internal sealed class NativeOwnerKernel
         int initializedLength = 0;
         try
         {
-            long requestedBytes = checked(
-                generation.FastArenaRequestedBytes
-                + checked((long)byteLength));
+            _ = checked(Volatile.Read(ref generation.InitializedPayloadBytes) + checked((long)byteLength));
             NativeLeaseWriter<T> writer = new(
                 allocation.Pointer,
                 length,
@@ -4368,8 +4402,7 @@ internal sealed class NativeOwnerKernel
                     "The native lease initializer did not write all logical elements.");
             }
 
-            generation.FastArenaRequestedBytes =
-                requestedBytes;
+            RecordInitialization(generation, checked((long)byteLength), scoped: true);
             generation.FastArenaScopedActive = true;
         }
         catch
@@ -4396,6 +4429,7 @@ internal sealed class NativeOwnerKernel
         int initializedLength = 0;
         try
         {
+            _ = checked(Volatile.Read(ref generation.InitializedPayloadBytes) + checked((long)byteLength));
             NativeLeaseWriter<T> writer = new(
                 allocation.Pointer,
                 length,
@@ -4407,10 +4441,7 @@ internal sealed class NativeOwnerKernel
                     "The native lease initializer did not write all logical elements.");
             }
 
-            generation.FastArenaRequestedBytes =
-                checked(
-                    generation.FastArenaRequestedBytes
-                    + checked((long)byteLength));
+            RecordInitialization(generation, checked((long)byteLength), scoped: false);
         }
         catch
         {
@@ -4668,8 +4699,6 @@ internal sealed class NativeOwnerKernel
                 generation.ScopedBaselineActive = true;
             }
 
-            generation.FastArenaScopedRequestedBaseline =
-                generation.FastArenaRequestedBytes;
         }
 
         if (byteLength == 0)
@@ -5038,7 +5067,6 @@ internal sealed class NativeOwnerKernel
             && generation.ScopedTouchedSegments.Count == 0)
         {
             generation.ScopedBaselineActive = false;
-            generation.FastArenaScopedRequestedBaseline = 0;
         }
     }
 
@@ -5436,6 +5464,7 @@ internal sealed class NativeOwnerKernel
                 "ScratchTransferable");
         }
 
+        RecordInitialization(batch.Generation, checked((long)batch.StorageBytes), scoped: false);
         return new NativeArenaTransferBatchReservation(
             batch,
             slotIndex,
@@ -6747,10 +6776,14 @@ internal sealed class NativeOwnerKernel
             ValidateBumpInitializationLocked(reservations[2]);
             ValidateBumpInitializationLocked(reservations[3]);
 
-            PublishBumpInitializationLocked(reservations[0]);
-            PublishBumpInitializationLocked(reservations[1]);
-            PublishBumpInitializationLocked(reservations[2]);
-            PublishBumpInitializationLocked(reservations[3]);
+            PublishBumpInitializationLocked(reservations[0], recordInitialization: false);
+            PublishBumpInitializationLocked(reservations[1], recordInitialization: false);
+            PublishBumpInitializationLocked(reservations[2], recordInitialization: false);
+            PublishBumpInitializationLocked(reservations[3], recordInitialization: false);
+            RecordInitialization(reservations[0].Generation, checked((long)reservations[0].Allocation.StorageBytes
+                + (long)reservations[1].Allocation.StorageBytes
+                + (long)reservations[2].Allocation.StorageBytes
+                + (long)reservations[3].Allocation.StorageBytes), scoped: true);
         }
     }
 
@@ -6812,18 +6845,26 @@ internal sealed class NativeOwnerKernel
             ValidateBumpInitializationLocked(reservations[6]);
             ValidateBumpInitializationLocked(reservations[7]);
 
-            PublishBumpInitializationLocked(reservations[0]);
-            PublishBumpInitializationLocked(reservations[1]);
-            PublishBumpInitializationLocked(reservations[2]);
-            PublishBumpInitializationLocked(reservations[3]);
-            PublishBumpInitializationLocked(reservations[4]);
-            PublishBumpInitializationLocked(reservations[5]);
-            PublishBumpInitializationLocked(reservations[6]);
-            PublishBumpInitializationLocked(reservations[7]);
+            PublishBumpInitializationLocked(reservations[0], recordInitialization: false);
+            PublishBumpInitializationLocked(reservations[1], recordInitialization: false);
+            PublishBumpInitializationLocked(reservations[2], recordInitialization: false);
+            PublishBumpInitializationLocked(reservations[3], recordInitialization: false);
+            PublishBumpInitializationLocked(reservations[4], recordInitialization: false);
+            PublishBumpInitializationLocked(reservations[5], recordInitialization: false);
+            PublishBumpInitializationLocked(reservations[6], recordInitialization: false);
+            PublishBumpInitializationLocked(reservations[7], recordInitialization: false);
+            RecordInitialization(reservations[0].Generation, checked((long)reservations[0].Allocation.StorageBytes
+                + (long)reservations[1].Allocation.StorageBytes
+                + (long)reservations[2].Allocation.StorageBytes
+                + (long)reservations[3].Allocation.StorageBytes
+                + (long)reservations[4].Allocation.StorageBytes
+                + (long)reservations[5].Allocation.StorageBytes
+                + (long)reservations[6].Allocation.StorageBytes
+                + (long)reservations[7].Allocation.StorageBytes), scoped: true);
         }
     }
 
-    private static void PublishFastBumpInitializationBatchLocked(
+    private void PublishFastBumpInitializationBatchLocked(
         ref NativeBumpInitialization firstReservation,
         int count)
     {
@@ -6872,6 +6913,7 @@ internal sealed class NativeOwnerKernel
                 reclaimedRangeBytes);
         }
 
+        long payloadBytes = 0;
         for (int index = 0; index < count; index++)
         {
             NativeAllocation allocation =
@@ -6881,8 +6923,10 @@ internal sealed class NativeOwnerKernel
             allocation.Lifecycle =
                 NativeAllocationLifecycle.Active;
             allocation.InitializedLength = 0;
+            payloadBytes += checked((long)allocation.StorageBytes);
         }
 
+        RecordInitialization(generation, payloadBytes, scoped: true);
         generation.InitializationsInProgress--;
         Volatile.Write(
             ref generation.ArenaInitializationsInProgress,
@@ -6917,8 +6961,8 @@ internal sealed class NativeOwnerKernel
         }
     }
 
-    private static void PublishBumpInitializationLocked(
-        NativeBumpInitialization reservation)
+    private void PublishBumpInitializationLocked(
+        NativeBumpInitialization reservation, bool recordInitialization = true)
     {
         NativeGeneration generation = reservation.Generation;
         NativeAllocation allocation = reservation.Allocation;
@@ -6950,6 +6994,10 @@ internal sealed class NativeOwnerKernel
             generation.ScopedCleanupPending.Add(allocation);
         }
 
+        if (recordInitialization)
+        {
+            RecordInitialization(generation, checked((long)allocation.StorageBytes), reservation.Scoped);
+        }
         generation.InitializationsInProgress--;
         Volatile.Write(
             ref generation.ArenaInitializationsInProgress,
@@ -8225,6 +8273,7 @@ internal sealed class NativeOwnerKernel
                     generation.AddAvailableSlabOrdered(allocation.Slab);
                 }
 
+                RecordPayloadReturn(generation, checked((long)allocation.StorageBytes), allocation.IsScoped);
                 allocation.Lifecycle = NativeAllocationLifecycle.Returned;
                 generation.Allocations.Remove(allocation.Id);
                 if (!allocation.IsScoped)
@@ -8410,13 +8459,8 @@ internal sealed class NativeOwnerKernel
                 generation.ScopedCleanupPending.Clear();
                 RecycleArenaCompositeAllocationsLocked(
                     generation);
-                if (generation.FastArenaScopedActive)
-                {
-                    generation.FastArenaRequestedBytes =
-                        generation.FastArenaScopedRequestedBaseline;
-                }
-
-                generation.FastArenaScopedRequestedBaseline = 0;
+                long scopedPayloadBytes = Interlocked.Exchange(ref generation.ScopedInitializedPayloadBytes, 0);
+                Interlocked.Add(ref generation.InitializedPayloadBytes, -scopedPayloadBytes);
                 generation.FastArenaScopedActive = false;
                 generation.ScopedRecordCount = 0;
                 generation.ScopedBaselineActive = false;

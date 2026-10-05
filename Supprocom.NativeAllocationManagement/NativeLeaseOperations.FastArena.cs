@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+
 namespace Supprocom.NativeAllocationManagement;
 
 public static partial class NativeLeaseOperations
@@ -221,7 +223,11 @@ public static partial class NativeLeaseOperations
         ArgumentOutOfRangeException.ThrowIfNegative(thirdLength);
         ArgumentOutOfRangeException.ThrowIfNegative(fourthLength);
         NativeArenaKernel kernel = arena.KernelForInitialization;
-        ArenaGroupCheckpoint checkpoint = kernel.BeginScopedGroup();
+        long payloadBytes = checked((long)firstLength * Unsafe.SizeOf<TFirst>()
+            + (long)secondLength * Unsafe.SizeOf<TSecond>()
+            + (long)thirdLength * Unsafe.SizeOf<TThird>()
+            + (long)fourthLength * Unsafe.SizeOf<TFourth>());
+        ArenaGroupCheckpoint checkpoint = kernel.BeginScopedGroup(payloadBytes);
         bool completed = false;
         bool initializerEntered = false;
         try
@@ -250,7 +256,7 @@ public static partial class NativeLeaseOperations
         }
         finally
         {
-            kernel.EndScopedGroup(checkpoint, completed);
+            kernel.EndScopedGroup(checkpoint, completed, payloadBytes);
         }
     }
 
@@ -304,7 +310,15 @@ public static partial class NativeLeaseOperations
         ArgumentOutOfRangeException.ThrowIfNegative(seventhLength);
         ArgumentOutOfRangeException.ThrowIfNegative(eighthLength);
         NativeArenaKernel kernel = arena.KernelForInitialization;
-        ArenaGroupCheckpoint checkpoint = kernel.BeginScopedGroup();
+        long payloadBytes = checked((long)firstLength * Unsafe.SizeOf<TFirst>()
+            + (long)secondLength * Unsafe.SizeOf<TSecond>()
+            + (long)thirdLength * Unsafe.SizeOf<TThird>()
+            + (long)fourthLength * Unsafe.SizeOf<TFourth>()
+            + (long)fifthLength * Unsafe.SizeOf<TFifth>()
+            + (long)sixthLength * Unsafe.SizeOf<TSixth>()
+            + (long)seventhLength * Unsafe.SizeOf<TSeventh>()
+            + (long)eighthLength * Unsafe.SizeOf<TEighth>());
+        ArenaGroupCheckpoint checkpoint = kernel.BeginScopedGroup(payloadBytes);
         bool completed = false;
         bool initializerEntered = false;
         try
@@ -341,7 +355,7 @@ public static partial class NativeLeaseOperations
         }
         finally
         {
-            kernel.EndScopedGroup(checkpoint, completed);
+            kernel.EndScopedGroup(checkpoint, completed, payloadBytes);
         }
     }
 }

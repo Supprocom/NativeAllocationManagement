@@ -90,6 +90,8 @@ public readonly record struct PressureAllocatorDiagnosticSnapshot(
     public long? OutstandingNativeBytes { get; init; }
     public long? DetachedNativeBytes { get; init; }
     public long? PeakOutstandingNativeBytes { get; init; }
+    public long? InitializedPayloadBytes { get; init; }
+    public long? PeakInitializedPayloadBytes { get; init; }
 }
 
 public readonly record struct PressureWorkerDiagnostic(

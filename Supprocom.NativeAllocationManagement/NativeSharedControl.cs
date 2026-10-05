@@ -286,7 +286,11 @@ internal sealed class NativeSharedControl<T> where T : unmanaged
                 checked(_strong.ElementBytes + _weak.ElementBytes), _shares, _weakCreations,
                 _upgrades, _strongRefusals, _weakRefusals, _expiredUpgrades, _payloadReturns,
                 _detaches, _historyOverflowed)
-            { RejectedDetachCount = _detachRefusals, PayloadReturnFailureCount = _returnFailures };
+            {
+                RejectedDetachCount = _detachRefusals,
+                PayloadReturnFailureCount = _returnFailures,
+                PeakInitializedPayloadBytes = _initializedBytes
+            };
         }
     }
 

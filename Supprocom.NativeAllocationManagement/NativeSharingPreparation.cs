@@ -85,6 +85,8 @@ public readonly record struct NativeSharingStatistics
     public long BorrowedBackingBytes { get; }
     /// <summary>Gets initialized logical payload bytes counted once, not once per overlapping binding or slice.</summary>
     public long InitializedPayloadBytes { get; }
+    /// <summary>Gets the original immutable initialized extent, counted once and retained after payload return; slices and aliases never increase it.</summary>
+    public long PeakInitializedPayloadBytes { get; internal init; }
     /// <summary>Gets currently retained binding-array element storage, excluding CLR headers, unreachable arrays awaiting collection, and allocator bookkeeping.</summary>
     public long ManagedBankBytes { get; }
     /// <summary>Gets successful explicit strong share or slice acquisitions, excluding the initial owner and weak upgrades.</summary>

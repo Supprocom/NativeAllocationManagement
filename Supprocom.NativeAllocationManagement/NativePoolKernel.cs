@@ -30,6 +30,7 @@ internal sealed unsafe class NativePoolKernel<T>
     private int _retirementState;
     private long _leaseTokenCounter;
     private long _requestedBytes;
+    private long _peakInitializedPayloadBytes;
     private long _retainedBytes;
     private long _trimmedBytes;
     private long _trimCallCount;
@@ -293,8 +294,6 @@ internal sealed unsafe class NativePoolKernel<T>
         slab.State = SlabState.Initializing;
         slab.Token = token;
         _liveLeaseCount++;
-        _requestedBytes = checked(
-            _requestedBytes + checked((long)CalculateByteLength(length)));
 
         int initializedLength = 0;
         try
@@ -311,6 +310,8 @@ internal sealed unsafe class NativePoolKernel<T>
                     length);
             }
 
+            _requestedBytes += checked((long)CalculateByteLength(length));
+            _peakInitializedPayloadBytes = Math.Max(_peakInitializedPayloadBytes, _requestedBytes);
             slab.State = SlabState.Leased;
             return new Pooled<T>(
                 this,
@@ -399,6 +400,8 @@ internal sealed unsafe class NativePoolKernel<T>
             DetachedNativeBytes = _lifecycle == NativeOwnerLifecycle.Disposed
                 && _returnMemoryOnDispose == NativeMemoryReturn.ToGarbageCollector ? _retainedBytes : 0,
             PeakOutstandingNativeBytes = _peakRetainedBytes,
+            InitializedPayloadBytes = _requestedBytes,
+            PeakInitializedPayloadBytes = _peakInitializedPayloadBytes,
             UsableCapacityBytes = counts.UsableBytes
         };
     }
@@ -421,7 +424,9 @@ internal sealed unsafe class NativePoolKernel<T>
             OutstandingNativeBytes = _retainedBytes,
             DetachedNativeBytes = _lifecycle == NativeOwnerLifecycle.Disposed
                 && _returnMemoryOnDispose == NativeMemoryReturn.ToGarbageCollector ? _retainedBytes : 0,
-            PeakOutstandingNativeBytes = _peakRetainedBytes
+            PeakOutstandingNativeBytes = _peakRetainedBytes,
+            InitializedPayloadBytes = _requestedBytes,
+            PeakInitializedPayloadBytes = _peakInitializedPayloadBytes
         };
         GC.KeepAlive(this);
         return snapshot;
@@ -818,7 +823,6 @@ internal sealed unsafe class NativePoolKernel<T>
         ref Slab slab = ref _slabs[slabIndex];
         slab.State = SlabState.Free;
         _liveLeaseCount--;
-        _requestedBytes -= checked((long)CalculateByteLength(length));
         CacheReturnedSlab(slabIndex, length);
     }
 

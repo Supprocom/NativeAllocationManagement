@@ -683,3 +683,12 @@ virtual Supprocom.NativeAllocationManagement.NativeLayoutInitializer<TState>.Inv
 ~override Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics.ToString() -> string
 ~override Supprocom.NativeAllocationManagement.NativeLayoutStatistics.Equals(object obj) -> bool
 ~override Supprocom.NativeAllocationManagement.NativeLayoutStatistics.ToString() -> string
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.InitializedPayloadBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.InitializedPayloadBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.PeakInitializedPayloadBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.PeakInitializedPayloadBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.InitializedPayloadBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.InitializedPayloadBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.PeakInitializedPayloadBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.PeakInitializedPayloadBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.PeakInitializedPayloadBytes.get -> long

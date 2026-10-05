@@ -26,6 +26,9 @@ internal sealed unsafe partial class NativeArenaKernel
     private int _initializerActive;
     private long _retainedBytes;
     private long _peakRetainedBytes;
+    private long _initializedPayloadBytes;
+    private long _scopedInitializedPayloadBytes;
+    private long _peakInitializedPayloadBytes;
     private long _trimmedBytes;
     private long _trimCallCount;
     private long _freshSegmentAllocationCount;
@@ -121,6 +124,8 @@ internal sealed unsafe partial class NativeArenaKernel
         int initializedLength = 0;
         try
         {
+            long payloadBytes = checked((long)CalculateByteLength<T>(length));
+            _ = checked(_initializedPayloadBytes + payloadBytes);
             NativeLeaseWriter<T> writer = new(
                 reservation.Pointer,
                 length,
@@ -132,12 +137,23 @@ internal sealed unsafe partial class NativeArenaKernel
                     initializedLength,
                     length);
             }
+            RecordInitialization(payloadBytes, reservation.Scoped);
         }
         catch
         {
             RollBack(reservation);
             throw;
         }
+    }
+
+    private void RecordInitialization(long payloadBytes, bool scoped)
+    {
+        _initializedPayloadBytes += payloadBytes;
+        if (scoped)
+        {
+            _scopedInitializedPayloadBytes += payloadBytes;
+        }
+        _peakInitializedPayloadBytes = Math.Max(_peakInitializedPayloadBytes, _initializedPayloadBytes);
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
@@ -194,6 +210,8 @@ internal sealed unsafe partial class NativeArenaKernel
             nameof(NativeArena.Reset));
         ResetLane(ref _ordinary);
         ResetLane(ref _scoped);
+        _initializedPayloadBytes = 0;
+        _scopedInitializedPayloadBytes = 0;
         _generation = nextGeneration;
         _scopeEpoch = nextScopeEpoch;
         if (_retentionEnabled)
@@ -209,6 +227,8 @@ internal sealed unsafe partial class NativeArenaKernel
             _scopeEpoch,
             nameof(NativeArena.RecycleScoped));
         ResetLane(ref _scoped);
+        _initializedPayloadBytes -= _scopedInitializedPayloadBytes;
+        _scopedInitializedPayloadBytes = 0;
         _scopeEpoch = nextScopeEpoch;
         if (_retentionEnabled)
         {
@@ -253,6 +273,8 @@ internal sealed unsafe partial class NativeArenaKernel
             OutstandingNativeBytes = _retainedBytes,
             DetachedNativeBytes = 0,
             PeakOutstandingNativeBytes = _peakRetainedBytes,
+            InitializedPayloadBytes = _lifecycle == NativeOwnerLifecycle.Active ? _initializedPayloadBytes : 0,
+            PeakInitializedPayloadBytes = _peakInitializedPayloadBytes,
             UsableCapacityBytes = usableCapacityBytes - _externalActiveBytes,
             BorrowedBytes = _externalRetainedBytes
         };
@@ -276,7 +298,9 @@ internal sealed unsafe partial class NativeArenaKernel
             OutstandingNativeBytes = _retainedBytes,
             DetachedNativeBytes = _lifecycle == NativeOwnerLifecycle.Disposed
                 && _returnMemoryOnDispose == NativeMemoryReturn.ToGarbageCollector ? _retainedBytes : 0,
-            PeakOutstandingNativeBytes = _peakRetainedBytes
+            PeakOutstandingNativeBytes = _peakRetainedBytes,
+            InitializedPayloadBytes = _lifecycle == NativeOwnerLifecycle.Active ? _initializedPayloadBytes : 0,
+            PeakInitializedPayloadBytes = _peakInitializedPayloadBytes
         };
         GC.KeepAlive(this);
         return snapshot;

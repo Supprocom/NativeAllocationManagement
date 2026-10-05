@@ -21,6 +21,8 @@ public sealed class NativeFastArenaIntegrationTests
         Assert.Equal(arena.GetStatistics().OutstandingNativeBytes, arena.CaptureDiagnosticSnapshot().OutstandingNativeBytes);
         ArenaLease<int> source = arena.Scratch<int>(1, static writer => writer.Write(17));
         Assert.Equal(17, source.Read(static view => view[0]));
+        Assert.Equal(4, arena.GetStatistics().InitializedPayloadBytes);
+        Assert.Equal(4, arena.CaptureDiagnosticSnapshot().PeakInitializedPayloadBytes);
         arena.Dispose();
         Assert.Equal(1, buffer.ReleaseCount);
         Assert.Equal(0, budget.CaptureStatistics().CommittedBytes);

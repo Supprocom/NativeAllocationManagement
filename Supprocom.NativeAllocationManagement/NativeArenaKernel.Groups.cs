@@ -20,7 +20,7 @@ internal sealed unsafe partial class NativeArenaKernel
         }
     }
 
-    internal ArenaGroupCheckpoint BeginScopedGroup(bool requirePrepared = false)
+    internal ArenaGroupCheckpoint BeginScopedGroup(long payloadBytes, bool requirePrepared = false)
     {
         ValidateActive(requirePrepared ? nameof(NativeLeaseOperations.TryInitializeScoped)
             : nameof(NativeLeaseOperations.InitializeScoped));
@@ -32,6 +32,7 @@ internal sealed unsafe partial class NativeArenaKernel
         {
             ThrowNestedInitializer();
         }
+        _ = checked(_initializedPayloadBytes + payloadBytes);
         ArenaGroupCheckpoint checkpoint = new((IntPtr)_scoped.Current,
             (IntPtr)_scoped.Cursor, _scoped.UsedBytes);
         _initializerActive = 1;
@@ -80,9 +81,13 @@ internal sealed unsafe partial class NativeArenaKernel
         }
     }
 
-    internal void EndScopedGroup(ArenaGroupCheckpoint checkpoint, bool completed)
+    internal void EndScopedGroup(ArenaGroupCheckpoint checkpoint, bool completed, long payloadBytes)
     {
-        if (!completed)
+        if (completed)
+        {
+            RecordInitialization(payloadBytes, scoped: true);
+        }
+        else
         {
             RollBack(new ArenaReservation(scoped: true, (ArenaSegmentHeader*)checkpoint.Segment,
                 (byte*)checkpoint.Cursor, checkpoint.UsedBytes, checkpoint.Cursor));

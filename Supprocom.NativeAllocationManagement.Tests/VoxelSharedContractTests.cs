@@ -3565,6 +3565,7 @@ public sealed class VoxelSharedContractTests
     public void NamDiagnosticMappingPreservesTheRealOwnerIdentity()
     {
         using NativeConcurrentArena arena = new(preAllocateBytes: 64, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        _ = arena.Scratch<byte>(12, static writer => writer.Fill(42));
         NativeOwnerDiagnosticSnapshot source = arena.CaptureDiagnosticSnapshot();
         PressureAllocatorDiagnosticSnapshot mapped =
             Demos.VoxelChunkPipeline.NAM.NativePressureSession.CaptureAllocatorDiagnostic(source);
@@ -3576,6 +3577,8 @@ public sealed class VoxelSharedContractTests
         Assert.Equal(64, mapped.OutstandingNativeBytes);
         Assert.Equal(0, mapped.DetachedNativeBytes);
         Assert.Equal(64, mapped.PeakOutstandingNativeBytes);
+        Assert.Equal(12, mapped.InitializedPayloadBytes);
+        Assert.Equal(12, mapped.PeakInitializedPayloadBytes);
         string json = JsonSerializer.Serialize(mapped, VoxelJson.Options);
         PressureAllocatorDiagnosticSnapshot restored =
             JsonSerializer.Deserialize<PressureAllocatorDiagnosticSnapshot>(json, VoxelJson.Options);
@@ -3605,6 +3608,8 @@ public sealed class VoxelSharedContractTests
         Assert.Null(unavailable.OutstandingNativeBytes);
         Assert.Null(unavailable.DetachedNativeBytes);
         Assert.Null(unavailable.PeakOutstandingNativeBytes);
+        Assert.Null(unavailable.InitializedPayloadBytes);
+        Assert.Null(unavailable.PeakInitializedPayloadBytes);
         string unavailableJson = JsonSerializer.Serialize(unavailable, VoxelJson.Options);
         PressureAllocatorDiagnosticSnapshot unavailableRestored =
             JsonSerializer.Deserialize<PressureAllocatorDiagnosticSnapshot>(unavailableJson, VoxelJson.Options);
@@ -3615,6 +3620,8 @@ public sealed class VoxelSharedContractTests
         Assert.Equal(0, terminal.OutstandingNativeBytes);
         Assert.Equal(0, terminal.DetachedNativeBytes);
         Assert.Equal(64, terminal.PeakOutstandingNativeBytes);
+        Assert.Equal(0, terminal.InitializedPayloadBytes);
+        Assert.Equal(12, terminal.PeakInitializedPayloadBytes);
     }
 
     [VoxelDemonstrationFact]

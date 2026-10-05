@@ -477,7 +477,12 @@ public sealed class NativeLeaseOperationsTests
             Assert.Equal("40", fourth.Read(__namIndexedView => __namIndexedView[1]));
         }
 
+        long logicalBytes = 2L * sizeof(int) + 2L * sizeof(long) + 2 + 2L * IntPtr.Size;
+        Assert.Equal(logicalBytes, arena.GetStatistics().InitializedPayloadBytes);
+        Assert.Equal(logicalBytes, arena.CaptureDiagnosticSnapshot().PeakInitializedPayloadBytes);
         arena.RecycleScoped();
+        Assert.Equal(0, arena.GetStatistics().InitializedPayloadBytes);
+        Assert.Equal(logicalBytes, arena.CaptureDiagnosticSnapshot().PeakInitializedPayloadBytes);
         source.Dispose();
     }
 
@@ -511,12 +516,17 @@ public sealed class NativeLeaseOperationsTests
             };
 
         InitializeAndVerify(source, arena, initializer);
+        Assert.Equal(31, arena.GetStatistics().InitializedPayloadBytes);
+        Assert.Equal(31, arena.CaptureDiagnosticSnapshot().PeakInitializedPayloadBytes);
         arena.RecycleScoped();
+        Assert.Equal(8, arena.GetStatistics().InitializedPayloadBytes);
         Assert.Equal(1, arena.CurrentAllocationRecordCountForTest);
         Assert.Equal(46, source.Read(static values => values[0] + values[1]));
         long reuseBefore =
             NativeMemoryTestHooks.Snapshot().ReclaimedRangeReuseCount;
         InitializeAndVerify(source, arena, initializer);
+        Assert.Equal(31, arena.GetStatistics().InitializedPayloadBytes);
+        Assert.Equal(31, arena.CaptureDiagnosticSnapshot().PeakInitializedPayloadBytes);
         NativeMemoryTestMetrics metrics =
             NativeMemoryTestHooks.Snapshot();
         Assert.True(metrics.ReclaimedRangeReuseCount > reuseBefore);
@@ -832,7 +842,11 @@ public sealed class NativeLeaseOperationsTests
         arena.RecycleScoped();
         long reuseBefore =
             NativeMemoryTestHooks.Snapshot().ReclaimedRangeReuseCount;
+        Assert.Equal(8, arena.GetStatistics().InitializedPayloadBytes);
+        Assert.Equal(57, arena.CaptureDiagnosticSnapshot().PeakInitializedPayloadBytes);
         InitializeAndVerify(source, arena, initializer);
+        Assert.Equal(57, arena.GetStatistics().InitializedPayloadBytes);
+        Assert.Equal(57, arena.CaptureDiagnosticSnapshot().PeakInitializedPayloadBytes);
         NativeMemoryTestMetrics metrics =
             NativeMemoryTestHooks.Snapshot();
         Assert.True(metrics.ReclaimedRangeReuseCount > reuseBefore);
@@ -961,6 +975,8 @@ public sealed class NativeLeaseOperationsTests
         Assert.True(failed);
         Assert.Equal(1, arena.CurrentAllocationRecordCountForTest);
         Assert.Equal(21, source.Read(__namIndexedView => __namIndexedView[0]));
+        Assert.Equal(4, arena.GetStatistics().InitializedPayloadBytes);
+        Assert.Equal(4, arena.CaptureDiagnosticSnapshot().PeakInitializedPayloadBytes);
         ConcurrentArenaLease<int> next = arena.Scratch<int>(
             1,
             static writer => writer.Write(34));
