@@ -152,6 +152,10 @@ try {
     Invoke-NamCommand allocator-jit pwsh @('-NoProfile', '-File', (Join-Path $PSScriptRoot 'capture-allocator-jit.ps1'),
         '-ExpectedRid', $ExpectedRid, '-Worker', $namPerformanceWorker, '-EvidenceRoot', (Join-Path $namRoot 'allocator-jit'))
     Write-Output ([IO.File]::ReadAllText((Join-Path $namRoot 'logs/allocator-jit.stdout.log')))
+    Invoke-NamCommand published-region-capture pwsh @('-NoProfile', '-File', (Join-Path $PSScriptRoot 'capture-published-region.ps1'),
+        '-ExpectedRid', $ExpectedRid, '-CandidateRuntime', (Join-Path $env:ArtifactsPath 'bin/Supprocom.NativeAllocationManagement/release/Supprocom.NativeAllocationManagement.dll'),
+        '-EvidenceRoot', (Join-Path $namRoot 'published-region'))
+    Write-Output ([IO.File]::ReadAllText((Join-Path $namRoot 'logs/published-region-capture.stdout.log')))
     Invoke-NamCommand package-consumers dotnet @('test', $namTests, '-c', 'Release', '--no-build', '--no-restore', '--nologo', '-v', 'normal', '--filter', 'FullyQualifiedName~PackageSmokeTests', '--logger', 'trx;LogFileName=package.trx', '--results-directory', (Join-Path $namRoot 'trx'), '--disable-build-servers') -DeadlineSeconds 2400
     Assert-NamTrx (Join-Path $namRoot 'trx/package.trx')
     Invoke-NamCommand non-package-tests dotnet @('test', $namTests, '-c', 'Release', '--no-build', '--no-restore', '--nologo', '-v', 'normal', '--filter', 'FullyQualifiedName!~PackageSmokeTests', '--logger', 'trx;LogFileName=non-package.trx', '--results-directory', (Join-Path $namRoot 'trx'), '--disable-build-servers') -DeadlineSeconds 1800
@@ -160,6 +164,8 @@ try {
         '-EvidenceRoot', $namRoot, '-Trx', (Join-Path $namRoot 'trx/non-package.trx'),
         '-Worker', (Join-Path $env:ArtifactsPath 'bin/Supprocom.NativeAllocationManagement.Tests/release/Supprocom.NativeAllocationManagement.Performance.dll'),
         '-Runtime', (Join-Path $env:ArtifactsPath 'bin/Supprocom.NativeAllocationManagement.Tests/release/Supprocom.NativeAllocationManagement.dll'))
+    Invoke-NamCommand published-region-acceptance pwsh @('-NoProfile', '-File', (Join-Path $PSScriptRoot 'assert-published-region.ps1'),
+        '-EvidenceRoot', (Join-Path $namRoot 'published-region'))
     if (@(& git status --porcelain).Count -ne 0) { throw 'A producer mutated the exact source checkout.' }
     $namPassed = $true
 } finally {

@@ -24,6 +24,19 @@ settings. Passing validation independently reconciles all three raw records with
 those passing tests, actual zero exits, ten-second deadlines and original floors.
 Passing test counts alone do not stand in for retained performance measurements.
 
+A generated standalone worker outside the checkout also compares the exact signed
+public 0.2.3 runtime with the current runtime, using identical compiled Region
+workload/configuration bytes and the existing expert typed-pool reference. Eight
+balanced process pairs in each controlled/default mode retain every raw result,
+native worker identity, observed exit and whole-child wall time. Each live worker
+records its own process CPU through complete workload/allocator cleanup, before
+final evidence emission/shutdown; post-exit CPU is not fabricated by the parent.
+A completed capture is not acceptance: exit 3 stays failed, and its capture.json explicitly
+does not assert performance acceptance. After the original unchanged test gates,
+independent validation requires current managed floors and the predeclared 1.10
+upper-95% candidate/published time-ratio ceilings. This one baseline scenario does
+not replace original workers or complete the new-feature performance matrix.
+
 Evidence lives outside the checkout. Each child retains arguments, declared
 deadline, actual exit, complete streams and original compiler inputs. Source,
 packages, caches, binaries, native runner/toolchain identities and length/SHA-256
