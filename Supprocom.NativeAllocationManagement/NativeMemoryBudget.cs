@@ -168,7 +168,8 @@ public sealed partial class NativeMemoryBudget
         }
     }
 
-    internal void CommitReallocation(nuint byteLength, nuint previousByteLength, long ownerId = 0)
+    internal void CommitReallocation(nuint byteLength, nuint previousByteLength, long ownerId = 0,
+        long allocationOrdinal = 0)
     {
         long bytes = checked((long)byteLength);
         long previousBytes = checked((long)previousByteLength);
@@ -189,7 +190,8 @@ public sealed partial class NativeMemoryBudget
                 _activeAllocationCount++;
                 IncrementHistory(ref _allocationCount);
             }
-            RecordTrace(NativeMemoryTraceKind.Reallocated, ownerId, byteLength, previousByteLength);
+            RecordTrace(NativeMemoryTraceKind.Reallocated, ownerId, byteLength, previousByteLength,
+                allocationOrdinal: allocationOrdinal);
         }
     }
 

@@ -388,9 +388,10 @@ internal static partial class NativeGeneratedScenarios
     internal static void RunDirectOwners(int seed, int steps, Action<string> trace)
     {
         SeededRandom random = new(seed);
+        Span<NativeMemoryTraceEvent> events = stackalloc NativeMemoryTraceEvent[32];
         for (int step = 0; step < steps; step++)
         {
-            NativeMemoryBudget budget = new(320);
+            NativeMemoryBudget budget = new(320, traceCapacity: 32);
             using NativeWorkspace<int> workspace = new(budget, 32);
             using NativeBuilder<int> builder = new(budget, 2);
             int count = random.Next(1, 33);
@@ -453,6 +454,16 @@ internal static partial class NativeGeneratedScenarios
             }
             finally { transfer.Dispose(); }
             Require(budget.CaptureStatistics().CommittedBytes == 0, "direct owner teardown leaked charge");
+            int eventCount = budget.CopyTraceTo(events);
+            Require(eventCount != 0 && budget.CaptureStatistics().DroppedTraceEventCount == 0,
+                "prepared direct trace omitted a storage transition");
+            foreach (ref readonly NativeMemoryTraceEvent entry in events[..eventCount])
+            {
+                if (entry.Kind is NativeMemoryTraceKind.Allocated or NativeMemoryTraceKind.Reallocated or NativeMemoryTraceKind.Released)
+                    Require(entry.AllocationOrdinal == 1 && entry.RequestedBytes != 0
+                        && (entry.OwnerId == workspace.Id || entry.OwnerId == builder.Id),
+                        "direct backing trace differs from its single-block owner lineage");
+            }
             trace($"direct seed={seed} step={step} builderCount={count} builderPeak={expectedBacking} workspaceProcess={processLength} workspaceInitialized={initializedLength} finalCommitted=0");
         }
     }

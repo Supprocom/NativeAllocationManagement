@@ -301,9 +301,13 @@ internal sealed unsafe class NativeRegionKernel
         string operation,
         nuint minimumCapacity = 0)
     {
+        // A lexical bank only appends. The existing count therefore supplies
+        // its lifetime backing ordinal; exhaustion must precede admission.
+        int segmentCount = checked(_segmentCount + 1);
         RegionSegmentHeader* segment = AllocateSegment(
             capacity,
             operation,
+            segmentCount,
             minimumCapacity);
         capacity = segment->Capacity;
         if (_currentSegment == null)
@@ -320,7 +324,7 @@ internal sealed unsafe class NativeRegionKernel
         _currentEnd = _currentCursor + capacity;
         _retainedBytes = checked(
             _retainedBytes + checked((long)segment->AllocationBytes));
-        _segmentCount = checked(_segmentCount + 1);
+        _segmentCount = segmentCount;
         NativeOwnerHistory.Increment(ref _freshSegmentAllocationCount, ref _historyOverflowed);
         return segment;
     }
@@ -328,6 +332,7 @@ internal sealed unsafe class NativeRegionKernel
     private RegionSegmentHeader* AllocateSegment(
         nuint capacity,
         string operation,
+        int allocationOrdinal,
         nuint minimumCapacity = 0)
     {
         nuint allocationBytes = NativeAlignedAllocation.GetBackingByteLength(checked(HeaderBytes + capacity));
@@ -376,10 +381,11 @@ internal sealed unsafe class NativeRegionKernel
             *segment = default;
             segment->Capacity = capacity;
             segment->AllocationBytes = allocationBytes;
+            segment->AllocationOrdinal = allocationOrdinal;
             metricsEpoch = NativeMemoryAccounting.RecordAllocation(allocationBytes, zeroed: false);
             recorded = true;
             segment->MetricsEpoch = metricsEpoch;
-            _budget?.Commit(allocationBytes, Id);
+            _budget?.Commit(allocationBytes, Id, allocationOrdinal: allocationOrdinal);
             acquired = true;
             return segment;
         }
@@ -447,8 +453,9 @@ internal sealed unsafe class NativeRegionKernel
             nuint allocationBytes = segment->AllocationBytes;
             long metricsEpoch = segment->MetricsEpoch;
             bool detached = segment->Detached != 0;
+            int allocationOrdinal = segment->AllocationOrdinal;
             NativeMemory.AlignedFree(segment);
-            _budget?.Release(allocationBytes, Id);
+            _budget?.Release(allocationBytes, Id, allocationOrdinal: allocationOrdinal);
             NativeMemoryAccounting.RecordFree(
                 allocationBytes,
                 detached,
@@ -559,6 +566,7 @@ internal sealed unsafe class NativeRegionKernel
         internal nuint AllocationBytes;
         internal long MetricsEpoch;
         internal int Detached;
+        internal int AllocationOrdinal;
     }
 
     [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]

@@ -50,7 +50,7 @@ internal static unsafe class NativeBlockAllocator
 
             metricsEpoch = NativeMemoryAccounting.RecordAllocation(byteLength, zeroed: false);
             recorded = true;
-            budget?.Commit(byteLength, ownerId);
+            budget?.Commit(byteLength, ownerId, allocationOrdinal: 1);
             acquired = true;
             return new NativeBlock(
                 (IntPtr)memory,
@@ -158,7 +158,7 @@ internal static unsafe class NativeBlockAllocator
             }
             long metricsEpoch = NativeMemoryAccounting.RecordReallocation(
                 block.ByteLength, byteLength, block.MetricsEpoch);
-            budget?.CommitReallocation(byteLength, block.ByteLength, ownerId);
+            budget?.CommitReallocation(byteLength, block.ByteLength, ownerId, allocationOrdinal: 1);
             acquired = true;
             return new NativeBlock((IntPtr)memory, byteLength, metricsEpoch, budget, ownerId);
         }
@@ -184,7 +184,7 @@ internal static unsafe class NativeBlockAllocator
         }
 
         NativeMemory.Free((void*)block.Pointer);
-        block.Budget?.Release(block.ByteLength, block.OwnerId);
+        block.Budget?.Release(block.ByteLength, block.OwnerId, allocationOrdinal: 1);
         try
         {
             NativeMemoryAccounting.RecordFree(

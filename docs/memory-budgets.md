@@ -152,8 +152,18 @@ requested/previous extents, and post-transition committed/reserved bytes.
 Use `Stopwatch.Frequency` to interpret ticks; they are not UTC timestamps.
 Production backing transitions supply their real owner ID; ownerless internal
 domain operations report `null`, never a fabricated owner zero.
-`AllocationOrdinal` is the owner-local backing acquisition ordinal where supplied,
-currently fast-pool slab/page physical transitions. Aggregate preparation has no single ordinal;
+`AllocationOrdinal` is the owner-local backing acquisition ordinal where supplied:
+fast-pool slabs/pages, fast-arena segments, lexical-region segments and direct blocks.
+A direct builder/workspace lineage has one block, ordinal one, including realloc
+from null, later replacement and physical return after completion or movement.
+Reallocation does not create a second live block or another owner lineage.
+Regions use their checked append count for consecutive acquired segment identities;
+initializer rollback does not pretend an acquired, retained segment was freed.
+The ordinal survives deterministic or emergency cleanup in existing native-header
+padding; the 64-byte header extent is unchanged. Exhaustion is checked before
+admission/publication. Empty owners, pending/refused/failed acquisition attempts
+have no successfully acquired backing ordinal.
+Aggregate preparation has no single ordinal;
 other transitions lacking an ordinal report unavailable (`null`), not an invented
 zero. Full correlation for other backing/pointer families remains required before
 the complete release boundary.
