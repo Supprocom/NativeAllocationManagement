@@ -210,6 +210,9 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 && method.Parameters.Any(parameter =>
                     IsOwnerType(parameter.Type)
                     || Is(parameter.Type, Transfer)
+                    || Is(parameter.Type, Reservation)
+                    || Is(parameter.Type, LayoutOwner)
+                    || Is(parameter.Type, LayoutReservation)
                     || Is(parameter.Type, Shared)
                     || Is(parameter.Type, Weak)
                     || Is(parameter.Type, Builder)
@@ -607,9 +610,9 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                         ParameterModifier(parameter.RefKind));
                     _transfers.Add(
                         parameter,
-                        TransferState.CreateExternal(
-                            parameter,
-                            syntax));
+                        parameter.RefKind == RefKind.Out
+                            ? TransferState.Create(parameter, syntax, TransferStatus.Unowned, mustEnd: false, isUsing: false)
+                            : TransferState.CreateExternal(parameter, syntax));
                     continue;
                 }
 
@@ -2717,7 +2720,14 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             }
             if (_symbols.IsStableOwnershipIdentity(operation.Property))
             {
-                // Identity is immutable metadata, not payload borrowing authority.
+                // Ended bindings retain immutable identity, but default/cleared
+                // bindings have no control and conditional acquisitions need proof.
+                if (IsNativeTransfer(operation.Instance?.Type)
+                    && GetTransfer(Unwrap(operation.Instance)) is TransferState identity
+                    && (identity.ConditionalPending || !identity.HasConstructedControl))
+                {
+                    CheckTransferActive(identity, operation.Syntax, operation.Property.Name);
+                }
                 // Still visit the receiver so nested calls/copies retain their checks.
                 base.VisitPropertyReference(operation);
                 return;
