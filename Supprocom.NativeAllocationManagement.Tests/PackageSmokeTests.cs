@@ -1980,6 +1980,109 @@ public sealed class PackageSmokeTests
         }
     }
 
+    [Theory]
+    [InlineData("NativeTransfer<int>")]
+    [InlineData("NativeMemoryReservation<int>")]
+    [InlineData("NativeLayoutOwner")]
+    [InlineData("NativeLayoutReservation")]
+    [InlineData("NativeShared<int>")]
+    [InlineData("NativeWeak<int>")]
+    public async Task PackageAnalyzerEnforcesGeneratedParameterAndControlIdentityPrograms(string type)
+    {
+        ArgumentNullException.ThrowIfNull(type);
+        PackageEvidence package = await GetPackageAsync();
+        WriteEvidence(package);
+        string root = CreateConsumerRoot();
+        try
+        {
+            WriteConsumerProject(root, package, excludeAnalyzer: false, suppressDiagnostics: false, treatWarningsAsErrors: true);
+            string program = Path.Combine(root, "Program.cs"), project = Path.Combine(root, "Consumer.csproj");
+            await File.WriteAllTextAsync(program, $$"""
+                using Supprocom.NativeAllocationManagement;
+                public static class Consumer
+                {
+                    public static void Drop({{type}} owner) { }
+                    public static void InvalidIdentity() { {{type}} owner = default; _ = owner.Id; }
+                    public static void InvalidOut(out {{type}} owner) { owner = default; }
+                }
+                """);
+            CommandResult restore = await RunDotnetAsync($"restore \"{project}\" --nologo --force --no-cache --packages \"{Path.Combine(root, ".packages")}\" --source \"{package.SourceDirectory}\"", root);
+            Assert.True(restore.ExitCode == 0, restore.Output);
+            CommandResult invalid = await RunDotnetAsync($"build \"{project}\" --no-restore --nologo", root);
+            _output.WriteLine(invalid.Output);
+            Assert.NotEqual(0, invalid.ExitCode);
+            Assert.Contains("NAM1025", invalid.Output, StringComparison.Ordinal);
+            Assert.Contains("NAM1022", invalid.Output, StringComparison.Ordinal);
+            Assert.Contains("NAM1027", invalid.Output, StringComparison.Ordinal);
+            await File.WriteAllTextAsync(program, $$"""
+                using Supprocom.NativeAllocationManagement;
+                public static class Consumer
+                {
+                    public static void End({{type}} owner) { owner.Dispose(); _ = owner.Id; }
+                    public static void Callback()
+                    { System.Action<{{type}}> end = owner => { owner.Dispose(); _ = owner.Id; }; }
+                }
+                """);
+            CommandResult valid = await RunDotnetAsync($"build \"{project}\" --no-restore --nologo", root);
+            Assert.True(valid.ExitCode == 0, valid.Output);
+        }
+        finally { DeleteConsumerRoot(root); }
+    }
+
+    [Fact]
+    public async Task PackageGeneratedRuntimeModelsRemainSafeWithOwnershipWarningsSuppressed()
+    {
+        PackageEvidence package = await GetPackageAsync();
+        WriteEvidence(package);
+        string root = CreateConsumerRoot();
+        try
+        {
+            WriteConsumerProject(root, package, excludeAnalyzer: false, suppressDiagnostics: false, executable: true);
+            string ownershipDiagnostics = string.Join(", ", new Analyzers.NativeAllocationAnalyzer().SupportedDiagnostics
+                .Select(static descriptor => descriptor.Id).Order(StringComparer.Ordinal));
+            foreach (string source in new[] { "NativeGeneratedScenarios.cs", "NativeGeneratedScenarios.Concurrent.cs" })
+            {
+                string text = await File.ReadAllTextAsync(Path.Combine(RepositoryTestPaths.Root, "Supprocom.NativeAllocationManagement.Tests", source));
+                // These programs deliberately alias, store, forward, and misuse native
+                // values to test runtime guards; the bundled analyzer stays loaded.
+                await File.WriteAllTextAsync(Path.Combine(root, source),
+                    $"#pragma warning disable {ownershipDiagnostics}\n" + text);
+            }
+            await File.WriteAllTextAsync(Path.Combine(root, "Program.cs"), """
+                using Supprocom.NativeAllocationManagement.Tests;
+                public static class Consumer
+                {
+                    public static async System.Threading.Tasks.Task<int> Main()
+                    {
+                        foreach (int seed in new[] { 17, 101, 379 })
+                        {
+                            System.Console.WriteLine($"seed={seed}");
+                            NativeGeneratedScenarios.RunAdmission(seed, 2048, System.Console.WriteLine);
+                            NativeGeneratedScenarios.RunSharing(seed, 512, System.Console.WriteLine);
+                            NativeGeneratedScenarios.RunPreparedPool(seed, 512, System.Console.WriteLine);
+                            NativeGeneratedScenarios.RunPreparedArena(seed, 512, System.Console.WriteLine);
+                            NativeGeneratedScenarios.RunLayouts(seed, 64, System.Console.WriteLine);
+                            NativeGeneratedScenarios.RunOutliers(seed, 128, System.Console.WriteLine);
+                            await NativeGeneratedScenarios.RunSharingSchedulesAsync(seed, 32, System.Console.WriteLine);
+                            await NativeGeneratedScenarios.RunBorrowReturnSchedulesAsync(seed, 16, System.Console.WriteLine);
+                        }
+                        System.Console.WriteLine("generatedRuntimeModels=passed;seeds=3;projectReferences=0");
+                        return 0;
+                    }
+                }
+                """);
+            string project = Path.Combine(root, "Consumer.csproj");
+            CommandResult restore = await RunDotnetAsync($"restore \"{project}\" --nologo --force --no-cache --packages \"{Path.Combine(root, ".packages")}\" --source \"{package.SourceDirectory}\"", root);
+            Assert.True(restore.ExitCode == 0, restore.Output);
+            CommandResult build = await RunDotnetAsync($"build \"{project}\" --no-restore --nologo", root);
+            Assert.True(build.ExitCode == 0, build.Output);
+            CommandResult run = await RunDotnetAsync($"run --project \"{project}\" --no-build --no-restore", root);
+            Assert.True(run.ExitCode == 0, run.Output);
+            Assert.Contains("generatedRuntimeModels=passed;seeds=3;projectReferences=0", run.Output, StringComparison.Ordinal);
+        }
+        finally { DeleteConsumerRoot(root); }
+    }
+
     private void WriteEvidence(PackageEvidence package)
     {
         _output.WriteLine($"package={package.Path}");
