@@ -692,3 +692,9 @@ Supprocom.NativeAllocationManagement.NativeOwnerStatistics.InitializedPayloadByt
 Supprocom.NativeAllocationManagement.NativeOwnerStatistics.PeakInitializedPayloadBytes.get -> long
 Supprocom.NativeAllocationManagement.NativeOwnerStatistics.PeakInitializedPayloadBytes.init -> void
 Supprocom.NativeAllocationManagement.NativeSharingStatistics.PeakInitializedPayloadBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeBuilder<T>.CaptureDiagnosticSnapshot() -> Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot
+Supprocom.NativeAllocationManagement.NativeBuilder<T>.GetStatistics() -> Supprocom.NativeAllocationManagement.NativeOwnerStatistics
+Supprocom.NativeAllocationManagement.NativeWorkspace<T>.CaptureDiagnosticSnapshot() -> Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot
+Supprocom.NativeAllocationManagement.NativeWorkspace<T>.GetStatistics() -> Supprocom.NativeAllocationManagement.NativeOwnerStatistics
+Supprocom.NativeAllocationManagement.NativeOwnerModel.SingleWriterBuilder = 7 -> Supprocom.NativeAllocationManagement.NativeOwnerModel
+Supprocom.NativeAllocationManagement.NativeOwnerModel.ThreadConfinedWorkspace = 8 -> Supprocom.NativeAllocationManagement.NativeOwnerModel

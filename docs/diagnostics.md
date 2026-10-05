@@ -1,7 +1,8 @@
 # Native owner diagnostics
 
 `NativePool<T>`, `NativeRegion`, `NativeArena`, `NativeConcurrentPool<T>` and
-`NativeConcurrentArena` expose `CaptureDiagnosticSnapshot()` with actual runtime
+`NativeConcurrentArena`, `NativeBuilder<T>` and `NativeWorkspace<T>` expose
+`CaptureDiagnosticSnapshot()` with actual runtime
 structural state. The snapshot is a value containing no owner, allocation,
 pointer or borrowing authority. Keeping it does not retain native storage.
 The voxel NAM serializer copies these fields directly; it does not infer
@@ -105,3 +106,52 @@ and sparse-page retention.
 
 See [bounded budget tracing](memory-budgets.md#owner-identities-and-optional-tracing)
 for peaks, refused acquisitions, event units, overflow disclosure and copying.
+
+## Direct builders and workspaces
+
+The `SingleWriterBuilder` and `ThreadConfinedWorkspace` model tags identify direct
+blocks, not generational segment banks. Each owned nonempty direct block is one
+retained segment and one active control record. It is available only when its
+owner is active, no workspace callback is entered, and no logical range is live.
+These unmanaged models have no reference roots, scoped records, generations,
+retired or quarantined banks, or detached backing. Their corresponding values
+are invariant zero/false; both traversal indices are minus one. They never
+borrow external backing. Disposal physically returns their direct block;
+builder completion instead transfers it to the unique owning handle.
+
+`GetStatistics()` and `CaptureDiagnosticSnapshot()` remain numeric observations
+after completion or disposal. They do not restore `Count`, `Capacity`, `Length`,
+append, processing, or payload authority. Builder capture takes its existing
+exclusive-operation gate and rejects an entered operation without aborting that
+writer. Workspace capture remains confined to its construction thread, including
+after release, and is allowed during that thread's callback.
+
+Backing fields count known acquired block extents in bytes. Builder reallocation
+keeps one growable storage segment, so `FreshSegmentAllocationCount` counts its
+first successful nonempty acquisition once, not reallocations. Budget and process
+statistics separately record actual reallocations. `PeakOutstandingNativeBytes`
+is the largest known acquired extent; it does not reconstruct opaque native
+allocator-internal old/new overlap or RSS. Conservative budget overlap admission
+remains separately enforced. Workspace backing is fixed at construction. Current
+backing becomes zero after disposal or builder completion, while numeric peaks
+survive. No snapshot holds a reference to the transferred payload.
+
+Builder `RequestedBytes` and `InitializedPayloadBytes` are its successfully
+published prefix, not reserved capacity or an unfinished writer. Its monotonic
+published count and capacity preserve historical peaks without added append-time
+accounting. A cancelled terminal operation preserves any prefix actually
+committed before cancellation; an incomplete producer never earns publication
+credit.
+
+Workspace checked `Initialize` publishes a prefix only after full initialization
+and cancellation checks. Its raw `Process` works within already zero-initialized
+reusable storage: current demand is the bounded entered range during its
+callback, then zero, without creating a persistent published range. A callback
+failure still records that genuinely entered range as a peak; an invalid or
+pre-cancelled request does not. `Reset` removes published visibility, not history
+or the retained block. The existing active-use flag encodes `~length` for Process
+and positive one for other uses, preserving nested-use and disposal guards even
+for zero-length Process. One owner-local high-water field records initialized
+demand. These are owner-lifetime histories, independent of process measurement
+resets. Counts and byte products are bounded by checked capacity admission; there
+is no wrapping history or optional-counter mode.

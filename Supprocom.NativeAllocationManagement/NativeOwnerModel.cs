@@ -16,5 +16,9 @@ public enum NativeOwnerModel
     /// <summary>Synchronized lexical bump storage used by the runtime kernel.</summary>
     SynchronizedRegion,
     /// <summary>Synchronized ordinary/scoped bump storage with generations and fast lanes.</summary>
-    SynchronizedArena
+    SynchronizedArena,
+    /// <summary>One growable unmanaged block with exclusive builder admission and destructive completion.</summary>
+    SingleWriterBuilder,
+    /// <summary>One fixed zero-initialized unmanaged block with thread-confined bounded use.</summary>
+    ThreadConfinedWorkspace
 }

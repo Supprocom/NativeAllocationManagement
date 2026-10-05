@@ -3694,6 +3694,13 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 return;
             }
 
+            if (operation.TargetMethod.Name is "GetStatistics" or "CaptureDiagnosticSnapshot"
+                && builder.HasConstructedControl && !builder.ConditionalPending
+                && builder.Status != TransferStatus.Ambiguous)
+            {
+                return;
+            }
+
             if (string.Equals(operation.TargetMethod.Name, "Complete", StringComparison.Ordinal))
             {
                 if (builder.Status != TransferStatus.Active)
@@ -3759,6 +3766,13 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             IOperation? instance = Unwrap(operation.Instance);
             TransferState? workspace = GetWorkspace(instance);
             if (workspace is null)
+            {
+                return;
+            }
+
+            if (operation.TargetMethod.Name is "GetStatistics" or "CaptureDiagnosticSnapshot"
+                && workspace.HasConstructedControl && !workspace.ConditionalPending
+                && workspace.Status != TransferStatus.Ambiguous)
             {
                 return;
             }
@@ -3966,12 +3980,24 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 return;
             }
 
+            if (value is null || IsNullValue(value))
+            {
+                ReportActiveTransferOverwrite(target);
+                _transfers[target.Symbol] = TransferState.CreateWorkspace(
+                    target.Symbol,
+                    target.Syntax,
+                    TransferStatus.Unowned,
+                    mustEnd: false,
+                    isUsing: false);
+                return;
+            }
+
             if (IsWorkspaceFactoryOperation(value))
             {
                 return;
             }
 
-            if (value is not null && IsNativeWorkspace(value.Type))
+            if (IsNativeWorkspace(value.Type))
             {
                 TransferState? source = GetWorkspace(value);
                 if (source is null)

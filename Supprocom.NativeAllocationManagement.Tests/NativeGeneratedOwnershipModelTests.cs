@@ -20,6 +20,7 @@ public sealed class NativeGeneratedOwnershipModelTests(ITestOutputHelper output)
             NativeGeneratedScenarios.RunPreparedArena(seed, 512, trace.Add);
             NativeGeneratedScenarios.RunLayouts(seed, 64, trace.Add);
             NativeGeneratedScenarios.RunOutliers(seed, 128, trace.Add);
+            NativeGeneratedScenarios.RunDirectOwners(seed, 128, trace.Add);
         }
         finally { SaveTrace(seed, "models", trace); }
     }

@@ -6,6 +6,117 @@ namespace Supprocom.NativeAllocationManagement.Tests;
 
 public sealed class NativeBuilderAnalyzerTests
 {
+    [Fact]
+    public async Task CompletedAndDisposedBuildersAllowOnlyConstructedNumericObservations()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    using NativeBuilder<int> builder = new(4);
+                    builder.Append(42);
+                    using NativeTransfer<int> transfer = builder.Complete();
+                    _ = builder.GetStatistics();
+                    _ = builder.CaptureDiagnosticSnapshot();
+                    using NativeBuilder<int> disposed = new(4);
+                    disposed.Dispose();
+                    _ = disposed.GetStatistics();
+                    _ = disposed.CaptureDiagnosticSnapshot();
+                }
+            }
+            """);
+        AssertNoNativeDiagnostics(diagnostics);
+    }
+
+    [Fact]
+    public async Task DisposedBuilderCompoundObservationKeepsOnlyNumericConstructionProof()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+            public static class Sample
+            {
+                public static bool Run()
+                {
+                    using (NativeBuilder<int> builder = new(4))
+                    {
+                        builder.Dispose();
+                        NativeOwnerDiagnosticSnapshot snapshot = builder.CaptureDiagnosticSnapshot();
+                        return snapshot.OutstandingNativeBytes == 0
+                            && snapshot.PeakOutstandingNativeBytes == 16
+                            && builder.GetStatistics().InitializedPayloadBytes == 0;
+                    }
+                }
+            }
+            """);
+        AssertNoNativeDiagnostics(diagnostics);
+    }
+
+    [Theory]
+    [InlineData("builder.Append(17);", "NAM1029")]
+    [InlineData("_ = builder.Complete();", "NAM1030")]
+    public async Task ObservingCompletedBuilderDoesNotRestoreItsOwnership(string use, string diagnostic)
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            $$"""
+            using Supprocom.NativeAllocationManagement;
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    using NativeBuilder<int> builder = new(4);
+                    builder.Append(42);
+                    using NativeTransfer<int> transfer = builder.Complete();
+                    _ = builder.GetStatistics();
+                    {{use}}
+                }
+            }
+            """);
+        Assert.Contains(diagnostic, AnalyzerContractTests.NativeDiagnostics(diagnostics), StringComparer.Ordinal);
+    }
+
+    [Fact]
+    public async Task AmbiguousBuilderObservationStillRequiresAConstructedKnownBinding()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+            public static class Sample
+            {
+                public static void Run(bool end)
+                {
+                    using NativeBuilder<int> builder = new(4);
+                    if (end) builder.Dispose();
+                    _ = builder.GetStatistics();
+                }
+            }
+            """);
+        Assert.Contains("NAM1029", AnalyzerContractTests.NativeDiagnostics(diagnostics), StringComparer.Ordinal);
+    }
+
+    [Fact]
+    public async Task ClearedBuilderBindingDoesNotInheritDisposedObservationProof()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    NativeBuilder<int> builder = new(4);
+                    builder.Dispose();
+                    builder = null!;
+                    _ = builder.GetStatistics();
+                }
+            }
+            """);
+        Assert.Contains("NAM1029", AnalyzerContractTests.NativeDiagnostics(diagnostics), StringComparer.Ordinal);
+    }
+
     [Theory]
     [InlineData("using NativeTransfer<int> transfer = builder.Complete();", "return transfer.Read(static view => view[0]);")]
     [InlineData("using NativeTransfer<int> transfer = builder.Complete();", "throw new System.InvalidOperationException();")]

@@ -385,6 +385,78 @@ internal static partial class NativeGeneratedScenarios
         Require(budget.CaptureStatistics().CommittedBytes == 0, "outlier teardown leaked charge");
     }
 
+    internal static void RunDirectOwners(int seed, int steps, Action<string> trace)
+    {
+        SeededRandom random = new(seed);
+        for (int step = 0; step < steps; step++)
+        {
+            NativeMemoryBudget budget = new(320);
+            using NativeWorkspace<int> workspace = new(budget, 32);
+            using NativeBuilder<int> builder = new(budget, 2);
+            int count = random.Next(1, 33);
+            int expectedCapacity = 2;
+            for (int index = 0; index < count; index++)
+            {
+                if (index == expectedCapacity) expectedCapacity *= 2;
+                builder.Append(seed + step + index);
+            }
+            long expectedBacking = expectedCapacity * 4L;
+            NativeOwnerStatistics builderStatistics = builder.GetStatistics();
+            Require(builderStatistics.Model == NativeOwnerModel.SingleWriterBuilder
+                && builderStatistics.InitializedPayloadBytes == count * 4L
+                && builderStatistics.PeakInitializedPayloadBytes == count * 4L
+                && builderStatistics.OutstandingNativeBytes == expectedBacking
+                && builderStatistics.PeakOutstandingNativeBytes == expectedBacking,
+                "direct builder differs from independent prefix/capacity model");
+
+            int processLength = random.Next(33);
+            int value = seed + step;
+            int result = workspace.Process(processLength, (workspace, value), static (values, state) =>
+            {
+                Require(state.workspace.GetStatistics().InitializedPayloadBytes == values.Length * 4L,
+                    "entered workspace demand differs from bounded process range");
+                values.Fill(state.value);
+                return values.Length == 0 ? 0 : values[0] + values[^1];
+            });
+            Require(result == (processLength == 0 ? 0 : value * 2)
+                && workspace.GetStatistics().InitializedPayloadBytes == 0,
+                "workspace process published persistent demand or incorrect output");
+            int initializedLength = random.Next(1, 33);
+            workspace.Initialize(initializedLength, writer => writer.Fill(value));
+            Require(workspace.Read(static values => values[0]) == value
+                && workspace.GetStatistics().InitializedPayloadBytes == initializedLength * 4L,
+                "workspace initialized prefix differs");
+            workspace.Reset();
+            workspace.Dispose();
+            NativeOwnerDiagnosticSnapshot workspaceSnapshot = workspace.CaptureDiagnosticSnapshot();
+            Require(workspaceSnapshot.Lifecycle == NativeOwnerLifecycle.Disposed
+                && workspaceSnapshot.OutstandingNativeBytes == 0
+                && workspaceSnapshot.PeakOutstandingNativeBytes == 128
+                && workspaceSnapshot.InitializedPayloadBytes == 0
+                && workspaceSnapshot.PeakInitializedPayloadBytes == Math.Max(processLength, initializedLength) * 4L,
+                "workspace reset/release erased genuine historical demand");
+
+            NativeTransfer<int> transfer = builder.Complete();
+            try
+            {
+                Require(transfer.Read(static values => values[0]) == seed + step
+                    && transfer.Read(static values => values[^1]) == seed + step + count - 1,
+                    "builder handoff output differs");
+                NativeOwnerDiagnosticSnapshot builderSnapshot = builder.CaptureDiagnosticSnapshot();
+                Require(builderSnapshot.Lifecycle == NativeOwnerLifecycle.Returned
+                    && builderSnapshot.OutstandingNativeBytes == 0
+                    && builderSnapshot.PeakOutstandingNativeBytes == expectedBacking
+                    && builderSnapshot.InitializedPayloadBytes == 0
+                    && builderSnapshot.PeakInitializedPayloadBytes == count * 4L
+                    && budget.CaptureStatistics().CommittedBytes == expectedBacking,
+                    "completed builder retained authority or lost numerical history");
+            }
+            finally { transfer.Dispose(); }
+            Require(budget.CaptureStatistics().CommittedBytes == 0, "direct owner teardown leaked charge");
+            trace($"direct seed={seed} step={step} builderCount={count} builderPeak={expectedBacking} workspaceProcess={processLength} workspaceInitialized={initializedLength} finalCommitted=0");
+        }
+    }
+
     private sealed class PoolOracle(int seed, int remaining, Action<string> trace)
     {
         internal SeededRandom Random { get; } = new(seed);

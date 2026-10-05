@@ -224,6 +224,22 @@ public sealed class PackageSmokeTests
                             {
                                 return 1;
                             }
+                            int result = workspace.Process(8, 17, static (values, value) =>
+                            {
+                                values.Fill(value);
+                                return values[7];
+                            });
+                            workspace.Dispose();
+                            NativeOwnerDiagnosticSnapshot workspaceSnapshot = workspace.CaptureDiagnosticSnapshot();
+                            if (result != 17
+                                || workspaceSnapshot.Model != NativeOwnerModel.ThreadConfinedWorkspace
+                                || workspaceSnapshot.Lifecycle != NativeOwnerLifecycle.Disposed
+                                || workspaceSnapshot.OutstandingNativeBytes != 0
+                                || workspaceSnapshot.PeakOutstandingNativeBytes != 32
+                                || workspace.GetStatistics().PeakInitializedPayloadBytes != 32)
+                            {
+                                return 6;
+                            }
                         }
 
                         if (!builder.TryEnsureCapacity(5))
@@ -234,9 +250,15 @@ public sealed class PackageSmokeTests
                         NativeTransfer<int> transfer = builder.Complete();
                         try
                         {
+                            NativeOwnerDiagnosticSnapshot builderSnapshot = builder.CaptureDiagnosticSnapshot();
                             if (transfer.Id != builder.Id
                                 || transfer.Read(static view => view[0]) != 42
-                                || budget.CaptureStatistics().CommittedBytes != 32)
+                                || budget.CaptureStatistics().CommittedBytes != 32
+                                || builderSnapshot.Model != NativeOwnerModel.SingleWriterBuilder
+                                || builderSnapshot.Lifecycle != NativeOwnerLifecycle.Returned
+                                || builderSnapshot.OutstandingNativeBytes != 0
+                                || builderSnapshot.PeakOutstandingNativeBytes != 32
+                                || builder.GetStatistics().PeakInitializedPayloadBytes != 4)
                             {
                                 return 3;
                             }
@@ -352,6 +374,11 @@ public sealed class PackageSmokeTests
                         NativeTransfer<uint> transfer = builder.Complete();
                         try
                         {
+                            if (builder.GetStatistics().OutstandingNativeBytes != 0
+                                || builder.CaptureDiagnosticSnapshot().PeakInitializedPayloadBytes != 16)
+                            {
+                                return 9;
+                            }
                             return transfer.Read(static values =>
                                 values.Length == 4
                                     && values[0] == 11
@@ -2133,6 +2160,7 @@ public sealed class PackageSmokeTests
                         NativeGeneratedScenarios.RunPreparedArena(seed, 512, System.Console.WriteLine);
                         NativeGeneratedScenarios.RunLayouts(seed, 64, System.Console.WriteLine);
                         NativeGeneratedScenarios.RunOutliers(seed, 128, System.Console.WriteLine);
+                        NativeGeneratedScenarios.RunDirectOwners(seed, 128, System.Console.WriteLine);
                         await NativeGeneratedScenarios.RunSharingSchedulesAsync(seed, 32, System.Console.WriteLine);
                         await NativeGeneratedScenarios.RunBorrowReturnSchedulesAsync(seed, 16, System.Console.WriteLine);
                     }

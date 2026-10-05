@@ -3584,6 +3584,8 @@ public sealed class VoxelSharedContractTests
             JsonSerializer.Deserialize<PressureAllocatorDiagnosticSnapshot>(json, VoxelJson.Options);
         Assert.Equal(mapped, restored);
         PressureAllocatorDiagnosticSnapshot unavailable = default;
+        Assert.Equal(unavailable,
+            Demos.VoxelChunkPipeline.NAM.NativePressureSession.CaptureAllocatorDiagnostic(default));
         Assert.False(unavailable.Available);
         Assert.Null(unavailable.OwnerId);
         Assert.Null(unavailable.Model);

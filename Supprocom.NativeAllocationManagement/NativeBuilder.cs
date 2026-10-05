@@ -59,6 +59,80 @@ public sealed class NativeBuilder<T> : IDisposable
     /// <summary>Gets the stable backing-ownership lineage, retained through completion and move.</summary>
     public long Id => _id;
 
+    /// <summary>Captures real direct-block ownership and initialized-prefix history, including after completion or disposal.</summary>
+    /// <remarks>Capture rejects an entered builder operation, grants no payload authority and does not change the lifetime. The growable block is one storage segment: its initial acquisition counts once; subsequent reallocation is not another segment acquisition. Peaks cover known acquired extents, not opaque backend old/new coexistence or RSS.</remarks>
+    public NativeOwnerStatistics GetStatistics()
+    {
+        EnterObservation();
+        try
+        {
+            return CaptureDirectStatistics();
+        }
+        finally
+        {
+            ExitOperation();
+            GC.KeepAlive(this);
+        }
+    }
+
+    /// <summary>Captures the direct block control and numeric history without reopening completed ownership.</summary>
+    /// <remarks>A builder has no generations, scope epochs, bump traversal, retired banks, managed roots or quarantine. Its direct block is its one possible retained/active control.</remarks>
+    public NativeOwnerDiagnosticSnapshot CaptureDiagnosticSnapshot()
+    {
+        EnterObservation();
+        try
+        {
+            NativeOwnerStatistics statistics = CaptureDirectStatistics();
+            return new NativeOwnerDiagnosticSnapshot(statistics.Lifecycle, 0, 0,
+                NativeMemoryAccounting.CurrentMetricsEpoch, statistics.SegmentCount, 0, 0,
+                -1, -1, statistics.SegmentCount, statistics.AvailableSegmentCount,
+                0, 0, 0, 0, 0, false)
+            {
+                OwnerId = _id,
+                Model = NativeOwnerModel.SingleWriterBuilder,
+                OutstandingNativeBytes = statistics.OutstandingNativeBytes,
+                PeakOutstandingNativeBytes = statistics.PeakOutstandingNativeBytes,
+                InitializedPayloadBytes = statistics.InitializedPayloadBytes,
+                PeakInitializedPayloadBytes = statistics.PeakInitializedPayloadBytes
+            };
+        }
+        finally
+        {
+            ExitOperation();
+            GC.KeepAlive(this);
+        }
+    }
+
+    private void EnterObservation()
+    {
+        if (Interlocked.CompareExchange(ref _writerGate, 1, 0) != 0)
+        {
+            throw new InvalidOperationException("A builder observation cannot run during another builder operation.");
+        }
+    }
+
+    private NativeOwnerStatistics CaptureDirectStatistics()
+    {
+        int state = Volatile.Read(ref _state);
+        NativeOwnerLifecycle lifecycle = state == Active ? NativeOwnerLifecycle.Active
+            : state == Completed ? NativeOwnerLifecycle.Returned : NativeOwnerLifecycle.Disposed;
+        long initializedBytes = (long)_count * Unsafe.SizeOf<T>();
+        long backingBytes = checked((long)_block.ByteLength);
+        int blockCount = _block.Pointer == IntPtr.Zero ? 0 : 1;
+        return new NativeOwnerStatistics(lifecycle, 0, state == Active ? initializedBytes : 0,
+            backingBytes, 0, blockCount, state == Active && _count == 0 ? blockCount : 0,
+            0, 0, 0, _capacity == 0 ? 0 : 1)
+        {
+            OwnerId = _id,
+            Model = NativeOwnerModel.SingleWriterBuilder,
+            UsableCapacityBytes = backingBytes,
+            OutstandingNativeBytes = backingBytes,
+            PeakOutstandingNativeBytes = (long)_capacity * Unsafe.SizeOf<T>(),
+            InitializedPayloadBytes = state == Active ? initializedBytes : 0,
+            PeakInitializedPayloadBytes = initializedBytes
+        };
+    }
+
     /// <summary>Gets the initialized element count.</summary>
     public int Count => ReadState(
         nameof(Count),
@@ -854,7 +928,6 @@ public sealed class NativeBuilder<T> : IDisposable
                 length,
                 _capacity);
         _block = default;
-        _capacity = 0;
         return transfer;
     }
 
@@ -903,7 +976,6 @@ public sealed class NativeBuilder<T> : IDisposable
     {
         NativeBlock block = _block;
         _block = default;
-        _capacity = 0;
         NativeBlockAllocator.Free(block);
     }
 

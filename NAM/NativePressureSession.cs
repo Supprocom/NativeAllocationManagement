@@ -618,6 +618,10 @@ internal sealed class NativePressureSession :
         CaptureAllocatorDiagnostic(
             NativeOwnerDiagnosticSnapshot snapshot)
     {
+        if (snapshot.Model == NativeOwnerModel.Unspecified)
+        {
+            return default;
+        }
         return new PressureAllocatorDiagnosticSnapshot(
             true,
             snapshot.Lifecycle.ToString(),

@@ -303,8 +303,12 @@ public readonly record struct NativeMemoryStatistics(
 
 /// <summary>Reports the current physical and logical state of one native owner.</summary>
 /// <remarks>
-/// Requested bytes describe live lease demand; fast arenas report occupied bump
-/// bytes, including inter-range alignment. Retained bytes describe known owned
+/// Requested bytes describe initialized live demand; thread-confined arenas
+/// report occupied bump bytes, including inter-range alignment and pending
+/// reservations. InitializedPayloadBytes separates their published logical demand.
+/// Direct workspaces also report bounded entered Process demand on prior
+/// zero-initialized reusable storage, without publishing a persistent binding.
+/// Retained bytes describe known owned
 /// backing extents, including native headers and backend size-alignment padding.
 /// Provider-owned ranges are reported separately in BorrowedBytes.
 /// Growth slack is therefore derived only while a request is live; retained idle
@@ -370,12 +374,12 @@ public readonly record struct NativeOwnerStatistics(
 /// <param name="Generation">The current or most recent generation identity.</param>
 /// <param name="ScopeEpoch">The current scoped-lifetime epoch, or zero without a current generation.</param>
 /// <param name="MetricsEpoch">The process accounting epoch; resets are confined to internal measurement tests.</param>
-/// <param name="ActiveRecords">Current active allocation records, transfer slots, and the grouped fast scoped lane.</param>
+/// <param name="ActiveRecords">Current active allocation records, transfer slots, the grouped fast scoped lane, or the direct builder/workspace block control.</param>
 /// <param name="ScopedRecords">Current scoped records, including the grouped fast scoped lane.</param>
 /// <param name="ReferenceRoots">Current managed reference roots held for native reference slots.</param>
 /// <param name="OrdinaryTraversalIndex">The forward bump-search frontier, or minus one without a current generation.</param>
 /// <param name="ScopedTraversalIndex">The reverse scoped-search frontier; minus one denotes no candidate.</param>
-/// <param name="RetainedSegmentCount">The current generation's slab and bump segments, including attached backing.</param>
+/// <param name="RetainedSegmentCount">The current storage bank's slab/bump segments, including attached backing, or the one possible direct block.</param>
 /// <param name="AvailableSegmentCount">Current idle slabs and completely idle bump segments.</param>
 /// <param name="RetiredGenerationCount">Generations awaiting entered-operation drain, excluding quarantine.</param>
 /// <param name="RetiredSegmentCount">Segments in retired or quarantined generation banks.</param>

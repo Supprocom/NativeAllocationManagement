@@ -6,6 +6,109 @@ namespace Supprocom.NativeAllocationManagement.Tests;
 public sealed class NativeWorkspaceAnalyzerTests
 {
     [Fact]
+    public async Task DisposedWorkspaceCanBeObservedWithoutRestoringPayloadAuthority()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    using NativeWorkspace<int> workspace = new(4);
+                    workspace.Dispose();
+                    _ = workspace.GetStatistics();
+                    _ = workspace.CaptureDiagnosticSnapshot();
+                }
+            }
+            """);
+        AssertNoNativeDiagnostics(diagnostics);
+    }
+
+    [Fact]
+    public async Task DisposedWorkspaceCompoundObservationRetainsConstructionWithoutAuthority()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+            public static class Sample
+            {
+                public static bool Run()
+                {
+                    using (NativeWorkspace<int> workspace = new(4))
+                    {
+                        workspace.Dispose();
+                        NativeOwnerDiagnosticSnapshot snapshot = workspace.CaptureDiagnosticSnapshot();
+                        return snapshot.OutstandingNativeBytes == 0
+                            && snapshot.PeakOutstandingNativeBytes == 16
+                            && workspace.GetStatistics().InitializedPayloadBytes == 0;
+                    }
+                }
+            }
+            """);
+        AssertNoNativeDiagnostics(diagnostics);
+    }
+
+    [Fact]
+    public async Task ObservingDisposedWorkspaceDoesNotAllowAnotherProcess()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    using NativeWorkspace<int> workspace = new(4);
+                    workspace.Dispose();
+                    _ = workspace.GetStatistics();
+                    _ = workspace.Process(4, 17, static (values, state) => state);
+                }
+            }
+            """);
+        Assert.Contains("NAM1037", AnalyzerContractTests.NativeDiagnostics(diagnostics), StringComparer.Ordinal);
+    }
+
+    [Fact]
+    public async Task AmbiguousWorkspaceObservationDoesNotBypassItsStateDiagnostic()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+            public static class Sample
+            {
+                public static void Run(bool end)
+                {
+                    using NativeWorkspace<int> workspace = new(4);
+                    if (end) workspace.Dispose();
+                    _ = workspace.CaptureDiagnosticSnapshot();
+                }
+            }
+            """);
+        Assert.Contains("NAM1037", AnalyzerContractTests.NativeDiagnostics(diagnostics), StringComparer.Ordinal);
+    }
+
+    [Fact]
+    public async Task ClearedWorkspaceBindingCannotObserveTheFormerConstructedControl()
+    {
+        ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+            """
+            using Supprocom.NativeAllocationManagement;
+            public static class Sample
+            {
+                public static void Run()
+                {
+                    NativeWorkspace<int> workspace = new(4);
+                    workspace.Dispose();
+                    workspace = null!;
+                    _ = workspace.CaptureDiagnosticSnapshot();
+                }
+            }
+            """);
+        Assert.Contains("NAM1037", AnalyzerContractTests.NativeDiagnostics(diagnostics), StringComparer.Ordinal);
+    }
+
+    [Fact]
     public async Task UsingWorkspaceAndBoundedOperationsAreAccepted()
     {
         ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(

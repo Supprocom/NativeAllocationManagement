@@ -18,6 +18,7 @@ public sealed class NativeWorkspace<T> : IDisposable
     private int _activeUse;
     private int _length;
     private int _published;
+    private int _peakInitializedLength;
 
     /// <summary>Creates one workspace with a fixed element reservation.</summary>
     /// <param name="preLease">The fixed reservation in elements of <typeparamref name="T"/>.</param>
@@ -50,6 +51,66 @@ public sealed class NativeWorkspace<T> : IDisposable
 
     /// <summary>Gets the stable process-local backing owner identity.</summary>
     public long Id => _id;
+
+    /// <summary>Captures real fixed backing and logical range demand, including during owner-thread callbacks and after release.</summary>
+    /// <remarks>Checked Initialize publishes demand only on completion. Process temporarily enters already zero-initialized reusable storage but does not publish a persistent range. Its entered demand remains a real peak even if a later callback throws.</remarks>
+    public NativeOwnerStatistics GetStatistics()
+    {
+        ValidateOwnerThread(nameof(GetStatistics));
+        NativeOwnerStatistics statistics = CaptureDirectStatistics();
+        GC.KeepAlive(this);
+        return statistics;
+    }
+
+    /// <summary>Captures the direct block control and its lifetime histories without borrowing payload.</summary>
+    /// <remarks>A workspace has no generations, scope epochs, bump traversal, retired banks, managed roots or quarantine. Capture remains owner-thread confined after release.</remarks>
+    public NativeOwnerDiagnosticSnapshot CaptureDiagnosticSnapshot()
+    {
+        ValidateOwnerThread(nameof(CaptureDiagnosticSnapshot));
+        NativeOwnerStatistics statistics = CaptureDirectStatistics();
+        NativeOwnerDiagnosticSnapshot snapshot = new(statistics.Lifecycle, 0, 0,
+            NativeMemoryAccounting.CurrentMetricsEpoch, statistics.SegmentCount, 0, 0,
+            -1, -1, statistics.SegmentCount, statistics.AvailableSegmentCount,
+            0, 0, 0, 0, 0, false)
+        {
+            OwnerId = _id,
+            Model = NativeOwnerModel.ThreadConfinedWorkspace,
+            OutstandingNativeBytes = statistics.OutstandingNativeBytes,
+            PeakOutstandingNativeBytes = statistics.PeakOutstandingNativeBytes,
+            InitializedPayloadBytes = statistics.InitializedPayloadBytes,
+            PeakInitializedPayloadBytes = statistics.PeakInitializedPayloadBytes
+        };
+        GC.KeepAlive(this);
+        return snapshot;
+    }
+
+    private NativeOwnerStatistics CaptureDirectStatistics()
+    {
+        bool active = _state == Active;
+        // Positive one is a checked Initialize/Access/Read. Negative values
+        // encode the already initialized Process range as ~length, including
+        // zero and Int32.MaxValue. Every existing use/disposal guard tests != 0.
+        int length = 0;
+        if (active)
+        {
+            length = _activeUse < 0 ? ~_activeUse : _published != 0 ? _length : 0;
+        }
+        long initializedBytes = (long)length * Unsafe.SizeOf<T>();
+        long backingBytes = checked((long)_block.ByteLength);
+        int blockCount = _block.Pointer == IntPtr.Zero ? 0 : 1;
+        return new NativeOwnerStatistics(active ? NativeOwnerLifecycle.Active : NativeOwnerLifecycle.Disposed,
+            0, initializedBytes, backingBytes, 0, blockCount, length == 0 && _activeUse == 0 ? blockCount : 0,
+            0, 0, 0, 1)
+        {
+            OwnerId = _id,
+            Model = NativeOwnerModel.ThreadConfinedWorkspace,
+            UsableCapacityBytes = backingBytes,
+            OutstandingNativeBytes = backingBytes,
+            PeakOutstandingNativeBytes = (long)_capacity * Unsafe.SizeOf<T>(),
+            InitializedPayloadBytes = initializedBytes,
+            PeakInitializedPayloadBytes = (long)_peakInitializedLength * Unsafe.SizeOf<T>()
+        };
+    }
 
     /// <summary>Gets the fixed physical element capacity.</summary>
     public int Capacity
@@ -98,6 +159,7 @@ public sealed class NativeWorkspace<T> : IDisposable
 
             _length = length;
             _published = 1;
+            _peakInitializedLength = Math.Max(_peakInitializedLength, length);
         }
         catch
         {
@@ -157,11 +219,11 @@ public sealed class NativeWorkspace<T> : IDisposable
     {
         ArgumentNullException.ThrowIfNull(initializer);
         ArgumentNullException.ThrowIfNull(reader);
-        EnterUse(nameof(Process));
+        EnterProcessUse(length);
         try
         {
-            ValidateProcessLength(length);
             cancellationToken.ThrowIfCancellationRequested();
+            _peakInitializedLength = Math.Max(_peakInitializedLength, length);
             Span<T> values = CreateSpan(length);
             initializer(values);
             cancellationToken.ThrowIfCancellationRequested();
@@ -182,11 +244,11 @@ public sealed class NativeWorkspace<T> : IDisposable
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(processor);
-        EnterUse(nameof(Process));
+        EnterProcessUse(length);
         try
         {
-            ValidateProcessLength(length);
             cancellationToken.ThrowIfCancellationRequested();
+            _peakInitializedLength = Math.Max(_peakInitializedLength, length);
             TResult result = processor(CreateSpan(length), state);
             cancellationToken.ThrowIfCancellationRequested();
             return result;
@@ -256,6 +318,14 @@ public sealed class NativeWorkspace<T> : IDisposable
     {
         _activeUse = 0;
         GC.KeepAlive(this);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void EnterProcessUse(int length)
+    {
+        ValidateAvailable(nameof(Process));
+        ValidateProcessLength(length);
+        _activeUse = ~length;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
