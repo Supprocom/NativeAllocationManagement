@@ -90,8 +90,8 @@ public readonly struct NativeTransfer<T> : IDisposable
     internal void AdoptSharedFinalization() => GetControl("NativeShared.Adopt").AdoptSharedFinalization(_authorityVersion);
 
     internal NativeStorageLifetimePin PinForSharing(out IntPtr pointer, out nuint ownedBytes,
-        out nuint borrowedBytes, out NativeMemoryBudget? budget) =>
-        GetControl("NativeShared.Pin").PinForSharing(_authorityVersion, out pointer, out ownedBytes, out borrowedBytes, out budget);
+        out nuint borrowedBytes, out NativeMemoryBudget? budget, out long allocationOrdinal) =>
+        GetControl("NativeShared.Pin").PinForSharing(_authorityVersion, out pointer, out ownedBytes, out borrowedBytes, out budget, out allocationOrdinal);
 
     internal static NativeTransfer<T> Create(NativeOwnerKernel kernel, NativePoolLease lease, string operation) =>
         new(NativeTransferControl<T>.Create(kernel, lease, operation), authorityVersion: 1);
@@ -261,7 +261,7 @@ internal class NativeTransferControl<T>
     }
 
     internal unsafe NativeStorageLifetimePin PinForSharing(long authorityVersion, out IntPtr pointer,
-        out nuint ownedBytes, out nuint borrowedBytes, out NativeMemoryBudget? budget)
+        out nuint ownedBytes, out nuint borrowedBytes, out NativeMemoryBudget? budget, out long allocationOrdinal)
     {
         EnterTransferOperation(authorityVersion, "NativeShared.Pin");
         try
@@ -272,6 +272,7 @@ internal class NativeTransferControl<T>
                 ownedBytes = _block.ByteLength;
                 borrowedBytes = 0;
                 budget = _block.Budget;
+                allocationOrdinal = _block.ByteLength == 0 ? 0 : 1;
                 return default;
             }
             _kernel.PrepareTransferReturnCapacity(_generation, _allocationId);
@@ -283,6 +284,7 @@ internal class NativeTransferControl<T>
                 ownedBytes = segment?.AllocationByteLength ?? 0;
                 borrowedBytes = segment is { AllocationByteLength: 0 } ? segment.ByteLength : 0;
                 budget = _kernel.BudgetForSharing;
+                allocationOrdinal = segment?.AllocationOrdinal ?? 0;
                 return token.MoveToLifetimePin();
             }
             finally { token.Dispose(); }
@@ -577,8 +579,7 @@ internal class NativeTransferControl<T>
             finally
             {
                 Volatile.Write(ref _state, Retiring);
-                budget?.RecordOwnershipTransition(NativeMemoryTraceKind.Retired, _ownerId,
-                    _allocationId == 0 ? _ownerId : _allocationId, checked((nuint)_backingBytes));
+                TraceOwnership(budget, NativeMemoryTraceKind.Retired);
                 // The last callback may have exited while the state was Moving.
                 // Recheck after publication; the terminal CAS arbitrates with its exit.
                 CompleteRetirement();
@@ -626,8 +627,7 @@ internal class NativeTransferControl<T>
         Volatile.Write(ref _authorityVersion, authorityVersion);
         NativeOperationAdmission.Reset(ref _operationAdmission);
         NativeMemoryBudget? budget = _kernel?.BudgetForSharing ?? _block.Budget;
-        budget?.RecordOwnershipTransition(NativeMemoryTraceKind.Moved, _ownerId,
-            _allocationId == 0 ? _ownerId : _allocationId, checked((nuint)_backingBytes));
+        TraceOwnership(budget, NativeMemoryTraceKind.Moved);
         Volatile.Write(ref _state, Active);
     }
 
@@ -635,6 +635,7 @@ internal class NativeTransferControl<T>
     {
         if (Volatile.Read(ref _payloadReturned) != 0) return;
         NativeMemoryBudget? budget = _kernel?.BudgetForSharing ?? _block.Budget;
+        long ordinal = budget is { TraceEnabled: true } ? BackingOrdinal : 0;
         try
         {
             NativeMemoryTestHooks.CheckManagedPublicationBoundary(operation, 4, "unique payload authority return");
@@ -650,8 +651,18 @@ internal class NativeTransferControl<T>
         // objects once the return obligation really ended.
         CompleteStorageReturn();
         NativeMemoryTestHooks.CheckManagedPublicationBoundary(operation, 5, "unique return trace emission after successful cleanup");
-        budget?.RecordOwnershipTransition(NativeMemoryTraceKind.UniqueReturned, _ownerId,
-            _allocationId == 0 ? _ownerId : _allocationId, checked((nuint)_backingBytes));
+        TraceOwnership(budget, NativeMemoryTraceKind.UniqueReturned, ordinal);
+    }
+
+    private protected long BackingOrdinal => _allocationState?.Segment?.AllocationOrdinal
+        ?? (_block.ByteLength == 0 ? 0 : 1);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void TraceOwnership(NativeMemoryBudget? budget, NativeMemoryTraceKind kind, long? ordinal = null)
+    {
+        if (budget is not { TraceEnabled: true }) return;
+        budget.RecordOwnershipTransition(kind, _ownerId, _allocationId == 0 ? _ownerId : _allocationId,
+            checked((nuint)_backingBytes), ordinal ?? BackingOrdinal);
     }
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "This boundary captures any failure to preserve cleanup and report the original error.")]

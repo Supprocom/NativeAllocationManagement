@@ -149,14 +149,15 @@ public sealed partial class NativeMemoryBudget
             {
                 _activeAllocationCount++;
                 IncrementHistory(ref _allocationCount);
-                RecordTrace(NativeMemoryTraceKind.Allocated, ownerId, byteLength);
+                RecordTrace(NativeMemoryTraceKind.Allocated, ownerId, byteLength, allocationOrdinal: 1);
             }
-            RecordTrace(NativeMemoryTraceKind.ReservationBackingPrepared, ownerId, byteLength, correlationId: ownerId);
+            RecordTrace(NativeMemoryTraceKind.ReservationBackingPrepared, ownerId, byteLength,
+                allocationOrdinal: byteLength == 0 ? 0 : 1, correlationId: ownerId);
             return new NativeBlock(acquired.Pointer, acquired.ByteLength, acquired.MetricsEpoch, this, ownerId);
         }
     }
 
-    internal void RecordApplicationBackingFailure(nuint bytes, long ownerId, bool backendFailure)
+    internal void RecordApplicationBackingFailure(nuint bytes, long ownerId, bool backendFailure, long allocationOrdinal)
     {
         lock (_gate)
         {
@@ -166,7 +167,8 @@ public sealed partial class NativeMemoryBudget
                 IncrementHistory(ref _applicationAdmission.BackendFailures);
                 IncrementHistory(ref _failedAllocationCount);
             }
-            RecordTrace(NativeMemoryTraceKind.ReservationBackingFailed, ownerId, bytes, correlationId: ownerId);
+            RecordTrace(NativeMemoryTraceKind.ReservationBackingFailed, ownerId, bytes,
+                allocationOrdinal: allocationOrdinal, correlationId: ownerId);
         }
     }
 
@@ -181,7 +183,8 @@ public sealed partial class NativeMemoryBudget
             ledger.Outstanding--;
             ledger.PreparedBytes -= bytes;
             IncrementHistory(ref ledger.Activated);
-            RecordTrace(NativeMemoryTraceKind.ReservationActivated, ownerId, byteLength, correlationId: ownerId);
+            RecordTrace(NativeMemoryTraceKind.ReservationActivated, ownerId, byteLength,
+                allocationOrdinal: byteLength == 0 ? 0 : 1, correlationId: ownerId);
         }
     }
 
@@ -190,16 +193,18 @@ public sealed partial class NativeMemoryBudget
         lock (_gate)
         {
             IncrementHistory(ref _applicationAdmission!.InitializationFailures);
-            RecordTrace(NativeMemoryTraceKind.ReservationInitializationFailed, ownerId, bytes, correlationId: ownerId);
+            RecordTrace(NativeMemoryTraceKind.ReservationInitializationFailed, ownerId, bytes,
+                allocationOrdinal: bytes == 0 ? 0 : 1, correlationId: ownerId);
         }
     }
 
-    internal void RecordApplicationReturnFailure(nuint bytes, long ownerId)
+    internal void RecordApplicationReturnFailure(nuint bytes, long ownerId, long allocationOrdinal)
     {
         lock (_gate)
         {
             IncrementHistory(ref _applicationAdmission!.ReturnFailures);
-            RecordTrace(NativeMemoryTraceKind.ReservationReturnFailed, ownerId, bytes, correlationId: ownerId);
+            RecordTrace(NativeMemoryTraceKind.ReservationReturnFailed, ownerId, bytes,
+                allocationOrdinal: allocationOrdinal, correlationId: ownerId);
         }
     }
 
@@ -236,7 +241,8 @@ public sealed partial class NativeMemoryBudget
                 NativeMemoryReservationOutcome.AuthorityExhausted => NativeMemoryTraceKind.ReservationAuthorityExhausted,
                 _ => NativeMemoryTraceKind.ReservationReturned
             };
-            RecordTrace(kind, ownerId, byteLength, correlationId: ownerId);
+            RecordTrace(kind, ownerId, byteLength,
+                allocationOrdinal: block.ByteLength == 0 ? 0 : 1, correlationId: ownerId);
         }
     }
 }

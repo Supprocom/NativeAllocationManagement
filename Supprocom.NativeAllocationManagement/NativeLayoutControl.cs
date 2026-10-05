@@ -62,7 +62,8 @@ internal sealed class NativeLayoutControl : NativeMemoryReservationControl<byte>
         _layoutPrepared = true;
         NativeMemoryBudget budget = OwnedBlock.Budget!;
         if (budget.TraceEnabled)
-            budget.RecordOwnershipTransition(NativeMemoryTraceKind.LayoutPrepared, Id, _layout.Id, (nuint)_layout.ExtentBytes);
+            budget.RecordOwnershipTransition(NativeMemoryTraceKind.LayoutPrepared, Id, _layout.Id, (nuint)_layout.ExtentBytes,
+                BackingOrdinal);
     }
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "Every consumed layout activation failure must reconcile its charged resource before preserving the original exception.")]
@@ -107,7 +108,8 @@ internal sealed class NativeLayoutControl : NativeMemoryReservationControl<byte>
         _initializationCompleted = true;
         NativeMemoryBudget budget = OwnedBlock.Budget!;
         if (budget.TraceEnabled)
-            budget.RecordOwnershipTransition(NativeMemoryTraceKind.LayoutInitialized, Id, _layout.Id, (nuint)_layout.LogicalBytes);
+            budget.RecordOwnershipTransition(NativeMemoryTraceKind.LayoutInitialized, Id, _layout.Id, (nuint)_layout.LogicalBytes,
+                BackingOrdinal);
     }
 
     private void ClearPadding(scoped Span<byte> backing)
@@ -178,7 +180,8 @@ internal sealed class NativeLayoutControl : NativeMemoryReservationControl<byte>
                 RecordLayoutHistory(ref _detachedOwners, 1);
                 NativeMemoryBudget sourceBudget = OwnedBlock.Budget!;
                 if (sourceBudget.TraceEnabled)
-                    sourceBudget.RecordOwnershipTransition(NativeMemoryTraceKind.Detached, Id, control.Id, (nuint)region.Bytes);
+                    sourceBudget.RecordOwnershipTransition(NativeMemoryTraceKind.Detached, Id, control.Id, (nuint)region.Bytes,
+                        BackingOrdinal);
                 return NativeTransfer<T>.CreateAdmitted(control, destinationVersion);
             }
             finally { permission?.Dispose(); }

@@ -672,7 +672,7 @@ public sealed class NativeSharingTests
             correlated++;
             Assert.Equal(owner.Id, entry.CorrelationId);
             Assert.Equal(owner.CaptureSnapshot().OwnerId, entry.OwnerId);
-            Assert.Null(entry.AllocationOrdinal);
+            Assert.Equal(1L, entry.AllocationOrdinal);
             if (entry.Kind == NativeMemoryTraceKind.PayloadReturned) returns++;
         }
         Assert.Equal(8, correlated);

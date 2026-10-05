@@ -5,6 +5,10 @@ namespace Supprocom.NativeAllocationManagement;
 // has no references to kernels, generations, segments or native payloads.
 internal sealed class NativeOwnerBackingHistory
 {
+    internal NativeOwnerBackingHistory(long ownerId = 0) => OwnerId = ownerId;
+
+    internal long OwnerId { get; }
+
     private long _outstandingBytes;
     private long _detachedBytes;
     private long _peakOutstandingBytes;

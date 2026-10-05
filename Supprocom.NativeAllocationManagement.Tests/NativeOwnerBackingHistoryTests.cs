@@ -309,11 +309,11 @@ public sealed class NativeOwnerBackingHistoryTests
     public void FreedUnpublishedSegmentRetainsItsActualPeakAndCannotDebitTwice()
     {
         NativeMemoryBudget budget = new(64);
-        NativeOwnerBackingHistory history = new();
+        NativeOwnerBackingHistory history = new(1);
         NativeGenerationOwner owner = new(0, budget, 1);
         owner.ReleaseToNative();
         NativeSegment segment = NativeSegment.Allocate(64, "BackingTest", 0, "publication",
-            NativeOwnerLifecycle.Active, false, budget, ownerId: 1, backingHistory: history);
+            NativeOwnerLifecycle.Active, false, budget, backingHistory: history);
         try
         {
             Assert.Equal((64L, 0L, 64L), history.Capture());

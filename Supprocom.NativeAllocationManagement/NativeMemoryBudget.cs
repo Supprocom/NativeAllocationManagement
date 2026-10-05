@@ -247,10 +247,11 @@ public sealed partial class NativeMemoryBudget
         }
     }
 
-    internal void RecordOwnershipTransition(NativeMemoryTraceKind kind, long ownerId, long correlationId, nuint bytes)
+    internal void RecordOwnershipTransition(NativeMemoryTraceKind kind, long ownerId, long correlationId, nuint bytes,
+        long allocationOrdinal = 0)
     {
         if (_trace.Length == 0) return;
-        lock (_gate) { RecordTrace(kind, ownerId, bytes, correlationId: correlationId); }
+        lock (_gate) { RecordTrace(kind, ownerId, bytes, allocationOrdinal: allocationOrdinal, correlationId: correlationId); }
     }
 
     internal void RecordGenerationTransition(NativeMemoryTraceKind kind, long ownerId, long generation, nuint bytes)

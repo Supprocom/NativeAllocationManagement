@@ -140,7 +140,8 @@ internal class NativeMemoryReservationControl<T> : NativeTransferControl<T> wher
             PublishAuthorityVersion(next);
             NativeMemoryBudget budget = Budget;
             if (budget.TraceEnabled)
-                budget.RecordOwnershipTransition(NativeMemoryTraceKind.ReservationMoved, Id, Id, RequiredBytes);
+                budget.RecordOwnershipTransition(NativeMemoryTraceKind.ReservationMoved, Id, Id, RequiredBytes,
+                    BackingOrdinal);
             PublishControlState(Reserved);
             return next;
         }
@@ -252,7 +253,8 @@ internal class NativeMemoryReservationControl<T> : NativeTransferControl<T> wher
         {
             if (!_backingPrepared) NativeBlockAllocator.Free(acquired);
             IncrementControlHistory(ref _preparationFailures);
-            Budget.RecordApplicationBackingFailure(RequiredBytes, Id, preparationFailure is NativeAllocationFailedException);
+            Budget.RecordApplicationBackingFailure(RequiredBytes, Id, preparationFailure is NativeAllocationFailedException,
+                BackingOrdinal);
             throw;
         }
     }
@@ -373,7 +375,7 @@ internal class NativeMemoryReservationControl<T> : NativeTransferControl<T> wher
         catch
         {
             RecordReturnFailure();
-            budget.RecordApplicationReturnFailure(RequiredBytes, Id);
+            budget.RecordApplicationReturnFailure(RequiredBytes, Id, BackingOrdinal);
             throw;
         }
         CompleteStorageReturn();

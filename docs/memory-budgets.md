@@ -163,10 +163,33 @@ The ordinal survives deterministic or emergency cleanup in existing native-heade
 padding; the 64-byte header extent is unchanged. Exhaustion is checked before
 admission/publication. Empty owners, pending/refused/failed acquisition attempts
 have no successfully acquired backing ordinal.
-Aggregate preparation has no single ordinal;
-other transitions lacking an ordinal report unavailable (`null`), not an invented
-zero. Full correlation for other backing/pointer families remains required before
-the complete release boundary.
+Synchronized owners likewise keep their existing lifetime segment sequence across
+generations and reuse. Failed backend/admission attempts do not advance it;
+acquired storage that later fails metadata publication consumes its identity and
+is traced through its actual physical release. The segment replaces its repeated
+owner-ID field with this ordinal; immutable owner identity is shared through the
+existing numeric backing-history record. No owner/kernel reference is added.
+Borrowed registration can have a segment identity but never earns an owned-byte
+charge or a fabricated backend acquisition/free event.
+
+Unique move/retirement/return events and immutable sharing/weak events identify
+their backing within the same owner lineage. Unique controls derive the ordinal
+only for enabled tracing, before clearing released authority. Shared control keeps
+one additional Int64 number after payload return, not a payload/segment/allocator
+reference; expired weak events can still be correlated without retaining native
+storage. Count its eight represented bytes in sharing metadata cost. Producer
+permissions have no acquired-backing ordinal while pending; successful direct
+preparation, activation and return use their existing single block. Empty ranges
+do not invent a physical identity. Typed layouts use that same direct lineage.
+
+`CorrelationId` has event-specific meaning: pointer/control identity for ordinary
+ownership events, layout descriptor identity for layout preparation/initialization,
+destination control identity for layout-field detach, source sharing-control
+identity for shared-slice detach, and actual generation for generation events.
+It is not interchangeable with `AllocationOrdinal` or `OwnerId`.
+Aggregate preparation/generation events have no single backing ordinal;
+other transitions lacking an acquired backing report unavailable (`null`), not an
+invented zero. Identity fields are observations, not lifetime or borrowing authority.
 
 Sequence exhaustion stops new event recording rather than wrapping an identity.
 Dropped-count exhaustion saturates and sets `TraceOverflowed`; after that flag,

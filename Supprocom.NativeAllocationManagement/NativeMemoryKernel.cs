@@ -800,7 +800,7 @@ internal sealed class NativeSegment
     private long _metricsEpoch;
     private readonly bool _ownsNativeMemory;
     private readonly NativeMemoryBudget? _budget;
-    private readonly long _ownerId;
+    private readonly long _allocationOrdinal;
     private readonly NativeOwnerBackingHistory? _backingHistory;
 
     private NativeSegment(
@@ -810,7 +810,7 @@ internal sealed class NativeSegment
         bool ownsNativeMemory,
         SafeBuffer? externalBuffer = null,
         NativeMemoryBudget? budget = null,
-        long ownerId = 0,
+        long allocationOrdinal = 0,
         NativeOwnerBackingHistory? backingHistory = null)
     {
         _pointer = pointer;
@@ -819,7 +819,7 @@ internal sealed class NativeSegment
         _ownsNativeMemory = ownsNativeMemory;
         _externalBuffer = externalBuffer;
         _budget = budget;
-        _ownerId = ownerId;
+        _allocationOrdinal = allocationOrdinal;
         _backingHistory = backingHistory;
         AllocationByteLength = ownsNativeMemory
             ? NativeAlignedAllocation.GetBackingByteLength(byteLength) : 0;
@@ -830,6 +830,8 @@ internal sealed class NativeSegment
     internal nuint AllocationByteLength { get; }
 
     internal long MetricsEpoch => _metricsEpoch;
+
+    internal long AllocationOrdinal => _allocationOrdinal;
 
     internal IntPtr Pointer => Volatile.Read(ref _pointer);
 
@@ -854,14 +856,15 @@ internal sealed class NativeSegment
         bool zeroed,
         NativeMemoryBudget? budget = null,
         nuint minimumByteLength = 0,
-        long ownerId = 0,
-        NativeOwnerBackingHistory? backingHistory = null)
+        NativeOwnerBackingHistory? backingHistory = null,
+        long allocationOrdinal = 0)
     {
         if (byteLength == 0)
         {
             throw new ArgumentOutOfRangeException(nameof(byteLength), "A native segment must contain at least one byte.");
         }
 
+        long ownerId = backingHistory?.OwnerId ?? 0;
         nuint allocationBytes = NativeAlignedAllocation.GetBackingByteLength(byteLength);
         if (budget is not null)
         {
@@ -889,7 +892,7 @@ internal sealed class NativeSegment
             // Allocate the control before payload. Its finalizer has no native
             // authority until admission, acquisition and accounting succeed.
             NativeSegment segment = new(IntPtr.Zero, byteLength, metricsEpoch: 0,
-                ownsNativeMemory: true, budget: budget, ownerId: ownerId,
+                ownsNativeMemory: true, budget: budget, allocationOrdinal: allocationOrdinal,
                 backingHistory: backingHistory);
             if (NativeMemoryTestHooks.ConsumeForcedFailure())
             {
@@ -916,7 +919,7 @@ internal sealed class NativeSegment
 
                 metricsEpoch = NativeMemoryAccounting.RecordAllocation(allocationBytes, zeroed);
                 recorded = true;
-                budget?.Commit(allocationBytes, ownerId);
+                budget?.Commit(allocationBytes, ownerId, allocationOrdinal: allocationOrdinal);
                 segment._metricsEpoch = metricsEpoch;
                 segment._pointer = pointer;
                 acquired = true;
@@ -954,7 +957,8 @@ internal sealed class NativeSegment
     internal static NativeSegment Borrow(
         SafeBuffer buffer,
         nuint byteOffset,
-        nuint byteLength)
+        nuint byteLength,
+        long allocationOrdinal = 0)
     {
         ArgumentNullException.ThrowIfNull(buffer);
         ArgumentOutOfRangeException.ThrowIfZero(byteLength);
@@ -998,7 +1002,8 @@ internal sealed class NativeSegment
                 byteLength,
                 metricsEpoch: 0,
                 ownsNativeMemory: false,
-                externalBuffer: buffer);
+                externalBuffer: buffer,
+                allocationOrdinal: allocationOrdinal);
         }
         catch
         {
@@ -1033,7 +1038,8 @@ internal sealed class NativeSegment
         }
 
         _backingHistory?.RecordFree(AllocationByteLength, Volatile.Read(ref _detached) != 0);
-        _budget?.Release(AllocationByteLength, _ownerId);
+        _budget?.Release(AllocationByteLength, _backingHistory?.OwnerId ?? 0,
+            allocationOrdinal: _allocationOrdinal);
         NativeMemoryAccounting.RecordFree(AllocationByteLength, Volatile.Read(ref _detached) != 0, _metricsEpoch);
     }
 
@@ -3217,7 +3223,7 @@ internal sealed class NativeOwnerKernel
     private readonly NativeMemoryReturn _returnMemoryOnDispose;
     private readonly NativeMemoryBudget? _budget;
     private readonly int _storageElementSize;
-    private readonly NativeOwnerBackingHistory _backingHistory = new();
+    private readonly NativeOwnerBackingHistory _backingHistory;
     private readonly nuint _preLease;
     private readonly nuint _preAllocateBytes;
     private readonly bool _containsReferences;
@@ -3797,6 +3803,7 @@ internal sealed class NativeOwnerKernel
         NativeMemoryBudget? budget = null)
     {
         _kind = kind;
+        _backingHistory = new(Id);
         _ownerKind = ownerKind;
         _returnMemoryOnDispose = returnMemoryOnDispose;
         _budget = budget;
@@ -8665,22 +8672,24 @@ internal sealed class NativeOwnerKernel
                 generation.BumpSegments.EnsureCapacity(
                     checked(generation.BumpSegments.Count + 1));
                 generation.Owner.PrepareAddSegmentCapacity(1);
+                long ordinal = checked(_nextSegmentOrdinal + 1);
                 NativeSegment segment = NativeSegment.Borrow(
                     buffer,
                     byteOffset,
-                    byteLength);
-                NativeBumpSegment bump = new(
-                    segment,
-                    NextSegmentOrdinalLocked());
+                    byteLength,
+                    ordinal);
+                _nextSegmentOrdinal = ordinal;
+                NativeBumpSegment? bump = null;
                 try
                 {
+                    bump = new(segment, ordinal);
                     AppendBumpSegmentLocked(generation, bump);
                     generation.Owner.AddSegment(segment);
                     return byteLength;
                 }
                 catch
                 {
-                    generation.BumpSegments.Remove(bump);
+                    if (bump is not null) generation.BumpSegments.Remove(bump);
                     generation.Owner.RemoveSegment(segment);
                     segment.FreeNow();
                     ResetBumpTraversal(generation);
@@ -8975,18 +8984,20 @@ internal sealed class NativeOwnerKernel
         NativeGeneration generation, nuint preferredBytes, nuint minimumBytes,
         string operation, NativeOwnerLifecycle observedLifecycle)
     {
+        long ordinal = checked(_nextSegmentOrdinal + 1);
         NativeSegment segment = NativeSegment.Allocate(
             preferredBytes, _ownerKind, generation.Number, operation,
             observedLifecycle, zeroed: false, budget: _budget,
-            minimumByteLength: minimumBytes, ownerId: Id,
-            backingHistory: _backingHistory);
+            minimumByteLength: minimumBytes,
+            backingHistory: _backingHistory, allocationOrdinal: ordinal);
+        _nextSegmentOrdinal = ordinal;
         try
         {
             // Admission precedes bank/control growth. A metadata failure must
             // physically release its payload and return its charge as well.
             generation.BumpSegments.EnsureCapacity(checked(generation.BumpSegments.Count + 1));
             generation.Owner.PrepareAddSegmentCapacity(1);
-            return new NativeBumpSegment(segment, NextSegmentOrdinalLocked());
+            return new NativeBumpSegment(segment, ordinal);
         }
         catch
         {
@@ -9033,6 +9044,7 @@ internal sealed class NativeOwnerKernel
         string operation,
         NativeOwnerLifecycle observedLifecycle)
     {
+        long ordinal = checked(_nextSegmentOrdinal + 1);
         NativeSegment segment = NativeSegment.Allocate(
             byteLength,
             _ownerKind,
@@ -9041,8 +9053,9 @@ internal sealed class NativeOwnerKernel
             observedLifecycle,
             zeroed: false,
             budget: _budget,
-            ownerId: Id,
-            backingHistory: _backingHistory);
+            backingHistory: _backingHistory,
+            allocationOrdinal: ordinal);
+        _nextSegmentOrdinal = ordinal;
         try
         {
             generation.Owner.AddSegment(segment);
@@ -9055,7 +9068,7 @@ internal sealed class NativeOwnerKernel
 
         try
         {
-            NativeSlab slab = new(segment, capacity, _containsReferences, NextSegmentOrdinalLocked());
+            NativeSlab slab = new(segment, capacity, _containsReferences, ordinal);
             NativeOwnerHistory.Increment(ref _freshSegmentAllocationCount, ref _historyOverflowed);
             return slab;
         }
@@ -10717,8 +10730,6 @@ internal sealed class NativeOwnerKernel
     }
 
     private long NextAllocationIdLocked() => checked(++_nextAllocationId);
-
-    private long NextSegmentOrdinalLocked() => checked(++_nextSegmentOrdinal);
 
     private int ActiveOperationCountLocked() => GetOwnerWideActivityLocked().ActiveOperations;
 

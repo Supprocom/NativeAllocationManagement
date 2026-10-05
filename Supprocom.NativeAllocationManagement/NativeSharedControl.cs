@@ -19,6 +19,7 @@ internal sealed class NativeSharedControl<T> where T : unmanaged
     private int _peakWeak;
     private long _ownedBytes;
     private long _borrowedBytes;
+    private long _allocationOrdinal;
     private readonly long _initializedBytes;
     private long _shares;
     private long _weakCreations;
@@ -49,10 +50,11 @@ internal sealed class NativeSharedControl<T> where T : unmanaged
         if (_preparation.WeakBindingCount != 0) _payload = new(payload);
     }
 
-    internal void ConfigureStorage(nuint ownedBytes, nuint borrowedBytes, NativeMemoryBudget? budget)
+    internal void ConfigureStorage(nuint ownedBytes, nuint borrowedBytes, NativeMemoryBudget? budget, long allocationOrdinal)
     {
         _ownedBytes = checked((long)ownedBytes);
         _borrowedBytes = checked((long)borrowedBytes);
+        _allocationOrdinal = allocationOrdinal;
         if (budget is { TraceEnabled: true }) _tracedBudget = new(budget);
     }
 
@@ -311,7 +313,7 @@ internal sealed class NativeSharedControl<T> where T : unmanaged
     private void Trace(NativeMemoryTraceKind kind)
     {
         if (_tracedBudget is not null && _tracedBudget.TryGetTarget(out NativeMemoryBudget? budget))
-            budget.RecordOwnershipTransition(kind, OwnerId, Id, checked((nuint)_ownedBytes));
+            budget.RecordOwnershipTransition(kind, OwnerId, Id, checked((nuint)_ownedBytes), _allocationOrdinal);
     }
 }
 
@@ -328,8 +330,8 @@ internal sealed class NativeSharedPayload<T> where T : unmanaged
     internal void Initialize(NativeTransfer<T> transfer)
     {
         _transfer = transfer;
-        _pin = transfer.PinForSharing(out _pointer, out nuint ownedBytes, out nuint borrowedBytes, out NativeMemoryBudget? budget);
-        Control.ConfigureStorage(ownedBytes, borrowedBytes, budget);
+        _pin = transfer.PinForSharing(out _pointer, out nuint ownedBytes, out nuint borrowedBytes, out NativeMemoryBudget? budget, out long ordinal);
+        Control.ConfigureStorage(ownedBytes, borrowedBytes, budget, ordinal);
         transfer.AdoptSharedFinalization();
     }
 
