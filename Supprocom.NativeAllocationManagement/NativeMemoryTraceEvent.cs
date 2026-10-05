@@ -36,7 +36,13 @@ public enum NativeMemoryTraceKind
     /// <summary>Payload authority was returned after the last strong binding and entered reader.</summary>
     PayloadReturned,
     /// <summary>A bounded explicit copy into independent unique ownership completed.</summary>
-    Detached
+    Detached,
+    /// <summary>Unique payload authority was returned; pooled backing may remain reusable and charged.</summary>
+    UniqueReturned,
+    /// <summary>A destructive unique move published its next non-reusable authority version.</summary>
+    Moved,
+    /// <summary>A consumed unique source awaits its last entered borrow or cleanup retry.</summary>
+    Retired
 }
 
 /// <summary>A bounded value-only storage transition; it contains no owner or native authority.</summary>

@@ -70,8 +70,11 @@ A failed return does not receive success credit. Ownership remains expired and
 storage remains charged. `TryCompletePayloadReturn` on a surviving shared or weak
 control retries cleanup without acquiring or reopening ownership. It returns true
 when return has completed and false while a strong binding, entered reader, or
-another return attempt prevents completion. Cleanup errors throw. A callback and
-last-return failure preserve both causes. Emergency cleanup never replaces
+another return attempt prevents completion. Cleanup errors throw.
+If an abandoned payload's short weak reference has already been cleared, the
+weak observer also returns false while emergency finalization owns that payload;
+it does not resurrect or strongly retain the payload merely to retry it.
+A callback and last-return failure preserve both causes. Emergency cleanup never replaces
 required deterministic disposal.
 
 ## Slices and explicit detach

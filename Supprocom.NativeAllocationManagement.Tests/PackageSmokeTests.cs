@@ -562,6 +562,30 @@ public sealed class PackageSmokeTests
                         }
                         if (NativeMemoryDiagnostics.Snapshot().CopiedBytes != beforeCopy.CopiedBytes + 16) return 20;
                         System.Console.WriteLine("accounted-copy-bytes=16; exported-output=17,19");
+                        NativeMemoryBudget uniqueBudget = new(16, 8);
+                        using (NativeBuilder<int> uniqueBuilder = new(uniqueBudget, 4))
+                        {
+                            uniqueBuilder.Append(37);
+                            NativeTransfer<int>? source = uniqueBuilder.Complete();
+                            NativeTransfer<int> unique = NativeTransfer<int>.Move(ref source);
+                            try
+                            {
+                                NativeTransferStatistics observed = unique.CaptureSnapshot();
+                                if (!observed.BindingIsActive || observed.OwnerId != uniqueBuilder.Id
+                                    || observed.MoveCount != 1 || observed.BindingVersion != 2
+                                    || observed.LiveUniqueOwnerCount != 1 || observed.OwnedBackingBytes != 16
+                                    || observed.InitializedPayloadBytes != 4 || observed.ControlFieldBytes <= 0
+                                    || unique.Read(static view => view[0]) != 37) return 32;
+                            }
+                            finally { unique.Dispose(); }
+                            NativeTransferStatistics returned = unique.CaptureSnapshot();
+                            if (returned.BindingIsActive || returned.LiveUniqueOwnerCount != 0
+                                || returned.PayloadReturnCount != 1 || returned.PayloadReturnFailureCount != 0
+                                || returned.OwnedBackingBytes != 0 || returned.PeakOwnedBackingBytes != 16
+                                || returned.PeakBorrowCount != 1 || !unique.TryCompletePayloadReturn()) return 33;
+                        }
+                        if (uniqueBudget.CaptureStatistics().CommittedBytes != 0) return 34;
+                        System.Console.WriteLine("unique-moves=1; returned=1; failures=0; final-charge=0");
                         NativeMemoryBudget retentionBudget = new(2_000_000);
                         using (NativeArena retention = new(retentionBudget, new NativeArenaRetentionPolicy(4096, 4160), 0, NativeMemoryReturn.ToNativeMemory))
                         {

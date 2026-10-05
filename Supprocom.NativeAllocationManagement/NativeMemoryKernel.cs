@@ -43,9 +43,13 @@ internal static class NativeOperationAdmission
     private const int CountMask = int.MaxValue;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static bool TryEnter(ref int state)
+    internal static bool TryEnter(ref int state) => TryEnter(ref state, out _);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static bool TryEnter(ref int state, out int count)
     {
         int entered = Interlocked.Increment(ref state);
+        count = entered & CountMask;
         if (entered > 0)
         {
             return true;
@@ -7745,6 +7749,10 @@ internal sealed class NativeOwnerKernel
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal bool TransferAuthorityIsActive(NativeGeneration generation, NativeAllocation allocation,
+        long generationNumber, long allocationId) =>
+        IsDirectHandleActive(generation, allocation, generationNumber, allocationId);
+
     private bool IsDirectHandleActive(
         NativeGeneration generation,
         NativeAllocation allocation,

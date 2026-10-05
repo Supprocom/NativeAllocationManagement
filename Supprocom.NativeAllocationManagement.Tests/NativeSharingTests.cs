@@ -465,7 +465,17 @@ public sealed class NativeSharingTests
         Assert.Equal(0, budget.CaptureStatistics().CommittedBytes);
         Span<NativeMemoryTraceEvent> events = stackalloc NativeMemoryTraceEvent[16];
         int count = budget.CopyTraceTo(events);
-        foreach (ref readonly NativeMemoryTraceEvent entry in events[..count]) Assert.Null(entry.CorrelationId);
+        int uniqueTransitions = 0;
+        foreach (ref readonly NativeMemoryTraceEvent entry in events[..count])
+        {
+            Assert.NotEqual(NativeMemoryTraceKind.Shared, entry.Kind);
+            Assert.NotEqual(NativeMemoryTraceKind.PayloadReturned, entry.Kind);
+            if (entry.CorrelationId is null) continue;
+            Assert.True(entry.Kind is NativeMemoryTraceKind.Retired or NativeMemoryTraceKind.UniqueReturned);
+            Assert.Equal(entry.OwnerId, entry.CorrelationId);
+            uniqueTransitions++;
+        }
+        Assert.Equal(2, uniqueTransitions);
         Assert.Equal(1, budget.CaptureStatistics().FreeCount);
         GC.KeepAlive(entered);
     }
@@ -658,6 +668,7 @@ public sealed class NativeSharingTests
         foreach (ref readonly NativeMemoryTraceEvent entry in events[..count])
         {
             if (entry.CorrelationId is null) continue;
+            if (entry.Kind is NativeMemoryTraceKind.Moved or NativeMemoryTraceKind.UniqueReturned) continue;
             correlated++;
             Assert.Equal(owner.Id, entry.CorrelationId);
             Assert.Equal(owner.CaptureSnapshot().OwnerId, entry.OwnerId);

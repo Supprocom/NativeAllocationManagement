@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Supprocom.NativeAllocationManagement.Performance;
 
 namespace Supprocom.NativeAllocationManagement.Tests;
@@ -174,5 +175,54 @@ public sealed class NativeWorkspaceStateBenchmarkTests
         Assert.Equal(managed.OutputSha256, native.OutputSha256);
         Assert.True(native.ExactlyOnceCleanupPassed);
         Assert.True(native.CancellationCleanupPassed);
+    }
+
+    [Fact]
+    public void CleanupEvidenceDoesNotMisattributeAnotherOwnersPhysicalRelease()
+    {
+        var options = new NativeWorkspaceStateOptions(
+            MapCount: 4,
+            MapSize: 2,
+            WorkspaceLength: 16,
+            WorkerCount: 2,
+            SampleCount: 6,
+            WarmupCount: 1,
+            MeasurementPassCount: 1,
+            Seed: 123_456);
+        NativeBlock unrelated = NativeBlockAllocator.Allocate<int>(
+            1, "CleanupAttributionTest", "Setup");
+        bool unrelatedReleased = false;
+        try
+        {
+            NativeWorkspaceStateIsolatedPairEvidence pair =
+                NativeWorkspaceStateBenchmark.RunSharedPairWorker(
+                    0, options, () =>
+                    {
+                        NativeBlockAllocator.Free(unrelated);
+                        unrelatedReleased = true;
+                    });
+
+            Assert.True(unrelatedReleased);
+            Assert.All(pair.Evidence, static evidence =>
+            {
+                Assert.True(evidence.ExactlyOnceCleanupPassed);
+                Assert.True(evidence.CancellationCleanupPassed);
+                Assert.True(evidence.ProcessNativeBytesBefore
+                    - evidence.ProcessNativeBytesAfter >= sizeof(int));
+                using JsonDocument serialized = JsonDocument.Parse(
+                    JsonSerializer.Serialize(evidence));
+                Assert.Equal(evidence.ProcessNativeBytesBefore,
+                    serialized.RootElement.GetProperty(nameof(evidence.ProcessNativeBytesBefore)).GetInt64());
+                Assert.Equal(evidence.ProcessNativeBytesAfter,
+                    serialized.RootElement.GetProperty(nameof(evidence.ProcessNativeBytesAfter)).GetInt64());
+            });
+        }
+        finally
+        {
+            if (!unrelatedReleased)
+            {
+                NativeBlockAllocator.Free(unrelated);
+            }
+        }
     }
 }

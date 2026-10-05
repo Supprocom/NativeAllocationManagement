@@ -329,9 +329,7 @@ internal static class NativeWorkspaceStateBenchmark
 
         NativeMemoryStatistics nativeFinal =
             NativeMemoryDiagnostics.Snapshot();
-        bool exactlyOnceCleanupPassed =
-            nativeFinal.OutstandingNativeBytes
-                == nativeBaseline.OutstandingNativeBytes;
+        bool exactlyOnceCleanupPassed = execution.VerifyBackingReleased();
         return new NativeWorkspaceStateWorkerEvidence(
             implementation,
             options.WorkerCount,
@@ -366,13 +364,18 @@ internal static class NativeWorkspaceStateBenchmark
                 Environment.GetEnvironmentVariable("DOTNET_TieredPGO"),
                 "0",
                 StringComparison.Ordinal),
-            Completed: true);
+            Completed: true)
+        {
+            ProcessNativeBytesBefore = nativeBaseline.OutstandingNativeBytes,
+            ProcessNativeBytesAfter = nativeFinal.OutstandingNativeBytes
+        };
     }
 
     internal static NativeWorkspaceStateIsolatedPairEvidence
         RunSharedPairWorker(
             int sampleIndex,
-            NativeWorkspaceStateOptions options)
+            NativeWorkspaceStateOptions options,
+            Action? beforeCleanup = null)
     {
         ValidateOptions(options);
         ArgumentOutOfRangeException.ThrowIfNegative(sampleIndex);
@@ -478,6 +481,7 @@ internal static class NativeWorkspaceStateBenchmark
             capturingWorkingSetAfterBytes = process.WorkingSet64;
             peakWorkingSetBytes = process.PeakWorkingSet64;
             freshSegmentsAfter = execution.ReadFreshSegmentCount();
+            beforeCleanup?.Invoke();
             cancellationCleanupPassed =
                 execution.VerifyCancellationCleanup();
         }
@@ -488,9 +492,7 @@ internal static class NativeWorkspaceStateBenchmark
 
         NativeMemoryStatistics nativeFinal =
             NativeMemoryDiagnostics.Snapshot();
-        bool exactlyOnceCleanupPassed =
-            nativeFinal.OutstandingNativeBytes
-                == nativeBaseline.OutstandingNativeBytes;
+        bool exactlyOnceCleanupPassed = execution.VerifyBackingReleased();
         bool tieredCompilationDisabled = string.Equals(
             Environment.GetEnvironmentVariable(
                 "DOTNET_TieredCompilation"),
@@ -540,7 +542,11 @@ internal static class NativeWorkspaceStateBenchmark
                     exactlyOnceCleanupPassed,
                     tieredCompilationDisabled,
                     tieredPgoDisabled,
-                    Completed: true);
+                    Completed: true)
+                {
+                    ProcessNativeBytesBefore = nativeBaseline.OutstandingNativeBytes,
+                    ProcessNativeBytesAfter = nativeFinal.OutstandingNativeBytes
+                };
             })
             .ToArray();
         return new NativeWorkspaceStateIsolatedPairEvidence(
@@ -1027,6 +1033,9 @@ internal static class NativeWorkspaceStateBenchmark
                 worker.CancellationCleanupPassed);
         }
 
+        internal bool VerifyBackingReleased() => Volatile.Read(ref _disposed) != 0
+            && _workers.All(static worker => worker.BackingReleasePassed);
+
         public void Dispose()
         {
             if (Interlocked.Exchange(ref _disposed, 1) != 0)
@@ -1125,6 +1134,8 @@ internal static class NativeWorkspaceStateBenchmark
 
         internal bool CancellationCleanupPassed { get; private set; } = true;
 
+        internal bool BackingReleasePassed { get; private set; }
+
         internal int ManagedThreadId { get; private set; }
 
         internal void Begin(WorkspaceWorkerCommand command)
@@ -1159,12 +1170,22 @@ internal static class NativeWorkspaceStateBenchmark
                 NativeSetupAllocatedBytes =
                     GC.GetAllocatedBytesForCurrentThread()
                         - allocationBefore;
+                object backingState = nativeWorkspace.StateForTest;
                 SignalReady();
                 while (WaitForCommand() is WorkspaceWorkerCommand command)
                 {
                     if (command == WorkspaceWorkerCommand.Stop)
                     {
-                        CompleteCommand();
+                        try
+                        {
+                            nativeWorkspace.Dispose();
+                            BackingReleasePassed = NativeWorkspace<float>
+                                .IsBackingReleasedForDiagnostics(backingState);
+                        }
+                        finally
+                        {
+                            CompleteCommand();
+                        }
                         break;
                     }
 
@@ -1417,7 +1438,11 @@ internal sealed record NativeWorkspaceStateWorkerEvidence(
     bool ExactlyOnceCleanupPassed,
     bool TieredCompilationDisabled,
     bool TieredPgoDisabled,
-    bool Completed);
+    bool Completed)
+{
+    public long ProcessNativeBytesBefore { get; init; }
+    public long ProcessNativeBytesAfter { get; init; }
+}
 
 internal sealed record NativeWorkspaceStatePairEvidence(
     int SampleIndex,

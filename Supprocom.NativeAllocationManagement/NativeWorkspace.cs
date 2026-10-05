@@ -222,6 +222,17 @@ public sealed class NativeWorkspace<T> : IDisposable
 
     internal object StateForTest => this;
 
+    // Teardown-only attribution. An owner-thread Dispose failure propagates to
+    // the caller; a successful release leaves no native backing representation.
+    internal static bool IsBackingReleasedForDiagnostics(object state)
+    {
+        var workspace = (NativeWorkspace<T>)state;
+        return workspace._state == Released
+            && workspace._block.Pointer == IntPtr.Zero
+            && workspace._block.ByteLength == 0
+            && workspace._activeUse == 0;
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void EnterUse(string operation)
     {

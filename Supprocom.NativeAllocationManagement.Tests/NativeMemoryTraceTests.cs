@@ -106,9 +106,11 @@ public sealed class NativeMemoryTraceTests
         }
         Span<NativeMemoryTraceEvent> events = stackalloc NativeMemoryTraceEvent[8];
         int count = budget.CopyTraceTo(events);
-        Assert.Equal(3, count);
+        Assert.Equal(5, count);
         Assert.Equal(NativeMemoryTraceKind.Reallocated, events[1].Kind);
         Assert.Equal((nuint)0, events[1].PreviousBytes);
+        Assert.Equal(NativeMemoryTraceKind.Moved, events[2].Kind);
+        Assert.Equal(NativeMemoryTraceKind.UniqueReturned, events[4].Kind);
         foreach (ref readonly NativeMemoryTraceEvent entry in events[..count])
         {
             Assert.Equal(id, entry.OwnerId);
@@ -140,7 +142,12 @@ public sealed class NativeMemoryTraceTests
         Assert.Equal(0, snapshot.ReservedBytes);
         Assert.Equal(0, snapshot.AllocationCount);
         Assert.Equal(0, snapshot.FreeCount);
-        Assert.Equal(0, snapshot.TraceCount);
+        Assert.Equal(1, snapshot.TraceCount);
+        Assert.Equal(1, snapshot.DroppedTraceEventCount);
+        Span<NativeMemoryTraceEvent> events = stackalloc NativeMemoryTraceEvent[1];
+        Assert.Equal(1, budget.CopyTraceTo(events));
+        Assert.Equal(NativeMemoryTraceKind.UniqueReturned, events[0].Kind);
+        Assert.Equal((nuint)0, events[0].RequestedBytes);
     }
 
     [Fact]

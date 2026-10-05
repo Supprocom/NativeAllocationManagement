@@ -1,4 +1,46 @@
 #nullable enable
+Supprocom.NativeAllocationManagement.NativeTransferStatistics.HasReturnObligation.get -> bool
+Supprocom.NativeAllocationManagement.NativeTransferLifecycle.Invalidated = 7 -> Supprocom.NativeAllocationManagement.NativeTransferLifecycle
+Supprocom.NativeAllocationManagement.NativeTransfer<T>.CaptureSnapshot() -> Supprocom.NativeAllocationManagement.NativeTransferStatistics
+Supprocom.NativeAllocationManagement.NativeTransfer<T>.TryCompletePayloadReturn() -> bool
+Supprocom.NativeAllocationManagement.NativeTransferStatistics
+Supprocom.NativeAllocationManagement.NativeTransferStatistics.NativeTransferStatistics() -> void
+Supprocom.NativeAllocationManagement.NativeTransferStatistics.OwnerId.get -> long
+Supprocom.NativeAllocationManagement.NativeTransferStatistics.AllocationId.get -> long
+Supprocom.NativeAllocationManagement.NativeTransferStatistics.BindingVersion.get -> long
+Supprocom.NativeAllocationManagement.NativeTransferStatistics.AuthorityVersion.get -> long
+Supprocom.NativeAllocationManagement.NativeTransferStatistics.BindingIsActive.get -> bool
+Supprocom.NativeAllocationManagement.NativeTransferStatistics.Lifecycle.get -> Supprocom.NativeAllocationManagement.NativeTransferLifecycle
+Supprocom.NativeAllocationManagement.NativeTransferStatistics.ActiveBorrowCount.get -> int
+Supprocom.NativeAllocationManagement.NativeTransferStatistics.PeakBorrowCount.get -> int
+Supprocom.NativeAllocationManagement.NativeTransferStatistics.MoveCount.get -> long
+Supprocom.NativeAllocationManagement.NativeTransferStatistics.LiveUniqueOwnerCount.get -> int
+Supprocom.NativeAllocationManagement.NativeTransferStatistics.InitializedPayloadBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeTransferStatistics.PeakInitializedPayloadBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeTransferStatistics.OwnedBackingBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeTransferStatistics.BorrowedBackingBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeTransferStatistics.PeakOwnedBackingBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeTransferStatistics.PayloadReturnCount.get -> long
+Supprocom.NativeAllocationManagement.NativeTransferStatistics.PayloadReturnFailureCount.get -> long
+Supprocom.NativeAllocationManagement.NativeTransferStatistics.HistoryOverflowed.get -> bool
+Supprocom.NativeAllocationManagement.NativeTransferStatistics.ControlFieldBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeTransferStatistics.Equals(Supprocom.NativeAllocationManagement.NativeTransferStatistics other) -> bool
+~override Supprocom.NativeAllocationManagement.NativeTransferStatistics.Equals(object obj) -> bool
+override Supprocom.NativeAllocationManagement.NativeTransferStatistics.GetHashCode() -> int
+~override Supprocom.NativeAllocationManagement.NativeTransferStatistics.ToString() -> string
+static Supprocom.NativeAllocationManagement.NativeTransferStatistics.operator !=(Supprocom.NativeAllocationManagement.NativeTransferStatistics left, Supprocom.NativeAllocationManagement.NativeTransferStatistics right) -> bool
+static Supprocom.NativeAllocationManagement.NativeTransferStatistics.operator ==(Supprocom.NativeAllocationManagement.NativeTransferStatistics left, Supprocom.NativeAllocationManagement.NativeTransferStatistics right) -> bool
+Supprocom.NativeAllocationManagement.NativeTransferLifecycle
+Supprocom.NativeAllocationManagement.NativeTransferLifecycle.Uninitialized = 0 -> Supprocom.NativeAllocationManagement.NativeTransferLifecycle
+Supprocom.NativeAllocationManagement.NativeTransferLifecycle.Active = 1 -> Supprocom.NativeAllocationManagement.NativeTransferLifecycle
+Supprocom.NativeAllocationManagement.NativeTransferLifecycle.Moving = 2 -> Supprocom.NativeAllocationManagement.NativeTransferLifecycle
+Supprocom.NativeAllocationManagement.NativeTransferLifecycle.Returning = 3 -> Supprocom.NativeAllocationManagement.NativeTransferLifecycle
+Supprocom.NativeAllocationManagement.NativeTransferLifecycle.Retiring = 4 -> Supprocom.NativeAllocationManagement.NativeTransferLifecycle
+Supprocom.NativeAllocationManagement.NativeTransferLifecycle.Returned = 5 -> Supprocom.NativeAllocationManagement.NativeTransferLifecycle
+Supprocom.NativeAllocationManagement.NativeTransferLifecycle.Finalizing = 6 -> Supprocom.NativeAllocationManagement.NativeTransferLifecycle
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.UniqueReturned = 16 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.Moved = 17 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.Retired = 18 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
 Supprocom.NativeAllocationManagement.NativeSharingPreparation
 Supprocom.NativeAllocationManagement.NativeSharingPreparation.NativeSharingPreparation() -> void
 Supprocom.NativeAllocationManagement.NativeSharingPreparation.NativeSharingPreparation(int strongBindingCount, int weakBindingCount) -> void
