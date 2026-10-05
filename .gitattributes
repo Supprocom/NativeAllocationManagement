@@ -1,0 +1,2 @@
+# Keep compiler inputs identical to the archived Git blobs on every native host.
+* text=auto eol=lf

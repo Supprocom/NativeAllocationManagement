@@ -1,7 +1,10 @@
 # Native release validation
 
 The workflow validates actual Linux/Windows x64/ARM64 processes from one clean,
-exact commit. It pins action identities, SDK 10.0.302 and native PowerShell 7.6.6.
+exact commit. It pins action identities, SDK 10.0.302/runtime 10.0.10 and native
+PowerShell 7.6.6. Official SDK archive SHA-512 identities are checked before a
+fresh isolated installation; a runner-global newer runtime cannot be selected.
+Tracked LF checkout bytes must equal their Git blobs before any compiler runs.
 All nine root projects use the complete Release analyzer policy; voxel coverage,
 both wrapper tests, isolated candidate consumers, rooted trimmed execution and
 actual NativeAOT execution are required. No skipped or failed TRX outcome passes.
