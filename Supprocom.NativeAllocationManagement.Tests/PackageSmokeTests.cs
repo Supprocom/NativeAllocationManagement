@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.IO.Compression;
 using System.Security.Cryptography;
+using System.Text.Json;
 using System.Xml.Linq;
 using Xunit.Abstractions;
 
@@ -79,7 +80,7 @@ public sealed class PackageSmokeTests
             Assert.True(build.ExitCode == 0, build.Output);
 
             CommandResult run = await RunDotnetAsync(
-                $"run \"{project}\" --no-build --no-restore --nologo",
+                $"run --project \"{project}\" --no-build --no-restore",
                 consumerRoot);
             Assert.True(run.ExitCode == 0, run.Output);
         }
@@ -270,7 +271,7 @@ public sealed class PackageSmokeTests
             Assert.True(restore.ExitCode == 0, restore.Output);
             CommandResult build = await RunDotnetAsync($"build \"{project}\" --no-restore --nologo", consumerRoot);
             Assert.True(build.ExitCode == 0, build.Output);
-            CommandResult run = await RunDotnetAsync($"run \"{project}\" --no-build --no-restore --nologo", consumerRoot);
+            CommandResult run = await RunDotnetAsync($"run --project \"{project}\" --no-build --no-restore", consumerRoot);
             Assert.True(run.ExitCode == 0, run.Output);
             await File.WriteAllTextAsync(program,
                 """
@@ -373,7 +374,7 @@ public sealed class PackageSmokeTests
             Assert.True(validBuild.ExitCode == 0, validBuild.Output);
 
             CommandResult run = await RunDotnetAsync(
-                $"run \"{project}\" --no-build --no-restore --nologo",
+                $"run --project \"{project}\" --no-build --no-restore",
                 consumerRoot);
             Assert.True(run.ExitCode == 0, run.Output);
 
@@ -720,7 +721,7 @@ public sealed class PackageSmokeTests
             CommandResult build = await RunDotnetAsync($"build \"{project}\" --no-restore --nologo", consumerRoot);
             _output.WriteLine(build.Output);
             Assert.True(build.ExitCode == 0, build.Output);
-            CommandResult run = await RunDotnetAsync($"run \"{project}\" --no-build --no-restore --nologo", consumerRoot);
+            CommandResult run = await RunDotnetAsync($"run --project \"{project}\" --no-build --no-restore", consumerRoot);
             _output.WriteLine(run.Output);
             Assert.True(run.ExitCode == 0, run.Output);
             await File.WriteAllTextAsync(program,
@@ -944,7 +945,7 @@ public sealed class PackageSmokeTests
             CommandResult build = await RunDotnetAsync($"build \"{project}\" --no-restore --nologo", consumerRoot);
             Assert.True(build.ExitCode == 0, build.Output);
 
-            CommandResult run = await RunDotnetAsync($"run \"{project}\" --no-build --no-restore --nologo", consumerRoot);
+            CommandResult run = await RunDotnetAsync($"run --project \"{project}\" --no-build --no-restore", consumerRoot);
             Assert.True(run.ExitCode == 0, run.Output);
         }
         finally
@@ -1840,7 +1841,7 @@ public sealed class PackageSmokeTests
             CommandResult build = await RunDotnetAsync($"build \"{project}\" --no-restore --nologo", consumerRoot);
             Assert.True(build.ExitCode == 0, build.Output);
 
-            CommandResult run = await RunDotnetAsync($"run \"{project}\" --no-build --no-restore --nologo", consumerRoot);
+            CommandResult run = await RunDotnetAsync($"run --project \"{project}\" --no-build --no-restore", consumerRoot);
             Assert.True(run.ExitCode == 0, run.Output);
         }
         finally
@@ -1931,8 +1932,38 @@ public sealed class PackageSmokeTests
             CommandResult build = await RunDotnetAsync($"build \"{project}\" --no-restore --nologo", consumerRoot);
             Assert.True(build.ExitCode == 0, build.Output);
 
-            CommandResult run = await RunDotnetAsync($"run \"{project}\" --no-build --no-restore --nologo", consumerRoot);
+            CommandResult run = await RunDotnetAsync($"run --project \"{project}\" --no-build --no-restore", consumerRoot);
             Assert.True(run.ExitCode == 0, run.Output);
+        }
+        finally
+        {
+            DeleteConsumerRoot(consumerRoot);
+        }
+    }
+
+    [Fact]
+    public async Task PackageCodeFixIsDiscoveredAndAppliedByAnIsolatedMefWorkspaceHost()
+    {
+        PackageEvidence package = await GetPackageAsync();
+        WriteEvidence(package);
+        string consumerRoot = CreateConsumerRoot();
+        try
+        {
+            string project = Path.Combine(consumerRoot, "Consumer.csproj");
+            await File.WriteAllTextAsync(project, CodeFixPackageFixture.Project(package.Version));
+            await File.WriteAllTextAsync(Path.Combine(consumerRoot, "Program.cs"), CodeFixPackageFixture.Program);
+            CommandResult restore = await RunDotnetAsync(
+                $"restore \"{project}\" --nologo --force --no-cache --packages \"{Path.Combine(consumerRoot, ".packages")}\" --source \"{package.SourceDirectory}\" --source https://api.nuget.org/v3/index.json",
+                consumerRoot);
+            _output.WriteLine(restore.Output);
+            Assert.True(restore.ExitCode == 0, restore.Output);
+            CommandResult build = await RunDotnetAsync($"build \"{project}\" --no-restore --nologo", consumerRoot);
+            _output.WriteLine(build.Output);
+            Assert.True(build.ExitCode == 0, build.Output);
+            CommandResult run = await RunDotnetAsync($"run --project \"{project}\" --no-build --no-restore -- {package.RuntimeAssemblySha256} {package.AnalyzerAssemblySha256} {package.CodeFixAssemblySha256}", consumerRoot);
+            _output.WriteLine(run.Output);
+            Assert.True(run.ExitCode == 0, run.Output);
+            Assert.Contains("packageMefExports=1;codeActions=1;correctedCompilerErrors=0;correctedNamDiagnostics=0", run.Output, StringComparison.Ordinal);
         }
         finally
         {
@@ -1948,6 +1979,7 @@ public sealed class PackageSmokeTests
         _output.WriteLine($"artifactSha256={package.ArtifactSha256}");
         _output.WriteLine($"runtimeSha256={package.RuntimeAssemblySha256}");
         _output.WriteLine($"analyzerSha256={package.AnalyzerAssemblySha256}");
+        _output.WriteLine($"codeFixSha256={package.CodeFixAssemblySha256}");
     }
 
     private static void WriteConsumerProject(
@@ -1984,6 +2016,7 @@ public sealed class PackageSmokeTests
                 <TargetFramework>net10.0</TargetFramework>
                 <ImplicitUsings>enable</ImplicitUsings>
                 <Nullable>enable</Nullable>
+                <ArtifactsPath>$(MSBuildProjectDirectory)/.build</ArtifactsPath>
                 {noWarn}
                 {warningsAsErrors}
               </PropertyGroup>
@@ -2052,7 +2085,9 @@ public sealed class PackageSmokeTests
         Assert.Equal("AGPL-3.0-only", licenseElement.Value);
         string runtimeHash = HashEntry(archive, "lib/net10.0/Supprocom.NativeAllocationManagement.dll");
         string analyzerHash = HashEntry(archive, "analyzers/dotnet/cs/Supprocom.NativeAllocationManagement.Analyzers.dll");
-        return new PackageEvidence(packagePath, sourceDirectory, version, commit, artifactHash, runtimeHash, analyzerHash);
+        string codeFixHash = HashEntry(archive, "analyzers/dotnet/cs/Supprocom.NativeAllocationManagement.CodeFixes.dll");
+        Assert.DoesNotContain(nuspec.Descendants(), static element => string.Equals(element.Name.LocalName, "dependency", StringComparison.Ordinal));
+        return new PackageEvidence(packagePath, sourceDirectory, version, commit, artifactHash, runtimeHash, analyzerHash, codeFixHash);
     }
 
     private static string HashEntry(ZipArchive archive, string name)
@@ -2076,6 +2111,7 @@ public sealed class PackageSmokeTests
 
     private static async Task<CommandResult> RunProcessAsync(string fileName, string arguments, string workingDirectory)
     {
+        DateTimeOffset startedAt = DateTimeOffset.UtcNow;
         using Process process = new()
         {
             StartInfo = new ProcessStartInfo
@@ -2108,12 +2144,45 @@ public sealed class PackageSmokeTests
             {
             }
 
+            await RetainCommandAsync(fileName, arguments, workingDirectory, startedAt,
+                process.HasExited ? process.ExitCode : null, timedOut: true,
+                await stdout.ConfigureAwait(true), await stderr.ConfigureAwait(true)).ConfigureAwait(true);
             throw new TimeoutException($"{fileName} {arguments} exceeded the 90 second smoke-test timeout.", exception);
         }
 
-        string output = await stdout.ConfigureAwait(true) + Environment.NewLine + await stderr.ConfigureAwait(true);
+        string standardOutput = await stdout.ConfigureAwait(true);
+        string standardError = await stderr.ConfigureAwait(true);
+        await RetainCommandAsync(fileName, arguments, workingDirectory, startedAt,
+            process.ExitCode, timedOut: false, standardOutput, standardError).ConfigureAwait(true);
+        string output = standardOutput + Environment.NewLine + standardError;
         return new CommandResult(process.ExitCode, output);
     }
+
+    private static async Task RetainCommandAsync(string executable, string arguments, string workingDirectory,
+        DateTimeOffset startedAt, int? exitCode, bool timedOut, string standardOutput, string standardError)
+    {
+        if (!RetainPackageEvidence) return;
+        string directory = Path.Combine(Path.GetTempPath(), "nam-command-evidence", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        DateTimeOffset endedAt = DateTimeOffset.UtcNow;
+        string record = JsonSerializer.Serialize(new
+        {
+            Executable = executable,
+            Arguments = arguments,
+            WorkingDirectory = workingDirectory,
+            StartedAt = startedAt,
+            EndedAt = endedAt,
+            ElapsedMilliseconds = (endedAt - startedAt).TotalMilliseconds,
+            ExitCode = exitCode,
+            TimedOut = timedOut
+        });
+        await File.WriteAllTextAsync(Path.Combine(directory, "command.json"), record).ConfigureAwait(true);
+        await File.WriteAllTextAsync(Path.Combine(directory, "stdout.log"), standardOutput).ConfigureAwait(true);
+        await File.WriteAllTextAsync(Path.Combine(directory, "stderr.log"), standardError).ConfigureAwait(true);
+    }
+
+    private static bool RetainPackageEvidence => string.Equals(
+        Environment.GetEnvironmentVariable("NAM_RETAIN_PACKAGE_EVIDENCE"), "1", StringComparison.Ordinal);
 
     private static string FindRepositoryRoot()
         => RepositoryTestPaths.Root;
@@ -2127,6 +2196,7 @@ public sealed class PackageSmokeTests
 
     private static void DeleteConsumerRoot(string path)
     {
+        if (RetainPackageEvidence) return;
         if (Directory.Exists(path))
         {
             Directory.Delete(path, recursive: true);
@@ -2140,7 +2210,8 @@ public sealed class PackageSmokeTests
         string RepositoryCommit,
         string ArtifactSha256,
         string RuntimeAssemblySha256,
-        string AnalyzerAssemblySha256);
+        string AnalyzerAssemblySha256,
+        string CodeFixAssemblySha256);
 
     private sealed class CommandResult
     {

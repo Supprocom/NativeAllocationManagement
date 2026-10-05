@@ -96,7 +96,7 @@ internal static class NativeAllocationDiagnosticDescriptors
     internal static readonly DiagnosticDescriptor TransferAlias = Create(
         "NAM1021",
         "Transfer ownership cannot be copied",
-        "Native transfer '{0}' owns transferable storage. Use NativeTransfer<T>.Move(ref source) instead of copying it to '{1}'.");
+        "Native ownership value '{0}' cannot be copied to '{1}'. Use the matching destructive Move for unique ownership, or an explicit share, observer or upgrade operation for independent shared ownership.");
 
     internal static readonly DiagnosticDescriptor InactiveTransferUse = Create(
         "NAM1022",
@@ -106,12 +106,12 @@ internal static class NativeAllocationDiagnosticDescriptors
     internal static readonly DiagnosticDescriptor InvalidTransferMove = Create(
         "NAM1023",
         "Transfer move requires active ownership",
-        "NativeTransfer<T>.Move cannot move '{0}' because its ownership is {1}.");
+        "The destructive ownership operation cannot consume '{0}' because its ownership is {1}.");
 
     internal static readonly DiagnosticDescriptor TransferViewEscape = Create(
         "NAM1024",
         "Native transfer view cannot escape",
-        "Callback view '{0}' cannot escape through '{1}'. Use it only during the Access or Read callback.");
+        "Callback view '{0}' cannot escape through '{1}'. Use it only during its bounded synchronous initializer, Access or Read callback.");
 
     internal static readonly DiagnosticDescriptor TransferLifetime = Create(
         "NAM1025",
@@ -121,7 +121,7 @@ internal static class NativeAllocationDiagnosticDescriptors
     internal static readonly DiagnosticDescriptor TransferAcquisitionEscape = Create(
         "NAM1026",
         "Transfer acquisition requires a local source",
-        "'{0}' must initialize a local NativeTransfer<T>. Move that local before storage, return, or channel transfer.");
+        "'{0}' must initialize a local native ownership capability. Destructively move a unique local before storage, return or channel transfer; use explicit shared acquisition for independent shared ownership.");
 
     internal static readonly DiagnosticDescriptor UnsupportedTransferParameter = Create(
         "NAM1027",
@@ -261,7 +261,7 @@ internal static class NativeAllocationDiagnosticDescriptors
             severity,
             isEnabledByDefault: true,
             description: message,
-            helpLinkUri: helpLinkUri ?? "https://github.com/Supprocom/NativeAllocationManagement#ownership-diagnostics",
+            helpLinkUri: helpLinkUri ?? "https://github.com/Supprocom/NativeAllocationManagement/blob/main/docs/diagnostics/" + id + ".md",
             customTags: WellKnownDiagnosticTags.Telemetry);
     }
 }

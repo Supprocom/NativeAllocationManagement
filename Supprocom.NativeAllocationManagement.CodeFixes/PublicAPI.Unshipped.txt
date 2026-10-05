@@ -1,0 +1,6 @@
+#nullable enable
+Supprocom.NativeAllocationManagement.CodeFixes.NativeOwnershipCodeFixProvider
+Supprocom.NativeAllocationManagement.CodeFixes.NativeOwnershipCodeFixProvider.NativeOwnershipCodeFixProvider() -> void
+override Supprocom.NativeAllocationManagement.CodeFixes.NativeOwnershipCodeFixProvider.FixableDiagnosticIds.get -> System.Collections.Immutable.ImmutableArray<string!>
+override Supprocom.NativeAllocationManagement.CodeFixes.NativeOwnershipCodeFixProvider.GetFixAllProvider() -> Microsoft.CodeAnalysis.CodeFixes.FixAllProvider?
+override Supprocom.NativeAllocationManagement.CodeFixes.NativeOwnershipCodeFixProvider.RegisterCodeFixesAsync(Microsoft.CodeAnalysis.CodeFixes.CodeFixContext context) -> System.Threading.Tasks.Task!

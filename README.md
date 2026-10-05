@@ -48,3 +48,11 @@ evidence.
 This project uses the GNU Affero General Public License, version 3 only. See
 [LICENSE](LICENSE) for the complete terms. See [NOTICE](NOTICE) for the project
 notice and source offer.
+
+# Ownership diagnostics
+
+Use the [complete diagnostic index](docs/diagnostics/README.md),
+[verified cleanup fixes](docs/analyzer-usability.md), and
+[managed-first allocator-selection guide](docs/allocator-selection.md).
+Every shipped rule has its own help page. Compiler analysis remains required;
+IDE fixes do not disable ownership checks or change a memory budget.
