@@ -16,12 +16,18 @@ public sealed class NativeFastArenaIntegrationTests
         Assert.Equal(128, budget.CaptureStatistics().CommittedBytes);
         Assert.Equal(128, arena.GetStatistics().BorrowedBytes);
         Assert.Equal(0, arena.GetStatistics().UsableCapacityBytes);
+        Assert.Equal(128, arena.CaptureDiagnosticSnapshot().OutstandingNativeBytes);
+        Assert.Equal(128, arena.CaptureDiagnosticSnapshot().PeakOutstandingNativeBytes);
+        Assert.Equal(arena.GetStatistics().OutstandingNativeBytes, arena.CaptureDiagnosticSnapshot().OutstandingNativeBytes);
         ArenaLease<int> source = arena.Scratch<int>(1, static writer => writer.Write(17));
         Assert.Equal(17, source.Read(static view => view[0]));
         arena.Dispose();
         Assert.Equal(1, buffer.ReleaseCount);
         Assert.Equal(0, budget.CaptureStatistics().CommittedBytes);
         Assert.Equal(0, arena.CapturePreparedSnapshot().RetainedBorrowedBytes);
+        Assert.Equal(0, arena.CaptureDiagnosticSnapshot().OutstandingNativeBytes);
+        Assert.Equal(0, arena.CaptureDiagnosticSnapshot().DetachedNativeBytes);
+        Assert.Equal(128, arena.CaptureDiagnosticSnapshot().PeakOutstandingNativeBytes);
     }
 
     [Fact]
@@ -37,6 +43,8 @@ public sealed class NativeFastArenaIntegrationTests
         Assert.Equal(64, partial.ActiveBorrowedBytes);
         Assert.Equal(128, partial.RetainedBorrowedBytes);
         Assert.Equal(128, partial.RetainedBytes);
+        Assert.Equal(128, arena.CaptureDiagnosticSnapshot().OutstandingNativeBytes);
+        Assert.Equal(128, arena.CaptureDiagnosticSnapshot().PeakOutstandingNativeBytes);
         Assert.Equal(0, partial.ScopedAvailableBytes);
         Assert.False(arena.TryScratchScoped<int>(1, static writer => writer.Write(1), out _));
         Assert.Equal(0, buffer.ReleaseCount);
@@ -45,6 +53,8 @@ public sealed class NativeFastArenaIntegrationTests
         Assert.Equal(1, buffer.ReleaseCount);
         Assert.Equal(0, budget.CaptureStatistics().CommittedBytes);
         Assert.Equal(0, arena.CapturePreparedSnapshot().RetainedBorrowedBytes);
+        Assert.Equal(0, arena.CaptureDiagnosticSnapshot().OutstandingNativeBytes);
+        Assert.Equal(128, arena.CaptureDiagnosticSnapshot().PeakOutstandingNativeBytes);
     }
 
     [Theory]

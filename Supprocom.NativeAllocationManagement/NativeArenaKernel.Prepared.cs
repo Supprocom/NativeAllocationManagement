@@ -10,7 +10,6 @@ internal sealed unsafe partial class NativeArenaKernel
     private long _preparedInitializerFailureCount;
     private long _preparedPeakOrdinaryUsedBytes;
     private long _preparedPeakScopedUsedBytes;
-    private long _preparedPeakRetainedBytes;
 
     internal NativeArenaKernel(NativeArenaPreparation preparation, NativeMemoryBudget budget)
     {
@@ -43,7 +42,6 @@ internal sealed unsafe partial class NativeArenaKernel
                     "scoped preparation", alreadyReserved: true);
                 ResetLane(ref _scoped);
             }
-            _preparedPeakRetainedBytes = _retainedBytes;
             budget.RecordPreparation(checked((nuint)_retainedBytes), Id);
         }
         catch
@@ -69,7 +67,7 @@ internal sealed unsafe partial class NativeArenaKernel
             _lifecycle == NativeOwnerLifecycle.Active ? LaneAvailable(_ordinary) : 0,
             _lifecycle == NativeOwnerLifecycle.Active ? LaneAvailable(_scoped) : 0,
             _preparedPeakOrdinaryUsedBytes, _preparedPeakScopedUsedBytes,
-            _retainedBytes, _preparedPeakRetainedBytes, _preparedSuccessCount,
+            _retainedBytes, _peakRetainedBytes, _preparedSuccessCount,
             _preparedRefusalCount, _preparedInitializerFailureCount, _historyOverflowed);
         snapshot = snapshot with
         {

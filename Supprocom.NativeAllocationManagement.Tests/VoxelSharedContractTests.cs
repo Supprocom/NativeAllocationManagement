@@ -3564,7 +3564,7 @@ public sealed class VoxelSharedContractTests
     [VoxelDemonstrationFact]
     public void NamDiagnosticMappingPreservesTheRealOwnerIdentity()
     {
-        using NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentArena arena = new(preAllocateBytes: 64, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
         NativeOwnerDiagnosticSnapshot source = arena.CaptureDiagnosticSnapshot();
         PressureAllocatorDiagnosticSnapshot mapped =
             Demos.VoxelChunkPipeline.NAM.NativePressureSession.CaptureAllocatorDiagnostic(source);
@@ -3573,6 +3573,9 @@ public sealed class VoxelSharedContractTests
         Assert.Equal(source.Model.ToString(), mapped.Model);
         Assert.Equal(source.Generation, mapped.Generation);
         Assert.Equal(source.ReferenceRoots, mapped.ReferenceRoots);
+        Assert.Equal(64, mapped.OutstandingNativeBytes);
+        Assert.Equal(0, mapped.DetachedNativeBytes);
+        Assert.Equal(64, mapped.PeakOutstandingNativeBytes);
         string json = JsonSerializer.Serialize(mapped, VoxelJson.Options);
         PressureAllocatorDiagnosticSnapshot restored =
             JsonSerializer.Deserialize<PressureAllocatorDiagnosticSnapshot>(json, VoxelJson.Options);
@@ -3581,6 +3584,37 @@ public sealed class VoxelSharedContractTests
         Assert.False(unavailable.Available);
         Assert.Null(unavailable.OwnerId);
         Assert.Null(unavailable.Model);
+        Assert.Null(unavailable.Lifecycle);
+        Assert.Null(unavailable.Generation);
+        Assert.Null(unavailable.ScopeEpoch);
+        Assert.Null(unavailable.MetricsEpoch);
+        Assert.Null(unavailable.ActiveRecords);
+        Assert.Null(unavailable.ScopedRecords);
+        Assert.Null(unavailable.ReferenceRoots);
+        Assert.Null(unavailable.OrdinaryTraversalIndex);
+        Assert.Null(unavailable.ScopedTraversalIndex);
+        Assert.Null(unavailable.RetainedSegmentCount);
+        Assert.Null(unavailable.AvailableSegmentCount);
+        Assert.Null(unavailable.RetiredGenerationCount);
+        Assert.Null(unavailable.RetiredSegmentCount);
+        Assert.Null(unavailable.RetiredBytes);
+        Assert.Null(unavailable.QuarantinedGenerationCount);
+        Assert.Null(unavailable.QuarantinedSegmentCount);
+        Assert.Null(unavailable.CurrentGenerationQuarantined);
+        Assert.Null(unavailable.HistoryOverflowed);
+        Assert.Null(unavailable.OutstandingNativeBytes);
+        Assert.Null(unavailable.DetachedNativeBytes);
+        Assert.Null(unavailable.PeakOutstandingNativeBytes);
+        string unavailableJson = JsonSerializer.Serialize(unavailable, VoxelJson.Options);
+        PressureAllocatorDiagnosticSnapshot unavailableRestored =
+            JsonSerializer.Deserialize<PressureAllocatorDiagnosticSnapshot>(unavailableJson, VoxelJson.Options);
+        Assert.Equal(unavailable, unavailableRestored);
+        arena.Dispose();
+        PressureAllocatorDiagnosticSnapshot terminal =
+            Demos.VoxelChunkPipeline.NAM.NativePressureSession.CaptureAllocatorDiagnostic(arena.CaptureDiagnosticSnapshot());
+        Assert.Equal(0, terminal.OutstandingNativeBytes);
+        Assert.Equal(0, terminal.DetachedNativeBytes);
+        Assert.Equal(64, terminal.PeakOutstandingNativeBytes);
     }
 
     [VoxelDemonstrationFact]

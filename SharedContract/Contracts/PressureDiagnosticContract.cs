@@ -66,27 +66,30 @@ public sealed class PressurePhaseRecorder
 
 public readonly record struct PressureAllocatorDiagnosticSnapshot(
     bool Available,
-    string Lifecycle,
-    long Generation,
-    long ScopeEpoch,
-    long MetricsEpoch,
-    int ActiveRecords,
-    int ScopedRecords,
-    int ReferenceRoots,
-    int OrdinaryTraversalIndex,
-    int ScopedTraversalIndex,
-    int RetainedSegmentCount,
-    int AvailableSegmentCount,
-    int RetiredGenerationCount,
-    int RetiredSegmentCount,
-    long RetiredBytes,
-    int QuarantinedGenerationCount,
-    int QuarantinedSegmentCount,
-    bool CurrentGenerationQuarantined)
+    string? Lifecycle,
+    long? Generation,
+    long? ScopeEpoch,
+    long? MetricsEpoch,
+    int? ActiveRecords,
+    int? ScopedRecords,
+    int? ReferenceRoots,
+    int? OrdinaryTraversalIndex,
+    int? ScopedTraversalIndex,
+    int? RetainedSegmentCount,
+    int? AvailableSegmentCount,
+    int? RetiredGenerationCount,
+    int? RetiredSegmentCount,
+    long? RetiredBytes,
+    int? QuarantinedGenerationCount,
+    int? QuarantinedSegmentCount,
+    bool? CurrentGenerationQuarantined)
 {
     public long? OwnerId { get; init; }
     public string? Model { get; init; }
     public bool? HistoryOverflowed { get; init; }
+    public long? OutstandingNativeBytes { get; init; }
+    public long? DetachedNativeBytes { get; init; }
+    public long? PeakOutstandingNativeBytes { get; init; }
 }
 
 public readonly record struct PressureWorkerDiagnostic(

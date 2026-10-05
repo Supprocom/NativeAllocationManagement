@@ -22,6 +22,7 @@ internal sealed unsafe class NativeRegionKernel
     private byte* _currentEnd;
     private long _requestedBytes;
     private long _retainedBytes;
+    private long _peakRetainedBytes;
     private int _segmentCount;
     private int _activeBorrowCount;
     private long _freshSegmentAllocationCount;
@@ -160,6 +161,9 @@ internal sealed unsafe class NativeRegionKernel
             OwnerId = Id,
             Model = NativeOwnerModel.ThreadConfinedRegion,
             HistoryOverflowed = _historyOverflowed,
+            OutstandingNativeBytes = _retainedBytes,
+            DetachedNativeBytes = 0,
+            PeakOutstandingNativeBytes = _peakRetainedBytes,
             UsableCapacityBytes = usableCapacityBytes
         };
     }
@@ -190,7 +194,11 @@ internal sealed unsafe class NativeRegionKernel
         {
             OwnerId = Id,
             Model = NativeOwnerModel.ThreadConfinedRegion,
-            HistoryOverflowed = _historyOverflowed
+            HistoryOverflowed = _historyOverflowed,
+            OutstandingNativeBytes = _retainedBytes,
+            DetachedNativeBytes = _lifecycle == NativeOwnerLifecycle.Disposed
+                && _returnMemoryOnDispose == NativeMemoryReturn.ToGarbageCollector ? _retainedBytes : 0,
+            PeakOutstandingNativeBytes = _peakRetainedBytes
         };
         GC.KeepAlive(this);
         return snapshot;
@@ -341,6 +349,7 @@ internal sealed unsafe class NativeRegionKernel
         long metricsEpoch = 0;
         try
         {
+            long prospectiveBytes = checked(_retainedBytes + checked((long)allocationBytes));
             if (NativeMemoryTestHooks.ConsumeForcedFailure())
             {
                 throw new NativeAllocationFailedException(allocationBytes, OwnerKind, generation: 0, operation, _lifecycle);
@@ -358,6 +367,7 @@ internal sealed unsafe class NativeRegionKernel
                     _lifecycle);
             }
 
+            _peakRetainedBytes = Math.Max(_peakRetainedBytes, prospectiveBytes);
             RegionSegmentHeader* segment =
                 (RegionSegmentHeader*)memory;
             *segment = default;

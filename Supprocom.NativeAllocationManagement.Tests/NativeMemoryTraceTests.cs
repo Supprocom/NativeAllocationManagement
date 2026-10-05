@@ -372,6 +372,9 @@ public sealed class NativeMemoryTraceTests
             pool.ReleaseLeasesToGarbageCollector();
             Assert.Equal(42, view[0]);
             Assert.Equal(extent, pool.CaptureDiagnosticSnapshot().RetiredBytes);
+            Assert.Equal(extent, pool.CaptureDiagnosticSnapshot().OutstandingNativeBytes);
+            Assert.Equal(extent, pool.CaptureDiagnosticSnapshot().PeakOutstandingNativeBytes);
+            Assert.Equal(0, pool.CaptureDiagnosticSnapshot().DetachedNativeBytes);
         });
         NativeMemoryTraceEvent[] events = CaptureTrace(budget);
         NativeMemoryTraceEvent retired = AssertOne(events, entry => entry.Kind == NativeMemoryTraceKind.GenerationRetired);
@@ -385,6 +388,9 @@ public sealed class NativeMemoryTraceTests
         Assert.Equal(extent, budget.CaptureStatistics().CommittedBytes);
         Assert.Equal(0, budget.CaptureStatistics().FreeCount);
         Assert.Equal(0, pool.CaptureDiagnosticSnapshot().RetiredBytes);
+        Assert.Equal(extent, pool.CaptureDiagnosticSnapshot().OutstandingNativeBytes);
+        Assert.Equal(extent, pool.CaptureDiagnosticSnapshot().PeakOutstandingNativeBytes);
+        Assert.Equal(0, pool.CaptureDiagnosticSnapshot().DetachedNativeBytes);
         Assert.DoesNotContain(events, entry => entry.Kind == NativeMemoryTraceKind.Released);
     }
 
@@ -418,6 +424,9 @@ public sealed class NativeMemoryTraceTests
             Assert.Equal(extent, quarantine.CommittedBytes);
             Assert.DoesNotContain(events, entry => entry.Kind == NativeMemoryTraceKind.GenerationReleased);
             Assert.Equal(1, pool.CaptureDiagnosticSnapshot().QuarantinedSegmentCount);
+            Assert.Equal(extent, pool.CaptureDiagnosticSnapshot().OutstandingNativeBytes);
+            Assert.Equal(extent, pool.CaptureDiagnosticSnapshot().PeakOutstandingNativeBytes);
+            Assert.Equal(0, pool.CaptureDiagnosticSnapshot().DetachedNativeBytes);
             Assert.Equal(0, budget.CaptureStatistics().FreeCount);
         }
         finally { NativeMemoryTestHooks.Reset(); pool.Dispose(); }
@@ -427,6 +436,9 @@ public sealed class NativeMemoryTraceTests
         Assert.Equal(0, budget.CaptureStatistics().CommittedBytes);
         Assert.Equal(1, budget.CaptureStatistics().FreeCount);
         pool.Dispose();
+        Assert.Equal(0, pool.CaptureDiagnosticSnapshot().OutstandingNativeBytes);
+        Assert.Equal(0, pool.CaptureDiagnosticSnapshot().DetachedNativeBytes);
+        Assert.Equal(extent, pool.CaptureDiagnosticSnapshot().PeakOutstandingNativeBytes);
         _ = AssertOne(CaptureTrace(budget), entry =>
             entry.Kind == NativeMemoryTraceKind.GenerationReleased && entry.Generation == 0);
     }

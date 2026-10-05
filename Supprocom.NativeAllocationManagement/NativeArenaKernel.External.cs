@@ -43,6 +43,7 @@ internal sealed unsafe partial class NativeArenaKernel
         void* headers = null;
         try
         {
+            long prospectiveBytes = checked((long)headerBytes);
             external = NativeSegment.Borrow(buffer, byteOffset, totalBytes);
             if (NativeMemoryTestHooks.ConsumeForcedFailure())
             {
@@ -55,6 +56,7 @@ internal sealed unsafe partial class NativeArenaKernel
                 throw new NativeAllocationFailedException(headerBytes, OwnerKind,
                     unchecked((long)_generation), "external preparation", _lifecycle);
             }
+            _peakRetainedBytes = Math.Max(_peakRetainedBytes, prospectiveBytes);
             NativeMemory.Clear(headers, headerBytes);
             metricsEpoch = NativeMemoryAccounting.RecordAllocation(headerBytes, zeroed: false);
             recorded = true;
@@ -66,8 +68,7 @@ internal sealed unsafe partial class NativeArenaKernel
             _externalHeaderCount = headerCount;
             _externalActiveBytes = checked((long)totalBytes);
             _externalRetainedBytes = _externalActiveBytes;
-            _retainedBytes = checked((long)headerBytes);
-            _preparedPeakRetainedBytes = _retainedBytes;
+            _retainedBytes = prospectiveBytes;
             _segmentCount = headerCount;
             _freshSegmentAllocationCount = 1;
             _nextAllocationOrdinal = 1;

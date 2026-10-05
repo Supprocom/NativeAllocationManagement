@@ -341,6 +341,15 @@ public readonly record struct NativeOwnerStatistics(
 
     /// <summary>Gets provider-owned range bytes still held by retired or quarantined banks.</summary>
     public long RetiredBorrowedBytes { get; init; }
+
+    /// <summary>Gets currently acquired NAM-owned extent bytes, including detached, retired and quarantined storage; excludes borrowed payload and opaque backend overhead.</summary>
+    public long OutstandingNativeBytes { get; init; }
+
+    /// <summary>Gets the subset of outstanding extent bytes detached for eventual physical release.</summary>
+    public long DetachedNativeBytes { get; init; }
+
+    /// <summary>Gets the owner lifetime high-water extent recorded at successful acquisition boundaries, including backing later released after failed publication; trim, generation changes and disposal do not reset it.</summary>
+    public long PeakOutstandingNativeBytes { get; init; }
 }
 
 /// <summary>Reports structural state from one native owner under its actual lifecycle model.</summary>
@@ -396,6 +405,15 @@ public readonly record struct NativeOwnerDiagnosticSnapshot(
 
     /// <summary>Gets the stable process-local allocator identity, independent of generation.</summary>
     public long OwnerId { get; init; }
+
+    /// <summary>Gets currently acquired NAM-owned extent bytes across retained, retired, quarantined and detached banks; excludes borrowed payload and opaque backend overhead.</summary>
+    public long OutstandingNativeBytes { get; init; }
+
+    /// <summary>Gets the subset of outstanding extent bytes detached for eventual physical release.</summary>
+    public long DetachedNativeBytes { get; init; }
+
+    /// <summary>Gets the owner lifetime high-water extent recorded at successful acquisition boundaries, including backing later released after failed publication; independent finalizers may decrease gauges after capture.</summary>
+    public long PeakOutstandingNativeBytes { get; init; }
 }
 
 /// <summary>Provides process-local physical storage counters for measurement and diagnostics.</summary>
@@ -742,6 +760,7 @@ internal sealed class NativeSegment
     private readonly bool _ownsNativeMemory;
     private readonly NativeMemoryBudget? _budget;
     private readonly long _ownerId;
+    private readonly NativeOwnerBackingHistory? _backingHistory;
 
     private NativeSegment(
         IntPtr pointer,
@@ -750,7 +769,8 @@ internal sealed class NativeSegment
         bool ownsNativeMemory,
         SafeBuffer? externalBuffer = null,
         NativeMemoryBudget? budget = null,
-        long ownerId = 0)
+        long ownerId = 0,
+        NativeOwnerBackingHistory? backingHistory = null)
     {
         _pointer = pointer;
         ByteLength = byteLength;
@@ -759,6 +779,7 @@ internal sealed class NativeSegment
         _externalBuffer = externalBuffer;
         _budget = budget;
         _ownerId = ownerId;
+        _backingHistory = backingHistory;
         AllocationByteLength = ownsNativeMemory
             ? NativeAlignedAllocation.GetBackingByteLength(byteLength) : 0;
     }
@@ -773,12 +794,13 @@ internal sealed class NativeSegment
 
     internal bool MarkDetached()
     {
-        if (!_ownsNativeMemory)
+        if (!_ownsNativeMemory || Pointer == IntPtr.Zero
+            || Interlocked.Exchange(ref _detached, 1) != 0)
         {
             return false;
         }
 
-        Volatile.Write(ref _detached, 1);
+        _backingHistory?.RecordDetached(AllocationByteLength);
         return true;
     }
 
@@ -791,7 +813,8 @@ internal sealed class NativeSegment
         bool zeroed,
         NativeMemoryBudget? budget = null,
         nuint minimumByteLength = 0,
-        long ownerId = 0)
+        long ownerId = 0,
+        NativeOwnerBackingHistory? backingHistory = null)
     {
         if (byteLength == 0)
         {
@@ -817,13 +840,16 @@ internal sealed class NativeSegment
         IntPtr pointer = IntPtr.Zero;
         bool acquired = false;
         bool recorded = false;
+        bool backingRecorded = false;
         long metricsEpoch = 0;
         try
         {
+            backingHistory?.ValidateAcquisition(allocationBytes);
             // Allocate the control before payload. Its finalizer has no native
             // authority until admission, acquisition and accounting succeed.
             NativeSegment segment = new(IntPtr.Zero, byteLength, metricsEpoch: 0,
-                ownsNativeMemory: true, budget: budget, ownerId: ownerId);
+                ownsNativeMemory: true, budget: budget, ownerId: ownerId,
+                backingHistory: backingHistory);
             if (NativeMemoryTestHooks.ConsumeForcedFailure())
             {
                 throw new NativeAllocationFailedException(allocationBytes, ownerKind, generation, operation, currentLifecycle);
@@ -838,6 +864,8 @@ internal sealed class NativeSegment
                     throw new NativeAllocationFailedException(byteLength, ownerKind, generation, operation, currentLifecycle);
                 }
 
+                backingHistory?.RecordAcquisition(allocationBytes);
+                backingRecorded = true;
                 if (zeroed)
                 {
                     NativeMemory.Clear(
@@ -867,6 +895,10 @@ internal sealed class NativeSegment
                     unsafe
                     {
                         NativeMemory.AlignedFree((void*)pointer);
+                    }
+                    if (backingRecorded)
+                    {
+                        backingHistory?.RecordFree(allocationBytes, detached: false);
                     }
                     if (recorded)
                     {
@@ -959,6 +991,7 @@ internal sealed class NativeSegment
             NativeMemory.AlignedFree((void*)pointer);
         }
 
+        _backingHistory?.RecordFree(AllocationByteLength, Volatile.Read(ref _detached) != 0);
         _budget?.Release(AllocationByteLength, _ownerId);
         NativeMemoryAccounting.RecordFree(AllocationByteLength, Volatile.Read(ref _detached) != 0, _metricsEpoch);
     }
@@ -3141,6 +3174,7 @@ internal sealed class NativeOwnerKernel
     private readonly NativeMemoryReturn _returnMemoryOnDispose;
     private readonly NativeMemoryBudget? _budget;
     private readonly int _storageElementSize;
+    private readonly NativeOwnerBackingHistory _backingHistory = new();
     private readonly nuint _preLease;
     private readonly nuint _preAllocateBytes;
     private readonly bool _containsReferences;
@@ -3190,6 +3224,7 @@ internal sealed class NativeOwnerKernel
     {
         lock (_gate)
         {
+            var backing = _backingHistory.Capture();
             NativeGeneration? current = _current;
             if (current is null)
             {
@@ -3209,6 +3244,9 @@ internal sealed class NativeOwnerKernel
                     OwnerId = Id,
                     Model = Model,
                     HistoryOverflowed = _historyOverflowed,
+                    OutstandingNativeBytes = backing.Outstanding,
+                    DetachedNativeBytes = backing.Detached,
+                    PeakOutstandingNativeBytes = backing.Peak,
                     RetiredBorrowedBytes = SumRetiredBorrowedBytesLocked()
                 };
             }
@@ -3286,6 +3324,9 @@ internal sealed class NativeOwnerKernel
                 OwnerId = Id,
                 Model = Model,
                 HistoryOverflowed = _historyOverflowed,
+                OutstandingNativeBytes = backing.Outstanding,
+                DetachedNativeBytes = backing.Detached,
+                PeakOutstandingNativeBytes = backing.Peak,
                 UsableCapacityBytes = usableCapacityBytes,
                 BorrowedBytes = GetGenerationBorrowedBytes(current),
                 RetiredBorrowedBytes = SumRetiredBorrowedBytesLocked()
@@ -3297,6 +3338,7 @@ internal sealed class NativeOwnerKernel
     {
         lock (_gate)
         {
+            var backing = _backingHistory.Capture();
             NativeGeneration? current = _current;
             int activeRecords = 0;
             int scopedRecords = current?.ScopedRecordCount ?? 0;
@@ -3385,7 +3427,10 @@ internal sealed class NativeOwnerKernel
             {
                 OwnerId = Id,
                 Model = Model,
-                HistoryOverflowed = _historyOverflowed
+                HistoryOverflowed = _historyOverflowed,
+                OutstandingNativeBytes = backing.Outstanding,
+                DetachedNativeBytes = backing.Detached,
+                PeakOutstandingNativeBytes = backing.Peak
             };
         }
     }
@@ -8860,7 +8905,8 @@ internal sealed class NativeOwnerKernel
         NativeSegment segment = NativeSegment.Allocate(
             preferredBytes, _ownerKind, generation.Number, operation,
             observedLifecycle, zeroed: false, budget: _budget,
-            minimumByteLength: minimumBytes, ownerId: Id);
+            minimumByteLength: minimumBytes, ownerId: Id,
+            backingHistory: _backingHistory);
         try
         {
             // Admission precedes bank/control growth. A metadata failure must
@@ -8922,7 +8968,8 @@ internal sealed class NativeOwnerKernel
             observedLifecycle,
             zeroed: false,
             budget: _budget,
-            ownerId: Id);
+            ownerId: Id,
+            backingHistory: _backingHistory);
         try
         {
             generation.Owner.AddSegment(segment);

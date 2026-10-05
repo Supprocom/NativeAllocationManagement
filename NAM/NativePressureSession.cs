@@ -640,7 +640,10 @@ internal sealed class NativePressureSession :
         {
             OwnerId = snapshot.OwnerId,
             Model = snapshot.Model.ToString(),
-            HistoryOverflowed = snapshot.HistoryOverflowed
+            HistoryOverflowed = snapshot.HistoryOverflowed,
+            OutstandingNativeBytes = snapshot.OutstandingNativeBytes,
+            DetachedNativeBytes = snapshot.DetachedNativeBytes,
+            PeakOutstandingNativeBytes = snapshot.PeakOutstandingNativeBytes
         };
     }
 

@@ -25,6 +25,7 @@ internal sealed unsafe partial class NativeArenaKernel
     private int _activeBorrowCount;
     private int _initializerActive;
     private long _retainedBytes;
+    private long _peakRetainedBytes;
     private long _trimmedBytes;
     private long _trimCallCount;
     private long _freshSegmentAllocationCount;
@@ -249,6 +250,9 @@ internal sealed unsafe partial class NativeArenaKernel
             OwnerId = Id,
             Model = NativeOwnerModel.ThreadConfinedArena,
             HistoryOverflowed = _historyOverflowed,
+            OutstandingNativeBytes = _retainedBytes,
+            DetachedNativeBytes = 0,
+            PeakOutstandingNativeBytes = _peakRetainedBytes,
             UsableCapacityBytes = usableCapacityBytes - _externalActiveBytes,
             BorrowedBytes = _externalRetainedBytes
         };
@@ -268,7 +272,11 @@ internal sealed unsafe partial class NativeArenaKernel
         {
             OwnerId = Id,
             Model = NativeOwnerModel.ThreadConfinedArena,
-            HistoryOverflowed = _historyOverflowed
+            HistoryOverflowed = _historyOverflowed,
+            OutstandingNativeBytes = _retainedBytes,
+            DetachedNativeBytes = _lifecycle == NativeOwnerLifecycle.Disposed
+                && _returnMemoryOnDispose == NativeMemoryReturn.ToGarbageCollector ? _retainedBytes : 0,
+            PeakOutstandingNativeBytes = _peakRetainedBytes
         };
         GC.KeepAlive(this);
         return snapshot;
@@ -570,6 +578,7 @@ internal sealed unsafe partial class NativeArenaKernel
         long metricsEpoch = 0;
         try
         {
+            long prospectiveBytes = checked(_retainedBytes + checked((long)allocationBytes));
             _nextAllocationOrdinal = allocationOrdinal;
             if (NativeMemoryTestHooks.ConsumeForcedFailure())
             {
@@ -587,6 +596,7 @@ internal sealed unsafe partial class NativeArenaKernel
 #pragma warning restore CA2201
             }
 
+            _peakRetainedBytes = Math.Max(_peakRetainedBytes, prospectiveBytes);
             ArenaSegmentHeader* segment =
                 (ArenaSegmentHeader*)memory;
             *segment = default;

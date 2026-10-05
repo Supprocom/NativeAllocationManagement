@@ -127,6 +127,7 @@ internal sealed unsafe class NativePoolKernel<T>
                 long epoch = 0;
                 try
                 {
+                    long prospectiveBytes = checked(_retainedBytes + checked((long)bytes));
                     if (NativeMemoryTestHooks.ConsumeForcedFailure())
                     {
                         throw CreateAllocationFailure(bytes, "page preparation");
@@ -136,14 +137,14 @@ internal sealed unsafe class NativePoolKernel<T>
                     {
                         throw CreateAllocationFailure(bytes, "page preparation");
                     }
+                    _peakRetainedBytes = Math.Max(_peakRetainedBytes, prospectiveBytes);
                     epoch = NativeMemoryAccounting.RecordAllocation(bytes, zeroed: false);
                     _budget?.Commit(bytes, Id, NativeMemoryTraceKind.PageAcquired, ordinal);
                     remainingReservation -= bytes;
                     committed = true;
                     page = new Page((IntPtr)memory, bytes, firstSlot, slots,
                         epoch, ordinal);
-                    _retainedBytes += checked((long)bytes);
-                    _peakRetainedBytes = _retainedBytes;
+                    _retainedBytes = prospectiveBytes;
                     IncrementHistory(ref _freshSegmentAllocationCount);
                     for (int offset = 0; offset < slots; offset++)
                     {
@@ -394,6 +395,10 @@ internal sealed unsafe class NativePoolKernel<T>
             OwnerId = Id,
             Model = NativeOwnerModel.ThreadConfinedPool,
             HistoryOverflowed = _historyOverflowed,
+            OutstandingNativeBytes = _retainedBytes,
+            DetachedNativeBytes = _lifecycle == NativeOwnerLifecycle.Disposed
+                && _returnMemoryOnDispose == NativeMemoryReturn.ToGarbageCollector ? _retainedBytes : 0,
+            PeakOutstandingNativeBytes = _peakRetainedBytes,
             UsableCapacityBytes = counts.UsableBytes
         };
     }
@@ -412,7 +417,11 @@ internal sealed unsafe class NativePoolKernel<T>
         {
             OwnerId = Id,
             Model = NativeOwnerModel.ThreadConfinedPool,
-            HistoryOverflowed = _historyOverflowed
+            HistoryOverflowed = _historyOverflowed,
+            OutstandingNativeBytes = _retainedBytes,
+            DetachedNativeBytes = _lifecycle == NativeOwnerLifecycle.Disposed
+                && _returnMemoryOnDispose == NativeMemoryReturn.ToGarbageCollector ? _retainedBytes : 0,
+            PeakOutstandingNativeBytes = _peakRetainedBytes
         };
         GC.KeepAlive(this);
         return snapshot;
@@ -691,6 +700,7 @@ internal sealed unsafe class NativePoolKernel<T>
         bool acquired = false;
         try
         {
+            long prospectiveBytes = checked(_retainedBytes + checked((long)backingBytes));
             index = ReserveSlabSlot();
             if (allocationBytes != 0)
             {
@@ -712,6 +722,7 @@ internal sealed unsafe class NativePoolKernel<T>
                         operation);
                 }
 
+                _peakRetainedBytes = Math.Max(_peakRetainedBytes, prospectiveBytes);
                 metricsEpoch = NativeMemoryAccounting.RecordAllocation(
                     backingBytes,
                     zeroed: false);
@@ -728,8 +739,7 @@ internal sealed unsafe class NativePoolKernel<T>
                 MetricsEpoch = metricsEpoch,
                 Ordinal = ordinal
             };
-            _retainedBytes = checked(
-                _retainedBytes + checked((long)backingBytes));
+            _retainedBytes = prospectiveBytes;
             if (allocationBytes != 0)
             {
                 IncrementHistory(ref _freshSegmentAllocationCount);

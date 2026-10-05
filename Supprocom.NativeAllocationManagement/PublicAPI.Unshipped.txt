@@ -436,6 +436,18 @@ Supprocom.NativeAllocationManagement.NativeOwnerStatistics.BorrowedBytes.get -> 
 Supprocom.NativeAllocationManagement.NativeOwnerStatistics.BorrowedBytes.init -> void
 Supprocom.NativeAllocationManagement.NativeOwnerStatistics.RetiredBorrowedBytes.get -> long
 Supprocom.NativeAllocationManagement.NativeOwnerStatistics.RetiredBorrowedBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.OutstandingNativeBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.OutstandingNativeBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.DetachedNativeBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.DetachedNativeBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.PeakOutstandingNativeBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.PeakOutstandingNativeBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.OutstandingNativeBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.OutstandingNativeBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.DetachedNativeBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.DetachedNativeBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.PeakOutstandingNativeBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.PeakOutstandingNativeBytes.init -> void
 *REMOVED*Supprocom.NativeAllocationManagement.NativeBuilder<T>.NativeBuilder(int preLease = 0) -> void
 Supprocom.NativeAllocationManagement.NativeBuilder<T>.NativeBuilder() -> void
 Supprocom.NativeAllocationManagement.NativeBuilder<T>.NativeBuilder(int preLease) -> void
