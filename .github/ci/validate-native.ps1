@@ -156,6 +156,10 @@ try {
     Assert-NamTrx (Join-Path $namRoot 'trx/package.trx')
     Invoke-NamCommand non-package-tests dotnet @('test', $namTests, '-c', 'Release', '--no-build', '--no-restore', '--nologo', '-v', 'normal', '--filter', 'FullyQualifiedName!~PackageSmokeTests', '--logger', 'trx;LogFileName=non-package.trx', '--results-directory', (Join-Path $namRoot 'trx'), '--disable-build-servers') -DeadlineSeconds 1800
     Assert-NamTrx (Join-Path $namRoot 'trx/non-package.trx')
+    Invoke-NamCommand allocator-raw-evidence pwsh @('-NoProfile', '-File', (Join-Path $PSScriptRoot 'assert-allocator-evidence.ps1'),
+        '-EvidenceRoot', $namRoot, '-Trx', (Join-Path $namRoot 'trx/non-package.trx'),
+        '-Worker', (Join-Path $env:ArtifactsPath 'bin/Supprocom.NativeAllocationManagement.Tests/release/Supprocom.NativeAllocationManagement.Performance.dll'),
+        '-Runtime', (Join-Path $env:ArtifactsPath 'bin/Supprocom.NativeAllocationManagement.Tests/release/Supprocom.NativeAllocationManagement.dll'))
     if (@(& git status --porcelain).Count -ne 0) { throw 'A producer mutated the exact source checkout.' }
     $namPassed = $true
 } finally {

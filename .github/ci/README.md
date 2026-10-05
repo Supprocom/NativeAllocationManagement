@@ -16,6 +16,14 @@ acceptance. An instrumented worker's floor failure remains exit 3 in its evidenc
 the unchanged uninstrumented test floors still determine validation. Captures are
 retained and printed in job logs even when a later floor fails.
 
+The unchanged uninstrumented Region, Arena and ArenaScoped test children also
+retain their original JSON and stderr before any assertion or deserialization,
+including failures and timeouts. Individual TRX output links their command
+records, exact worker/runtime lengths and SHA-256, argument lists and compilation
+settings. Passing validation independently reconciles all three raw records with
+those passing tests, actual zero exits, ten-second deadlines and original floors.
+Passing test counts alone do not stand in for retained performance measurements.
+
 Evidence lives outside the checkout. Each child retains arguments, declared
 deadline, actual exit, complete streams and original compiler inputs. Source,
 packages, caches, binaries, native runner/toolchain identities and length/SHA-256

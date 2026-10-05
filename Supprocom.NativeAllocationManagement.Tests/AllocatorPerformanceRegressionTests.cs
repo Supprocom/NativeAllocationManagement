@@ -1,6 +1,8 @@
 using System.Diagnostics;
+using System.Security.Cryptography;
 using System.Text.Json;
 using Supprocom.NativeAllocationManagement.Performance;
+using Xunit.Abstractions;
 
 namespace Supprocom.NativeAllocationManagement.Tests;
 
@@ -8,6 +10,12 @@ public sealed class AllocatorPerformanceRegressionTests
 {
     private const int ProcessTimeoutMilliseconds = 10_000;
     private const double MinimumSampleMilliseconds = 10d;
+    private readonly ITestOutputHelper _output;
+
+    public AllocatorPerformanceRegressionTests(ITestOutputHelper output)
+    {
+        _output = output;
+    }
 
     [Fact]
     public async Task NativeRegionBeatsOptimizedTypedArrayPools()
@@ -174,7 +182,7 @@ public sealed class AllocatorPerformanceRegressionTests
         }
     }
 
-    private static async Task<TReport> RunWorkerAsync<TReport>(
+    private async Task<TReport> RunWorkerAsync<TReport>(
         string kind)
     {
         string dotnet = Environment.GetEnvironmentVariable(
@@ -195,40 +203,103 @@ public sealed class AllocatorPerformanceRegressionTests
         start.Environment["DOTNET_TieredCompilation"] = "0";
         start.Environment["DOTNET_TieredPGO"] = "0";
 
-        using Process process = Process.Start(start)
-            ?? throw new InvalidOperationException(
-                $"The {kind} regression process did not start.");
+        WorkerResult result = await RunWorkerProcessAsync(start, worker, kind,
+            PackageFixtureEvidence.IsEnabled(Environment.GetEnvironmentVariable("NAM_RETAIN_PACKAGE_EVIDENCE")),
+            ProcessTimeoutMilliseconds,
+            directory => _output.WriteLine($"allocatorWorkerEvidence={directory}")).ConfigureAwait(true);
+        string evidence = result.StandardOutput + Environment.NewLine + result.StandardError;
+        Assert.True(result.ExitCode == 0, evidence);
+        Assert.DoesNotContain("Unhandled exception", result.StandardError, StringComparison.Ordinal);
+        return JsonSerializer.Deserialize<TReport>(result.StandardOutput)
+            ?? throw new InvalidDataException($"The {kind} regression report was empty.");
+    }
+
+    internal static async Task<WorkerResult> RunWorkerProcessAsync(ProcessStartInfo start, string worker, string kind,
+        bool retain, int timeoutMilliseconds, Action<string> evidenceCreated)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMilliseconds);
+        string workingDirectory = string.IsNullOrEmpty(start.WorkingDirectory)
+            ? Environment.CurrentDirectory : start.WorkingDirectory;
+        string? directory = PackageFixtureEvidence.Begin(workingDirectory, retain);
+        if (directory is not null)
+        {
+            evidenceCreated(directory);
+            string identity = JsonSerializer.Serialize(new
+            {
+                Kind = kind,
+                Worker = FileIdentity(worker),
+                CandidateRuntime = FileIdentity(typeof(NativeRegion).Assembly.Location),
+                Arguments = start.ArgumentList.ToArray(),
+                CompilationEnvironment = start.Environment.Where(static item =>
+                    item.Key.StartsWith("DOTNET_", StringComparison.Ordinal)
+                        || item.Key.StartsWith("COMPlus_", StringComparison.Ordinal))
+                    .Where(static item => item.Key.Contains("Tiered", StringComparison.Ordinal)
+                        || item.Key.Contains("Jit", StringComparison.Ordinal)
+                        || item.Key.EndsWith("ReadyToRun", StringComparison.Ordinal))
+                    .OrderBy(static item => item.Key, StringComparer.Ordinal)
+                    .ToDictionary(static item => item.Key, static item => item.Value, StringComparer.Ordinal)
+            });
+            await File.WriteAllTextAsync(Path.Combine(directory, "allocator-worker.json"), identity).ConfigureAwait(true);
+        }
+
+        string arguments = JsonSerializer.Serialize(start.ArgumentList.ToArray());
+        DateTimeOffset startedAt = DateTimeOffset.UtcNow;
+        using Process process = new() { StartInfo = start };
+        try
+        {
+            if (!process.Start())
+                throw new InvalidOperationException($"The {kind} regression process did not start.");
+        }
+        catch (System.ComponentModel.Win32Exception exception)
+        {
+            await PackageFixtureEvidence.CompleteAsync(directory, start.FileName, arguments, workingDirectory, startedAt,
+                exitCode: null, timedOut: false, string.Empty, exception.ToString(), timeoutMilliseconds / 1000d).ConfigureAwait(true);
+            throw;
+        }
+
         Task<string> outputTask =
             process.StandardOutput.ReadToEndAsync();
         Task<string> errorTask =
             process.StandardError.ReadToEndAsync();
         using CancellationTokenSource timeout = new(
-            ProcessTimeoutMilliseconds);
+            timeoutMilliseconds);
         try
         {
             await process.WaitForExitAsync(timeout.Token).ConfigureAwait(true);
         }
         catch (OperationCanceledException exception)
         {
-            process.Kill(entireProcessTree: true);
+            try
+            {
+                process.Kill(entireProcessTree: true);
+            }
+            catch (InvalidOperationException)
+            {
+            }
+
+            await process.WaitForExitAsync().ConfigureAwait(true);
+            await PackageFixtureEvidence.CompleteAsync(directory, start.FileName, arguments, workingDirectory, startedAt,
+                process.ExitCode, timedOut: true, await outputTask.ConfigureAwait(true), await errorTask.ConfigureAwait(true),
+                timeoutMilliseconds / 1000d).ConfigureAwait(true);
             throw new TimeoutException(
-                $"The {kind} regression process exceeded ten seconds.",
+                $"The {kind} regression process exceeded {timeoutMilliseconds / 1000d} seconds.",
                 exception);
         }
 
         string output = await outputTask.ConfigureAwait(true);
         string error = await errorTask.ConfigureAwait(true);
-        TReport report =
-            JsonSerializer.Deserialize<TReport>(
-                output)
-            ?? throw new InvalidDataException(
-                $"The {kind} regression report was empty.");
-        string evidence = output + Environment.NewLine + error;
-
-        Assert.True(process.ExitCode == 0, evidence);
-        Assert.DoesNotContain("Unhandled exception", error, StringComparison.Ordinal);
-        return report;
+        await PackageFixtureEvidence.CompleteAsync(directory, start.FileName, arguments, workingDirectory, startedAt,
+            process.ExitCode, timedOut: false, output, error, timeoutMilliseconds / 1000d).ConfigureAwait(true);
+        return new WorkerResult(process.ExitCode, output, error);
     }
+
+    private static object FileIdentity(string path)
+    {
+        using FileStream file = File.OpenRead(path);
+        return new { Path = path, Length = file.Length, SHA256 = Convert.ToHexString(SHA256.HashData(file)) };
+    }
+
+    internal readonly record struct WorkerResult(int ExitCode, string StandardOutput, string StandardError);
 
     [Theory]
     [InlineData(1.50d, 1.49d)]
