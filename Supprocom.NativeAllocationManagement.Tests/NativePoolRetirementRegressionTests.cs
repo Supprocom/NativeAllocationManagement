@@ -32,4 +32,39 @@ public sealed class NativePoolRetirementRegressionTests
             Assert.Equal([2, 2, 2], positions);
         }
     }
+
+    [Fact]
+    public void FailedInitializationReleasesEverySuccessfullyCreatedWorkerPool()
+    {
+        NativeMemoryTestHooks.Reset();
+        try
+        {
+            NativeMemoryTestHooks.FailNextAllocation();
+            Assert.Throws<NativeAllocationFailedException>(() => new NativePoolRetirementRegression.PoolRetirementWorkload());
+            NativeMemoryTestMetrics metrics = NativeMemoryTestHooks.Snapshot();
+            Assert.Equal(metrics.AllocationCount, metrics.FreeCount);
+            Assert.Equal(0, metrics.OutstandingNativeBytes);
+        }
+        finally { NativeMemoryTestHooks.Reset(); }
+    }
+
+    [Fact]
+    public void NormalTeardownReleasesEachNativePoolExactlyOnce()
+    {
+        NativeMemoryTestHooks.Reset();
+        try
+        {
+            using NativePoolRetirementRegression.PoolRetirementWorkload workload = new();
+            NativeMemoryTestMetrics before = NativeMemoryTestHooks.Snapshot();
+            Assert.Equal(NativePoolRetirementRegression.WorkerCount, before.AllocationCount);
+            Assert.Equal(0, before.FreeCount);
+            workload.Dispose();
+            workload.Dispose();
+            NativeMemoryTestMetrics after = NativeMemoryTestHooks.Snapshot();
+            Assert.Equal(before.AllocationCount, after.AllocationCount);
+            Assert.Equal(before.AllocationCount, after.FreeCount);
+            Assert.Equal(0, after.OutstandingNativeBytes);
+        }
+        finally { NativeMemoryTestHooks.Reset(); }
+    }
 }

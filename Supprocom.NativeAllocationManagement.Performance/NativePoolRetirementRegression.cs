@@ -238,11 +238,9 @@ internal static class NativePoolRetirementRegression
         return true;
     }
 
-    private sealed class PoolRetirementWorkload : IDisposable
+    internal sealed class PoolRetirementWorkload : IDisposable
     {
-        private readonly PersistentMapWorkers _workers = new(
-            WorkerCount,
-            BuildCount);
+        private readonly PersistentMapWorkers _workers;
         private readonly ThreadLocal<PersistentPoolWorker> _persistent =
             new(
                 static () => new PersistentPoolWorker(),
@@ -257,9 +255,9 @@ internal static class NativePoolRetirementRegression
         private readonly Action<int, int> _persistentHashAction;
         private readonly Action<int, int> _transientHashAction;
         private readonly Action<int, int> _initializeAction;
-        private readonly Action<int, int> _retireAction;
         private int _disposed;
 
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "Failed initialization owns all started threads and pools; teardown must preserve the original failure and any actual cleanup failure.")]
         internal PoolRetirementWorkload()
         {
             _managedAction = RunManaged;
@@ -269,8 +267,24 @@ internal static class NativePoolRetirementRegression
             _persistentHashAction = HashPersistent;
             _transientHashAction = HashTransient;
             _initializeAction = InitializePersistent;
-            _retireAction = RetirePersistent;
-            _workers.Run(_initializeAction);
+            try
+            {
+                _workers = new PersistentMapWorkers(WorkerCount, BuildCount, StopPersistent, _persistent.Dispose);
+                _workers.Run(_initializeAction);
+            }
+            catch (Exception exception)
+            {
+                try
+                {
+                    if (_workers is null) _persistent.Dispose();
+                    else Dispose();
+                }
+                catch (Exception cleanup)
+                {
+                    throw new AggregateException("Retirement workload initialization and cleanup both failed.", exception, cleanup);
+                }
+                throw;
+            }
         }
 
         internal void Warm()
@@ -323,19 +337,15 @@ internal static class NativePoolRetirementRegression
 
         public void Dispose()
         {
-            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            if (Volatile.Read(ref _disposed) == 2)
             {
                 return;
             }
 
-            _workers.Run(_retireAction);
-            foreach (PersistentPoolWorker worker in _persistent.Values)
-            {
-                worker.Dispose();
-            }
-
-            _persistent.Dispose();
+            Volatile.Write(ref _disposed, 1);
             _workers.Dispose();
+            _persistent.Dispose();
+            Volatile.Write(ref _disposed, 2);
         }
 
         private void InitializePersistent(int workerIndex, int mapIndex)
@@ -346,11 +356,12 @@ internal static class NativePoolRetirementRegression
             }
         }
 
-        private void RetirePersistent(int workerIndex, int mapIndex)
+        private void StopPersistent(int workerIndex)
         {
-            if (workerIndex == mapIndex)
+            if (_persistent.IsValueCreated)
             {
                 _persistent.Value!.Retire();
+                _persistent.Value.Dispose();
             }
         }
 
