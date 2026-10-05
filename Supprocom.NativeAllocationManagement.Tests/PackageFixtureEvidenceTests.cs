@@ -1,3 +1,4 @@
+using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -29,6 +30,8 @@ public sealed class PackageFixtureEvidenceTests
         XDocument configuration = XDocument.Parse(PackageFixtureEvidence.RestoreConfiguration(candidate));
         XElement sources = configuration.Root!.Element("packageSources")!;
         Assert.NotNull(sources.Element("clear"));
+        Assert.Collection(configuration.Root.Element("fallbackPackageFolders")!.Elements(),
+            clear => Assert.Equal("clear", clear.Name.LocalName));
         Assert.Collection(sources.Elements("add"),
             local =>
             {
@@ -62,6 +65,91 @@ public sealed class PackageFixtureEvidenceTests
     [Fact]
     public void RestoreConfigurationRejectsNullBeforeWritingAnything()
         => Assert.Throws<ArgumentNullException>(() => PackageFixtureEvidence.RestoreConfiguration(null!));
+
+    [Fact]
+    public async Task RestoreRejectsAnOtherwiseUsableInheritedFallbackPackage()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "nam-restore-isolation-" + Guid.NewGuid().ToString("N"));
+        string feed = Path.Combine(root, "feed");
+        string missingFeed = Path.Combine(root, "empty-feed");
+        string fallback = Path.Combine(root, "fallback");
+        Directory.CreateDirectory(feed);
+        Directory.CreateDirectory(missingFeed);
+        const string version = "0.0.0-isolation";
+        string package = Path.Combine(feed, $"Supprocom.NativeAllocationManagement.{version}.nupkg");
+        ZipArchive archive = await ZipFile.OpenAsync(package, ZipArchiveMode.Create).ConfigureAwait(true);
+        await using (archive.ConfigureAwait(true))
+        {
+            ZipArchiveEntry entry = archive.CreateEntry("Supprocom.NativeAllocationManagement.nuspec");
+            StreamWriter writer = new(await entry.OpenAsync().ConfigureAwait(true));
+            await using (writer.ConfigureAwait(true))
+            {
+                await writer.WriteAsync($"""
+                    <package><metadata><id>Supprocom.NativeAllocationManagement</id><version>{version}</version>
+                    <authors>Isolation fixture</authors><description>Fallback exclusion control only.</description>
+                    </metadata></package>
+                    """).ConfigureAwait(true);
+            }
+        }
+
+        string seed = CreateRestoreProject(root, "seed", version);
+        string seedConfiguration = Path.Combine(seed, "NuGet.config");
+        await File.WriteAllTextAsync(seedConfiguration, PackageFixtureEvidence.RestoreConfiguration(feed));
+        PackageSmokeTests.CommandResult seeded = await PackageSmokeTests.RunDotnetAsync(
+            $"restore --nologo --force --no-cache --packages \"{fallback}\" --configfile \"{seedConfiguration}\"", seed);
+        Assert.True(seeded.ExitCode == 0, seeded.Output);
+
+        XDocument inherited = new(new XElement("configuration",
+            new XElement("packageSources", new XElement("clear"),
+                new XElement("add", new XAttribute("key", "empty"), new XAttribute("value", missingFeed))),
+            new XElement("fallbackPackageFolders", new XElement("clear"),
+                new XElement("add", new XAttribute("key", "control"), new XAttribute("value", fallback)))));
+        await File.WriteAllTextAsync(Path.Combine(root, "NuGet.config"), inherited.ToString());
+        string control = CreateRestoreProject(root, "control", version);
+        await File.WriteAllTextAsync(Path.Combine(control, "Inherited.config"), inherited.ToString());
+        string controlCache = Path.Combine(control, ".packages");
+        PackageSmokeTests.CommandResult accepted = await PackageSmokeTests.RunDotnetAsync(
+            $"restore --nologo --force --no-cache --packages \"{controlCache}\"", control);
+        Assert.True(accepted.ExitCode == 0, accepted.Output);
+        using JsonDocument controlAssets = JsonDocument.Parse(await File.ReadAllTextAsync(AssetsPath(control)));
+        bool fallbackAdvertised = false;
+        foreach (JsonProperty folder in controlAssets.RootElement.GetProperty("packageFolders").EnumerateObject())
+        {
+            fallbackAdvertised |= string.Equals(Path.TrimEndingDirectorySeparator(folder.Name), fallback, StringComparison.Ordinal);
+        }
+        Assert.True(fallbackAdvertised);
+        Assert.False(Directory.Exists(Path.Combine(controlCache, "supprocom.nativeallocationmanagement")));
+
+        string isolated = CreateRestoreProject(root, "isolated", version);
+        await File.WriteAllTextAsync(Path.Combine(isolated, "NuGet.config"),
+            PackageFixtureEvidence.RestoreConfiguration(missingFeed));
+        PackageSmokeTests.CommandResult rejected = await PackageSmokeTests.RunDotnetAsync(
+            $"restore --nologo --force --no-cache --packages \"{Path.Combine(isolated, ".packages")}\"", isolated);
+        Assert.NotEqual(0, rejected.ExitCode);
+        Assert.Contains("NU1101", rejected.Output, StringComparison.Ordinal);
+        using JsonDocument isolatedAssets = JsonDocument.Parse(await File.ReadAllTextAsync(AssetsPath(isolated)));
+        int folderCount = 0;
+        foreach (JsonProperty folder in isolatedAssets.RootElement.GetProperty("packageFolders").EnumerateObject())
+        {
+            ++folderCount;
+            Assert.Equal(Path.Combine(isolated, ".packages"), Path.TrimEndingDirectorySeparator(folder.Name));
+        }
+        Assert.Equal(1, folderCount);
+    }
+
+    private static string CreateRestoreProject(string parent, string name, string version)
+    {
+        string root = Path.Combine(parent, "nam-package-smoke-" + name);
+        Directory.CreateDirectory(root);
+        File.WriteAllText(Path.Combine(root, "Directory.Build.props"), PackageFixtureEvidence.BuildProperties);
+        File.WriteAllText(Path.Combine(root, "Consumer.csproj"), $"""
+            <Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+            <ItemGroup><PackageReference Include="Supprocom.NativeAllocationManagement" Version="{version}" /></ItemGroup></Project>
+            """);
+        return root;
+    }
+
+    private static string AssetsPath(string root) => Path.Combine(root, ".build", "obj", "Consumer", "project.assets.json");
 
     [Fact]
     public async Task CommandsKeepTheirOwnPreExecutionSourcesAndHonestFailureRecords()

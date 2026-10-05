@@ -22,6 +22,7 @@ internal static class PackageFixtureEvidence
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(candidateSource);
         return new XDocument(new XElement("configuration",
+            new XElement("fallbackPackageFolders", new XElement("clear")),
             new XElement("packageSources", new XElement("clear"),
                 new XElement("add", new XAttribute("key", "candidate"), new XAttribute("value", candidateSource)),
                 new XElement("add", new XAttribute("key", "nuget.org"), new XAttribute("value", "https://api.nuget.org/v3/index.json"))),

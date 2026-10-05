@@ -2162,6 +2162,8 @@ public sealed class PackageSmokeTests
         bool executable = false,
         bool treatWarningsAsErrors = false)
     {
+        File.WriteAllText(Path.Combine(consumerRoot, "NuGet.config"),
+            PackageFixtureEvidence.RestoreConfiguration(package.SourceDirectory));
         string analyzerAssets = excludeAnalyzer ? " ExcludeAssets=\"analyzers\"" : string.Empty;
         string outputType = executable || suppressDiagnostics ? "Exe" : "Library";
         string warningsAsErrors = treatWarningsAsErrors
@@ -2275,7 +2277,7 @@ public sealed class PackageSmokeTests
         return result.Output.Trim();
     }
 
-    private static async Task<CommandResult> RunDotnetAsync(string arguments, string workingDirectory, int timeoutSeconds = 90)
+    internal static async Task<CommandResult> RunDotnetAsync(string arguments, string workingDirectory, int timeoutSeconds = 90)
     {
         return await RunProcessAsync(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet", arguments, workingDirectory, timeoutSeconds).ConfigureAwait(true);
     }
@@ -2374,7 +2376,7 @@ public sealed class PackageSmokeTests
         string AnalyzerAssemblySha256,
         string CodeFixAssemblySha256);
 
-    private sealed class CommandResult
+    internal sealed class CommandResult
     {
         internal CommandResult(int exitCode, string output)
         {
