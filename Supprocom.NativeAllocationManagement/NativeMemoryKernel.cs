@@ -251,6 +251,20 @@ internal readonly record struct NativeMemoryTestMetrics(
 }
 
 /// <summary>Reports physical native storage observed by the NAM runtime.</summary>
+/// <remarks>
+/// Gauges count known NAM-owned backend extents, including headers and padding,
+/// not borrowed payload, opaque native allocator overhead or process RSS. Gauges
+/// remain exact; cumulative completed histories saturate with HistoryOverflowed.
+/// Internal measurement resets require quiescent producers and advance MetricsEpoch.
+/// Capture samples independently changing counters, not an atomic global instant.
+/// </remarks>
+/// <param name="OutstandingNativeBytes">Current acquired extent bytes across all NAM-owned retained, retired, quarantined and detached storage.</param>
+/// <param name="PeakOutstandingNativeBytes">Greatest process outstanding extent gauge recorded in this measurement epoch; capture does not reset it.</param>
+/// <param name="DetachedNativeBytes">Current outstanding extent bytes detached for eventual physical release; a subset of outstanding bytes.</param>
+/// <param name="RetiredNativeBytes">Current outstanding extent bytes in retired or quarantined generation banks awaiting cleanup or reuse.</param>
+/// <param name="ReusedNativeSegmentCount">Completed reuse events for existing native segments in this measurement epoch; not a fresh backend acquisition count.</param>
+/// <param name="ReclaimedRangeReuseCount">Completed bump reservations satisfied from reclaimed tail ranges in this measurement epoch.</param>
+/// <param name="ReclaimedRangeReuseBytes">Storage bytes actually intersecting previously reclaimed scoped ranges in completed reservations in this measurement epoch; not total requested demand or geometric capacity.</param>
 [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
 public readonly record struct NativeMemoryStatistics(
     long OutstandingNativeBytes,
@@ -314,6 +328,17 @@ public readonly record struct NativeMemoryStatistics(
 /// Growth slack is therefore derived only while a request is live; retained idle
 /// capacity must not be interpreted as geometric growth slack.
 /// </remarks>
+/// <param name="Lifecycle">The owner lifecycle state at capture; numeric observation does not grant storage authority.</param>
+/// <param name="Generation">Current or most recent synchronized generation identity or thread-confined arena epoch; fast pools, lexical regions and direct owners report zero.</param>
+/// <param name="RequestedBytes">Current initialized logical demand, except thread-confined arenas report occupied bump bytes including padding/pending reservations; their InitializedPayloadBytes separates published demand.</param>
+/// <param name="RetainedBytes">Known owned extent bytes retained in the current storage bank, including headers/padding; excludes retired banks and provider-owned payload.</param>
+/// <param name="RetiredBytes">Known owned extent bytes held by retired or quarantined banks, not detached physical storage.</param>
+/// <param name="SegmentCount">Storage slabs/bump segments in the current bank, including attached external ranges; a direct owner has at most one backing block.</param>
+/// <param name="AvailableSegmentCount">Completely idle current slabs or bump segments; direct owners report their unused active block. This is not free-byte capacity.</param>
+/// <param name="RetiredSegmentCount">Storage segments in retired or quarantined banks; unavailable for ordinary allocation.</param>
+/// <param name="TrimmedBytes">Owner-lifetime sum of extent bytes physically released by explicit trim operations; saturated histories set HistoryOverflowed.</param>
+/// <param name="TrimCallCount">Completed explicit owner trim calls, including calls releasing zero bytes; lifetime history independent of process measurement reset.</param>
+/// <param name="FreshSegmentAllocationCount">Owner-lifetime count of successful first backing-segment acquisitions, not reuse or direct-builder reallocations; saturated histories set HistoryOverflowed.</param>
 [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
 public readonly record struct NativeOwnerStatistics(
     NativeOwnerLifecycle Lifecycle,

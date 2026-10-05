@@ -138,6 +138,13 @@ public sealed class NativeLayout
 internal readonly record struct NativeLayoutRegion(RuntimeTypeHandle Type, int Length, int Offset, int Bytes, int Alignment);
 
 /// <summary>Immutable descriptor facts for one checked typed field, not native-use authority.</summary>
+/// <param name="LayoutId">Stable process-local identity of the descriptor that authenticates this field; not a payload owner or budget charge.</param>
+/// <param name="Index">Zero-based field index in that descriptor; no independent storage lifetime is created.</param>
+/// <param name="Length">Declared element count, including valid zero-length fields.</param>
+/// <param name="ElementBytes">Unmanaged element size in bytes, without descriptor padding.</param>
+/// <param name="OffsetBytes">Checked byte offset from the common payload start after field-alignment padding.</param>
+/// <param name="PayloadBytes">Checked element count times element size in bytes; excludes inter-field padding and owner/control overhead.</param>
+/// <param name="Alignment">Power-of-two byte alignment required by this field; offsets are aligned within the descriptor's common backing.</param>
 [StructLayout(LayoutKind.Sequential)]
 public readonly record struct NativeLayoutRegionStatistics(
     long LayoutId, int Index, int Length, int ElementBytes, int OffsetBytes, int PayloadBytes, int Alignment);
