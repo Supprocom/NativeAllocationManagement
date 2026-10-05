@@ -1,4 +1,93 @@
 #nullable enable
+Supprocom.NativeAllocationManagement.NativeSharingPreparation
+Supprocom.NativeAllocationManagement.NativeSharingPreparation.NativeSharingPreparation() -> void
+Supprocom.NativeAllocationManagement.NativeSharingPreparation.NativeSharingPreparation(int strongBindingCount, int weakBindingCount) -> void
+Supprocom.NativeAllocationManagement.NativeSharingPreparation.StrongBindingCount.get -> int
+Supprocom.NativeAllocationManagement.NativeSharingPreparation.WeakBindingCount.get -> int
+Supprocom.NativeAllocationManagement.NativeSharingPreparation.Equals(Supprocom.NativeAllocationManagement.NativeSharingPreparation other) -> bool
+~override Supprocom.NativeAllocationManagement.NativeSharingPreparation.Equals(object obj) -> bool
+override Supprocom.NativeAllocationManagement.NativeSharingPreparation.GetHashCode() -> int
+~override Supprocom.NativeAllocationManagement.NativeSharingPreparation.ToString() -> string
+static Supprocom.NativeAllocationManagement.NativeSharingPreparation.operator !=(Supprocom.NativeAllocationManagement.NativeSharingPreparation left, Supprocom.NativeAllocationManagement.NativeSharingPreparation right) -> bool
+static Supprocom.NativeAllocationManagement.NativeSharingPreparation.operator ==(Supprocom.NativeAllocationManagement.NativeSharingPreparation left, Supprocom.NativeAllocationManagement.NativeSharingPreparation right) -> bool
+Supprocom.NativeAllocationManagement.NativeSharingStatistics
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.NativeSharingStatistics() -> void
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.Id.get -> long
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.OwnerId.get -> long
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.Preparation.get -> Supprocom.NativeAllocationManagement.NativeSharingPreparation
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.StrongBindingCount.get -> int
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.WeakBindingCount.get -> int
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.ActiveReadCount.get -> int
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.PeakStrongBindingCount.get -> int
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.PeakWeakBindingCount.get -> int
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.Expired.get -> bool
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.PayloadReleased.get -> bool
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.HistoryOverflowed.get -> bool
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.OwnedBackingBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.BorrowedBackingBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.InitializedPayloadBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.ManagedBankBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.ShareCount.get -> long
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.WeakCreationCount.get -> long
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.SuccessfulUpgradeCount.get -> long
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.RejectedStrongCount.get -> long
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.RejectedWeakCount.get -> long
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.ExpiredUpgradeCount.get -> long
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.PayloadReturnCount.get -> long
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.DetachCount.get -> long
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.RejectedDetachCount.get -> long
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.PayloadReturnFailureCount.get -> long
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.Equals(Supprocom.NativeAllocationManagement.NativeSharingStatistics other) -> bool
+~override Supprocom.NativeAllocationManagement.NativeSharingStatistics.Equals(object obj) -> bool
+override Supprocom.NativeAllocationManagement.NativeSharingStatistics.GetHashCode() -> int
+~override Supprocom.NativeAllocationManagement.NativeSharingStatistics.ToString() -> string
+static Supprocom.NativeAllocationManagement.NativeSharingStatistics.operator !=(Supprocom.NativeAllocationManagement.NativeSharingStatistics left, Supprocom.NativeAllocationManagement.NativeSharingStatistics right) -> bool
+static Supprocom.NativeAllocationManagement.NativeSharingStatistics.operator ==(Supprocom.NativeAllocationManagement.NativeSharingStatistics left, Supprocom.NativeAllocationManagement.NativeSharingStatistics right) -> bool
+Supprocom.NativeAllocationManagement.NativeSharingExhaustionReason
+Supprocom.NativeAllocationManagement.NativeSharingExhaustionReason.None = 0 -> Supprocom.NativeAllocationManagement.NativeSharingExhaustionReason
+Supprocom.NativeAllocationManagement.NativeSharingExhaustionReason.NoStrongBinding = 1 -> Supprocom.NativeAllocationManagement.NativeSharingExhaustionReason
+Supprocom.NativeAllocationManagement.NativeSharingExhaustionReason.NoWeakBinding = 2 -> Supprocom.NativeAllocationManagement.NativeSharingExhaustionReason
+Supprocom.NativeAllocationManagement.NativeSharingExhaustionReason.ExpiredPayload = 3 -> Supprocom.NativeAllocationManagement.NativeSharingExhaustionReason
+Supprocom.NativeAllocationManagement.NativeShared<T>
+Supprocom.NativeAllocationManagement.NativeShared<T>.NativeShared() -> void
+Supprocom.NativeAllocationManagement.NativeShared<T>.Id.get -> long
+Supprocom.NativeAllocationManagement.NativeShared<T>.Dispose() -> void
+Supprocom.NativeAllocationManagement.NativeShared<T>.CaptureSnapshot() -> Supprocom.NativeAllocationManagement.NativeSharingStatistics
+Supprocom.NativeAllocationManagement.NativeShared<T>.TryCompletePayloadReturn() -> bool
+Supprocom.NativeAllocationManagement.NativeWeak<T>
+Supprocom.NativeAllocationManagement.NativeWeak<T>.NativeWeak() -> void
+Supprocom.NativeAllocationManagement.NativeWeak<T>.Id.get -> long
+Supprocom.NativeAllocationManagement.NativeWeak<T>.Dispose() -> void
+Supprocom.NativeAllocationManagement.NativeWeak<T>.CaptureSnapshot() -> Supprocom.NativeAllocationManagement.NativeSharingStatistics
+Supprocom.NativeAllocationManagement.NativeWeak<T>.TryCompletePayloadReturn() -> bool
+Supprocom.NativeAllocationManagement.NativeShared<T>.Length.get -> int
+static Supprocom.NativeAllocationManagement.NativeShared<T>.Create(ref Supprocom.NativeAllocationManagement.NativeTransfer<T>? source, Supprocom.NativeAllocationManagement.NativeSharingPreparation preparation) -> Supprocom.NativeAllocationManagement.NativeShared<T>
+Supprocom.NativeAllocationManagement.NativeShared<T>.TryShare(out Supprocom.NativeAllocationManagement.NativeShared<T> share, out Supprocom.NativeAllocationManagement.NativeSharingExhaustionReason reason) -> bool
+Supprocom.NativeAllocationManagement.NativeShared<T>.TrySlice(int offset, int length, out Supprocom.NativeAllocationManagement.NativeShared<T> slice, out Supprocom.NativeAllocationManagement.NativeSharingExhaustionReason reason) -> bool
+Supprocom.NativeAllocationManagement.NativeShared<T>.TryDowngrade(out Supprocom.NativeAllocationManagement.NativeWeak<T> weak, out Supprocom.NativeAllocationManagement.NativeSharingExhaustionReason reason) -> bool
+Supprocom.NativeAllocationManagement.NativeShared<T>.Access(Supprocom.NativeAllocationManagement.NativeReadOnlyLeaseAction<T>! action) -> void
+Supprocom.NativeAllocationManagement.NativeShared<T>.Read<TResult>(Supprocom.NativeAllocationManagement.NativeReadOnlyLeaseFunc<T, TResult>! action) -> TResult
+Supprocom.NativeAllocationManagement.NativeShared<T>.TryDetach(Supprocom.NativeAllocationManagement.NativeMemoryBudget! budget, out Supprocom.NativeAllocationManagement.NativeTransfer<T> detached) -> bool
+Supprocom.NativeAllocationManagement.NativeWeak<T>.IsExpired.get -> bool
+Supprocom.NativeAllocationManagement.NativeWeak<T>.TryUpgrade(out Supprocom.NativeAllocationManagement.NativeShared<T> shared, out Supprocom.NativeAllocationManagement.NativeSharingExhaustionReason reason) -> bool
+Supprocom.NativeAllocationManagement.NativeReadOnlyLeaseView<T>
+Supprocom.NativeAllocationManagement.NativeReadOnlyLeaseView<T>.NativeReadOnlyLeaseView() -> void
+Supprocom.NativeAllocationManagement.NativeReadOnlyLeaseView<T>.Length.get -> int
+Supprocom.NativeAllocationManagement.NativeReadOnlyLeaseView<T>.this[int index].get -> T
+Supprocom.NativeAllocationManagement.NativeReadOnlyLeaseView<T>.AsSpan() -> System.ReadOnlySpan<T>
+Supprocom.NativeAllocationManagement.NativeReadOnlyLeaseView<T>.CopyTo(scoped System.Span<T> destination) -> void
+Supprocom.NativeAllocationManagement.NativeReadOnlyLeaseAction<T>
+virtual Supprocom.NativeAllocationManagement.NativeReadOnlyLeaseAction<T>.Invoke(scoped Supprocom.NativeAllocationManagement.NativeReadOnlyLeaseView<T> view) -> void
+Supprocom.NativeAllocationManagement.NativeReadOnlyLeaseFunc<T, TResult>
+virtual Supprocom.NativeAllocationManagement.NativeReadOnlyLeaseFunc<T, TResult>.Invoke(scoped Supprocom.NativeAllocationManagement.NativeReadOnlyLeaseView<T> view) -> TResult
+Supprocom.NativeAllocationManagement.NativeMemoryTraceEvent.CorrelationId.get -> long?
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.Shared = 9 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.WeakCreated = 10 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.WeakUpgraded = 11 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.UpgradeRejected = 12 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.OwnershipReleased = 13 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.PayloadReturned = 14 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.Detached = 15 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
 Supprocom.NativeAllocationManagement.NativeArena.NativeArena(Supprocom.NativeAllocationManagement.NativeMemoryBudget! budget, Supprocom.NativeAllocationManagement.NativeArenaRetentionPolicy retentionPolicy, nuint preAllocateBytes, Supprocom.NativeAllocationManagement.NativeMemoryReturn returnMemoryOnDispose) -> void
 Supprocom.NativeAllocationManagement.NativeArena.CaptureRetentionSnapshot() -> Supprocom.NativeAllocationManagement.NativeArenaRetentionStatistics
 Supprocom.NativeAllocationManagement.NativeArena.MaintainRetention() -> nuint

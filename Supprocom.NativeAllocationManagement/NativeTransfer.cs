@@ -79,6 +79,12 @@ public readonly struct NativeTransfer<T> : IDisposable
 
     internal object? ControlForTest => _control;
 
+    internal void AdoptSharedFinalization() => GetControl("NativeShared.Adopt").AdoptSharedFinalization(_authorityVersion);
+
+    internal NativeStorageLifetimePin PinForSharing(out IntPtr pointer, out nuint ownedBytes,
+        out nuint borrowedBytes, out NativeMemoryBudget? budget) =>
+        GetControl("NativeShared.Pin").PinForSharing(_authorityVersion, out pointer, out ownedBytes, out borrowedBytes, out budget);
+
     internal static NativeTransfer<T> Create(NativeOwnerKernel kernel, NativePoolLease lease, string operation) =>
         new(NativeTransferControl<T>.Create(kernel, lease, operation), authorityVersion: 1);
 
@@ -150,6 +156,43 @@ internal sealed class NativeTransferControl<T>
     internal int GetLength(long authorityVersion) => Validate(authorityVersion, nameof(NativeTransfer<T>.Length)).Length;
 
     internal int GetCapacity(long authorityVersion) => Validate(authorityVersion, nameof(NativeTransfer<T>.Capacity)).Capacity;
+
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA1816", Justification = "The initialized finalizable shared payload assumes this unique control's emergency-cleanup obligation, preventing competing finalizers.")]
+    internal void AdoptSharedFinalization(long authorityVersion)
+    {
+        EnsureActive(authorityVersion, "NativeShared.Adopt");
+        GC.SuppressFinalize(this);
+    }
+
+    internal unsafe NativeStorageLifetimePin PinForSharing(long authorityVersion, out IntPtr pointer,
+        out nuint ownedBytes, out nuint borrowedBytes, out NativeMemoryBudget? budget)
+    {
+        EnterTransferOperation(authorityVersion, "NativeShared.Pin");
+        try
+        {
+            if (_kernel is null)
+            {
+                pointer = _block.Pointer;
+                ownedBytes = _block.ByteLength;
+                borrowedBytes = 0;
+                budget = _block.Budget;
+                return default;
+            }
+            _kernel.PrepareTransferReturnCapacity(_generation, _allocationId);
+            NativeOperationToken token = EnterKernelOperation("NativeShared.Pin");
+            try
+            {
+                NativeSegment? segment = _allocationState!.Segment;
+                pointer = _length == 0 ? IntPtr.Zero : (IntPtr)((byte*)segment!.Pointer + _allocationState.OffsetBytes);
+                ownedBytes = segment?.AllocationByteLength ?? 0;
+                borrowedBytes = segment is { AllocationByteLength: 0 } ? segment.ByteLength : 0;
+                budget = _kernel.BudgetForSharing;
+                return token.MoveToLifetimePin();
+            }
+            finally { token.Dispose(); }
+        }
+        finally { ExitTransferOperation(); }
+    }
 
     /// <summary>Runs one synchronous bounded callback over the native span.</summary>
     internal void Access(long authorityVersion, NativeLeaseAction<T> action)

@@ -54,6 +54,8 @@ public sealed class NativeMemoryBudget
     /// <summary>Gets the immutable admission ceiling in bytes.</summary>
     public long CapacityBytes { get; }
 
+    internal bool TraceEnabled => _trace.Length != 0;
+
     /// <summary>Captures one consistent domain snapshot without resetting history.</summary>
     public NativeMemoryBudgetStatistics CaptureStatistics()
     {
@@ -243,8 +245,14 @@ public sealed class NativeMemoryBudget
         }
     }
 
+    internal void RecordOwnershipTransition(NativeMemoryTraceKind kind, long ownerId, long correlationId, nuint bytes)
+    {
+        if (_trace.Length == 0) return;
+        lock (_gate) { RecordTrace(kind, ownerId, bytes, correlationId: correlationId); }
+    }
+
     private void RecordTrace(NativeMemoryTraceKind kind, long ownerId, nuint bytes,
-        nuint previousBytes = 0, long allocationOrdinal = 0)
+        nuint previousBytes = 0, long allocationOrdinal = 0, long correlationId = 0)
     {
         if (_trace.Length == 0)
         {
@@ -263,7 +271,8 @@ public sealed class NativeMemoryBudget
         _trace[_traceWriteIndex] = new NativeMemoryTraceEvent(
             _traceSequence, System.Diagnostics.Stopwatch.GetTimestamp(), Id,
             ownerId == 0 ? null : ownerId, kind, bytes, previousBytes,
-            _committedBytes, _reservedBytes, allocationOrdinal);
+            _committedBytes, _reservedBytes, allocationOrdinal)
+        { CorrelationId = correlationId == 0 ? null : correlationId };
         _traceWriteIndex++;
         if (_traceWriteIndex == _trace.Length)
         {

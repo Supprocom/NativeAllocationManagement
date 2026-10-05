@@ -541,6 +541,9 @@ public sealed class NativeLeaseStateAnalyzer : DiagnosticAnalyzer
                 Namespace + "NativeLeaseStateFunc`3");
             LeaseView = runtime.GetTypeByMetadataName(
                 Namespace + "NativeLeaseView`1");
+            Shared = runtime.GetTypeByMetadataName(Namespace + "NativeShared`1");
+            Weak = runtime.GetTypeByMetadataName(Namespace + "NativeWeak`1");
+            ReadOnlyLeaseView = runtime.GetTypeByMetadataName(Namespace + "NativeReadOnlyLeaseView`1");
         }
 
         internal Compilation Compilation { get; }
@@ -550,6 +553,9 @@ public sealed class NativeLeaseStateAnalyzer : DiagnosticAnalyzer
         private INamedTypeSymbol? StateCallback { get; }
 
         private INamedTypeSymbol? LeaseView { get; }
+        private INamedTypeSymbol? Shared { get; }
+        private INamedTypeSymbol? Weak { get; }
+        private INamedTypeSymbol? ReadOnlyLeaseView { get; }
 
         internal bool IsAvailable =>
             ConcurrentPooled is not null
@@ -567,7 +573,7 @@ public sealed class NativeLeaseStateAnalyzer : DiagnosticAnalyzer
             Is(type, StateCallback);
 
         internal bool IsLeaseView(ITypeSymbol? type) =>
-            Is(type, LeaseView);
+            Is(type, LeaseView) || Is(type, ReadOnlyLeaseView);
 
         internal bool IsViewLike(ITypeSymbol? type)
         {
@@ -593,7 +599,7 @@ public sealed class NativeLeaseStateAnalyzer : DiagnosticAnalyzer
                 new HashSet<ITypeSymbol>(
                     SymbolEqualityComparer.Default));
 
-        private static bool IsOwnerBearingState(
+        private bool IsOwnerBearingState(
             ITypeSymbol type,
             HashSet<ITypeSymbol> visited)
         {
@@ -627,7 +633,7 @@ public sealed class NativeLeaseStateAnalyzer : DiagnosticAnalyzer
                 return false;
             }
 
-            if (IsNamOwnershipType(named))
+            if (IsNamOwnershipType(named) || Is(named, Shared) || Is(named, Weak) || Is(named, ReadOnlyLeaseView))
             {
                 return true;
             }

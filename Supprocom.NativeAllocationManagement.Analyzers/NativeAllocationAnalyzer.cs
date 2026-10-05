@@ -117,6 +117,9 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 Namespace + "ConcurrentArenaLease`1");
             Transfer = runtimeAssembly.GetTypeByMetadataName(
                 Namespace + "NativeTransfer`1");
+            Shared = runtimeAssembly.GetTypeByMetadataName(Namespace + "NativeShared`1");
+            Weak = runtimeAssembly.GetTypeByMetadataName(Namespace + "NativeWeak`1");
+            ReadOnlyLeaseView = runtimeAssembly.GetTypeByMetadataName(Namespace + "NativeReadOnlyLeaseView`1");
             Builder = runtimeAssembly.GetTypeByMetadataName(
                 Namespace + "NativeBuilder`1");
             BuilderPairBorrowAction = runtimeAssembly.GetTypeByMetadataName(
@@ -150,6 +153,9 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         internal INamedTypeSymbol? ConcurrentArenaLease { get; }
 
         internal INamedTypeSymbol? Transfer { get; }
+        internal INamedTypeSymbol? Shared { get; }
+        internal INamedTypeSymbol? Weak { get; }
+        internal INamedTypeSymbol? ReadOnlyLeaseView { get; }
 
         internal INamedTypeSymbol? Builder { get; }
 
@@ -190,6 +196,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 && method.Parameters.Any(parameter =>
                     IsOwnerType(parameter.Type)
                     || Is(parameter.Type, Transfer)
+                    || Is(parameter.Type, Shared)
+                    || Is(parameter.Type, Weak)
                     || Is(parameter.Type, Builder)
                     || Is(parameter.Type, Workspace));
         }
@@ -203,7 +211,10 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             && property.Type.SpecialType == SpecialType.System_Int64
             && (Is(property.ContainingType, Builder)
                 || Is(property.ContainingType, Workspace)
-                || Is(property.ContainingType, Transfer));
+                || Is(property.ContainingType, Transfer)
+                || Is(property.ContainingType, Shared)
+                || Is(property.ContainingType, Weak));
+
 
         private bool IsTrackedType(ITypeSymbol? type)
         {
@@ -214,6 +225,9 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 || Is(type, ArenaLease)
                 || Is(type, ConcurrentArenaLease)
                 || Is(type, Transfer)
+                || Is(type, Shared)
+                || Is(type, Weak)
+                || Is(type, ReadOnlyLeaseView)
                 || Is(type, Builder)
                 || Is(type, Workspace);
         }
@@ -1087,6 +1101,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             bool emitDiagnostics)
         {
             FlowSnapshot result = CloneSnapshot(state);
+            RefineNullableOwnership(branch, result);
             RefinePreparedAcquisition(branch, result);
             ControlFlowRegion[] finallyRegions = GetFinallyRegionsForBranch(graph, branch);
             foreach (var itemAt40386 in finallyRegions)
@@ -1138,6 +1153,46 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             return [];
         }
 
+        private void RefineNullableOwnership(ControlFlowBranch branch, FlowSnapshot state)
+        {
+            if (branch.Source is not BasicBlock source || source.ConditionKind == ControlFlowConditionKind.None) return;
+            IOperation? condition = Unwrap(source.BranchValue);
+            bool negated = false;
+            while (condition is IUnaryOperation { OperatorKind: UnaryOperatorKind.Not } unary)
+            {
+                negated = !negated;
+                condition = Unwrap(unary.Operand);
+            }
+            IOperation? operand;
+            bool trueMeansAbsent;
+            if (condition is IIsNullOperation isNull) { operand = isNull.Operand; trueMeansAbsent = true; }
+            else if (condition is IPropertyReferenceOperation property
+                && property.Property.ContainingType.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T
+                && string.Equals(property.Property.Name, "HasValue", StringComparison.Ordinal))
+            { operand = property.Instance; trueMeansAbsent = false; }
+            else return;
+            if (operand is null) return;
+            ISymbol? symbol = GetSymbol(Unwrap(operand)) ?? GetSemanticSymbol(operand);
+            if (symbol is null || GetSymbolType(symbol) is not INamedTypeSymbol { OriginalDefinition.SpecialType: SpecialType.System_Nullable_T }
+                || !state.Transfers.TryGetValue(symbol, out TransferState? ownership)) return;
+            bool conditionTrue = source.ConditionKind == ControlFlowConditionKind.WhenTrue
+                ? branch.IsConditionalSuccessor : !branch.IsConditionalSuccessor;
+            bool absent = (conditionTrue != negated) == trueMeansAbsent;
+            if (absent)
+            {
+                ownership.Status = TransferStatus.Unowned;
+                ownership.MustEnd = false;
+                ownership.ConditionalPending = false;
+                ownership.MayBePresentWithoutAuthority = false;
+            }
+            else if (ownership.Status == TransferStatus.Ambiguous && !ownership.MayBePresentWithoutAuthority)
+            {
+                // An active-or-absent binding gains no new owner here. Presence
+                // only selects its already-owning branch, not a disposed/default value.
+                ownership.Status = TransferStatus.Active;
+            }
+        }
+
         private void RefinePreparedAcquisition(ControlFlowBranch branch, FlowSnapshot state)
         {
             if (branch.Source is not BasicBlock source || source.ConditionKind == ControlFlowConditionKind.None)
@@ -1151,7 +1206,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 negated = !negated;
                 condition = Unwrap(unary.Operand);
             }
-            if (condition is not IInvocationOperation invocation || !IsPreparedTryAcquisition(invocation))
+            if (condition is not IInvocationOperation invocation
+                || !IsPreparedTryAcquisition(invocation) && !IsSharingTryAcquisition(invocation))
             {
                 return;
             }
@@ -1160,6 +1216,18 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             bool acquired = conditionTrue != negated;
             foreach (IArgumentOperation argument in invocation.Arguments)
             {
+                if (argument.Parameter?.RefKind == RefKind.Out && IsNativeTransfer(argument.Parameter.Type))
+                {
+                    ISymbol? destination = GetPreparedOutSymbol(argument.Value);
+                    if (destination is not null && state.Transfers.TryGetValue(destination, out TransferState? binding)
+                        && binding.Syntax.SyntaxTree == invocation.Syntax.SyntaxTree && binding.Syntax.Span == invocation.Syntax.Span)
+                    {
+                        binding.Status = acquired ? TransferStatus.Active : TransferStatus.Unowned;
+                        binding.ConditionalPending = false;
+                        binding.MustEnd = acquired && destination is ILocalSymbol;
+                    }
+                    continue;
+                }
                 if (argument.Parameter?.RefKind != RefKind.Out || !IsHandleType(argument.Parameter.Type))
                 {
                     continue;
@@ -1926,6 +1994,13 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 }
 
                 merged.MustEnd = present.Any(transfer => transfer.MustEnd);
+                merged.ConditionalPending = present.Any(transfer => transfer.ConditionalPending);
+                merged.MayBePresentWithoutAuthority = present.Any(transfer => transfer.MayBePresentWithoutAuthority);
+                if (present.Length == paths.Length && present.All(transfer => transfer.Status is TransferStatus.Unowned or TransferStatus.Disposed or TransferStatus.Moved))
+                {
+                    merged.Status = TransferStatus.Unowned;
+                    merged.MustEnd = false;
+                }
                 transfers.Add(symbol, merged);
             }
 
@@ -2145,7 +2220,9 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     || pair.Value.Kind != other.Kind
                     || pair.Value.Status != other.Status
                     || !string.Equals(pair.Value.OwnershipIdentity, other.OwnershipIdentity, StringComparison.Ordinal) || pair.Value.MustEnd != other.MustEnd
-                    || pair.Value.IsUsing != other.IsUsing)
+                    || pair.Value.IsUsing != other.IsUsing
+                    || pair.Value.ConditionalPending != other.ConditionalPending
+                    || pair.Value.MayBePresentWithoutAuthority != other.MayBePresentWithoutAuthority)
                 {
                     return false;
                 }
@@ -2747,6 +2824,12 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
         public override void VisitArgument(IArgumentOperation operation)
         {
+            if (operation.Parameter?.RefKind == RefKind.Out
+                && operation.Parent is IInvocationOperation sharing && IsSharingTryAcquisition(sharing))
+            {
+                base.VisitArgument(operation);
+                return;
+            }
             IOperation? value = Unwrap(operation.Value);
             if (value is not null && IsNativeTransfer(value.Type))
             {
@@ -3282,6 +3365,27 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             base.VisitArrayInitializer(operation);
         }
 
+        public override void VisitCollectionExpression(ICollectionExpressionOperation operation)
+        {
+            foreach (IOperation element in operation.Elements)
+            {
+                IOperation? value = Unwrap(element);
+                if (GetNativeOwnership(value) is TransferState ownership)
+                {
+                    ReportTransferCopy(ownership, operation.Syntax, "collection storage");
+                }
+                else if (value is not null && IsHandleType(value.Type) && GetHandle(value) is HandleState handle)
+                {
+                    ReportHandleTransfer(handle, new Target(null, operation.Syntax));
+                }
+                else if (value is not null && IsOwnerType(value.Type) && GetOwner(value) is OwnerState owner)
+                {
+                    ReportOwnerTransfer(owner, new Target(null, operation.Syntax));
+                }
+            }
+            base.VisitCollectionExpression(operation);
+        }
+
         public override void VisitDeconstructionAssignment(IDeconstructionAssignmentOperation operation)
         {
             foreach (IOperation value in operation.Value is ITupleOperation tuple
@@ -3309,10 +3413,23 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 return;
             }
 
+            if ((NativeSymbols.Is(operation.TargetMethod.ContainingType, _symbols.Shared)
+                    || NativeSymbols.Is(operation.TargetMethod.ContainingType, _symbols.Weak))
+                && operation.TargetMethod.Name is "CaptureSnapshot" or "TryCompletePayloadReturn")
+            {
+                if (transfer.ConditionalPending || transfer.Status == TransferStatus.Unowned)
+                    CheckTransferActive(transfer, operation.Syntax, operation.TargetMethod.Name);
+                return;
+            }
+
             if (string.Equals(operation.TargetMethod.Name, "Dispose", StringComparison.Ordinal) && IsConditionalTransferCleanup(operation, transfer))
             {
                 if (_cfgMode)
                 {
+                    if (transfer.Status == TransferStatus.Active)
+                        MarkTransferIdentity(transfer.OwnershipIdentity, TransferStatus.Disposed);
+                    else if (transfer.Status == TransferStatus.Ambiguous || transfer.MayBePresentWithoutAuthority)
+                        CheckTransferActive(transfer, operation.Syntax, operation.TargetMethod.Name);
                     return;
                 }
 
@@ -3343,6 +3460,19 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             {
                 ReportTransferViewEscapes(operation);
                 return;
+            }
+
+            if (IsSharingTryAcquisition(operation))
+            {
+                foreach (IArgumentOperation argument in operation.Arguments)
+                {
+                    if (argument.Parameter?.RefKind != RefKind.Out || !IsNativeTransfer(argument.Parameter.Type)) continue;
+                    ISymbol? symbol = GetPreparedOutSymbol(argument.Value);
+                    if (symbol is null) continue;
+                    Target target = new(symbol, argument.Syntax);
+                    RegisterTransferDestination(target, operation.Syntax, mustEnd: symbol is ILocalSymbol, isUsing: false);
+                    _transfers[symbol].ConditionalPending = true;
+                }
             }
 
             if (string.Equals(operation.TargetMethod.Name, "Dispose", StringComparison.Ordinal))
@@ -3973,6 +4103,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     TransferStatus.Unowned,
                     mustEnd: false,
                     isUsing: false);
+                _transfers[target.Symbol].MayBePresentWithoutAuthority = value is not null && !IsNullValue(value)
+                    && value.Type is not INamedTypeSymbol { OriginalDefinition.SpecialType: SpecialType.System_Nullable_T };
                 return;
             }
 
@@ -4354,6 +4486,11 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             SyntaxNode syntax,
             string operation)
         {
+            if (transfer.ConditionalPending)
+            {
+                Report(NativeAllocationDiagnosticDescriptors.PreparedAcquisitionGuard, syntax, transfer.DisplayName);
+                return false;
+            }
             if (transfer.Status == TransferStatus.Active)
             {
                 return true;
@@ -4506,6 +4643,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 if (string.Equals(transfer.OwnershipIdentity, ownershipIdentity, StringComparison.Ordinal))
                 {
                     transfer.Status = status;
+                    if (status == TransferStatus.Disposed) transfer.MayBePresentWithoutAuthority = true;
                 }
             }
         }
@@ -4868,8 +5006,17 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
         private bool IsTransferMoveInvocation(IOperation operation) =>
             operation is IInvocationOperation invocation
-            && string.Equals(invocation.TargetMethod.Name, "Move", StringComparison.Ordinal) && IsNativeTransfer(invocation.TargetMethod.ContainingType)
+            && (string.Equals(invocation.TargetMethod.Name, "Move", StringComparison.Ordinal) && NativeSymbols.Is(invocation.TargetMethod.ContainingType, _symbols.Transfer)
+                || string.Equals(invocation.TargetMethod.Name, "Create", StringComparison.Ordinal) && NativeSymbols.Is(invocation.TargetMethod.ContainingType, _symbols.Shared))
             && IsNativeTransfer(invocation.Type);
+
+        private bool IsSharingTryAcquisition(IInvocationOperation invocation) =>
+            (NativeSymbols.Is(invocation.TargetMethod.ContainingType, _symbols.Shared)
+                && invocation.TargetMethod.Name is "TryShare" or "TrySlice" or "TryDowngrade" or "TryDetach"
+                || NativeSymbols.Is(invocation.TargetMethod.ContainingType, _symbols.Weak)
+                && invocation.TargetMethod.Name is "TryUpgrade")
+            && invocation.TargetMethod.ReturnType.SpecialType == SpecialType.System_Boolean
+            && invocation.Arguments.Any(argument => argument.Parameter?.RefKind == RefKind.Out && IsNativeTransfer(argument.Parameter.Type));
 
         private bool IsTransferFactoryInvocation(IOperation operation) =>
             operation is IInvocationOperation invocation
@@ -7536,7 +7683,9 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
         private bool IsNativeTransfer(ITypeSymbol? type)
         {
-            return NativeSymbols.Is(type, _symbols.Transfer);
+            return NativeSymbols.Is(type, _symbols.Transfer)
+                || NativeSymbols.Is(type, _symbols.Shared)
+                || NativeSymbols.Is(type, _symbols.Weak);
         }
 
         private bool IsNativeBuilder(ITypeSymbol? type)
@@ -7551,7 +7700,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
         private bool IsNativeLeaseView(ITypeSymbol? type)
         {
-            return NativeSymbols.Is(type, _symbols.LeaseView);
+            return NativeSymbols.Is(type, _symbols.LeaseView)
+                || NativeSymbols.Is(type, _symbols.ReadOnlyLeaseView);
         }
 
         private bool IsNativePool(ITypeSymbol? type)
@@ -7993,6 +8143,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             internal string OwnershipIdentity { get; }
             internal OwnershipKind Kind { get; }
             internal TransferStatus Status { get; set; }
+            internal bool ConditionalPending { get; set; }
+            internal bool MayBePresentWithoutAuthority { get; set; }
             internal bool MustEnd { get; set; }
             internal bool IsUsing { get; }
             internal SyntaxNode Syntax { get; }
@@ -8111,7 +8263,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     Status,
                     MustEnd,
                     IsUsing,
-                    Syntax);
+                    Syntax)
+                { ConditionalPending = ConditionalPending, MayBePresentWithoutAuthority = MayBePresentWithoutAuthority };
 
             internal TransferState CloneFor(
                 ISymbol symbol,
@@ -8125,7 +8278,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     Status,
                     mustEnd,
                     isUsing,
-                    syntax);
+                    syntax)
+                { ConditionalPending = ConditionalPending, MayBePresentWithoutAuthority = MayBePresentWithoutAuthority };
 
             private static string CreateSyntaxIdentity(SyntaxNode syntax) =>
                 $"{syntax.SyntaxTree.FilePath}:{syntax.SpanStart}:{syntax.RawKind}";

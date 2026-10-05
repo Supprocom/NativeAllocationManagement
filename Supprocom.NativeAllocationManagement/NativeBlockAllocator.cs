@@ -10,7 +10,8 @@ internal static unsafe class NativeBlockAllocator
         string ownerKind,
         string operation,
         NativeMemoryBudget? budget = null,
-        long ownerId = 0)
+        long ownerId = 0,
+        bool alreadyReserved = false)
         where T : unmanaged
     {
         ArgumentOutOfRangeException.ThrowIfNegative(capacity);
@@ -26,7 +27,7 @@ internal static unsafe class NativeBlockAllocator
         {
             ownerId = NativeOwnerIdentity.Next();
         }
-        budget?.Reserve(byteLength, ownerId);
+        if (!alreadyReserved) budget?.Reserve(byteLength, ownerId);
         void* memory = null;
         bool acquired = false;
         bool recorded = false;

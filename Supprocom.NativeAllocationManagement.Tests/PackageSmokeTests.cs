@@ -581,6 +581,49 @@ public sealed class PackageSmokeTests
                         }
                         if (retentionBudget.CaptureStatistics().CommittedBytes != 0) return 24;
                         System.Console.WriteLine("outlier-released=65600; normal-retained=4160; final-charge=0");
+                        NativeMemoryBudget sharingBudget = new(32, 16);
+                        using (NativeBuilder<int> sharingBuilder = new(sharingBudget, 4))
+                        {
+                            sharingBuilder.Append(42);
+                            NativeTransfer<int>? source = sharingBuilder.Complete();
+                            try
+                            {
+                            NativeShared<int> shared = NativeShared<int>.Create(ref source, new(2, 1));
+                            if (!shared.TryDowngrade(out NativeWeak<int> weak, out _))
+                            { shared.Dispose(); return 25; }
+                            try
+                            {
+                                try
+                                {
+                                    if (source.HasValue || shared.Read(static view => view[0]) != 42) return 26;
+                                    if (!shared.TryShare(out NativeShared<int> share, out _)) return 27;
+                                    try { if (share.Read(static view => view[0]) != 42) return 28; }
+                                    finally { share.Dispose(); }
+                                    if (!shared.TryDetach(sharingBudget, out NativeTransfer<int> detached)) return 29;
+                                    try
+                                    {
+                                        if (detached.Read(static view => view[0]) != 42
+                                            || sharingBudget.CaptureStatistics().CommittedBytes != 20) return 30;
+                                    }
+                                    finally { detached.Dispose(); }
+                                }
+                                finally { shared.Dispose(); }
+                                if (!weak.IsExpired) return 31;
+                                if (weak.TryUpgrade(out NativeShared<int> revived, out _))
+                                { revived.Dispose(); return 31; }
+                                NativeSharingStatistics snapshot = weak.CaptureSnapshot();
+                                if (!snapshot.PayloadReleased || snapshot.PayloadReturnCount != 1
+                                    || snapshot.StrongBindingCount != 0 || snapshot.WeakBindingCount != 1
+                                    || snapshot.OwnedBackingBytes != 0 || snapshot.ExpiredUpgradeCount != 1
+                                    || snapshot.ShareCount != 1 || snapshot.DetachCount != 1
+                                    || snapshot.PayloadReturnFailureCount != 0 || snapshot.PeakStrongBindingCount != 2
+                                    || sharingBudget.CaptureStatistics().CommittedBytes != 0) return 32;
+                            }
+                            finally { weak.Dispose(); }
+                            }
+                            finally { source?.Dispose(); }
+                        }
+                        System.Console.WriteLine("immutable-shared-output=42; overlap=20; expired-upgrade=refused; final-charge=0");
                         return 0;
                     }
                     private sealed class MappedBuffer : SafeBuffer
@@ -671,6 +714,45 @@ public sealed class PackageSmokeTests
             _output.WriteLine(invalidGroup.Output);
             Assert.NotEqual(0, invalidGroup.ExitCode);
             Assert.Contains("error NAM1050", invalidGroup.Output, StringComparison.OrdinalIgnoreCase);
+            await File.WriteAllTextAsync(program,
+                """
+                using Supprocom.NativeAllocationManagement;
+                public static class Consumer
+                {
+                    public static void Main()
+                    {
+                        using NativeBuilder<int> builder = new(4);
+                        builder.Append(42);
+                        NativeTransfer<int>? source = builder.Complete();
+                        using NativeShared<int> shared = NativeShared<int>.Create(ref source, new(2, 1));
+                        shared.TryShare(out NativeShared<int> share, out _);
+                        share.Dispose();
+                    }
+                }
+                """);
+            CommandResult invalidSharing = await RunDotnetAsync($"build \"{project}\" --no-restore --nologo -t:Rebuild", consumerRoot);
+            _output.WriteLine(invalidSharing.Output);
+            Assert.NotEqual(0, invalidSharing.ExitCode);
+            Assert.Contains("error NAM1050", invalidSharing.Output, StringComparison.OrdinalIgnoreCase);
+            await File.WriteAllTextAsync(program,
+                """
+                using Supprocom.NativeAllocationManagement;
+                public static class Consumer
+                {
+                    public static void Main()
+                    {
+                        using NativeBuilder<int> builder = new(4);
+                        builder.Append(42);
+                        NativeTransfer<int>? source = builder.Complete();
+                        using NativeShared<int> shared = NativeShared<int>.Create(ref source, new(2, 0));
+                        NativeShared<int>[] aliases = [shared];
+                    }
+                }
+                """);
+            CommandResult sharingAlias = await RunDotnetAsync($"build \"{project}\" --no-restore --nologo -t:Rebuild", consumerRoot);
+            _output.WriteLine(sharingAlias.Output);
+            Assert.NotEqual(0, sharingAlias.ExitCode);
+            Assert.Contains("error NAM1021", sharingAlias.Output, StringComparison.OrdinalIgnoreCase);
         }
         finally
         {

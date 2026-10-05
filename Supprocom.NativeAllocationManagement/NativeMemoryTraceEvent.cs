@@ -22,7 +22,21 @@ public enum NativeMemoryTraceKind
     /// <summary>Backing and metadata preparation completed and its capacity is ready.</summary>
     Prepared,
     /// <summary>A maintenance trim physically released backing.</summary>
-    Trimmed
+    Trimmed,
+    /// <summary>An independently owning immutable binding was published.</summary>
+    Shared,
+    /// <summary>A control-only weak observer was published.</summary>
+    WeakCreated,
+    /// <summary>A weak observer successfully acquired strong ownership.</summary>
+    WeakUpgraded,
+    /// <summary>A weak upgrade was refused for expiration or prepared capacity exhaustion.</summary>
+    UpgradeRejected,
+    /// <summary>One independently acquired strong or weak binding was released.</summary>
+    OwnershipReleased,
+    /// <summary>Payload authority was returned after the last strong binding and entered reader.</summary>
+    PayloadReturned,
+    /// <summary>A bounded explicit copy into independent unique ownership completed.</summary>
+    Detached
 }
 
 /// <summary>A bounded value-only storage transition; it contains no owner or native authority.</summary>
@@ -66,4 +80,6 @@ public readonly record struct NativeMemoryTraceEvent
     public long ReservedBytes { get; }
     /// <summary>Gets the owner-local backing acquisition ordinal when supplied, otherwise unavailable.</summary>
     public long? AllocationOrdinal { get; }
+    /// <summary>Gets the ownership control identity for ownership transitions, otherwise unavailable.</summary>
+    public long? CorrelationId { get; internal init; }
 }

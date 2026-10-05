@@ -2733,6 +2733,15 @@ internal ref struct NativeOperationToken
 
     internal void SetValue<T>(int index, T value) => _allocation.SetValue(index, value);
 
+    internal NativeStorageLifetimePin MoveToLifetimePin()
+    {
+        NativeOwnerKernel kernel = _kernel ?? throw new InvalidOperationException("The operation token has already ended.");
+        NativeStorageLifetimePin pin = new(kernel, _generationState, _allocation,
+            _allocationEntered, _generationEntered, _operation);
+        _kernel = null;
+        return pin;
+    }
+
     public void Dispose()
     {
         NativeOwnerKernel? kernel = _kernel;
@@ -3096,6 +3105,7 @@ internal ref struct NativeMultiOwnerOperationToken
 internal sealed class NativeOwnerKernel
 {
     internal long Id { get; } = NativeOwnerIdentity.Next();
+    internal NativeMemoryBudget? BudgetForSharing => _budget;
     private NativeOwnerModel Model => _kind switch
     {
         NativeOwnerKind.Pool => NativeOwnerModel.SynchronizedPool,
@@ -8166,6 +8176,22 @@ internal sealed class NativeOwnerKernel
             {
                 generation.LeaseReturnsInProgress--;
             }
+        }
+    }
+
+    internal void PrepareTransferReturnCapacity(long generationNumber, long allocationId)
+    {
+        lock (_gate)
+        {
+            NativeGeneration generation = EnsureActiveLocked("NativeShared.PrepareReturn", generationNumber, allocationId);
+            if (generation.Number != generationNumber || !generation.Allocations.TryGetValue(allocationId, out NativeAllocation allocation)
+                || allocation.Lifecycle != NativeAllocationLifecycle.Active)
+            {
+                throw CreateReturnedException("NativeShared.PrepareReturn", generationNumber, _generation, allocationId,
+                    "The transferable payload is no longer active.");
+            }
+            generation.ReusableAllocations.EnsureCapacity(checked(generation.ReusableAllocations.Count + generation.Allocations.Count));
+            generation.AvailableSlabs.EnsureCapacity(generation.Slabs.Count);
         }
     }
 
