@@ -3,6 +3,46 @@ namespace Supprocom.NativeAllocationManagement.Tests;
 public sealed class NativeRegionInitializerSafetyTests
 {
     [Fact]
+    public void EmptyReservationsDoNotAcquireBackingAndTheFirstNonemptyLeaseStillGrows()
+    {
+        NativeMemoryBudget budget = new(16_384);
+        using NativeRegion region = new(budget, 0, NativeMemoryReturn.ToNativeMemory);
+        Local<byte> empty = region.Lease<byte>(0, static writer => writer.Fill(0));
+        Assert.Equal(0, empty.Read(static view => view.Length));
+        Assert.Equal(0, budget.CaptureStatistics().AllocationCount);
+        Assert.Equal(0, region.GetStatistics().SegmentCount);
+        Assert.Equal(0, region.GetStatistics().RequestedBytes);
+        Local<byte> bytes = region.Lease<byte>(1, static writer => writer.Write(1));
+        Local<short> shorts = region.Lease<short>(1, static writer => writer.Write(2));
+        Local<int> integers = region.Lease<int>(1, static writer => writer.Write(3));
+        Local<long> longs = region.Lease<long>(1, static writer => writer.Write(4));
+        Assert.Equal(1, bytes.Read(static view => view[0]));
+        Assert.Equal(2, shorts.Read(static view => view[0]));
+        Assert.Equal(3, integers.Read(static view => view[0]));
+        Assert.Equal(4, longs.Read(static view => view[0]));
+        Assert.Equal(15, region.GetStatistics().RequestedBytes);
+        Assert.Equal(1, budget.CaptureStatistics().AllocationCount);
+        Assert.Equal(1, region.GetStatistics().SegmentCount);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(3)]
+    [InlineData(7)]
+    public void AlignmentBeyondAnOddSegmentEndGrowsWithoutUnsignedRemainingCapacity(int prefix)
+    {
+        NativeMemoryBudget budget = new(16_384);
+        using NativeRegion region = new(budget, (nuint)(prefix + 1), NativeMemoryReturn.ToNativeMemory);
+        Local<byte> first = region.Lease<byte>(prefix, static writer => writer.Fill(17));
+        Local<long> second = region.Lease<long>(1, static writer => writer.Write(42));
+        Assert.Equal(17, first.Read(static view => view[0]));
+        Assert.Equal(42, second.Read(static view => view[0]));
+        Assert.Equal(prefix + sizeof(long), region.GetStatistics().RequestedBytes);
+        Assert.Equal(2, region.GetStatistics().SegmentCount);
+        Assert.Equal(2, budget.CaptureStatistics().AllocationCount);
+    }
+
+    [Fact]
     public void FailedBackendReservationLeavesAdmissionOpenForTheNextInitializer()
     {
         NativeMemoryBudget budget = new(256);
