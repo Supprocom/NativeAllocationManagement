@@ -100,6 +100,21 @@ records are occupied slots. The actual acquisition-ordinal probe reads retained
 slab/page identities instead of returning an empty placeholder. These
 model-specific absences are not a license to zero-fill synchronized-owner fields.
 
+The maintained [private typed-pool probe inventory](../conformance/native-fast-pool-probe-contracts.json)
+defines all thirteen friend-test observations separately from public capture.
+Its independent transition tests cover initialization, nested borrows, failure,
+empty records, whole-page retention, ordinals and terminal/coordinator cleanup.
+The active-operation probe counts entered initializers as well as actual slab
+borrows; its legacy generation name does not invent generational storage.
+Both slab-capacity tuple elements describe the same allocated metadata bank,
+not two arrays or two physical charges. Page capacity stays allocated after
+native trim. The ordinal probe validates the owner thread and creates a numeric
+array copy; it is not part of the no-allocation public snapshot guarantee.
+Private absent-generation mutation hooks explicitly reject unsupported test
+injection rather than manufacturing a scope or generation counter. This
+inventory does not claim packaged access to private members or close the
+remaining model, demo, API, performance and release inventory.
+
 See [prepared page diagnostics](prepared-pools.md#prepared-snapshot-inventory)
 for full retained capacity, historical occupancy, exhaustion, managed bank costs
 and sparse-page retention.
