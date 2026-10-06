@@ -19,6 +19,41 @@ public sealed class PackageSmokeTests
     }
 
     [Fact]
+    public async Task PackageAdmissionDiagnosticOracleMatchesEveryField()
+    {
+        PackageEvidence package = await GetPackageAsync();
+        WriteEvidence(package);
+        string consumerRoot = CreateConsumerRoot();
+        try
+        {
+            WriteConsumerProject(consumerRoot, package, excludeAnalyzer: false, suppressDiagnostics: false,
+                executable: true, treatWarningsAsErrors: true);
+            File.Copy(Path.Combine(FindRepositoryRoot(), "conformance", "native-admission-diagnostic-oracle.cs"),
+                Path.Combine(consumerRoot, "NativeAdmissionDiagnosticOracle.cs"));
+            await File.WriteAllTextAsync(Path.Combine(consumerRoot, "Program.cs"),
+                """
+                using Supprocom.NativeAllocationManagement.Conformance;
+
+                NativeAdmissionDiagnosticOracle.Run(traceCapacity: 0);
+                NativeAdmissionDiagnosticOracle.Run(traceCapacity: 16);
+                NativeAdmissionDiagnosticOracle.RunOrdinaryUnique(traceCapacity: 0);
+                NativeAdmissionDiagnosticOracle.RunOrdinaryUnique(traceCapacity: 16);
+                System.Console.WriteLine("admission-oracle schemas=3 fields=60 modes=2 paths=reservation,activation,unique cleanup=complete");
+                """);
+            string project = Path.Combine(consumerRoot, "Consumer.csproj");
+            CommandResult restore = await RunDotnetAsync(
+                $"restore \"{project}\" --nologo --force --no-cache --packages \"{Path.Combine(consumerRoot, ".packages")}\" --source \"{package.SourceDirectory}\"", consumerRoot);
+            Assert.True(restore.ExitCode == 0, restore.Output);
+            CommandResult build = await RunDotnetAsync($"build \"{project}\" --no-restore --nologo", consumerRoot);
+            Assert.True(build.ExitCode == 0, build.Output);
+            CommandResult run = await RunDotnetAsync($"run --project \"{project}\" --no-build --no-restore", consumerRoot);
+            Assert.True(run.ExitCode == 0, run.Output);
+            Assert.Contains("admission-oracle schemas=3 fields=60 modes=2 paths=reservation,activation,unique cleanup=complete", run.Output, StringComparison.Ordinal);
+        }
+        finally { DeleteConsumerRoot(consumerRoot); }
+    }
+
+    [Fact]
     public async Task PackageSharingDiagnosticOracleMatchesEveryField()
     {
         PackageEvidence package = await GetPackageAsync();
