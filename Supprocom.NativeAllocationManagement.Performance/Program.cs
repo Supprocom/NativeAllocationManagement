@@ -93,6 +93,11 @@ internal static class Program
             return NativeOwnershipFullCostMeasurement.RunCommand(args);
         }
 
+        if (args.Length != 0 && string.Equals(args[0], "--admission-full-cost-worker", StringComparison.Ordinal))
+        {
+            return NativeAdmissionFullCostMeasurement.RunCommand(args);
+        }
+
         if (args.Length != 0
             && args[0] is "--voxel-handoff" or "--voxel-handoff-worker")
         {
