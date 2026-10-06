@@ -171,6 +171,11 @@ internal static class VoxelHandoffBenchmark
             exactParity = CreateManagedUpload(source).AsSpan().SequenceEqual(exactOutput);
         }
 
+        if (pool is not null)
+        {
+            PrepareNativeHandoffStorage(pool, options.WordCount, initializer!.Action);
+        }
+
         setupClock.Stop();
         Stopwatch warmupClock = Stopwatch.StartNew();
         BatchResult warmup = implementation == VoxelHandoffImplementation.Managed
@@ -371,6 +376,19 @@ internal static class VoxelHandoffBenchmark
         return new BatchResult(
             result,
             clock.Elapsed.TotalMilliseconds);
+    }
+
+    internal static void PrepareNativeHandoffStorage(
+        NativeConcurrentPool<uint> pool,
+        int wordCount,
+        NativeLeaseInitializer<uint> initializer)
+    {
+        ArgumentNullException.ThrowIfNull(pool);
+        // Capacity one does not mean one live payload: the consumer, queue, and
+        // producer can each own a transfer. Hold the complete bound together.
+        using NativeTransfer<uint> consumed = pool.RentTransferable(wordCount, initializer);
+        using NativeTransfer<uint> queued = pool.RentTransferable(wordCount, initializer);
+        using NativeTransfer<uint> produced = pool.RentTransferable(wordCount, initializer);
     }
 
     private static async Task<BatchResult> RunNativeBatchAsync(

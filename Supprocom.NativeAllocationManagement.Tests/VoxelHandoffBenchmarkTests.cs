@@ -46,6 +46,48 @@ public sealed class VoxelHandoffBenchmarkTests
     }
 
     [VoxelDemonstrationFact]
+    public void NativePreparationCoversEverySimultaneousChannelOwner()
+    {
+        using NativeConcurrentPool<uint> pool = new(8_192, NativeMemoryReturn.ToNativeMemory);
+        VoxelHandoffBenchmark.PrepareNativeHandoffStorage(pool, 8_192, static writer => writer.Fill(42));
+        long preparedAllocations = pool.GetStatistics().FreshSegmentAllocationCount;
+        using (NativeTransfer<uint> consumed = pool.RentTransferable(8_192, static writer => writer.Fill(43)))
+        using (NativeTransfer<uint> queued = pool.RentTransferable(8_192, static writer => writer.Fill(47)))
+        using (NativeTransfer<uint> produced = pool.RentTransferable(8_192, static writer => writer.Fill(53)))
+        {
+            Assert.Equal(preparedAllocations, pool.GetStatistics().FreshSegmentAllocationCount);
+            Assert.Equal(43u, consumed.Read(static view => view[8_191]));
+            Assert.Equal(47u, queued.Read(static view => view[8_191]));
+            Assert.Equal(53u, produced.Read(static view => view[8_191]));
+        }
+        Assert.Equal(0, pool.GetStatistics().RequestedBytes);
+        Assert.Equal(0, pool.CurrentAllocationRecordCountForTest);
+    }
+
+    [VoxelDemonstrationFact]
+    public void OnePreleasedPayloadDoesNotCoverTheChannelOwnershipBound()
+    {
+        using NativeConcurrentPool<uint> pool = new(8_192, NativeMemoryReturn.ToNativeMemory);
+        long initialAllocations = pool.GetStatistics().FreshSegmentAllocationCount;
+        using NativeTransfer<uint> consumed = pool.RentTransferable(8_192, static writer => writer.Fill(43));
+        using NativeTransfer<uint> queued = pool.RentTransferable(8_192, static writer => writer.Fill(47));
+        using NativeTransfer<uint> produced = pool.RentTransferable(8_192, static writer => writer.Fill(53));
+        Assert.True(pool.GetStatistics().FreshSegmentAllocationCount > initialAllocations);
+    }
+
+    [VoxelDemonstrationFact]
+    public async Task NativeWorkerWithMinimalWarmupHasNoMeasuredBackingGrowth()
+    {
+        VoxelHandoffWorkerEvidence evidence = await VoxelHandoffBenchmark.RunWorkerAsync(
+            VoxelHandoffImplementation.Native,
+            new VoxelHandoffBenchmarkOptions(WordCount: 8_192, Iterations: 32, WarmupIterations: 1, SampleCount: 2, Seed: 0x51A7)).ConfigureAwait(false);
+        Assert.True(evidence.ExactParity);
+        Assert.Equal(0, evidence.NativeFreshSegmentAllocationDelta);
+        Assert.True(evidence.SetupMilliseconds > 0);
+        Assert.True(evidence.NativeRetainedBytes >= 3L * 8_192 * sizeof(uint));
+    }
+
+    [VoxelDemonstrationFact]
     public async Task PairedBenchmarkRejectsAnOddSampleCount()
     {
         VoxelHandoffBenchmarkOptions options = new(
