@@ -123,3 +123,15 @@ The bundled analyzer authenticates types against the runtime assembly, rejects
 assignment/boxing/storage aliases, tracks destructive conversion, and checks
 guarded outputs and read-only escape boundaries. Runtime version and lifetime
 guards remain effective when analyzer diagnostics are suppressed.
+
+The maintained [sharing field contract](../conformance/native-sharing-diagnostic-contracts.json)
+defines all 26 properties, their units, scope, mutation sources, lifetime and
+overflow behavior. The public-only independent oracle compares every field
+through share/slice/observer acquisition and exhaustion, weak
+upgrade, rejected and successful detach, payload return, expiration and final
+bank release. It also runs in an isolated package consumer with bundled ownership
+analysis enabled, in traced and untraced configurations. Its callbacks are static;
+it does not capture owning values to inspect an entered read. Independent local
+fault, nested-read admission/drain and real provider-storage cases verify complete
+snapshots at those boundaries without weakening the package's capture rule.
+These proofs do not constitute performance acceptance or a complete release inventory.
