@@ -19,6 +19,45 @@ public sealed class PackageSmokeTests
     }
 
     [Fact]
+    public async Task PackageCapacityDiagnosticOracleMatchesEveryField()
+    {
+        PackageEvidence package = await GetPackageAsync();
+        WriteEvidence(package);
+        string consumerRoot = CreateConsumerRoot();
+        try
+        {
+            WriteConsumerProject(consumerRoot, package, excludeAnalyzer: false, suppressDiagnostics: false,
+                executable: true, treatWarningsAsErrors: true);
+            File.Copy(Path.Combine(FindRepositoryRoot(), "conformance", "native-capacity-diagnostic-oracle.cs"),
+                Path.Combine(consumerRoot, "NativeCapacityDiagnosticOracle.cs"));
+            File.Copy(Path.Combine(FindRepositoryRoot(), "conformance", "native-admission-diagnostic-oracle.cs"),
+                Path.Combine(consumerRoot, "NativeAdmissionDiagnosticOracle.cs"));
+            await File.WriteAllTextAsync(Path.Combine(consumerRoot, "Program.cs"),
+                """
+                using Supprocom.NativeAllocationManagement.Conformance;
+
+                NativeCapacityDiagnosticOracle.RunPool(traceCapacity: 0);
+                NativeCapacityDiagnosticOracle.RunPool(traceCapacity: 16);
+                NativeCapacityDiagnosticOracle.RunArena(traceCapacity: 0);
+                NativeCapacityDiagnosticOracle.RunArena(traceCapacity: 16);
+                NativeCapacityDiagnosticOracle.RunRetention(traceCapacity: 0);
+                NativeCapacityDiagnosticOracle.RunRetention(traceCapacity: 16);
+                System.Console.WriteLine("capacity-oracle schemas=3 fields=45 tracing-modes=2 paths=pages,lanes,retention cleanup=complete");
+                """);
+            string project = Path.Combine(consumerRoot, "Consumer.csproj");
+            CommandResult restore = await RunDotnetAsync(
+                $"restore \"{project}\" --nologo --force --no-cache --packages \"{Path.Combine(consumerRoot, ".packages")}\" --source \"{package.SourceDirectory}\"", consumerRoot);
+            Assert.True(restore.ExitCode == 0, restore.Output);
+            CommandResult build = await RunDotnetAsync($"build \"{project}\" --no-restore --nologo", consumerRoot);
+            Assert.True(build.ExitCode == 0, build.Output);
+            CommandResult run = await RunDotnetAsync($"run --project \"{project}\" --no-build --no-restore", consumerRoot);
+            Assert.True(run.ExitCode == 0, run.Output);
+            Assert.Contains("capacity-oracle schemas=3 fields=45 tracing-modes=2 paths=pages,lanes,retention cleanup=complete", run.Output, StringComparison.Ordinal);
+        }
+        finally { DeleteConsumerRoot(consumerRoot); }
+    }
+
+    [Fact]
     public async Task PackageAdmissionDiagnosticOracleMatchesEveryField()
     {
         PackageEvidence package = await GetPackageAsync();
