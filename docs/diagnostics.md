@@ -190,3 +190,22 @@ GC memory/LOH fields describe the last completed collection, identified by
 `LastCompletedGcIndex`, not instantaneous live memory. Before a completed
 collection, those fields are unavailable. Capturing diagnostics does not force a
 collection or change allocator accounting.
+
+## Maintained semantic contracts
+
+The [budget contract inventory](../conformance/native-budget-diagnostic-contracts.json)
+defines all 17 `NativeMemoryBudgetStatistics` fields, their units, domain scope,
+reset and overflow rules, implementation anchors, and executable proof links.
+An [independent whole-snapshot oracle](../conformance/native-budget-diagnostic-oracle.cs)
+checks actual builder growth/refusal/release and pending/prepared reservation
+cancellation with tracing disabled and enabled. The same source runs in local
+tests and an isolated consumer of the packaged library. Local fault tests also
+distinguish ordinary acquisition rollback from application backing failure that
+preserves pending admission for retry. `FailedAllocationCount` counts both;
+cancelling an unprepared permission is neither an allocation failure nor a free.
+
+This inventory covers the budget snapshot only. It does not certify the other
+diagnostic schemas, complete trace payload semantics, performance, or release
+readiness. Tests reject missing, duplicate or newly unmapped budget fields and
+broken source/test links. Source anchors and XML definitions complement, but do
+not replace, the independent transition assertions and actual test evidence.

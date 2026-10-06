@@ -394,7 +394,7 @@ public readonly record struct NativeMemoryBudgetStatistics
     public long ActiveAllocationCount { get; }
     /// <summary>Gets requests refused by the ceiling before native allocation.</summary>
     public long RejectedAllocationCount { get; }
-    /// <summary>Gets admitted acquisition attempts rolled back after failure.</summary>
+    /// <summary>Gets failed admitted acquisition attempts, including ordinary rollback and application backing failures that preserve pending admission for retry.</summary>
     public long FailedAllocationCount { get; }
     /// <summary>Gets the fixed preallocated event capacity, or zero when tracing is disabled.</summary>
     public int TraceCapacity { get; }

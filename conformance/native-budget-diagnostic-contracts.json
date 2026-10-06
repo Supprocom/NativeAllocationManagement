@@ -1,0 +1,135 @@
+{
+  "schema": "Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics",
+  "completeReleaseInventory": false,
+  "scope": "One budget domain; NAM-requested native backing extents, not process RSS or allocator-private overhead.",
+  "consistency": "CaptureStatistics takes the existing domain gate once. Values describe one completed transition; separate captures are not one transaction.",
+  "resetPolicy": "No reset API. Gauges fall as actual obligations end; identities, configuration, peaks and histories survive owner cleanup for the lifetime of the budget.",
+  "availability": "Every field in this schema is implemented and available. A zero is an observed count or invariant, never an unavailable private-runtime measurement.",
+  "oracleSource": "conformance/native-budget-diagnostic-oracle.cs",
+  "wholeSnapshotProof": "NativeBudgetDiagnosticContractTests.PublicOperationsMatchEveryBudgetField",
+  "ordinaryFaultProof": "NativeBudgetDiagnosticContractTests.OrdinaryBackendFailureRollsBackEveryBudgetGauge",
+  "applicationFaultProof": "NativeBudgetDiagnosticContractTests.ApplicationBackendFailureKeepsPendingAdmissionForRetry",
+  "packageProof": "PackageSmokeTests.PackageBudgetDiagnosticOracleMatchesEveryField",
+  "unreviewedScope": "Other diagnostic schemas, trace payload semantics, public API/lifecycle contracts and the complete 0.3.0 performance/platform/release boundary remain open. This file is not global completion evidence.",
+  "fields": [
+    {
+      "name": "Id", "units": "process-local identity", "role": "identity",
+      "definition": "Positive immutable budget lineage; not an address and not a separately owned resource.",
+      "implementation": ["NativeMemoryBudget.cs#Id = NextId();", "NativeMemoryBudget.cs#long next = checked(current + 1);"],
+      "overflow": "Construction throws before wrapping identity; existing budgets remain usable.",
+      "additionalProofs": ["NativeBudgetDiagnosticContractTests.IdentityExhaustionCannotWrapOrChangeExistingBudget", "NativeBudgetDiagnosticContractTests.InvalidConfigurationDoesNotCreateABudget"]
+    },
+    {
+      "name": "CapacityBytes", "units": "bytes", "role": "configuration",
+      "definition": "Immutable nonnegative ceiling on committed plus reserved NAM-requested native extents.",
+      "implementation": ["NativeMemoryBudget.cs#CapacityBytes = capacityBytes;", "NativeMemoryBudget.cs#ArgumentOutOfRangeException.ThrowIfNegative(capacityBytes);"],
+      "overflow": "Admission subtracts existing nonnegative charges from the ceiling; checked input conversion cannot wrap.",
+      "additionalProofs": ["NativeMemoryBudgetTests.CeilingArithmeticHandlesTheSignedMaximumWithoutOverflow", "NativeMemoryBudgetTests.CompetingOwnersCannotOversubscribeTheSharedCeiling", "NativeBudgetDiagnosticContractTests.InvalidConfigurationDoesNotCreateABudget"]
+    },
+    {
+      "name": "CommittedBytes", "units": "bytes", "role": "gauge",
+      "definition": "Complete successfully acquired backing extents, including prepared-unpublished, retained, retired and detached storage until actual release. Realloc replaces the previous extent exactly once.",
+      "implementation": ["NativeMemoryBudget.cs#_committedBytes += bytes;", "NativeMemoryBudget.cs#_committedBytes = _committedBytes - previousBytes + bytes;", "NativeMemoryBudget.cs#_committedBytes -= bytes;", "NativeMemoryAdmission.cs#_committedBytes += bytes;"],
+      "overflow": "Exact nonnegative gauge bounded by CapacityBytes, independent of saturated event histories.",
+      "additionalProofs": ["NativeMemoryBudgetTests.CompletedAndMovedTransferKeepsItsFullBackingCharge", "NativeMemoryTraceTests.DetachedGenerationRemainsChargedUntilItsActualFinalizer", "NativeBudgetHistoryTests.SaturatedCompletedHistoriesDoNotBlockNewBackingOrPhysicalRelease"]
+    },
+    {
+      "name": "ReservedBytes", "units": "bytes", "role": "gauge",
+      "definition": "Admitted extents awaiting acquisition or cancellation. Ordinary failed acquisition rolls back; application preparation failure preserves pending permission for retry. Cancellation without acquisition is not a physical free or a failed allocation.",
+      "implementation": ["NativeMemoryBudget.cs#_reservedBytes += bytes;", "NativeMemoryBudget.cs#_reservedBytes -= bytes;", "NativeMemoryAdmission.cs#_reservedBytes += bytes;", "NativeMemoryAdmission.cs#_reservedBytes -= bytes;"],
+      "overflow": "Exact nonnegative gauge; committed plus reserved cannot exceed CapacityBytes.",
+      "additionalProofs": ["NativeMemoryBudgetTests.CompetingOwnersCannotOversubscribeTheSharedCeiling", "NativeMemoryReservationTests.VariableSizedPermissionsCompeteWithoutAcquiringPayload"]
+    },
+    {
+      "name": "PeakCommittedBytes", "units": "bytes", "role": "peak",
+      "definition": "Lifetime maximum known committed extent after successful acquisition or replacement. Does not claim an opaque backend realloc transient peak or process RSS.",
+      "implementation": ["NativeMemoryBudget.cs#_peakCommittedBytes = Math.Max(_peakCommittedBytes, _committedBytes);", "NativeMemoryAdmission.cs#_peakCommittedBytes = Math.Max(_peakCommittedBytes, _committedBytes);"],
+      "overflow": "Exact maximum bounded by CapacityBytes; cleanup does not reset it.",
+      "additionalProofs": ["NativeMemoryBudgetTests.GrowthAdmitsFullOverlapWithoutInventingReallocPhysicalPeaks", "NativeBudgetHistoryTests.SaturatedCompletedHistoriesDoNotBlockNewBackingOrPhysicalRelease"]
+    },
+    {
+      "name": "PeakAdmittedBytes", "units": "bytes", "role": "peak",
+      "definition": "Lifetime maximum committed plus reserved extent, including conservative admission of the full replacement alongside the old extent. Refusal does not raise it; admitted failure can.",
+      "implementation": ["NativeMemoryBudget.cs#_peakAdmittedBytes, _committedBytes + _reservedBytes);", "NativeMemoryAdmission.cs#_peakAdmittedBytes = Math.Max(_peakAdmittedBytes, _committedBytes + _reservedBytes);"],
+      "overflow": "Exact maximum bounded by CapacityBytes; failed or cancelled admission does not reset it.",
+      "additionalProofs": ["NativeMemoryBudgetTests.TightGrowthCapUsesExactCapacityAndAdmitsOldPlusNew", "NativeMemoryBudgetTests.GrowthAdmitsFullOverlapWithoutInventingReallocPhysicalPeaks"]
+    },
+    {
+      "name": "AllocationCount", "units": "successful acquisitions", "role": "history",
+      "definition": "Fresh nonempty backing acquisitions, including successful realloc from null and application prepared backing. Does not count reusing already charged storage, failed acquisition, or replacing nonempty backing by realloc.",
+      "implementation": ["NativeMemoryBudget.cs#IncrementHistory(ref _allocationCount);", "NativeMemoryAdmission.cs#IncrementHistory(ref _allocationCount);"],
+      "overflow": "Saturates at Int64.MaxValue. A further event sets HistoryOverflowed; current allocation gauges remain exact.",
+      "additionalProofs": ["NativeMemoryBudgetTests.ReallocationFromNullAndFailedGrowthKeepHonestEventCounts", "NativeMemoryBudgetTests.ZeroLengthDoesNotFabricateBackingEvents", "NativeBudgetHistoryTests.ExactMaximumHistoryRemainsExactUntilAnotherEventActuallyOccurs"]
+    },
+    {
+      "name": "ReallocationCount", "units": "successful realloc calls", "role": "history",
+      "definition": "Successful backing realloc calls, including realloc from null; refused or failed attempts are excluded. Not a count of logical size changes within existing backing.",
+      "implementation": ["NativeMemoryBudget.cs#IncrementHistory(ref _reallocationCount);"],
+      "overflow": "Saturates at Int64.MaxValue with HistoryOverflowed on a further event; replacement charge and ownership remain correct.",
+      "additionalProofs": ["NativeMemoryBudgetTests.PublishedReallocCountersMatchActualCallsAndExtentChanges", "NativeMemoryBudgetTests.ReallocationFromNullAndFailedGrowthKeepHonestEventCounts", "NativeBudgetHistoryTests.ReallocHistorySaturationCannotLoseTheReplacementOrItsCharge"]
+    },
+    {
+      "name": "FreeCount", "units": "physical releases", "role": "history",
+      "definition": "Actual physical backing releases. Application cancellation without acquired backing and backing replacement by realloc are not extra frees.",
+      "implementation": ["NativeMemoryBudget.cs#IncrementHistory(ref _freeCount);", "NativeMemoryAdmission.cs#NativeBlockAllocator.Free(block);"],
+      "overflow": "Saturates at Int64.MaxValue with HistoryOverflowed on a further event; physical release cannot be blocked by history exhaustion.",
+      "additionalProofs": ["NativeMemoryBudgetTests.PublishedReallocCountersMatchActualCallsAndExtentChanges", "NativeMemoryBudgetTests.ZeroLengthDoesNotFabricateBackingEvents", "NativeBudgetHistoryTests.SaturatedCompletedHistoriesDoNotBlockNewBackingOrPhysicalRelease"]
+    },
+    {
+      "name": "ActiveAllocationCount", "units": "charged backing allocations", "role": "gauge",
+      "definition": "Exact live nonempty backing allocation count. Admission alone adds none; replacing nonempty backing preserves one; successful realloc from null adds one; physical release removes one.",
+      "implementation": ["NativeMemoryBudget.cs#_activeAllocationCount++;", "NativeMemoryBudget.cs#_activeAllocationCount--;", "NativeMemoryAdmission.cs#_activeAllocationCount++;"],
+      "overflow": "Each active allocation charges at least one byte; CapacityBytes bounds the exact gauge independently of saturated histories.",
+      "additionalProofs": ["NativeMemoryBudgetTests.ReallocationFromNullAndFailedGrowthKeepHonestEventCounts", "NativeBudgetHistoryTests.SaturatedCompletedHistoriesDoNotBlockNewBackingOrPhysicalRelease", "NativeBudgetHistoryTests.ReallocHistorySaturationCannotLoseTheReplacementOrItsCharge"]
+    },
+    {
+      "name": "RejectedAllocationCount", "units": "ceiling refusals", "role": "history",
+      "definition": "Requests refused before native acquisition because the budget cannot admit the minimum extent, including application permissions. Accepting a smaller permitted growth preference is not a refusal.",
+      "implementation": ["NativeMemoryBudget.cs#IncrementHistory(ref _rejectedAllocationCount);", "NativeMemoryAdmission.cs#IncrementHistory(ref _rejectedAllocationCount);"],
+      "overflow": "Saturates at Int64.MaxValue with HistoryOverflowed on a further refusal; expected exhaustion remains nonallocating.",
+      "additionalProofs": ["NativeMemoryBudgetTests.GrowthPreferenceFallsBackWithoutInventingRejectedAllocations", "NativeMemoryBudgetTests.WorkspaceRefusalDoesNotConsumeNativeFailureInjection", "NativeBudgetHistoryTests.RefusalHistorySaturationPreservesNonAllocatingExpectedExhaustion"]
+    },
+    {
+      "name": "FailedAllocationCount", "units": "failed admitted acquisition attempts", "role": "history",
+      "definition": "Ordinary admitted acquisition rollback and actual application backend failures. Application backend failure can preserve pending admission for retry. Permission cancellation alone and preparation metadata failure before backend acquisition are not fabricated backend failures.",
+      "implementation": ["NativeMemoryBudget.cs#IncrementHistory(ref _failedAllocationCount);", "NativeMemoryAdmission.cs#if (backendFailure)", "NativeMemoryAdmission.cs#IncrementHistory(ref _failedAllocationCount);"],
+      "overflow": "Saturates at Int64.MaxValue with HistoryOverflowed on a further event; rollback still releases the admission charge.",
+      "additionalProofs": ["NativeMemoryBudgetTests.NativeFailureRollsBackTheReservationAndReleasesTheAbortedBuilder", "NativeBudgetHistoryTests.AdmittedFailureStillCancelsItsChargeWithSaturatedFailureHistory", "NativeBudgetHistoryTests.PagePreparationRollbackReleasesRealPagesDespiteSaturatedAcquisitionAndFreeHistory"]
+    },
+    {
+      "name": "TraceCapacity", "units": "event slots", "role": "configuration",
+      "definition": "Fixed preallocated ring size. Zero disables event construction, not budget histories or gauges.",
+      "implementation": ["NativeMemoryBudget.cs#_trace = traceCapacity == 0 ? [] : new NativeMemoryTraceEvent[traceCapacity];", "NativeMemoryBudget.cs#ArgumentOutOfRangeException.ThrowIfNegative(traceCapacity);"],
+      "overflow": "Int32 nonnegative constructor input; allocation failure throws, never reports a fabricated ring.",
+      "additionalProofs": ["NativeMemoryTraceTests.DisabledTracingConstructsNoEventsOrManagedExpectedExhaustionState", "NativeBudgetDiagnosticContractTests.InvalidConfigurationDoesNotCreateABudget"]
+    },
+    {
+      "name": "TraceCount", "units": "retained events", "role": "trace-gauge",
+      "definition": "Events currently copyable from the bounded ring, not the lifetime event total. Short copies select the newest chronological suffix and do not consume or reset this gauge.",
+      "implementation": ["NativeMemoryBudget.cs#_traceCount++;", "NativeMemoryBudget.cs#int count = Math.Min(destination.Length, _traceCount);"],
+      "overflow": "Exact bounded gauge no greater than TraceCapacity; sequence exhaustion prevents new entries without destroying retained ones.",
+      "additionalProofs": ["NativeMemoryTraceTests.BoundedRingOverwritesOldestAndShortCopiesReturnNewestSuffix", "NativeMemoryTraceTests.TraceSequenceExhaustionCannotBreakAllocationOrRelease", "NativeMemoryTraceTests.EnabledTraceCopyAndRepeatedSnapshotDoNotAllocate"]
+    },
+    {
+      "name": "DroppedTraceEventCount", "units": "unretained events", "role": "trace-history",
+      "definition": "Enabled events overwritten by a full ring or not recorded after sequence exhaustion. Disabled tracing deliberately records neither events nor drops; a short copy is not a drop.",
+      "implementation": ["NativeMemoryBudget.cs#RecordDroppedTraceEvent();", "NativeMemoryBudget.cs#_droppedTraceEventCount++;"],
+      "overflow": "Saturates at Int64.MaxValue; an additional drop sets TraceOverflowed and makes the count a lower bound.",
+      "additionalProofs": ["NativeMemoryTraceTests.BoundedRingOverwritesOldestAndShortCopiesReturnNewestSuffix", "NativeMemoryTraceTests.DroppedEventCounterSaturatesAndDisclosesLostExactness", "NativeMemoryTraceTests.TraceSequenceExhaustionCannotBreakAllocationOrRelease"]
+    },
+    {
+      "name": "TraceOverflowed", "units": "boolean", "role": "overflow",
+      "definition": "Sticky disclosure that an enabled event sequence could not advance or a dropped-event history could not remain exact. Ordinary bounded overwriting below Int64.MaxValue is not identity exhaustion.",
+      "implementation": ["NativeMemoryBudget.cs#if (_traceSequence == long.MaxValue)", "NativeMemoryBudget.cs#if (_droppedTraceEventCount == long.MaxValue)", "NativeMemoryBudget.cs#_traceOverflowed = true;"],
+      "overflow": "Sticky true; diagnostic exhaustion never wraps identity or breaks backing acquisition/release.",
+      "additionalProofs": ["NativeMemoryTraceTests.TraceSequenceExhaustionCannotBreakAllocationOrRelease", "NativeMemoryTraceTests.DroppedEventCounterSaturatesAndDisclosesLostExactness"]
+    },
+    {
+      "name": "HistoryOverflowed", "units": "boolean", "role": "overflow",
+      "definition": "Sticky budget-domain history saturation disclosure, including application-admission histories. A counter reaching exactly Int64.MaxValue is still exact until another event occurs; current gauges are unaffected.",
+      "implementation": ["NativeMemoryBudget.cs#if (counter == long.MaxValue)", "NativeMemoryBudget.cs#_historyOverflowed = true;", "NativeMemoryAdmission.cs#HistoryOverflowed = _historyOverflowed,"],
+      "overflow": "Sticky true; saturated histories become lower bounds without preventing admission reconciliation or physical cleanup.",
+      "additionalProofs": ["NativeBudgetHistoryTests.ExactMaximumHistoryRemainsExactUntilAnotherEventActuallyOccurs", "NativeBudgetHistoryTests.SaturatedCompletedHistoriesDoNotBlockNewBackingOrPhysicalRelease", "NativeBudgetHistoryTests.PagePreparationRollbackReleasesRealPagesDespiteSaturatedAcquisitionAndFreeHistory"]
+    }
+  ]
+}
