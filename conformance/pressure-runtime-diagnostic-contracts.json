@@ -1,0 +1,260 @@
+{
+  "completeReleaseInventory": false,
+  "scope": "Every 20-property pressure runtime snapshot and two nested compilation configuration properties. Not other APIs, diagnostics, final targets or performance/release acceptance.",
+  "schemas": [
+    {
+      "name": "PressureRuntimeSnapshot",
+      "qualifiedName": "Supprocom.NativeAllocationManagement.Demos.VoxelChunkPipeline.SharedContract.PressureRuntimeSnapshot",
+      "properties": [
+        {
+          "name": "Utc",
+          "valueType": "System.DateTime",
+          "units": "UTC wall-clock timestamp",
+          "source": "DateTime.UtcNow during capture",
+          "availability": "A successful capture has UTC kind; default struct is not a captured observation",
+          "lifetime": "Current sample, not a monotonic elapsed-time clock",
+          "consistency": "Sequential cold capture, not an atomic process transaction; GC fields share one supplied GCMemoryInfo identity.",
+          "positiveProof": "CapturedProcessAndCumulativeCountersUseActualBoundedSources",
+          "negativeProof": "MissingGcObservationMeansUnavailableNotMeasuredMemoryZero"
+        },
+        {
+          "name": "TotalAllocatedBytes",
+          "valueType": "System.Int64",
+          "units": "cumulative managed bytes",
+          "source": "GC.GetTotalAllocatedBytes(precise: true)",
+          "availability": "Actual precise managed counter; excludes native allocations",
+          "lifetime": "Runtime process lifetime, not live/reclaimed/RSS bytes",
+          "consistency": "Sequential cold capture, not an atomic process transaction; GC fields share one supplied GCMemoryInfo identity.",
+          "positiveProof": "RealManagedWorkAdvancesHistoriesWithoutClaimingPhysicalFreeing",
+          "negativeProof": "MissingGcObservationMeansUnavailableNotMeasuredMemoryZero"
+        },
+        {
+          "name": "Gen0Collections",
+          "valueType": "System.Int32",
+          "units": "generation-zero collections",
+          "source": "GC.CollectionCount(0)",
+          "availability": "Actual runtime count; a measured zero is valid",
+          "lifetime": "Runtime process lifetime",
+          "consistency": "Sequential cold capture, not an atomic process transaction; GC fields share one supplied GCMemoryInfo identity.",
+          "positiveProof": "RealManagedWorkAdvancesHistoriesWithoutClaimingPhysicalFreeing",
+          "negativeProof": "MissingGcObservationMeansUnavailableNotMeasuredMemoryZero"
+        },
+        {
+          "name": "Gen1Collections",
+          "valueType": "System.Int32",
+          "units": "generation-one collections",
+          "source": "GC.CollectionCount(1)",
+          "availability": "Actual runtime count; a measured zero is valid",
+          "lifetime": "Runtime process lifetime",
+          "consistency": "Sequential cold capture, not an atomic process transaction; GC fields share one supplied GCMemoryInfo identity.",
+          "positiveProof": "RealManagedWorkAdvancesHistoriesWithoutClaimingPhysicalFreeing",
+          "negativeProof": "MissingGcObservationMeansUnavailableNotMeasuredMemoryZero"
+        },
+        {
+          "name": "Gen2Collections",
+          "valueType": "System.Int32",
+          "units": "generation-two collections",
+          "source": "GC.CollectionCount(2)",
+          "availability": "Actual runtime count; a measured zero is valid",
+          "lifetime": "Runtime process lifetime",
+          "consistency": "Sequential cold capture, not an atomic process transaction; GC fields share one supplied GCMemoryInfo identity.",
+          "positiveProof": "RealManagedWorkAdvancesHistoriesWithoutClaimingPhysicalFreeing",
+          "negativeProof": "MissingGcObservationMeansUnavailableNotMeasuredMemoryZero"
+        },
+        {
+          "name": "TotalPauseMilliseconds",
+          "valueType": "System.Double",
+          "units": "cumulative GC pause milliseconds",
+          "source": "GC.GetTotalPauseDuration().TotalMilliseconds",
+          "availability": "Actual runtime duration, not wall time or a percentage",
+          "lifetime": "Runtime process lifetime",
+          "consistency": "Sequential cold capture, not an atomic process transaction; GC fields share one supplied GCMemoryInfo identity.",
+          "positiveProof": "CapturedProcessAndCumulativeCountersUseActualBoundedSources",
+          "negativeProof": "MissingGcObservationMeansUnavailableNotMeasuredMemoryZero"
+        },
+        {
+          "name": "TotalAvailableMemoryBytes",
+          "valueType": "System.Nullable`1[System.Int64]",
+          "units": "bytes available to GC",
+          "source": "One GCMemoryInfo.TotalAvailableMemoryBytes observation",
+          "availability": "Null when memory.Index <= 0",
+          "lifetime": "Associated completed-GC observation",
+          "consistency": "Sequential cold capture, not an atomic process transaction; GC fields share one supplied GCMemoryInfo identity.",
+          "positiveProof": "CompletedGcFieldsMapOneRealObservationWithoutResamplingItsIdentity",
+          "negativeProof": "MissingGcObservationMeansUnavailableNotMeasuredMemoryZero"
+        },
+        {
+          "name": "MemoryLoadBytes",
+          "valueType": "System.Nullable`1[System.Int64]",
+          "units": "physical memory load bytes",
+          "source": "One GCMemoryInfo.MemoryLoadBytes observation",
+          "availability": "Null when memory.Index <= 0",
+          "lifetime": "Associated completed-GC observation; not exclusive process bytes",
+          "consistency": "Sequential cold capture, not an atomic process transaction; GC fields share one supplied GCMemoryInfo identity.",
+          "positiveProof": "CompletedGcFieldsMapOneRealObservationWithoutResamplingItsIdentity",
+          "negativeProof": "MissingGcObservationMeansUnavailableNotMeasuredMemoryZero"
+        },
+        {
+          "name": "HighMemoryLoadThresholdBytes",
+          "valueType": "System.Nullable`1[System.Int64]",
+          "units": "GC high-load threshold bytes",
+          "source": "One GCMemoryInfo.HighMemoryLoadThresholdBytes observation",
+          "availability": "Null when memory.Index <= 0",
+          "lifetime": "Associated completed-GC observation",
+          "consistency": "Sequential cold capture, not an atomic process transaction; GC fields share one supplied GCMemoryInfo identity.",
+          "positiveProof": "CompletedGcFieldsMapOneRealObservationWithoutResamplingItsIdentity",
+          "negativeProof": "MissingGcObservationMeansUnavailableNotMeasuredMemoryZero"
+        },
+        {
+          "name": "TotalCommittedBytes",
+          "valueType": "System.Nullable`1[System.Int64]",
+          "units": "managed heap committed bytes",
+          "source": "One GCMemoryInfo.TotalCommittedBytes observation",
+          "availability": "Null when memory.Index <= 0",
+          "lifetime": "Associated completed-GC observation; not NAM charge",
+          "consistency": "Sequential cold capture, not an atomic process transaction; GC fields share one supplied GCMemoryInfo identity.",
+          "positiveProof": "CompletedGcFieldsMapOneRealObservationWithoutResamplingItsIdentity",
+          "negativeProof": "MissingGcObservationMeansUnavailableNotMeasuredMemoryZero"
+        },
+        {
+          "name": "HeapSizeBytes",
+          "valueType": "System.Nullable`1[System.Int64]",
+          "units": "managed heap bytes",
+          "source": "One GCMemoryInfo.HeapSizeBytes observation",
+          "availability": "Null when memory.Index <= 0",
+          "lifetime": "Associated completed-GC observation, not current live objects",
+          "consistency": "Sequential cold capture, not an atomic process transaction; GC fields share one supplied GCMemoryInfo identity.",
+          "positiveProof": "CompletedGcFieldsMapOneRealObservationWithoutResamplingItsIdentity",
+          "negativeProof": "MissingGcObservationMeansUnavailableNotMeasuredMemoryZero"
+        },
+        {
+          "name": "FragmentedBytes",
+          "valueType": "System.Nullable`1[System.Int64]",
+          "units": "managed heap fragmented bytes",
+          "source": "One GCMemoryInfo.FragmentedBytes observation",
+          "availability": "Null when memory.Index <= 0; actual zero preserved",
+          "lifetime": "Associated completed-GC observation",
+          "consistency": "Sequential cold capture, not an atomic process transaction; GC fields share one supplied GCMemoryInfo identity.",
+          "positiveProof": "CompletedGcFieldsMapOneRealObservationWithoutResamplingItsIdentity",
+          "negativeProof": "MissingGcObservationMeansUnavailableNotMeasuredMemoryZero"
+        },
+        {
+          "name": "LargeObjectHeapBytes",
+          "valueType": "System.Nullable`1[System.Int64]",
+          "units": "LOH size-after bytes",
+          "source": "One GCMemoryInfo.GenerationInfo[3].SizeAfterBytes observation",
+          "availability": "Null when memory.Index <= 0 or generation slot 3 is absent",
+          "lifetime": "Associated completed-GC observation; not all pinned/large native storage",
+          "consistency": "Sequential cold capture, not an atomic process transaction; GC fields share one supplied GCMemoryInfo identity.",
+          "positiveProof": "CompletedGcFieldsMapOneRealObservationWithoutResamplingItsIdentity",
+          "negativeProof": "MissingGcObservationMeansUnavailableNotMeasuredMemoryZero"
+        },
+        {
+          "name": "ProcessWorkingSetBytes",
+          "valueType": "System.Int64",
+          "units": "resident working-set bytes",
+          "source": "A fresh Process.GetCurrentProcess().WorkingSet64",
+          "availability": "Actual successful OS sample; failures propagate rather than fabricate zero",
+          "lifetime": "Current process sample; shared and private pages; no peak claim",
+          "consistency": "Sequential cold capture, not an atomic process transaction; GC fields share one supplied GCMemoryInfo identity.",
+          "positiveProof": "CapturedProcessAndCumulativeCountersUseActualBoundedSources",
+          "negativeProof": "MissingGcObservationMeansUnavailableNotMeasuredMemoryZero"
+        },
+        {
+          "name": "ProcessCpuMilliseconds",
+          "valueType": "System.Double",
+          "units": "cumulative process CPU milliseconds",
+          "source": "A fresh Process.GetCurrentProcess().TotalProcessorTime.TotalMilliseconds",
+          "availability": "Actual successful OS sample; failures propagate",
+          "lifetime": "Process lifetime across all threads, not CPU percent",
+          "consistency": "Sequential cold capture, not an atomic process transaction; GC fields share one supplied GCMemoryInfo identity.",
+          "positiveProof": "CapturedProcessAndCumulativeCountersUseActualBoundedSources",
+          "negativeProof": "MissingGcObservationMeansUnavailableNotMeasuredMemoryZero"
+        },
+        {
+          "name": "ProcessorCount",
+          "valueType": "System.Int32",
+          "units": "runtime-available logical processors",
+          "source": "Environment.ProcessorCount",
+          "availability": "Actual positive runtime value, not physical CPU count",
+          "lifetime": "Runtime startup value; not dynamically refreshed quota",
+          "consistency": "Sequential cold capture, not an atomic process transaction; GC fields share one supplied GCMemoryInfo identity.",
+          "positiveProof": "CapturedProcessAndCumulativeCountersUseActualBoundedSources",
+          "negativeProof": "MissingGcObservationMeansUnavailableNotMeasuredMemoryZero"
+        },
+        {
+          "name": "Cgroup",
+          "valueType": "Supprocom.NativeAllocationManagement.Demos.VoxelChunkPipeline.SharedContract.CgroupMemorySnapshot",
+          "units": "nested external kernel observations",
+          "source": "CgroupMemorySnapshot.Read()",
+          "availability": "Each nullable nested field has independent availability; not process-exclusive storage",
+          "lifetime": "External hierarchy lifetimes and reset rules; see cgroup registry",
+          "consistency": "Sequential cold capture, not an atomic process transaction; GC fields share one supplied GCMemoryInfo identity.",
+          "positiveProof": "CapturedProcessAndCumulativeCountersUseActualBoundedSources",
+          "negativeProof": "MissingGcObservationMeansUnavailableNotMeasuredMemoryZero"
+        },
+        {
+          "name": "GcConfiguration",
+          "valueType": "System.Collections.Generic.IReadOnlyDictionary`2[System.String,System.String]",
+          "units": "invariant configuration name/value pairs",
+          "source": "GC.GetConfigurationVariables(), Convert.ToString(value, InvariantCulture)",
+          "availability": "Only actual runtime-provided entries; no missing key is synthesized",
+          "lifetime": "Independent captured dictionary; values used by GC, not merely requested environment",
+          "consistency": "Sequential cold capture, not an atomic process transaction; GC fields share one supplied GCMemoryInfo identity.",
+          "positiveProof": "GcConfigurationIsActualInvariantRuntimeStateAndIndependentlyCaptured",
+          "negativeProof": "GcConfigurationIsActualInvariantRuntimeStateAndIndependentlyCaptured"
+        },
+        {
+          "name": "CompilationConfiguration",
+          "valueType": "Supprocom.NativeAllocationManagement.Demos.VoxelChunkPipeline.SharedContract.PressureCompilationConfiguration",
+          "units": "nested raw environment strings",
+          "source": "PressureCompilationConfiguration.Capture()",
+          "availability": "Empty strings mean absent requested variables, not an effective JIT setting",
+          "lifetime": "Current environment sample; runtime may already have fixed settings",
+          "consistency": "Sequential cold capture, not an atomic process transaction; GC fields share one supplied GCMemoryInfo identity.",
+          "positiveProof": "CompilationVariablesAreRawValuesAndAbsenceDoesNotInferEffectiveJitState",
+          "negativeProof": "CompilationVariablesAreRawValuesAndAbsenceDoesNotInferEffectiveJitState"
+        },
+        {
+          "name": "LastCompletedGcIndex",
+          "valueType": "System.Nullable`1[System.Int64]",
+          "units": "completed GC observation identity",
+          "source": "The same GCMemoryInfo.Index used by all completed-GC fields",
+          "availability": "Null when memory.Index <= 0",
+          "lifetime": "No monotonic cross-kind ordering guarantee; background/foreground completion can differ",
+          "consistency": "Sequential cold capture, not an atomic process transaction; GC fields share one supplied GCMemoryInfo identity.",
+          "positiveProof": "CompletedGcFieldsMapOneRealObservationWithoutResamplingItsIdentity",
+          "negativeProof": "MissingGcObservationMeansUnavailableNotMeasuredMemoryZero"
+        }
+      ]
+    },
+    {
+      "name": "PressureCompilationConfiguration",
+      "qualifiedName": "Supprocom.NativeAllocationManagement.Demos.VoxelChunkPipeline.SharedContract.PressureCompilationConfiguration",
+      "properties": [
+        {
+          "name": "TieredCompilation",
+          "valueType": "System.String",
+          "units": "raw environment string",
+          "source": "Environment.GetEnvironmentVariable(DOTNET_TieredCompilation) ?? string.Empty",
+          "availability": "Absent variable is empty; no inferred enabled/disabled/default state",
+          "lifetime": "Environment at capture, not necessarily effective startup/JIT state",
+          "consistency": "Two separate environment reads, not atomic",
+          "positiveProof": "CompilationVariablesAreRawValuesAndAbsenceDoesNotInferEffectiveJitState",
+          "negativeProof": "CompilationVariablesAreRawValuesAndAbsenceDoesNotInferEffectiveJitState"
+        },
+        {
+          "name": "TieredPgo",
+          "valueType": "System.String",
+          "units": "raw environment string",
+          "source": "Environment.GetEnvironmentVariable(DOTNET_TieredPGO) ?? string.Empty",
+          "availability": "Absent variable is empty; no inferred enabled/disabled/default state",
+          "lifetime": "Environment at capture, not necessarily effective startup/JIT state",
+          "consistency": "Two separate environment reads, not atomic",
+          "positiveProof": "CompilationVariablesAreRawValuesAndAbsenceDoesNotInferEffectiveJitState",
+          "negativeProof": "CompilationVariablesAreRawValuesAndAbsenceDoesNotInferEffectiveJitState"
+        }
+      ]
+    }
+  ]
+}

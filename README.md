@@ -39,6 +39,9 @@ on each supported native target.
 
 ## Documentation
 
+See [demo process/GC observations](docs/demo-runtime-metrics.md) for their exact
+units, sources, lifetimes and availability; cold telemetry is not an allocator budget.
+
 The [getting-started guide][getting-started] contains installation instructions,
 complete examples, lifecycle rules, analyzer diagnostics, and cleanup requirements.
 

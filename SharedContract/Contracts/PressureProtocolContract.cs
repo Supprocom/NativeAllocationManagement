@@ -242,6 +242,15 @@ public readonly record struct PressureRuntimeSnapshot(
     public static PressureRuntimeSnapshot Capture()
     {
         GCMemoryInfo memory = GC.GetGCMemoryInfo();
+        return Capture(memory, memory.Index > 0);
+    }
+
+    // One actual GC identity supplies every completed-GC field. Keeping the
+    // mapping in one cold core permits an explicit absent-observation fixture
+    // without accessing an invalid default struct or pretending a test host
+    // has never collected. Public capture derives presence from the real index.
+    private static PressureRuntimeSnapshot Capture(GCMemoryInfo memory, bool hasCollection)
+    {
         using Process process = Process.GetCurrentProcess();
         Dictionary<string, string> configuration = new(StringComparer.Ordinal);
         foreach (KeyValuePair<string, object> entry in GC.GetConfigurationVariables())
@@ -258,20 +267,20 @@ public readonly record struct PressureRuntimeSnapshot(
             GC.CollectionCount(1),
             GC.CollectionCount(2),
             GC.GetTotalPauseDuration().TotalMilliseconds,
-            memory.Index > 0 ? memory.TotalAvailableMemoryBytes : null,
-            memory.Index > 0 ? memory.MemoryLoadBytes : null,
-            memory.Index > 0 ? memory.HighMemoryLoadThresholdBytes : null,
-            memory.Index > 0 ? memory.TotalCommittedBytes : null,
-            memory.Index > 0 ? memory.HeapSizeBytes : null,
-            memory.Index > 0 ? memory.FragmentedBytes : null,
-            memory.Index > 0 && memory.GenerationInfo.Length > 3 ? memory.GenerationInfo[3].SizeAfterBytes : null,
+            hasCollection ? memory.TotalAvailableMemoryBytes : null,
+            hasCollection ? memory.MemoryLoadBytes : null,
+            hasCollection ? memory.HighMemoryLoadThresholdBytes : null,
+            hasCollection ? memory.TotalCommittedBytes : null,
+            hasCollection ? memory.HeapSizeBytes : null,
+            hasCollection ? memory.FragmentedBytes : null,
+            hasCollection && memory.GenerationInfo.Length > 3 ? memory.GenerationInfo[3].SizeAfterBytes : null,
             process.WorkingSet64,
             process.TotalProcessorTime.TotalMilliseconds,
             Environment.ProcessorCount,
             CgroupMemorySnapshot.Read(),
             configuration,
             PressureCompilationConfiguration.Capture(),
-            memory.Index > 0 ? memory.Index : null);
+            hasCollection ? memory.Index : null);
     }
 }
 
