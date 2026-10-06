@@ -18,6 +18,80 @@ public sealed class PackageSmokeTests
         _output = output;
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PackageAnalyzerRejectsActivePooledBindingReplacement(bool prepared)
+    {
+        PackageEvidence package = await GetPackageAsync();
+        WriteEvidence(package);
+        string consumerRoot = CreateConsumerRoot();
+        try
+        {
+            WriteConsumerProject(consumerRoot, package, excludeAnalyzer: false, suppressDiagnostics: false);
+            string replacement = prepared
+                ? "if (pool.TryRent(4, static writer => writer.Fill(2), out lease, out _)) lease.Dispose();"
+                : "lease = pool.Rent(4, static writer => writer.Fill(2)); lease.Dispose();";
+            await File.WriteAllTextAsync(Path.Combine(consumerRoot, "Program.cs"), $$"""
+                using Supprocom.NativeAllocationManagement;
+                public static class Consumer
+                {
+                    public static void Run()
+                    {
+                        using NativePool<int> pool = new(new NativePoolPreparation(4, 16, 2), null);
+                        if (!pool.TryRent(4, static writer => writer.Fill(1), out Pooled<int> lease, out _)) return;
+                        {{replacement}}
+                    }
+                }
+                """);
+            string project = Path.Combine(consumerRoot, "Consumer.csproj");
+            CommandResult restore = await RunDotnetAsync(
+                $"restore \"{project}\" --nologo --force --no-cache --packages \"{Path.Combine(consumerRoot, ".packages")}\" --source \"{package.SourceDirectory}\"", consumerRoot);
+            Assert.True(restore.ExitCode == 0, restore.Output);
+            CommandResult build = await RunDotnetAsync($"build \"{project}\" --no-restore --nologo", consumerRoot);
+            Assert.True(build.ExitCode != 0, build.Output);
+            Assert.Contains("error NAM1003", build.Output, StringComparison.Ordinal);
+            Assert.DoesNotContain("error CS", build.Output, StringComparison.Ordinal);
+            Assert.DoesNotContain("AD0001", build.Output, StringComparison.Ordinal);
+        }
+        finally { DeleteConsumerRoot(consumerRoot); }
+    }
+
+    [Fact]
+    public async Task PackageAnalyzerAcceptsCompletedPooledBindingReplacementAndExecution()
+    {
+        PackageEvidence package = await GetPackageAsync();
+        WriteEvidence(package);
+        string consumerRoot = CreateConsumerRoot();
+        try
+        {
+            WriteConsumerProject(consumerRoot, package, excludeAnalyzer: false, suppressDiagnostics: false,
+                executable: true, treatWarningsAsErrors: true);
+            await File.WriteAllTextAsync(Path.Combine(consumerRoot, "Program.cs"), """
+                using System;
+                using Supprocom.NativeAllocationManagement;
+                using NativePool<int> pool = new(new NativePoolPreparation(4, 16, 2), null);
+                if (!pool.TryRent(4, static writer => writer.Fill(1), out Pooled<int> lease, out _)) throw new InvalidOperationException();
+                lease.Dispose();
+                if (!pool.TryRent(4, static writer => writer.Fill(2), out lease, out _)) throw new InvalidOperationException();
+                int value = lease.Read(static view => view[0]);
+                lease.Dispose();
+                if (value != 2) throw new InvalidOperationException();
+                Console.WriteLine("lease-replacement completed=2 value=2");
+                """);
+            string project = Path.Combine(consumerRoot, "Consumer.csproj");
+            CommandResult restore = await RunDotnetAsync(
+                $"restore \"{project}\" --nologo --force --no-cache --packages \"{Path.Combine(consumerRoot, ".packages")}\" --source \"{package.SourceDirectory}\"", consumerRoot);
+            Assert.True(restore.ExitCode == 0, restore.Output);
+            CommandResult build = await RunDotnetAsync($"build \"{project}\" --no-restore --nologo", consumerRoot);
+            Assert.True(build.ExitCode == 0, build.Output);
+            CommandResult run = await RunDotnetAsync($"run --project \"{project}\" --no-build --no-restore", consumerRoot);
+            Assert.True(run.ExitCode == 0, run.Output);
+            Assert.Contains("lease-replacement completed=2 value=2", run.Output, StringComparison.Ordinal);
+        }
+        finally { DeleteConsumerRoot(consumerRoot); }
+    }
+
     [Fact]
     public async Task PackageEventDiagnosticOracleVerifiesCompleteOrderedHistories()
     {

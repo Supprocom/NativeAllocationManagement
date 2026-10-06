@@ -1952,7 +1952,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     bool allPresentPathsEnded = paths
                         .Where(path => path.Handles.ContainsKey(symbol))
                         .Select(path => path.Handles[symbol])
-                        .All(handle => handle.IsScoped && IsHandleEnded(handle));
+                        .All(IsHandleEnded);
                     if (allPresentPathsEnded)
                     {
                         mergedHandle.Returned = true;
@@ -2783,6 +2783,12 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         public override void VisitSimpleAssignment(ISimpleAssignmentOperation operation)
         {
             IOperation? value = Unwrap(operation.Value);
+            if (IsDefaultHandleValue(value))
+            {
+                RegisterDefaultHandle(GetTarget(operation.Target), value!.Type!);
+                base.VisitSimpleAssignment(operation);
+                return;
+            }
             if (IsNativeTransfer(operation.Target.Type))
             {
                 ProcessTransferAssignment(
@@ -2825,6 +2831,12 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         public override void VisitVariableDeclarator(IVariableDeclaratorOperation operation)
         {
             IOperation? value = Unwrap(operation.Initializer?.Value);
+            if (IsDefaultHandleValue(value))
+            {
+                RegisterDefaultHandle(new Target(operation.Symbol, operation.Syntax), value!.Type!);
+                base.VisitVariableDeclarator(operation);
+                return;
+            }
             if (IsNativeTransfer(operation.Symbol.Type))
             {
                 ProcessTransferAssignment(
@@ -5520,6 +5532,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 return;
             }
 
+            ReportPooledBindingReplacement(target.Symbol, operation.Syntax);
             HandleState handle = new(
                 target.Symbol,
                 owner,
@@ -5655,6 +5668,36 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             operation is IDeclarationExpressionOperation declaration
                 ? GetSymbol(Unwrap(declaration.Expression)) : GetSymbol(Unwrap(operation));
 
+        private void ReportPooledBindingReplacement(ISymbol symbol, SyntaxNode syntax)
+        {
+            if (_handles.TryGetValue(symbol, out HandleState? previous)
+                && !IsHandleEnded(previous)
+                && !previous.Owner.IsArena
+                && !previous.Owner.IsRegion)
+            {
+                Report(NativeAllocationDiagnosticDescriptors.LifetimeEscape, syntax, previous.DisplayName);
+            }
+        }
+
+        private bool IsDefaultHandleValue(IOperation? value) => value is not null && IsHandleType(value.Type)
+            && (value is IDefaultValueOperation
+                || value is IObjectCreationOperation { Constructor.IsImplicitlyDeclared: true, Arguments.IsEmpty: true });
+
+        private void RegisterDefaultHandle(Target target, ITypeSymbol type)
+        {
+            if (target.Symbol is not ILocalSymbol symbol)
+            {
+                return;
+            }
+            ReportPooledBindingReplacement(symbol, target.Syntax);
+            OwnerState owner = new(symbol: null, type, IsNativeLocal(type), isArena: false,
+                isUsing: false, isField: false, requiresDeterministicReturn: false, target.Syntax);
+            _handles[symbol] = new HandleState(symbol, owner, 0, isUsing: false, target.Syntax)
+            {
+                Returned = true
+            };
+        }
+
         private void RegisterPreparedHandle(IInvocationOperation operation)
         {
             bool group = IsPreparedTryGroupAcquisition(operation);
@@ -5683,6 +5726,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                         "the prepared allocation", symbol?.Name ?? "an escaping destination");
                     continue;
                 }
+                ReportPooledBindingReplacement(symbol, operation.Syntax);
                 _handles[symbol] = new HandleState(symbol, owner, owner.Generation,
                     isUsing: false, operation.Syntax)
                 {
