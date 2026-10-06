@@ -30,6 +30,8 @@
     <Compile Include="..\conformance\native-trace-diagnostic-oracle.cs" Link="Conformance\NativeTraceDiagnosticOracle.cs" />
     <None Include="..\conformance\native-owner-diagnostic-contracts.json" CopyToOutputDirectory="PreserveNewest" />
     <Compile Include="..\conformance\native-owner-diagnostic-oracle.cs" Link="Conformance\NativeOwnerDiagnosticOracle.cs" />
+    <None Include="..\conformance\native-layout-diagnostic-contracts.json" CopyToOutputDirectory="PreserveNewest" />
+    <Compile Include="..\conformance\native-layout-diagnostic-oracle.cs" Link="Conformance\NativeLayoutDiagnosticOracle.cs" />
     <ProjectReference Include="..\Supprocom.NativeAllocationManagement\Supprocom.NativeAllocationManagement.csproj" />
     <ProjectReference Include="..\Supprocom.NativeAllocationManagement.Analyzers\Supprocom.NativeAllocationManagement.Analyzers.csproj" />
     <ProjectReference Include="..\Supprocom.NativeAllocationManagement.CodeFixes\Supprocom.NativeAllocationManagement.CodeFixes.csproj" />

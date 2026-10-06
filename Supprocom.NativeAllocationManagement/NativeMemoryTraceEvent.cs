@@ -112,7 +112,8 @@ public readonly record struct NativeMemoryTraceEvent
     public long? OwnerId { get; }
     /// <summary>Gets the actual transition kind.</summary>
     public NativeMemoryTraceKind Kind { get; }
-    /// <summary>Gets the complete known extent associated with the transition.</summary>
+    /// <summary>Gets the kind-specific extent associated with the transition.</summary>
+    /// <remarks>Backing/admission events use the complete known native extent. LayoutPrepared uses payload extent including inter-region padding but excluding base-alignment slack; LayoutInitialized uses typed logical bytes. Ownership/copy events use their documented payload or backing extent.</remarks>
     public nuint RequestedBytes { get; }
     /// <summary>Gets the previous complete extent for realloc, otherwise zero.</summary>
     public nuint PreviousBytes { get; }

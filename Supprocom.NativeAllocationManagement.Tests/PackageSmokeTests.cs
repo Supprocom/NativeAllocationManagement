@@ -19,6 +19,44 @@ public sealed class PackageSmokeTests
     }
 
     [Fact]
+    public async Task PackageLayoutDiagnosticOracleMatchesEveryField()
+    {
+        PackageEvidence package = await GetPackageAsync();
+        WriteEvidence(package);
+        string consumerRoot = CreateConsumerRoot();
+        try
+        {
+            WriteConsumerProject(consumerRoot, package, excludeAnalyzer: false, suppressDiagnostics: false,
+                executable: true, treatWarningsAsErrors: true);
+            foreach (string name in new[] { "layout", "admission" })
+                File.Copy(Path.Combine(FindRepositoryRoot(), "conformance", "native-" + name + "-diagnostic-oracle.cs"),
+                    Path.Combine(consumerRoot, "Native" + char.ToUpperInvariant(name[0]) + name[1..] + "DiagnosticOracle.cs"));
+            await File.WriteAllTextAsync(Path.Combine(consumerRoot, "Program.cs"),
+                """
+                using Supprocom.NativeAllocationManagement.Conformance;
+
+                foreach (int capacity in new[] { 0, 16 })
+                {
+                    NativeLayoutDiagnosticOracle.Run(capacity);
+                    NativeLayoutDiagnosticOracle.RunEmpty(capacity, false);
+                    NativeLayoutDiagnosticOracle.RunEmpty(capacity, true);
+                }
+                System.Console.WriteLine("layout-oracle schemas=2 fields=24 nested-fields=38 tracing-modes=2 paths=prepared,moved,detached,empty cleanup=complete");
+                """);
+            string project = Path.Combine(consumerRoot, "Consumer.csproj");
+            CommandResult restore = await RunDotnetAsync(
+                $"restore \"{project}\" --nologo --force --no-cache --packages \"{Path.Combine(consumerRoot, ".packages")}\" --source \"{package.SourceDirectory}\"", consumerRoot);
+            Assert.True(restore.ExitCode == 0, restore.Output);
+            CommandResult build = await RunDotnetAsync($"build \"{project}\" --no-restore --nologo", consumerRoot);
+            Assert.True(build.ExitCode == 0, build.Output);
+            CommandResult run = await RunDotnetAsync($"run --project \"{project}\" --no-build --no-restore", consumerRoot);
+            Assert.True(run.ExitCode == 0, run.Output);
+            Assert.Contains("layout-oracle schemas=2 fields=24 nested-fields=38 tracing-modes=2 paths=prepared,moved,detached,empty cleanup=complete", run.Output, StringComparison.Ordinal);
+        }
+        finally { DeleteConsumerRoot(consumerRoot); }
+    }
+
+    [Fact]
     public async Task PackageOwnerDiagnosticOracleMatchesEveryField()
     {
         PackageEvidence package = await GetPackageAsync();
