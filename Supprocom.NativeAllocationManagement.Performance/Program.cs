@@ -83,6 +83,11 @@ internal static class Program
             return NativePreparedPageMeasurement.RunCommand(args);
         }
 
+        if (args.Length != 0 && string.Equals(args[0], "--layout-full-cost-worker", StringComparison.Ordinal))
+        {
+            return NativeLayoutFullCostMeasurement.RunCommand(args);
+        }
+
         if (args.Length != 0
             && args[0] is "--voxel-handoff" or "--voxel-handoff-worker")
         {
