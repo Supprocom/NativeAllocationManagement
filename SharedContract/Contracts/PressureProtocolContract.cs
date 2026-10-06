@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Supprocom.NativeAllocationManagement.Demos.VoxelChunkPipeline.SharedContract;
 
@@ -206,8 +207,8 @@ public readonly record struct PressureChunkEvidence(
     bool ExactVerificationPassed);
 
 public readonly record struct PressureCompilationConfiguration(
-    string TieredCompilation,
-    string TieredPgo)
+    [property: JsonRequired] string TieredCompilation,
+    [property: JsonRequired] string TieredPgo)
 {
     public static PressureCompilationConfiguration Capture() =>
         new(
@@ -218,26 +219,26 @@ public readonly record struct PressureCompilationConfiguration(
 }
 
 public readonly record struct PressureRuntimeSnapshot(
-    DateTime Utc,
-    long TotalAllocatedBytes,
-    int Gen0Collections,
-    int Gen1Collections,
-    int Gen2Collections,
-    double TotalPauseMilliseconds,
-    long? TotalAvailableMemoryBytes,
-    long? MemoryLoadBytes,
-    long? HighMemoryLoadThresholdBytes,
-    long? TotalCommittedBytes,
-    long? HeapSizeBytes,
-    long? FragmentedBytes,
-    long? LargeObjectHeapBytes,
-    long ProcessWorkingSetBytes,
-    double ProcessCpuMilliseconds,
-    int ProcessorCount,
-    CgroupMemorySnapshot Cgroup,
-    IReadOnlyDictionary<string, string> GcConfiguration,
-    PressureCompilationConfiguration CompilationConfiguration = default,
-    long? LastCompletedGcIndex = null)
+    [property: JsonRequired] DateTime Utc,
+    [property: JsonRequired] long TotalAllocatedBytes,
+    [property: JsonRequired] int Gen0Collections,
+    [property: JsonRequired] int Gen1Collections,
+    [property: JsonRequired] int Gen2Collections,
+    [property: JsonRequired] double TotalPauseMilliseconds,
+    [property: JsonRequired] long? TotalAvailableMemoryBytes,
+    [property: JsonRequired] long? MemoryLoadBytes,
+    [property: JsonRequired] long? HighMemoryLoadThresholdBytes,
+    [property: JsonRequired] long? TotalCommittedBytes,
+    [property: JsonRequired] long? HeapSizeBytes,
+    [property: JsonRequired] long? FragmentedBytes,
+    [property: JsonRequired] long? LargeObjectHeapBytes,
+    [property: JsonRequired] long ProcessWorkingSetBytes,
+    [property: JsonRequired] double ProcessCpuMilliseconds,
+    [property: JsonRequired] int ProcessorCount,
+    [property: JsonRequired] CgroupMemorySnapshot Cgroup,
+    [property: JsonRequired] IReadOnlyDictionary<string, string> GcConfiguration,
+    [property: JsonRequired] PressureCompilationConfiguration CompilationConfiguration = default,
+    [property: JsonRequired] long? LastCompletedGcIndex = null)
 {
     public static PressureRuntimeSnapshot Capture()
     {

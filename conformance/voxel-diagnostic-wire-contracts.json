@@ -1,0 +1,80 @@
+{
+  "completeReleaseInventory": false,
+  "scope": "Wire presence of all twenty current pressure runtime properties and two nested raw compilation settings, plus fourteen optional numeric legacy report properties (thirteen corrected and one existing nullable LOH observation). Not every legacy property, runtime API, diagnostic implementation, platform or release gate.",
+  "requiredPresence": "All current runtime/configuration JSON members must be present. Explicit nullable null remains unavailable. Presence is not non-null validation or proof that a producer measured a supplied value.",
+  "optionalMeasurement": "Legacy numeric omission/null means unavailable; explicit numeric zero remains a value. These legacy schemas have no maintained worker producer. Their transport fields are not reconstructed from current counters.",
+  "schemas": [
+    {
+      "name": "PressureRuntimeSnapshot",
+      "source": "SharedContract/Contracts/PressureProtocolContract.cs",
+      "role": "required",
+      "proof": "MissingRuntimeMemberIsRejectedInsteadOfInventingAnObservation",
+      "members": [
+        "Utc",
+        "TotalAllocatedBytes",
+        "Gen0Collections",
+        "Gen1Collections",
+        "Gen2Collections",
+        "TotalPauseMilliseconds",
+        "TotalAvailableMemoryBytes",
+        "MemoryLoadBytes",
+        "HighMemoryLoadThresholdBytes",
+        "TotalCommittedBytes",
+        "HeapSizeBytes",
+        "FragmentedBytes",
+        "LargeObjectHeapBytes",
+        "ProcessWorkingSetBytes",
+        "ProcessCpuMilliseconds",
+        "ProcessorCount",
+        "Cgroup",
+        "GcConfiguration",
+        "CompilationConfiguration",
+        "LastCompletedGcIndex"
+      ],
+      "qualifiedName": "Supprocom.NativeAllocationManagement.Demos.VoxelChunkPipeline.SharedContract.PressureRuntimeSnapshot"
+    },
+    {
+      "name": "PressureCompilationConfiguration",
+      "source": "SharedContract/Contracts/PressureProtocolContract.cs",
+      "role": "required",
+      "proof": "MissingCompilationMemberCannotBecomeAnAbsentRuntimeSetting",
+      "members": [
+        "TieredCompilation",
+        "TieredPgo"
+      ],
+      "qualifiedName": "Supprocom.NativeAllocationManagement.Demos.VoxelChunkPipeline.SharedContract.PressureCompilationConfiguration"
+    },
+    {
+      "name": "ChildRunResult",
+      "source": "SharedContract/Contracts/RuntimeMetricsContract.cs",
+      "role": "optionalMeasurement",
+      "proof": "OptionalLegacyMeasurementDistinguishesOmissionFromExplicitZero",
+      "members": [
+        "LargeObjectHeapBytesAfterRun",
+        "ColdManagedAllocatedBytes",
+        "ColdElapsedMilliseconds"
+      ],
+      "qualifiedName": "Supprocom.NativeAllocationManagement.Demos.VoxelChunkPipeline.SharedContract.ChildRunResult"
+    },
+    {
+      "name": "BenchmarkSummary",
+      "source": "SharedContract/Contracts/HarnessContract.cs",
+      "role": "optionalMeasurement",
+      "proof": "OptionalLegacyMeasurementDistinguishesOmissionFromExplicitZero",
+      "members": [
+        "SafeMeanGenerationMilliseconds",
+        "SafeMeanFaceDerivationMilliseconds",
+        "SafeMeanTransparentMaskMilliseconds",
+        "SafeMeanOpaquePackingMilliseconds",
+        "SafeMeanTransparentPackingMilliseconds",
+        "SafeMeanCoordinateRecycleMilliseconds",
+        "SafeMeanFaceRecycleMilliseconds",
+        "SafeMeanMaskRecycleMilliseconds",
+        "SafeMeanPackingRecycleMilliseconds",
+        "SafeMeanColdElapsedMilliseconds",
+        "NamMeanColdElapsedMilliseconds"
+      ],
+      "qualifiedName": "Supprocom.NativeAllocationManagement.Demos.VoxelChunkPipeline.SharedContract.BenchmarkSummary"
+    }
+  ]
+}

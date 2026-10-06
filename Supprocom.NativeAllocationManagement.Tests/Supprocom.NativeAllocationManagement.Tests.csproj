@@ -15,6 +15,7 @@
       <_Parameter2>$(MSBuildProjectDirectory)/..</_Parameter2>
     </AssemblyAttribute>
     <PackageReference Include="xunit.analyzers" Version="2.1.0" PrivateAssets="all" />
+    <None Include="..\conformance\voxel-diagnostic-wire-contracts.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\conformance\native-allocation-ownership.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\conformance\native-budget-diagnostic-contracts.json" CopyToOutputDirectory="PreserveNewest" />
     <Compile Include="..\conformance\native-budget-diagnostic-oracle.cs" Link="Conformance\NativeBudgetDiagnosticOracle.cs" />

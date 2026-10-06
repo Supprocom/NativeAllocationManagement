@@ -14,9 +14,9 @@ public readonly record struct ChildRunResult(
     long HeapBytesAfterRun,
     long PeakWorkingSetBytes,
     long? LargeObjectHeapBytesAfterRun = null,
-    long ColdManagedAllocatedBytes = 0,
+    long? ColdManagedAllocatedBytes = null,
     PressureRunMetrics? Pressure = null,
-    double ColdElapsedMilliseconds = 0)
+    double? ColdElapsedMilliseconds = null)
 {
     public string ToJson() => JsonSerializer.Serialize(this, VoxelJson.Options);
 
