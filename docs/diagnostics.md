@@ -67,6 +67,14 @@ when absent. Region has no scoped bank. A newly reserved region segment is idle
 until its cursor advances; its availability now agrees in both storage and
 structural snapshots, including initializer-failure rollback.
 
+A lexical region's checked append count is also its lifetime successful backing
+acquisition history and non-reusing backing ordinal. It does not reset or trim
+during that lifetime. Native cleanup clears the linked head, so current segment
+counts become zero while completed history is preserved. Identity exhaustion
+rejects before admission or producer execution, before the wider `long` history
+could overflow; `HistoryOverflowed` is genuinely false for this model. Failed
+backend acquisition adds no count. Other models keep their saturating histories.
+
 Fast pool and lexical region have one nongenerational lifetime: generation and
 scope counters are invariant zero. Fast arena reports its real checked UInt64
 generation/scope epoch using the existing signed Int64 bit representation; use

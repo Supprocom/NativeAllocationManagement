@@ -105,15 +105,119 @@ public sealed class NativeOwnerHistoryTests
     {
         NativeMemoryBudget budget = new(8_192);
         NativeRegionKernel kernel = new(0, NativeMemoryReturn.ToNativeMemory, budget);
-        SetHistory(kernel, "_freshSegmentAllocationCount", long.MaxValue);
-        Local<int> value = kernel.LeaseInitialized<int>(1, static writer => writer.Write(42));
-        Assert.Equal(42, value.Read(static view => view[0]));
-        Assert.Equal(4, kernel.GetStatistics().RequestedBytes);
-        Assert.True(kernel.GetStatistics().HistoryOverflowed);
-        Assert.True(kernel.GetDiagnosticSnapshot().HistoryOverflowed);
-        Assert.Equal(long.MaxValue, kernel.GetStatistics().FreshSegmentAllocationCount);
-        kernel.Dispose();
+        try
+        {
+            Assert.Throws<InvalidOperationException>(() => kernel.LeaseInitialized<int>(2, static writer => writer.Write(42)));
+            Assert.Equal(1, kernel.GetStatistics().FreshSegmentAllocationCount);
+            Assert.Equal(1, kernel.GetStatistics().SegmentCount);
+            Assert.Equal(0, kernel.GetStatistics().RequestedBytes);
+            Local<int> value = kernel.LeaseInitialized<int>(1, static writer => writer.Write(42));
+            Assert.Equal(42, value.Read(static view => view[0]));
+            Assert.Equal(4, kernel.GetStatistics().RequestedBytes);
+            Assert.False(kernel.GetStatistics().HistoryOverflowed);
+            Assert.False(kernel.GetDiagnosticSnapshot().HistoryOverflowed);
+            Assert.Equal(1, kernel.GetStatistics().FreshSegmentAllocationCount);
+        }
+        finally { kernel.Dispose(); }
+        NativeOwnerDiagnosticSnapshot terminal = kernel.GetDiagnosticSnapshot();
+        Assert.Equal(0, terminal.RetainedSegmentCount);
+        Assert.Equal(0, terminal.OutstandingNativeBytes);
+        Assert.False(terminal.HistoryOverflowed);
+        Assert.Equal(1, typeof(NativeRegionKernel).GetField("_segmentCount", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(kernel));
         Assert.Equal(0, budget.CaptureStatistics().CommittedBytes);
+    }
+
+    [Fact]
+    public void RegionCheckedOrdinalExhaustionPrecedesAdmissionAndRetainsPriorStorage()
+    {
+        NativeMemoryBudget budget = new(65_536);
+        NativeRegionKernel kernel = new(64, NativeMemoryReturn.ToNativeMemory, budget);
+        FieldInfo count = typeof(NativeRegionKernel).GetField("_segmentCount", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        try
+        {
+            Local<int> prior = kernel.LeaseInitialized<int>(1, static writer => writer.Write(17));
+            long backing = budget.CaptureStatistics().CommittedBytes;
+            count.SetValue(kernel, int.MaxValue);
+            Assert.Equal(int.MaxValue, kernel.GetStatistics().FreshSegmentAllocationCount);
+            Assert.False(kernel.GetStatistics().HistoryOverflowed);
+            bool invoked = false;
+            Assert.Throws<OverflowException>(() => kernel.LeaseInitialized<byte>(8_192, writer => { invoked = true; writer.Fill(3); }));
+            Assert.False(invoked);
+            Assert.Equal(17, prior.Read(static view => view[0]));
+            NativeMemoryBudgetStatistics statistics = budget.CaptureStatistics();
+            Assert.Equal(backing, statistics.CommittedBytes);
+            Assert.Equal(0, statistics.ReservedBytes);
+            Assert.Equal(1, statistics.AllocationCount);
+            Assert.Equal(0, statistics.RejectedAllocationCount);
+            Assert.Equal(int.MaxValue, kernel.GetStatistics().FreshSegmentAllocationCount);
+        }
+        finally { count.SetValue(kernel, 1); kernel.Dispose(); }
+        Assert.Equal(0, kernel.GetDiagnosticSnapshot().RetainedSegmentCount);
+        Assert.Equal(1, count.GetValue(kernel));
+        Assert.Equal(0, budget.CaptureStatistics().CommittedBytes);
+    }
+
+    [Fact]
+    public void RegionFailedBackingAcquisitionDoesNotAdvanceAuthoritativeHistory()
+    {
+        NativeMemoryBudget budget = new(512);
+        NativeRegionKernel kernel = new(0, NativeMemoryReturn.ToNativeMemory, budget);
+        try
+        {
+            NativeMemoryTestHooks.FailNextAllocation();
+            Assert.Throws<NativeAllocationFailedException>(() => kernel.LeaseInitialized<int>(1, static writer => writer.Write(7)));
+            Assert.Equal(0, kernel.GetStatistics().FreshSegmentAllocationCount);
+            Assert.Equal(0, kernel.GetStatistics().SegmentCount);
+            Assert.False(kernel.GetStatistics().HistoryOverflowed);
+            Assert.Equal(0, budget.CaptureStatistics().CommittedBytes);
+            Assert.Equal(0, budget.CaptureStatistics().ReservedBytes);
+            _ = kernel.LeaseInitialized<int>(1, static writer => writer.Write(7));
+            Assert.Equal(1, kernel.GetStatistics().FreshSegmentAllocationCount);
+            Assert.Equal(1, budget.CaptureStatistics().AllocationCount);
+        }
+        finally { NativeMemoryTestHooks.Reset(); kernel.Dispose(); }
+        Assert.Equal(0, kernel.GetDiagnosticSnapshot().OutstandingNativeBytes);
+        Assert.False(kernel.GetDiagnosticSnapshot().HistoryOverflowed);
+        Assert.Equal(0, budget.CaptureStatistics().CommittedBytes);
+    }
+
+    [Theory]
+    [InlineData(NativeMemoryReturn.ToNativeMemory)]
+    [InlineData(NativeMemoryReturn.ToGarbageCollector)]
+    public void RegionAppendHistoryMatchesRealAcquisitionsAndTerminalBackingPolicy(NativeMemoryReturn policy)
+    {
+        NativeMemoryBudget budget = new(65_536);
+        NativeRegionKernel kernel = new(64, policy, budget);
+        try
+        {
+            Local<int> first = kernel.LeaseInitialized<int>(1, static writer => writer.Write(23));
+            Local<byte> second = kernel.LeaseInitialized<byte>(8_192, static writer => writer.Fill(3));
+            Assert.Equal(23, first.Read(static view => view[0]));
+            Assert.Equal(3, second.Read(static view => view[8_191]));
+            NativeOwnerStatistics statistics = kernel.GetStatistics();
+            Assert.Equal(2, statistics.SegmentCount);
+            Assert.Equal(2, statistics.FreshSegmentAllocationCount);
+            Assert.Equal(2, budget.CaptureStatistics().AllocationCount);
+            Assert.Equal(8_196, statistics.RequestedBytes);
+            Assert.False(statistics.HistoryOverflowed);
+            kernel.Dispose();
+            NativeOwnerDiagnosticSnapshot terminal = kernel.GetDiagnosticSnapshot();
+            Assert.Equal(NativeOwnerLifecycle.Disposed, terminal.Lifecycle);
+            Assert.Equal(0, terminal.AvailableSegmentCount);
+            Assert.False(terminal.HistoryOverflowed);
+            Assert.Equal(statistics.PeakOutstandingNativeBytes, terminal.PeakOutstandingNativeBytes);
+            bool detached = policy == NativeMemoryReturn.ToGarbageCollector;
+            Assert.Equal(detached ? 2 : 0, terminal.RetainedSegmentCount);
+            Assert.Equal(detached ? statistics.RetainedBytes : 0, terminal.OutstandingNativeBytes);
+            Assert.Equal(detached ? statistics.RetainedBytes : 0, terminal.DetachedNativeBytes);
+            Assert.Equal(2, typeof(NativeRegionKernel).GetField("_segmentCount", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(kernel));
+            Assert.Equal(detached ? 0 : 2, budget.CaptureStatistics().FreeCount);
+            bool refused = false;
+            try { _ = first.Read(static view => view[0]); }
+            catch (NativeAllocationDisposedException) { refused = true; }
+            Assert.True(refused);
+        }
+        finally { kernel.Dispose(); }
     }
 
     [Fact]

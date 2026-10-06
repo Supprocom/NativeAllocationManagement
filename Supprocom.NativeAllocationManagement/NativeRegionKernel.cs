@@ -23,10 +23,10 @@ internal sealed unsafe class NativeRegionKernel
     private long _requestedBytes;
     private long _retainedBytes;
     private long _peakRetainedBytes;
+    // Append-only lifetime count is also the non-reusing backing ordinal.
+    // Terminal cleanup clears the head, not this completed acquisition history.
     private int _segmentCount;
     private int _activeBorrowCount;
-    private long _freshSegmentAllocationCount;
-    private bool _historyOverflowed;
 
     internal NativeRegionKernel(
         nuint preAllocateBytes,
@@ -151,16 +151,17 @@ internal sealed unsafe class NativeRegionKernel
             _requestedBytes,
             _retainedBytes,
             RetiredBytes: 0,
-            _segmentCount,
+            _firstSegment == null ? 0 : _segmentCount,
             AvailableSegmentCount: GetAvailableSegmentCount(),
             RetiredSegmentCount: 0,
             TrimmedBytes: 0,
             TrimCallCount: 0,
-            _freshSegmentAllocationCount)
+            FreshSegmentAllocationCount: _segmentCount)
         {
             OwnerId = Id,
             Model = NativeOwnerModel.ThreadConfinedRegion,
-            HistoryOverflowed = _historyOverflowed,
+            // Checked int backing identity exhausts before long history can overflow.
+            HistoryOverflowed = false,
             OutstandingNativeBytes = _retainedBytes,
             DetachedNativeBytes = 0,
             PeakOutstandingNativeBytes = _peakRetainedBytes,
@@ -190,13 +191,13 @@ internal sealed unsafe class NativeRegionKernel
         }
         NativeOwnerDiagnosticSnapshot snapshot = new(
             _lifecycle, 0, 0, NativeMemoryAccounting.CurrentMetricsEpoch,
-            0, 0, 0, currentIndex, -1, _segmentCount,
+            0, 0, 0, currentIndex, -1, _firstSegment == null ? 0 : _segmentCount,
             _lifecycle == NativeOwnerLifecycle.Active ? GetAvailableSegmentCount() : 0,
             0, 0, 0, 0, 0, false)
         {
             OwnerId = Id,
             Model = NativeOwnerModel.ThreadConfinedRegion,
-            HistoryOverflowed = _historyOverflowed,
+            HistoryOverflowed = false,
             OutstandingNativeBytes = _retainedBytes,
             DetachedNativeBytes = _lifecycle == NativeOwnerLifecycle.Disposed
                 && _returnMemoryOnDispose == NativeMemoryReturn.ToGarbageCollector ? _retainedBytes : 0,
@@ -325,7 +326,6 @@ internal sealed unsafe class NativeRegionKernel
         _retainedBytes = checked(
             _retainedBytes + checked((long)segment->AllocationBytes));
         _segmentCount = segmentCount;
-        NativeOwnerHistory.Increment(ref _freshSegmentAllocationCount, ref _historyOverflowed);
         return segment;
     }
 
@@ -446,7 +446,6 @@ internal sealed unsafe class NativeRegionKernel
         _currentCursor = null;
         _currentEnd = null;
         _retainedBytes = 0;
-        _segmentCount = 0;
         while (segment != null)
         {
             RegionSegmentHeader* next = segment->Next;
