@@ -2408,6 +2408,7 @@ public sealed class PackageSmokeTests
             CommandResult run = await RunDotnetAsync($"run --project \"{project}\" --no-build --no-restore", root);
             Assert.True(run.ExitCode == 0, run.Output);
             Assert.Contains("generatedRuntimeModels=passed;seeds=3;projectReferences=0", run.Output, StringComparison.Ordinal);
+            Assert.Contains("generatedBoundaryModels=passed;seeds=4;families=3;tracing-modes=2", run.Output, StringComparison.Ordinal);
         }
         finally { DeleteConsumerRoot(root); }
     }
@@ -2453,6 +2454,7 @@ public sealed class PackageSmokeTests
             CommandResult execution = await RunProcessAsync(executable, string.Empty, root);
             Assert.True(execution.ExitCode == 0, execution.Output);
             Assert.Contains("generatedRuntimeModels=passed;seeds=3;projectReferences=0", execution.Output, StringComparison.Ordinal);
+            Assert.Contains("generatedBoundaryModels=passed;seeds=4;families=3;tracing-modes=2", execution.Output, StringComparison.Ordinal);
             Assert.Contains($"dynamicCodeSupported={!nativeAot}", execution.Output, StringComparison.Ordinal);
             Assert.Contains($"hostRid={rid}", execution.Output, StringComparison.Ordinal);
             _output.WriteLine($"publishedExecutable={executable}");
@@ -2465,9 +2467,16 @@ public sealed class PackageSmokeTests
 
     private static async Task WriteGeneratedRuntimeSourcesAsync(string root)
     {
+        string project = Path.Combine(root, "Consumer.csproj");
+        XDocument generatedProject = XDocument.Load(project);
+        // This fixture's actual SafeBuffer provider is the explicit unsafe
+        // registration boundary, not an escaping unsafe ordinary consumer.
+        generatedProject.Root!.Element("PropertyGroup")!.Add(new XElement("AllowUnsafeBlocks", "true"));
+        generatedProject.Save(project);
         string ownershipDiagnostics = string.Join(", ", new Analyzers.NativeAllocationAnalyzer().SupportedDiagnostics
             .Select(static descriptor => descriptor.Id).Order(StringComparer.Ordinal));
-        foreach (string source in new[] { "NativeGeneratedScenarios.cs", "NativeGeneratedScenarios.Concurrent.cs" })
+        foreach (string source in new[] { "NativeGeneratedScenarios.cs", "NativeGeneratedScenarios.Concurrent.cs",
+            "NativeGeneratedScenarios.StorageBoundaries.cs", "NativeGeneratedScenarios.MappedBoundaries.cs" })
         {
             string text = await File.ReadAllTextAsync(Path.Combine(RepositoryTestPaths.Root, "Supprocom.NativeAllocationManagement.Tests", source)).ConfigureAwait(false);
             // Adversarial stored aliases/forwarding test runtime guards with the
@@ -2497,6 +2506,16 @@ public sealed class PackageSmokeTests
                         await NativeGeneratedScenarios.RunBorrowReturnSchedulesAsync(seed, 16, System.Console.WriteLine);
                     }
                     System.Console.WriteLine("generatedRuntimeModels=passed;seeds=3;projectReferences=0");
+                    foreach (int seed in new[] { 23, 149, 541, 887 })
+                    {
+                        foreach (int traceCapacity in new[] { 0, 64 })
+                        {
+                            NativeGeneratedScenarios.RunSparsePageReuse(seed, 32, traceCapacity, System.Console.WriteLine);
+                            NativeGeneratedScenarios.RunTighterGrowthAtTheCap(seed, 32, traceCapacity, System.Console.WriteLine);
+                            NativeGeneratedScenarios.RunMappedCompositeFailures(seed, 16, traceCapacity, System.Console.WriteLine);
+                        }
+                    }
+                    System.Console.WriteLine("generatedBoundaryModels=passed;seeds=4;families=3;tracing-modes=2");
                     return 0;
                 }
             }
