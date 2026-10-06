@@ -8,6 +8,17 @@ pointer or borrowing authority. Keeping it does not retain native storage.
 The voxel NAM serializer copies these fields directly; it does not infer
 private counters from the smaller storage-statistics record.
 
+The [allocator-demo mapping contract](../conformance/voxel-allocator-diagnostic-contracts.json)
+enumerates every declared demo allocator field and links real mapping source,
+units, availability and executable proofs. These cover rooted/scoped and fast
+states, retirement, failed-drain quarantine, saturated history, detached backing,
+physical cleanup, and complete JSON round trips. A default `Unspecified` source
+has `Available=false` and all other fields `null`; measured model-specific zero
+remains zero. Old-generation quarantine does not mark its healthy replacement
+as quarantined. Detachment stays charged until actual finalization, not merely
+until logical disposal. This mapping inventory does not close the remaining
+demo report, configuration, OS, or complete public API/lifecycle inventory.
+
 Synchronized capture runs under the owner's lifecycle gate. Fast capture validates
 the construction thread and can observe terminal state without authorizing payload
 use. Entered synchronized callbacks and the fast lane can continue payload/cursor
