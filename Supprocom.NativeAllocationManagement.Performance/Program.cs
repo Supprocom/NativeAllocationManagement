@@ -78,6 +78,11 @@ internal static class Program
             return 0;
         }
 
+        if (args.Length != 0 && string.Equals(args[0], "--prepared-page-worker", StringComparison.Ordinal))
+        {
+            return NativePreparedPageMeasurement.RunCommand(args);
+        }
+
         if (args.Length != 0
             && args[0] is "--voxel-handoff" or "--voxel-handoff-worker")
         {
