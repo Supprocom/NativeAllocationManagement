@@ -1,5 +1,8 @@
 # Native backing budgets
 
+This page describes [unreleased 0.3.0 development](version-status.md), not the
+released 0.2.3 API or an accepted performance/compatibility claim.
+
 `NativeMemoryBudget` is a shared admission domain for complete NAM-requested
 native backing extents. It does not claim to bound process RSS, CLR object
 headers, external storage owned by another provider, or opaque native allocator
@@ -11,8 +14,13 @@ thread-confined pools/arenas/regions, and synchronized pools/arenas. Storage kee
 its domain through retention, retirement, quarantine and finalizable detachment.
 [Prepared fixed-shape page slots](prepared-pools.md) additionally reserve all
 pages before metadata acquisition and retain whole-page charges through slot
-reuse. Complete preparation across other shapes and shared-pointer controls are
-still required before the 0.3.0 boundary is eligible for release.
+reuse. [Prepared arenas](prepared-arenas.md) establish exact ordinary/scoped
+lane bounds; [immutable sharing](immutable-sharing.md) prepares fixed strong/weak
+binding banks. [Application admission](application-admission.md) admits declared
+payloads before production, and [typed layouts](typed-layouts.md) share one backing
+owner. These are implemented contracts, not accepted full-cost improvements.
+All essential diagnostic definitions, equivalent managed/previous-NAM performance
+and final source/package/target gates remain mandatory before release.
 
 Budgeted owner constructors require all arguments explicitly. Existing optional
 owner signatures and defaults are preserved. Their narrow RS0027 exceptions

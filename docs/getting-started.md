@@ -1,5 +1,12 @@
 # Getting started
 
+This guide follows **unreleased 0.3.0 development** on `main`. Install the
+released `0.2.3` package only for its own stable API boundary; the new budget,
+prepared, layout and smart-pointer APIs below do not all exist in that package.
+The [version and migration status](version-status.md) explains source/package
+separation and the required consumer rebuild. Use documentation at the matching
+release tag when consuming 0.2.3, not examples for the changed development tree.
+
 `Supprocom.NativeAllocationManagement` combines a native-memory runtime with a
 bundled Roslyn analyzer. Each allocator uses only the state checks that its contract
 needs. The analyzer checks ownership, bounded callbacks, destructive moves, and
@@ -13,7 +20,7 @@ The package targets .NET 10. The fast `NativePool<T>`, `NativeRegion`, and
 generation model for concurrent ownership. Their ordinary leases can store managed
 references through a separate root-aware path. Transferable leases remain unmanaged.
 
-Install version `0.2.3` with the .NET CLI:
+Install the released version `0.2.3` with the .NET CLI (not the development APIs):
 
 ```powershell
 dotnet add package Supprocom.NativeAllocationManagement --version 0.2.3
@@ -186,7 +193,8 @@ registering another finalizer. Copies of the previous value cannot access or
 release the new binding; they do not create another owner.
 
 This is a representation change in 0.3.0, not binary compatibility with the old
-class. Rebuild consumers. A nullable binding uses `binding.Value` after checking
+class. Rebuild consumers, including assemblies that store or pass transfer values.
+A nullable binding uses `binding.Value` after checking
 presence, or `binding?.Dispose()` at a proven cleanup boundary. Default values are
 uninitialized and reject use, including disposal. Passing the same source variable
 to concurrent moves requires caller synchronization; independent aliases compete
