@@ -19,6 +19,44 @@ public sealed class PackageSmokeTests
     }
 
     [Fact]
+    public async Task PackageTraceDiagnosticOracleMatchesEveryField()
+    {
+        PackageEvidence package = await GetPackageAsync();
+        WriteEvidence(package);
+        string consumerRoot = CreateConsumerRoot();
+        try
+        {
+            WriteConsumerProject(consumerRoot, package, excludeAnalyzer: false, suppressDiagnostics: false,
+                executable: true, treatWarningsAsErrors: true);
+            File.Copy(Path.Combine(FindRepositoryRoot(), "conformance", "native-trace-diagnostic-oracle.cs"),
+                Path.Combine(consumerRoot, "NativeTraceDiagnosticOracle.cs"));
+            await File.WriteAllTextAsync(Path.Combine(consumerRoot, "Program.cs"),
+                """
+                using Supprocom.NativeAllocationManagement.Conformance;
+
+                foreach (int capacity in new[] { 0, 2, 16 })
+                {
+                    NativeTraceDiagnosticOracle.RunDirect(capacity);
+                    NativeTraceDiagnosticOracle.RunReservation(capacity);
+                }
+                NativeTraceDiagnosticOracle.RunOwnerlessRefusal();
+                NativeTraceDiagnosticOracle.RunGenerationZero();
+                System.Console.WriteLine("trace-oracle schemas=1 fields=12 tracing-modes=3 paths=growth,reservation,ownerless,generation-zero cleanup=complete");
+                """);
+            string project = Path.Combine(consumerRoot, "Consumer.csproj");
+            CommandResult restore = await RunDotnetAsync(
+                $"restore \"{project}\" --nologo --force --no-cache --packages \"{Path.Combine(consumerRoot, ".packages")}\" --source \"{package.SourceDirectory}\"", consumerRoot);
+            Assert.True(restore.ExitCode == 0, restore.Output);
+            CommandResult build = await RunDotnetAsync($"build \"{project}\" --no-restore --nologo", consumerRoot);
+            Assert.True(build.ExitCode == 0, build.Output);
+            CommandResult run = await RunDotnetAsync($"run --project \"{project}\" --no-build --no-restore", consumerRoot);
+            Assert.True(run.ExitCode == 0, run.Output);
+            Assert.Contains("trace-oracle schemas=1 fields=12 tracing-modes=3 paths=growth,reservation,ownerless,generation-zero cleanup=complete", run.Output, StringComparison.Ordinal);
+        }
+        finally { DeleteConsumerRoot(consumerRoot); }
+    }
+
+    [Fact]
     public async Task PackageCapacityDiagnosticOracleMatchesEveryField()
     {
         PackageEvidence package = await GetPackageAsync();

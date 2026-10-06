@@ -26,6 +26,8 @@
     <Compile Include="..\conformance\native-admission-diagnostic-oracle.cs" Link="Conformance\NativeAdmissionDiagnosticOracle.cs" />
     <None Include="..\conformance\native-capacity-diagnostic-contracts.json" CopyToOutputDirectory="PreserveNewest" />
     <Compile Include="..\conformance\native-capacity-diagnostic-oracle.cs" Link="Conformance\NativeCapacityDiagnosticOracle.cs" />
+    <None Include="..\conformance\native-trace-diagnostic-contracts.json" CopyToOutputDirectory="PreserveNewest" />
+    <Compile Include="..\conformance\native-trace-diagnostic-oracle.cs" Link="Conformance\NativeTraceDiagnosticOracle.cs" />
     <ProjectReference Include="..\Supprocom.NativeAllocationManagement\Supprocom.NativeAllocationManagement.csproj" />
     <ProjectReference Include="..\Supprocom.NativeAllocationManagement.Analyzers\Supprocom.NativeAllocationManagement.Analyzers.csproj" />
     <ProjectReference Include="..\Supprocom.NativeAllocationManagement.CodeFixes\Supprocom.NativeAllocationManagement.CodeFixes.csproj" />
