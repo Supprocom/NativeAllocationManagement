@@ -44,6 +44,8 @@ complete examples, lifecycle rules, analyzer diagnostics, and cleanup requiremen
 
 The guide covers typed pools, fixed workspaces, lexical regions, reusable arenas,
 growable builders, cross-thread transfers, scoped recycling, statistics, and trimming.
+The [demo kernel-metrics contract](docs/demo-kernel-metrics.md) distinguishes
+actual cgroup sources and units from native budgets and unavailable observations.
 
 [getting-started]: https://github.com/Supprocom/NativeAllocationManagement/blob/main/docs/getting-started.md
 
