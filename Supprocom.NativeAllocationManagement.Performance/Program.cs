@@ -88,6 +88,11 @@ internal static class Program
             return NativeLayoutFullCostMeasurement.RunCommand(args);
         }
 
+        if (args.Length != 0 && string.Equals(args[0], "--ownership-full-cost-worker", StringComparison.Ordinal))
+        {
+            return NativeOwnershipFullCostMeasurement.RunCommand(args);
+        }
+
         if (args.Length != 0
             && args[0] is "--voxel-handoff" or "--voxel-handoff-worker")
         {
