@@ -11,7 +11,6 @@ public readonly ref struct Pooled<T>
     private readonly NativePoolKernel<T>? _kernel;
     private readonly int _slabIndex;
     private readonly long _token;
-    private readonly IntPtr _pointer;
     private readonly int _length;
     private readonly int _capacity;
 
@@ -19,14 +18,12 @@ public readonly ref struct Pooled<T>
         NativePoolKernel<T> kernel,
         int slabIndex,
         long token,
-        IntPtr pointer,
         int length,
         int capacity)
     {
         _kernel = kernel;
         _slabIndex = slabIndex;
         _token = token;
-        _pointer = pointer;
         _length = length;
         _capacity = capacity;
     }

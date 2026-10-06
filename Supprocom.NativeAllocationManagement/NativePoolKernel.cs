@@ -317,7 +317,6 @@ internal sealed unsafe class NativePoolKernel<T>
                 this,
                 slabIndex,
                 token,
-                slab.Pointer,
                 length,
                 slab.Capacity);
         }
