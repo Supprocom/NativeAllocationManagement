@@ -115,6 +115,15 @@ injection rather than manufacturing a scope or generation counter. This
 inventory does not claim packaged access to private members or close the
 remaining model, demo, API, performance and release inventory.
 
+The [private fast-bump inventory](../conformance/native-fast-bump-probe-contracts.json)
+separately covers both lifecycle and record observations on lexical regions and
+fast arenas. A default region reports `Uninitialized` without granting any
+owner or payload authority. Live bump ranges need no per-range record table,
+so their zero record counts remain real during initialized work and cleanup.
+Arena reset/recycle changes range epochs, not this invariant. The inventory
+also explicitly classifies the arena's internal initialization-kernel getter
+as an operation capability—not an omitted counter or serializable snapshot.
+
 See [prepared page diagnostics](prepared-pools.md#prepared-snapshot-inventory)
 for full retained capacity, historical occupancy, exhaustion, managed bank costs
 and sparse-page retention.
