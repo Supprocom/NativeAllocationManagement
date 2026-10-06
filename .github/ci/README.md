@@ -47,6 +47,13 @@ missing native disposition/manifest honestly; it does not invent a passing gate.
 Every retained file is explicitly enumerated into the PAX archive, including
 hidden files and dot-directories containing isolated consumer build/cache data.
 The manifest and retrieved archive must reconcile completely before acceptance.
+Abandoned Unix CLR diagnostic pipe endpoints are runtime protocol objects, not
+durable file payloads. Exact recognized paths with no live process are recorded
+with their real filesystem type/identity and observation time before exclusion
+from hashing and archive data; they are not deleted or assigned fabricated hashes.
+Active endpoints, links and unknown special files fail retention before hashing.
+Actual native fixtures exercise ordinary/hidden files, overwrite refusal and
+links on each platform, plus real dead/active/unknown FIFOs on Linux.
 Remote-dependent fixtures use a retained per-consumer NuGet.config: NAM maps only
 to the exact local candidate, while tooling/runtime prerequisites map to the
 official HTTPS feed. Inherited feeds are cleared and no restore-source URL is

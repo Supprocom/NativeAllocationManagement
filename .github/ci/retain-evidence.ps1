@@ -6,6 +6,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot 'durable-entries.ps1')
 $namRoot = [IO.Path]::GetFullPath($EvidenceRoot)
 $namUpload = [IO.Path]::GetFullPath($UploadRoot)
 $namSource = [IO.Path]::GetFullPath((Get-Location).Path)
@@ -35,7 +36,8 @@ if (Test-Path -LiteralPath $namRetention) { throw 'An existing retention boundar
 $namManifest = Join-Path $namRoot 'RETENTION-MANIFEST.tsv'
 if (Test-Path -LiteralPath $namManifest) { throw 'An existing retention manifest must not be overwritten.' }
 $namEntries = [Collections.Generic.List[string]]::new()
-foreach ($namFile in Get-ChildItem -LiteralPath $namRoot -Force -Recurse | Sort-Object FullName) {
+$namDurableEntries = @(Get-NamDurableEntries -EvidenceRoot $namRoot -ObservationName 'retention-volatile-endpoints.json')
+foreach ($namFile in $namDurableEntries) {
     if (($namFile.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Retained payloads must not contain links.' }
     if ($namFile.PSIsContainer) { continue }
     $namRelative = [IO.Path]::GetRelativePath($namRoot, $namFile.FullName).Replace('\', '/')
@@ -43,6 +45,7 @@ foreach ($namFile in Get-ChildItem -LiteralPath $namRoot -Force -Recurse | Sort-
     $namEntries.Add("$namRelative`t$($namFile.Length)`t$((Get-FileHash -LiteralPath $namFile.FullName -Algorithm SHA256).Hash)")
 }
 [IO.File]::WriteAllLines($namManifest, $namEntries)
+$namDurableEntries += Get-Item -LiteralPath $namManifest -Force
 [IO.Directory]::CreateDirectory($namUpload) | Out-Null
 $namBundle = Join-Path $namUpload "nam-$ExpectedRid.tar.gz"
 $namStream = [IO.File]::Create($namBundle)
@@ -51,7 +54,7 @@ try {
     try {
         $namWriter = [Formats.Tar.TarWriter]::new($namGzip, [Formats.Tar.TarEntryFormat]::Pax, $true)
         try {
-            foreach ($namFile in Get-ChildItem -LiteralPath $namRoot -Force -Recurse | Sort-Object FullName) {
+            foreach ($namFile in $namDurableEntries) {
                 if (($namFile.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Retained payloads must not contain links.' }
                 $namRelative = [IO.Path]::GetRelativePath($namRoot, $namFile.FullName).Replace('\', '/')
                 $namWriter.WriteEntry($namFile.FullName, $namRelative)

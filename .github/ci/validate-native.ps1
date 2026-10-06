@@ -6,6 +6,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'validation-contract.ps1')
+. (Join-Path $PSScriptRoot 'durable-entries.ps1')
 $namRoot = [IO.Path]::GetFullPath($EvidenceRoot)
 $namSource = [IO.Path]::GetFullPath((Get-Location).Path)
 if ([string]::Equals($namRoot, $namSource, [StringComparison]::OrdinalIgnoreCase) -or
@@ -142,6 +143,8 @@ try {
         [IO.File]::Copy('/proc/cpuinfo', (Join-Path $namRoot 'processor-identity.txt'))
         [IO.File]::Copy('/etc/os-release', (Join-Path $namRoot 'os-release.txt'))
     }
+    Invoke-NamCommand durable-entry-contract pwsh @('-NoProfile', '-File', (Join-Path $PSScriptRoot 'test-durable-entries.ps1'),
+        '-EvidenceRoot', (Join-Path $namRoot 'durable-entry-fixtures'), '-ScratchRoot', ($namRoot + '-volatile-fixtures'))
     $namSolution = 'Supprocom.NativeAllocationManagement.slnx'
     $namTests = 'Supprocom.NativeAllocationManagement.Tests/Supprocom.NativeAllocationManagement.Tests.csproj'
     Invoke-NamCommand restore dotnet @('restore', $namSolution, '--force', '--no-cache', '--nologo', '-v', 'minimal')
@@ -175,7 +178,7 @@ try {
     $namManifest = Join-Path $namRoot 'MANIFEST.tsv'
     if (Test-Path -LiteralPath $namManifest) { throw 'An existing evidence manifest must not be overwritten.' }
     $namEntries = [Collections.Generic.List[string]]::new()
-    foreach ($namFile in Get-ChildItem -LiteralPath $namRoot -Force -Recurse | Sort-Object FullName) {
+    foreach ($namFile in Get-NamDurableEntries -EvidenceRoot $namRoot -ObservationName 'validation-volatile-endpoints.json') {
         if (($namFile.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Evidence payload must not contain file links.' }
         if ($namFile.PSIsContainer) { continue }
         $namRelative = [IO.Path]::GetRelativePath($namRoot, $namFile.FullName).Replace('\', '/')
