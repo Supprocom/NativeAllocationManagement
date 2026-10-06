@@ -33,6 +33,7 @@
     <None Include="..\conformance\native-fast-bump-probe-contracts.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\conformance\native-concurrent-arena-observation-contracts.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\conformance\native-concurrent-wrapper-probe-contracts.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\conformance\native-exception-diagnostic-contracts.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\conformance\voxel-allocator-diagnostic-contracts.json" CopyToOutputDirectory="PreserveNewest" />
     <Compile Include="..\conformance\native-owner-diagnostic-oracle.cs" Link="Conformance\NativeOwnerDiagnosticOracle.cs" />
     <None Include="..\conformance\native-layout-diagnostic-contracts.json" CopyToOutputDirectory="PreserveNewest" />

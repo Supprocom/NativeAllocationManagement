@@ -1,0 +1,351 @@
+{
+  "completeReleaseInventory": false,
+  "distinctPropertyCount": 16,
+  "scope": "All runtime-exported Exception-derived types and every NAM-declared public instance diagnostic property including inherited NAM fields; exact compiled metadata set equality without suffix filtering.",
+  "unreviewedScope": "CLR-inherited Exception diagnostics, other API/lifecycle/private/demo roles, required complete useful-work performance corrections and final native/shipping/Review gates remain explicit distinct work. This registry is not the complete release inventory.",
+  "schemas": [
+    {
+      "type": "Supprocom.NativeAllocationManagement.NativeAllocationException",
+      "eventProof": "NativeExceptionDiagnosticContractTests.ReturnedDecisionPreservesSourceIdentityAfterRolloverAndDisposal",
+      "properties": [
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.OwnerKind",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.Generation",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.CurrentGeneration",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.Operation",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.ActiveOperationCount",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.AllocationId",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.CurrentLifecycle",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.OwnerWideLeaseReturnCount",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.OwnerWideBusyGenerationCount"
+      ]
+    },
+    {
+      "type": "Supprocom.NativeAllocationManagement.NativeAllocationUninitializedException",
+      "eventProof": "NativeExceptionDiagnosticContractTests.DefaultHandleContainsActualAbsenceNotInventedOwnerState",
+      "properties": [
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.OwnerKind",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.Generation",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.CurrentGeneration",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.Operation",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.ActiveOperationCount",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.AllocationId",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.CurrentLifecycle",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.OwnerWideLeaseReturnCount",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.OwnerWideBusyGenerationCount"
+      ]
+    },
+    {
+      "type": "Supprocom.NativeAllocationManagement.NativeAllocationReturnedException",
+      "eventProof": "NativeExceptionDiagnosticContractTests.ReturnedDecisionPreservesSourceIdentityAfterRolloverAndDisposal",
+      "properties": [
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.OwnerKind",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.Generation",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.CurrentGeneration",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.Operation",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.ActiveOperationCount",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.AllocationId",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.CurrentLifecycle",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.OwnerWideLeaseReturnCount",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.OwnerWideBusyGenerationCount"
+      ]
+    },
+    {
+      "type": "Supprocom.NativeAllocationManagement.NativeAllocationDisposedException",
+      "eventProof": "NativeExceptionDiagnosticContractTests.ReturnedDecisionPreservesSourceIdentityAfterRolloverAndDisposal",
+      "properties": [
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.OwnerKind",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.Generation",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.CurrentGeneration",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.Operation",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.ActiveOperationCount",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.AllocationId",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.CurrentLifecycle",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.OwnerWideLeaseReturnCount",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.OwnerWideBusyGenerationCount"
+      ]
+    },
+    {
+      "type": "Supprocom.NativeAllocationManagement.NativeAllocationInUseException",
+      "eventProof": "NativeExceptionDiagnosticContractTests.NestedBorrowRefusalReportsEnteredOperationsNotLeaseCount",
+      "properties": [
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.OwnerKind",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.Generation",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.CurrentGeneration",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.Operation",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.ActiveOperationCount",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.AllocationId",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.CurrentLifecycle",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.OwnerWideLeaseReturnCount",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.OwnerWideBusyGenerationCount"
+      ]
+    },
+    {
+      "type": "Supprocom.NativeAllocationManagement.NativeAllocationStateException",
+      "eventProof": "NativeExceptionDiagnosticContractTests.UnleasedAndAlreadyActiveFailuresDoNotChangeTheObservedDecision",
+      "properties": [
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.OwnerKind",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.Generation",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.CurrentGeneration",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.Operation",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.ActiveOperationCount",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.AllocationId",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.CurrentLifecycle",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.OwnerWideLeaseReturnCount",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.OwnerWideBusyGenerationCount"
+      ]
+    },
+    {
+      "type": "Supprocom.NativeAllocationManagement.NativeAllocationQuarantinedException",
+      "eventProof": "NativeExceptionDiagnosticContractTests.QuarantineDecisionNamesActualEndedGenerationSegmentAndFailureBoundary",
+      "properties": [
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.OwnerKind",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.Generation",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.CurrentGeneration",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.Operation",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.ActiveOperationCount",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.AllocationId",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.CurrentLifecycle",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.OwnerWideLeaseReturnCount",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.OwnerWideBusyGenerationCount",
+        "Supprocom.NativeAllocationManagement.NativeAllocationQuarantinedException.SegmentOrdinal",
+        "Supprocom.NativeAllocationManagement.NativeAllocationQuarantinedException.Boundary"
+      ]
+    },
+    {
+      "type": "Supprocom.NativeAllocationManagement.NativeAllocationFailedException",
+      "eventProof": "NativeExceptionDiagnosticContractTests.BackendFailureReportsRequestedExtentWithoutInventingPublishedAllocation",
+      "properties": [
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.OwnerKind",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.Generation",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.CurrentGeneration",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.Operation",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.ActiveOperationCount",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.AllocationId",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.CurrentLifecycle",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.OwnerWideLeaseReturnCount",
+        "Supprocom.NativeAllocationManagement.NativeAllocationException.OwnerWideBusyGenerationCount",
+        "Supprocom.NativeAllocationManagement.NativeAllocationFailedException.RequestedBytes"
+      ]
+    },
+    {
+      "type": "Supprocom.NativeAllocationManagement.NativeMemoryBudgetExceededException",
+      "eventProof": "NativeExceptionDiagnosticContractTests.BudgetRefusalSubtractsActualPendingAndOwnedExtentsAndStaysImmutable",
+      "properties": [
+        "Supprocom.NativeAllocationManagement.NativeMemoryBudgetExceededException.BudgetId",
+        "Supprocom.NativeAllocationManagement.NativeMemoryBudgetExceededException.CapacityBytes",
+        "Supprocom.NativeAllocationManagement.NativeMemoryBudgetExceededException.RequestedBytes",
+        "Supprocom.NativeAllocationManagement.NativeMemoryBudgetExceededException.AvailableBytes"
+      ]
+    }
+  ],
+  "fields": [
+    {
+      "key": "Supprocom.NativeAllocationManagement.NativeAllocationException.OwnerKind",
+      "valueType": "System.String",
+      "definition": "Owner or handle type description, not a stable owner identifier or address.",
+      "units": "type description",
+      "consistency": "Immutable factory-supplied failure-decision values, captured under the applicable existing owner/domain gate or thread-affine boundary; not a cross-owner or later live snapshot.",
+      "resetPolicy": "Captured exception lifetime; property observation never resets, acquires authority, changes owner state or frees storage.",
+      "overflow": "Existing checked/saturating producer rules apply before the decision; property reads perform no arithmetic or wrapping. Valid zero identity/state values remain model-specific.",
+      "availability": "Always present as supplied by this exact decision factory; zero is not proof that an unsampled aggregate was measured. CLR inherited fields are a separate domain.",
+      "implementation": "NativeAllocationExceptions.cs#OwnerKind = ownerKind;",
+      "positiveProof": "NativeExceptionDiagnosticContractTests.ReturnedDecisionPreservesSourceIdentityAfterRolloverAndDisposal",
+      "negativeProof": "NativeExceptionDiagnosticContractTests.DefaultHandleContainsActualAbsenceNotInventedOwnerState"
+    },
+    {
+      "key": "Supprocom.NativeAllocationManagement.NativeAllocationException.Generation",
+      "valueType": "System.Int64",
+      "definition": "Attempted generation or fast-pool binding token; owner-wide refusal uses its first busy generation. Zero is a valid initial generation and default absence, not unavailable.",
+      "units": "generation or binding identity",
+      "consistency": "Immutable factory-supplied failure-decision values, captured under the applicable existing owner/domain gate or thread-affine boundary; not a cross-owner or later live snapshot.",
+      "resetPolicy": "Captured exception lifetime; property observation never resets, acquires authority, changes owner state or frees storage.",
+      "overflow": "Existing checked/saturating producer rules apply before the decision; property reads perform no arithmetic or wrapping. Valid zero identity/state values remain model-specific.",
+      "availability": "Always present as supplied by this exact decision factory; zero is not proof that an unsampled aggregate was measured. CLR inherited fields are a separate domain.",
+      "implementation": "NativeAllocationExceptions.cs#Generation = generation;",
+      "positiveProof": "NativeExceptionDiagnosticContractTests.ReturnedDecisionPreservesSourceIdentityAfterRolloverAndDisposal",
+      "negativeProof": "NativeExceptionDiagnosticContractTests.DefaultHandleContainsActualAbsenceNotInventedOwnerState"
+    },
+    {
+      "key": "Supprocom.NativeAllocationManagement.NativeAllocationException.CurrentGeneration",
+      "valueType": "System.Int64",
+      "definition": "Owner current published generation or fast-pool current binding token at refusal. It does not update when that owner later advances.",
+      "units": "generation or binding identity",
+      "consistency": "Immutable factory-supplied failure-decision values, captured under the applicable existing owner/domain gate or thread-affine boundary; not a cross-owner or later live snapshot.",
+      "resetPolicy": "Captured exception lifetime; property observation never resets, acquires authority, changes owner state or frees storage.",
+      "overflow": "Existing checked/saturating producer rules apply before the decision; property reads perform no arithmetic or wrapping. Valid zero identity/state values remain model-specific.",
+      "availability": "Always present as supplied by this exact decision factory; zero is not proof that an unsampled aggregate was measured. CLR inherited fields are a separate domain.",
+      "implementation": "NativeAllocationExceptions.cs#CurrentGeneration = currentGeneration;",
+      "positiveProof": "NativeExceptionDiagnosticContractTests.ReturnedDecisionPreservesSourceIdentityAfterRolloverAndDisposal",
+      "negativeProof": "NativeExceptionDiagnosticContractTests.UnleasedAndAlreadyActiveFailuresDoNotChangeTheObservedDecision"
+    },
+    {
+      "key": "Supprocom.NativeAllocationManagement.NativeAllocationException.Operation",
+      "valueType": "System.String",
+      "definition": "Actual runtime boundary name that failed; wrapper names and kernel boundary names are not interchangeable.",
+      "units": "operation name",
+      "consistency": "Immutable factory-supplied failure-decision values, captured under the applicable existing owner/domain gate or thread-affine boundary; not a cross-owner or later live snapshot.",
+      "resetPolicy": "Captured exception lifetime; property observation never resets, acquires authority, changes owner state or frees storage.",
+      "overflow": "Existing checked/saturating producer rules apply before the decision; property reads perform no arithmetic or wrapping. Valid zero identity/state values remain model-specific.",
+      "availability": "Always present as supplied by this exact decision factory; zero is not proof that an unsampled aggregate was measured. CLR inherited fields are a separate domain.",
+      "implementation": "NativeAllocationExceptions.cs#Operation = operation;",
+      "positiveProof": "NativeExceptionDiagnosticContractTests.QuarantineDecisionNamesActualEndedGenerationSegmentAndFailureBoundary",
+      "negativeProof": "NativeExceptionDiagnosticContractTests.DefaultHandleContainsActualAbsenceNotInventedOwnerState"
+    },
+    {
+      "key": "Supprocom.NativeAllocationManagement.NativeAllocationException.ActiveOperationCount",
+      "valueType": "System.Int32",
+      "definition": "Active operations supplied by this decision factory. Owner-wide refusal counts all entered operations; fast lexical owner may include initialization. This is not total live handles or a universal process gauge.",
+      "units": "entered operations at this decision",
+      "consistency": "Immutable factory-supplied failure-decision values, captured under the applicable existing owner/domain gate or thread-affine boundary; not a cross-owner or later live snapshot.",
+      "resetPolicy": "Captured exception lifetime; property observation never resets, acquires authority, changes owner state or frees storage.",
+      "overflow": "Existing checked/saturating producer rules apply before the decision; property reads perform no arithmetic or wrapping. Valid zero identity/state values remain model-specific.",
+      "availability": "Always present as supplied by this exact decision factory; zero is not proof that an unsampled aggregate was measured. CLR inherited fields are a separate domain.",
+      "implementation": "NativeAllocationExceptions.cs#ActiveOperationCount = activeOperationCount;",
+      "positiveProof": "NativeExceptionDiagnosticContractTests.NestedBorrowRefusalReportsEnteredOperationsNotLeaseCount",
+      "negativeProof": "NativeExceptionDiagnosticContractTests.UnpublishedInitializerIsARealOwnerWideReturnObligationNotABorrow"
+    },
+    {
+      "key": "Supprocom.NativeAllocationManagement.NativeAllocationException.AllocationId",
+      "valueType": "System.Int64",
+      "definition": "Derived logical allocation identity supplied at failure, or zero for owner-only/default/unpublished failures. Fast pool stale token uses slab index, which may be zero; not a universal unique owner ID.",
+      "units": "allocation identity or model-specific index",
+      "consistency": "Immutable factory-supplied failure-decision values, captured under the applicable existing owner/domain gate or thread-affine boundary; not a cross-owner or later live snapshot.",
+      "resetPolicy": "Captured exception lifetime; property observation never resets, acquires authority, changes owner state or frees storage.",
+      "overflow": "Existing checked/saturating producer rules apply before the decision; property reads perform no arithmetic or wrapping. Valid zero identity/state values remain model-specific.",
+      "availability": "Always present as supplied by this exact decision factory; zero is not proof that an unsampled aggregate was measured. CLR inherited fields are a separate domain.",
+      "implementation": "NativeAllocationExceptions.cs#AllocationId = allocationId;",
+      "positiveProof": "NativeExceptionDiagnosticContractTests.ReturnedDecisionPreservesSourceIdentityAfterRolloverAndDisposal",
+      "negativeProof": "NativeExceptionDiagnosticContractTests.BackendFailureReportsRequestedExtentWithoutInventingPublishedAllocation"
+    },
+    {
+      "key": "Supprocom.NativeAllocationManagement.NativeAllocationException.CurrentLifecycle",
+      "valueType": "Supprocom.NativeAllocationManagement.NativeOwnerLifecycle",
+      "definition": "Actual lifecycle supplied at refusal, preserved even if cleanup later disposes the owner. Uninitialized is a genuine default-value state, not active empty storage.",
+      "units": "owner lifecycle enum",
+      "consistency": "Immutable factory-supplied failure-decision values, captured under the applicable existing owner/domain gate or thread-affine boundary; not a cross-owner or later live snapshot.",
+      "resetPolicy": "Captured exception lifetime; property observation never resets, acquires authority, changes owner state or frees storage.",
+      "overflow": "Existing checked/saturating producer rules apply before the decision; property reads perform no arithmetic or wrapping. Valid zero identity/state values remain model-specific.",
+      "availability": "Always present as supplied by this exact decision factory; zero is not proof that an unsampled aggregate was measured. CLR inherited fields are a separate domain.",
+      "implementation": "NativeAllocationExceptions.cs#CurrentLifecycle = currentLifecycle;",
+      "positiveProof": "NativeExceptionDiagnosticContractTests.UnleasedAndAlreadyActiveFailuresDoNotChangeTheObservedDecision",
+      "negativeProof": "NativeExceptionDiagnosticContractTests.DefaultHandleContainsActualAbsenceNotInventedOwnerState"
+    },
+    {
+      "key": "Supprocom.NativeAllocationManagement.NativeAllocationException.OwnerWideLeaseReturnCount",
+      "valueType": "System.Int32",
+      "definition": "Owner-wide factory counts in-progress individual lease returns plus unpublished initialization obligations; zero on factories that do not request that aggregate. Not a lifetime return history.",
+      "units": "owner-wide return or initializer tokens",
+      "consistency": "Immutable factory-supplied failure-decision values, captured under the applicable existing owner/domain gate or thread-affine boundary; not a cross-owner or later live snapshot.",
+      "resetPolicy": "Captured exception lifetime; property observation never resets, acquires authority, changes owner state or frees storage.",
+      "overflow": "Existing checked/saturating producer rules apply before the decision; property reads perform no arithmetic or wrapping. Valid zero identity/state values remain model-specific.",
+      "availability": "Always present as supplied by this exact decision factory; zero is not proof that an unsampled aggregate was measured. CLR inherited fields are a separate domain.",
+      "implementation": "NativeAllocationExceptions.cs#OwnerWideLeaseReturnCount = ownerWideLeaseReturnCount;",
+      "positiveProof": "NativeExceptionDiagnosticContractTests.UnpublishedInitializerIsARealOwnerWideReturnObligationNotABorrow",
+      "negativeProof": "NativeExceptionDiagnosticContractTests.NestedBorrowRefusalReportsEnteredOperationsNotLeaseCount"
+    },
+    {
+      "key": "Supprocom.NativeAllocationManagement.NativeAllocationException.OwnerWideBusyGenerationCount",
+      "valueType": "System.Int32",
+      "definition": "Owner-wide factory counts generations containing operations, returns or initialization. Not operation count: two nested operations in one generation yield one busy generation. Zero on factories without an owner-wide aggregation.",
+      "units": "busy generations",
+      "consistency": "Immutable factory-supplied failure-decision values, captured under the applicable existing owner/domain gate or thread-affine boundary; not a cross-owner or later live snapshot.",
+      "resetPolicy": "Captured exception lifetime; property observation never resets, acquires authority, changes owner state or frees storage.",
+      "overflow": "Existing checked/saturating producer rules apply before the decision; property reads perform no arithmetic or wrapping. Valid zero identity/state values remain model-specific.",
+      "availability": "Always present as supplied by this exact decision factory; zero is not proof that an unsampled aggregate was measured. CLR inherited fields are a separate domain.",
+      "implementation": "NativeAllocationExceptions.cs#OwnerWideBusyGenerationCount = ownerWideBusyGenerationCount;",
+      "positiveProof": "NativeExceptionDiagnosticContractTests.NestedBorrowRefusalReportsEnteredOperationsNotLeaseCount",
+      "negativeProof": "NativeExceptionDiagnosticContractTests.UnleasedAndAlreadyActiveFailuresDoNotChangeTheObservedDecision"
+    },
+    {
+      "key": "Supprocom.NativeAllocationManagement.NativeAllocationQuarantinedException.SegmentOrdinal",
+      "valueType": "System.Int64",
+      "definition": "Physical segment acquisition ordinal reported at actual cleanup failure; zero where no physical segment is identified. It is not the logical allocation ID or a reusable-bank index.",
+      "units": "physical segment ordinal",
+      "consistency": "Immutable factory-supplied failure-decision values, captured under the applicable existing owner/domain gate or thread-affine boundary; not a cross-owner or later live snapshot.",
+      "resetPolicy": "Captured exception lifetime; property observation never resets, acquires authority, changes owner state or frees storage.",
+      "overflow": "Existing checked/saturating producer rules apply before the decision; property reads perform no arithmetic or wrapping. Valid zero identity/state values remain model-specific.",
+      "availability": "Always present as supplied by this exact decision factory; zero is not proof that an unsampled aggregate was measured. CLR inherited fields are a separate domain.",
+      "implementation": "NativeAllocationExceptions.cs#SegmentOrdinal = segmentOrdinal;",
+      "positiveProof": "NativeExceptionDiagnosticContractTests.QuarantineDecisionNamesActualEndedGenerationSegmentAndFailureBoundary",
+      "negativeProof": "NativeExceptionDiagnosticContractTests.QuarantineDecisionNamesActualEndedGenerationSegmentAndFailureBoundary"
+    },
+    {
+      "key": "Supprocom.NativeAllocationManagement.NativeAllocationQuarantinedException.Boundary",
+      "valueType": "System.String",
+      "definition": "Exact cleanup boundary that failed while ending a generation; quarantine preserves the charge and forbids reuse. Detached failure has a distinct allocator-ownership disposition.",
+      "units": "cleanup boundary name",
+      "consistency": "Immutable factory-supplied failure-decision values, captured under the applicable existing owner/domain gate or thread-affine boundary; not a cross-owner or later live snapshot.",
+      "resetPolicy": "Captured exception lifetime; property observation never resets, acquires authority, changes owner state or frees storage.",
+      "overflow": "Existing checked/saturating producer rules apply before the decision; property reads perform no arithmetic or wrapping. Valid zero identity/state values remain model-specific.",
+      "availability": "Always present as supplied by this exact decision factory; zero is not proof that an unsampled aggregate was measured. CLR inherited fields are a separate domain.",
+      "implementation": "NativeAllocationExceptions.cs#Boundary = boundary;",
+      "positiveProof": "NativeExceptionDiagnosticContractTests.QuarantineDecisionNamesActualEndedGenerationSegmentAndFailureBoundary",
+      "negativeProof": "NativeExceptionDiagnosticContractTests.QuarantineDecisionNamesActualEndedGenerationSegmentAndFailureBoundary"
+    },
+    {
+      "key": "Supprocom.NativeAllocationManagement.NativeAllocationFailedException.RequestedBytes",
+      "valueType": "System.UIntPtr",
+      "definition": "Exact byte request reported by the failing backend boundary. No allocation identity is invented when publication never occurred; preserved admission is not an OS guarantee.",
+      "units": "requested bytes",
+      "consistency": "Immutable factory-supplied failure-decision values, captured under the applicable existing owner/domain gate or thread-affine boundary; not a cross-owner or later live snapshot.",
+      "resetPolicy": "Captured exception lifetime; property observation never resets, acquires authority, changes owner state or frees storage.",
+      "overflow": "Existing checked/saturating producer rules apply before the decision; property reads perform no arithmetic or wrapping. Valid zero identity/state values remain model-specific.",
+      "availability": "Always present as supplied by this exact decision factory; zero is not proof that an unsampled aggregate was measured. CLR inherited fields are a separate domain.",
+      "implementation": "NativeAllocationExceptions.cs#RequestedBytes = requestedBytes;",
+      "positiveProof": "NativeExceptionDiagnosticContractTests.BackendFailureReportsRequestedExtentWithoutInventingPublishedAllocation",
+      "negativeProof": "NativeExceptionDiagnosticContractTests.BackendFailureReportsRequestedExtentWithoutInventingPublishedAllocation"
+    },
+    {
+      "key": "Supprocom.NativeAllocationManagement.NativeMemoryBudgetExceededException.BudgetId",
+      "valueType": "System.Int64",
+      "definition": "Stable process-local ID of the domain that refused the extent, captured at that decision. Not the owner ID or a native address.",
+      "units": "budget identity",
+      "consistency": "Immutable factory-supplied failure-decision values, captured under the applicable existing owner/domain gate or thread-affine boundary; not a cross-owner or later live snapshot.",
+      "resetPolicy": "Captured exception lifetime; property observation never resets, acquires authority, changes owner state or frees storage.",
+      "overflow": "Existing checked/saturating producer rules apply before the decision; property reads perform no arithmetic or wrapping. Valid zero identity/state values remain model-specific.",
+      "availability": "Always present as supplied by this exact decision factory; zero is not proof that an unsampled aggregate was measured. CLR inherited fields are a separate domain.",
+      "implementation": "NativeMemoryBudget.cs#BudgetId = budgetId;",
+      "positiveProof": "NativeExceptionDiagnosticContractTests.BudgetRefusalSubtractsActualPendingAndOwnedExtentsAndStaysImmutable",
+      "negativeProof": "NativeExceptionDiagnosticContractTests.BudgetRefusalSubtractsActualPendingAndOwnedExtentsAndStaysImmutable"
+    },
+    {
+      "key": "Supprocom.NativeAllocationManagement.NativeMemoryBudgetExceededException.CapacityBytes",
+      "valueType": "System.Int64",
+      "definition": "Immutable complete NAM-requested backing extent ceiling; excludes borrowed external backing, CLR metadata and process resident memory.",
+      "units": "native extent bytes",
+      "consistency": "Immutable factory-supplied failure-decision values, captured under the applicable existing owner/domain gate or thread-affine boundary; not a cross-owner or later live snapshot.",
+      "resetPolicy": "Captured exception lifetime; property observation never resets, acquires authority, changes owner state or frees storage.",
+      "overflow": "Existing checked/saturating producer rules apply before the decision; property reads perform no arithmetic or wrapping. Valid zero identity/state values remain model-specific.",
+      "availability": "Always present as supplied by this exact decision factory; zero is not proof that an unsampled aggregate was measured. CLR inherited fields are a separate domain.",
+      "implementation": "NativeMemoryBudget.cs#CapacityBytes = capacityBytes;",
+      "positiveProof": "NativeExceptionDiagnosticContractTests.BudgetRefusalSubtractsActualPendingAndOwnedExtentsAndStaysImmutable",
+      "negativeProof": "NativeExceptionDiagnosticContractTests.BudgetRefusalSubtractsActualPendingAndOwnedExtentsAndStaysImmutable"
+    },
+    {
+      "key": "Supprocom.NativeAllocationManagement.NativeMemoryBudgetExceededException.RequestedBytes",
+      "valueType": "System.UIntPtr",
+      "definition": "Complete rejected backing extent including the chosen growth strategy's admitted overlap, not logical payload/slice demand.",
+      "units": "requested extent bytes",
+      "consistency": "Immutable factory-supplied failure-decision values, captured under the applicable existing owner/domain gate or thread-affine boundary; not a cross-owner or later live snapshot.",
+      "resetPolicy": "Captured exception lifetime; property observation never resets, acquires authority, changes owner state or frees storage.",
+      "overflow": "Existing checked/saturating producer rules apply before the decision; property reads perform no arithmetic or wrapping. Valid zero identity/state values remain model-specific.",
+      "availability": "Always present as supplied by this exact decision factory; zero is not proof that an unsampled aggregate was measured. CLR inherited fields are a separate domain.",
+      "implementation": "NativeMemoryBudget.cs#RequestedBytes = requestedBytes;",
+      "positiveProof": "NativeExceptionDiagnosticContractTests.BudgetRefusalSubtractsActualPendingAndOwnedExtentsAndStaysImmutable",
+      "negativeProof": "NativeExceptionDiagnosticContractTests.BudgetRefusalSubtractsActualPendingAndOwnedExtentsAndStaysImmutable"
+    },
+    {
+      "key": "Supprocom.NativeAllocationManagement.NativeMemoryBudgetExceededException.AvailableBytes",
+      "valueType": "System.Int64",
+      "definition": "Capacity minus simultaneously committed and reserved complete extents at the rejected decision. Stored after the budget gate; does not become current availability after cleanup and is not RSS/free OS storage.",
+      "units": "remaining admission bytes",
+      "consistency": "Immutable factory-supplied failure-decision values, captured under the applicable existing owner/domain gate or thread-affine boundary; not a cross-owner or later live snapshot.",
+      "resetPolicy": "Captured exception lifetime; property observation never resets, acquires authority, changes owner state or frees storage.",
+      "overflow": "Existing checked/saturating producer rules apply before the decision; property reads perform no arithmetic or wrapping. Valid zero identity/state values remain model-specific.",
+      "availability": "Always present as supplied by this exact decision factory; zero is not proof that an unsampled aggregate was measured. CLR inherited fields are a separate domain.",
+      "implementation": "NativeMemoryBudget.cs#AvailableBytes = availableBytes;",
+      "positiveProof": "NativeExceptionDiagnosticContractTests.BudgetRefusalSubtractsActualPendingAndOwnedExtentsAndStaysImmutable",
+      "negativeProof": "NativeExceptionDiagnosticContractTests.BudgetRefusalSubtractsActualPendingAndOwnedExtentsAndStaysImmutable"
+    }
+  ]
+}
