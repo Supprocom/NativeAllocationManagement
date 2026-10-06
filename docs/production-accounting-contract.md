@@ -63,3 +63,19 @@ advance concurrently, so reconciliation requires a quiescent measurement boundar
 Neither this implementation nor structural zero-allocation tests prove comparative
 advantage. Startup, shared fallback, snapshots, enabled/disabled tracing and final
 old-NAM/expert-managed comparisons remain required release evidence.
+
+The maintained [20-field process contract](../conformance/native-process-diagnostic-contracts.json)
+records each field's units, scope, update/derivation source, consistency, reset,
+overflow and linked positive/fault/cleanup proofs. Reflection checks require exact
+agreement with the published schema and independently declared expected fields;
+new fields cannot silently remain unmapped. The exact public-only oracle source
+also compiles and runs in an isolated analyzer-enabled package consumer.
+
+The oracle takes one quiescent initial baseline in an unsaturated measurement
+epoch, then independently calculates complete workspace/builder/transfer extents,
+actual copies and clears, successful realloc and final releases. It never builds
+a production snapshot as its expected result or reads later observations into
+its expectation. Generation/reclaim fields stay at their true direct-owner
+invariants; separate positive retirement, detach, reuse, epoch and overflow tests
+cover the mechanisms that can advance them. This exact schema coverage does not
+claim completion of all other diagnostics, comparative cost or release gates.

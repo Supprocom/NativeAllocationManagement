@@ -1,0 +1,157 @@
+{
+  "schema": "Supprocom.NativeAllocationManagement.NativeMemoryStatistics",
+  "completeReleaseInventory": false,
+  "scope": "Process-local NAM-controlled known native extents and operations. Excludes borrowed provider capacity, opaque allocator overhead and process RSS.",
+  "consistency": "Snapshot samples independently advancing counters and bounded thread histories; it is not an atomic global transaction. Exact cross-field reconciliation requires quiescent producers and completed finalizers.",
+  "resetPolicy": "Public capture never resets. Only internal quiescent measurement reset advances a checked non-reusing epoch; old-epoch releases are excluded and a successful old-epoch resize enters its complete replacement into the new epoch.",
+  "availability": "All 20 fields are implemented. Mechanisms absent from particular owners have verified zero-valued invariants, not unavailable measurements.",
+  "oracleSource": "conformance/native-process-diagnostic-oracle.cs",
+  "wholeSnapshotProof": "NativeProcessDiagnosticContractTests.PublicOperationsMatchEveryProcessField",
+  "ordinaryFaultProof": "NativeProcessDiagnosticContractTests.FailedAcquisitionCannotInventAnyProcessField",
+  "reallocationFaultProof": "NativeProcessDiagnosticContractTests.FailedReplacementCreditsOnlyActualOldBackingRelease",
+  "packageProof": "PackageSmokeTests.PackageProcessDiagnosticOracleMatchesEveryField",
+  "oracleScope": "All fields are compared at each public workspace/builder/transfer stage. Initial baseline is observed once; subsequent extents, peaks, event and byte deltas are independently calculated from exact payload operations. Direct owners have no generation/reclaim events. Positive generation, reuse, fault, epoch and overflow cases are separately linked below; the packaged oracle does not pretend to exercise every runtime mechanism.",
+  "unreviewedScope": "Other schemas, complete trace/API/lifecycle inventories, diagnostic-cost and feature benefit comparisons, final native matrix and the complete 0.3.0 release remain open.",
+  "fields": [
+    {
+      "name": "OutstandingNativeBytes", "units": "bytes", "role": "gauge",
+      "definition": "Current actual acquired NAM-owned extents, including known headers/padding and retained, retired, quarantined and detached backing. Resize changes the old charge to the complete replacement; failed acquisition adds none.",
+      "implementation": ["NativeMemoryAccounting.cs#Interlocked.Add(ref _outstandingNativeBytes, checked((long)byteLength));", "NativeMemoryAccounting.cs#Interlocked.Add(ref _outstandingNativeBytes, -bytes);"],
+      "overflow": "Exact gauge for actual addressable acquired extents, not a saturating event history. Individual extent conversion is checked.",
+      "additionalProofs": ["NativeProductionAccountingTests.PublicDiagnosticsAccountWithoutFaultHookActivation", "NativeProductionAccountingTests.PreEpochReleaseAndResizeRespectMeasurementBoundaries"]
+    },
+    {
+      "name": "PeakOutstandingNativeBytes", "units": "bytes", "role": "peak",
+      "definition": "Highest process outstanding extent recorded after actual acquisition or resize in the current measurement epoch. Physical cleanup and capture do not reset it; not a claimed opaque realloc transient peak or RSS peak.",
+      "implementation": ["NativeMemoryAccounting.cs#RecordPeak(current);", "NativeMemoryAccounting.cs#Interlocked.CompareExchange(ref _peakOutstandingNativeBytes, current, peak)"],
+      "overflow": "Exact maximum of known outstanding gauges; internal epoch reset starts a new peak.",
+      "additionalProofs": ["NativeProductionAccountingTests.PreEpochReleaseAndResizeRespectMeasurementBoundaries"]
+    },
+    {
+      "name": "DetachedNativeBytes", "units": "bytes", "role": "subset-gauge",
+      "definition": "Acquired extent still awaiting physical release after deterministic generation ownership detached. A subset of OutstandingNativeBytes, not an additional charge or a logical payload size.",
+      "implementation": ["NativeMemoryAccounting.cs#Interlocked.Add(ref _detachedNativeBytes, checked((long)byteLength));", "NativeMemoryAccounting.cs#Interlocked.Add(ref _detachedNativeBytes, -bytes);"],
+      "overflow": "Exact actual extent gauge in the current epoch; old-epoch release does not debit a new measurement.",
+      "additionalProofs": ["NativeProductionAccountingTests.RetainedExtentIncludesDirectOwnershipButExcludesDetachedStorage", "RuntimeLifecycleTests.DetachedNativeBytesRemainAccountedUntilFinalization"]
+    },
+    {
+      "name": "RetiredNativeBytes", "units": "bytes", "role": "subset-gauge",
+      "definition": "Actual extents in retired or quarantined generation banks until drain, reuse or cleanup. A subset of outstanding storage, not an extra allocation. Can also belong to DetachedNativeBytes after owner-wide GC return while an entered operation still protects them; never sum these subsets as disjoint storage.",
+      "implementation": ["NativeMemoryAccounting.cs#Interlocked.Add(ref _retiredNativeBytes, add ? bytes : -bytes);"],
+      "overflow": "Exact gauge in the current measurement epoch, independently of completed-event history saturation.",
+      "additionalProofs": ["NativeProcessDiagnosticContractTests.RetiredProcessExtentIsObservedDuringBorrowAndRemovedAfterDrain", "NativeProcessDiagnosticContractTests.RetiredAndDetachedProcessSubsetsOverlapUntilEnteredBorrowDrains"]
+    },
+    {
+      "name": "RetainedNativeBytes", "units": "bytes", "role": "derived-gauge",
+      "definition": "OutstandingNativeBytes minus DetachedNativeBytes. Includes direct owners and retired/quarantined backing; not merely current-generation banks or geometric slack.",
+      "implementation": ["NativeMemoryKernel.cs#public long RetainedNativeBytes => OutstandingNativeBytes - DetachedNativeBytes;"],
+      "overflow": "Derived from exact gauges, not by subtracting saturated allocation/free histories.",
+      "additionalProofs": ["NativeProductionAccountingTests.RetainedExtentIncludesDirectOwnershipButExcludesDetachedStorage"]
+    },
+    {
+      "name": "AllocationCount", "units": "successful acquisitions", "role": "history",
+      "definition": "Successful fresh backing acquisitions in the epoch, including realloc from null and a successful replacement of pre-epoch backing. Reusing already measured backing and replacing nonempty current-epoch backing add no acquisition.",
+      "implementation": ["NativeMemoryAccounting.cs#AddAtomicHistory(ref _allocationCount, 1, ref _historyOverflowed);"],
+      "overflow": "Saturates at Int64.MaxValue; another completed event marks HistoryOverflowed without failing storage work.",
+      "additionalProofs": ["NativeProductionAccountingTests.SaturatedGlobalEventHistoryCannotWrapOrThrowAfterAccounting", "NativeProductionAccountingTests.PreEpochReleaseAndResizeRespectMeasurementBoundaries"]
+    },
+    {
+      "name": "ReallocationCount", "units": "successful realloc calls", "role": "history",
+      "definition": "Actual successful backend realloc calls, including from null; not a fabricated allocate/free pair, logical-capacity change or failed resize.",
+      "implementation": ["NativeMemoryAccounting.cs#AddAtomicHistory(ref _reallocationCount, 1, ref _historyOverflowed);"],
+      "overflow": "Saturates with HistoryOverflowed on an additional event; replacement extent and cleanup remain exact.",
+      "additionalProofs": ["NativeProductionAccountingTests.SaturatedGlobalEventHistoryCannotWrapOrThrowAfterAccounting", "NativeProductionAccountingTests.PreEpochReleaseAndResizeRespectMeasurementBoundaries"]
+    },
+    {
+      "name": "FreeCount", "units": "physical releases", "role": "history",
+      "definition": "Actual backend frees of backing belonging to the measurement epoch; admission cancellation and realloc replacement are not fabricated physical frees.",
+      "implementation": ["NativeMemoryAccounting.cs#AddAtomicHistory(ref _freeCount, 1, ref _historyOverflowed);"],
+      "overflow": "Saturates with HistoryOverflowed on a further event; physical release cannot be blocked by history exhaustion.",
+      "additionalProofs": ["NativeProductionAccountingTests.SaturatedGlobalEventHistoryCannotWrapOrThrowAfterAccounting", "NativeProductionAccountingTests.PreEpochReleaseAndResizeRespectMeasurementBoundaries"]
+    },
+    {
+      "name": "MetricsEpoch", "units": "measurement identity", "role": "identity",
+      "definition": "Process-local non-reusing internal measurement epoch. Public capture and owner lifecycle changes do not advance it or provide reset authority.",
+      "implementation": ["NativeMemoryAccounting.cs#long next = checked(CurrentMetricsEpoch + 1);", "NativeMemoryAccounting.cs#MetricsEpoch = CurrentMetricsEpoch,"],
+      "overflow": "Checked epoch exhaustion rejects reset before changing any gauge or history.",
+      "additionalProofs": ["NativeProductionAccountingTests.ExhaustedMeasurementIdentityRejectsBeforeChangingAnyCounter", "NativeProductionAccountingTests.PreEpochReleaseAndResizeRespectMeasurementBoundaries"]
+    },
+    {
+      "name": "HistoryOverflowed", "units": "boolean exactness flag", "role": "availability",
+      "definition": "At least one completed global, local or aggregated event/byte history exceeded representable exactness. Reaching the maximum exactly is not alone overflow. Current extent gauges remain exact.",
+      "implementation": ["NativeMemoryAccounting.cs#HistoryOverflowed = Volatile.Read(ref _historyOverflowed) || hot.HistoryOverflowed,"],
+      "overflow": "Sticky for the measurement epoch, including overflow while aggregating individually exact thread histories; internal reset clears it.",
+      "additionalProofs": ["NativeProductionAccountingTests.SummedLocalHistoryReportsOverflowBeforeEitherThreadHistoryOverflows", "NativeProductionAccountingTests.ThreadLocalHistorySaturatesWithoutLosingCurrentGauges"]
+    },
+    {
+      "name": "ZeroedAllocationCount", "units": "successful zeroed acquisitions", "role": "history",
+      "definition": "Successful fresh backend acquisitions requested zeroed. Explicit workspace/view/root clears and reused backing are distinct operations, not invented zeroed acquisitions.",
+      "implementation": ["NativeMemoryAccounting.cs#AddAtomicHistory(ref _zeroedAllocationCount, 1, ref _historyOverflowed);"],
+      "overflow": "Saturates with HistoryOverflowed on a further completed zeroed acquisition.",
+      "additionalProofs": ["NativeProductionAccountingTests.ColdMetadataFailureFallsBackWithoutLosingPriorHistoryOrFailingWork", "NativeProductionAccountingTests.EmptyClearsDoNotInventRangeWorkAndWorkspaceBackingClearIsObserved"]
+    },
+    {
+      "name": "DetachedGenerationCount", "units": "detached generations", "role": "history",
+      "definition": "Actual generation-detach events in the epoch, independent of payload length or remaining physical backing. Not the number of detached handles or pages.",
+      "implementation": ["NativeMemoryAccounting.cs#AddAtomicHistory(ref _detachedGenerationCount, 1, ref _historyOverflowed);"],
+      "overflow": "Saturates with HistoryOverflowed on another completed detach; cannot interrupt release authority transfer.",
+      "additionalProofs": ["RuntimeLifecycleTests.GarbageCollectorReturnDetachesPhysicalCleanupUntilGenerationOwnerFinalizes"]
+    },
+    {
+      "name": "BumpTraversalVisitCount", "units": "segment search visits", "role": "history",
+      "definition": "Actual bump-allocation segment search visits, not element access, lease count or capacity.",
+      "implementation": ["NativeMemoryAccounting.cs#AddHotHistory(metrics, ref metrics.BumpTraversalVisitCount, 1);"],
+      "overflow": "Local/shared histories and their snapshot sum saturate with HistoryOverflowed, without changing traversal.",
+      "additionalProofs": ["MechanismRegressionTests.ArenaTraversalAdvancesFromTheCurrentSegmentInsteadOfRescanningTheBank", "NativeProductionAccountingTests.ThreadLocalHistorySaturatesWithoutLosingCurrentGauges"]
+    },
+    {
+      "name": "ReusedNativeSegmentCount", "units": "segment reuse events", "role": "history",
+      "definition": "Completed reuse of already acquired native backing, not a fresh physical acquisition or invented byte capacity.",
+      "implementation": ["NativeMemoryAccounting.cs#AddHotHistory(metrics, ref metrics.ReusedNativeSegmentCount, 1);"],
+      "overflow": "Saturates across local/shared updates and bounded aggregation; overflow does not disable reuse.",
+      "additionalProofs": ["RuntimeLifecycleTests.PoolGrowthAndSmallestSlabReuseWorkWithoutManagedBackingArrays", "NativeProductionAccountingTests.SummedLocalHistoryReportsOverflowBeforeEitherThreadHistoryOverflows"]
+    },
+    {
+      "name": "ReclaimedRangeReuseCount", "units": "reclaimed ranges consumed", "role": "history",
+      "definition": "Actual completed reservations that consume reclaimed tail ranges; ordinary never-reclaimed bump demand adds none.",
+      "implementation": ["NativeMemoryAccounting.cs#AddHotHistory(metrics, ref metrics.ReclaimedRangeReuseCount, rangeCount);"],
+      "overflow": "Completed histories saturate without throwing after a successful reservation.",
+      "additionalProofs": ["ArenaLifecycleTests.ReclaimedArenaRangeReuseIsCountedOnlyAfterScopedRecycle"]
+    },
+    {
+      "name": "ReclaimedRangeReuseBytes", "units": "bytes", "role": "byte-history",
+      "definition": "Actual storage bytes intersecting reclaimed scoped ranges in completed reservations, excluding requested bytes outside those intersections and geometric capacity.",
+      "implementation": ["NativeMemoryAccounting.cs#AddHotHistory(metrics, ref metrics.ReclaimedRangeReuseBytes, checked((long)byteLength));"],
+      "overflow": "Completed byte history and aggregated sum saturate with HistoryOverflowed; current extent gauges remain exact.",
+      "additionalProofs": ["ArenaLifecycleTests.ReclaimedArenaRangeReuseIsCountedOnlyAfterScopedRecycle"]
+    },
+    {
+      "name": "StorageClearCount", "units": "nonempty clear operations", "role": "history",
+      "definition": "NAM-controlled nonempty clear ranges, including workspace preparation and bounded view Clear. Empty ranges and arbitrary consumer span clears add no observed operation.",
+      "implementation": ["NativeMemoryAccounting.cs#AddHotHistory(metrics, ref metrics.StorageClearCount, 1);", "NativeWorkspace.cs#NativeMemoryAccounting.RecordStorageClear(_block.ByteLength, _block.ByteLength);"],
+      "overflow": "Saturates with HistoryOverflowed; completed clearing and root cleanup cannot fail for history exhaustion.",
+      "additionalProofs": ["NativeProductionAccountingTests.EmptyClearsDoNotInventRangeWorkAndWorkspaceBackingClearIsObserved", "NativeProductionAccountingTests.DirectBoundedClearIsObservedButArbitraryConsumerSpanClearIsNotInvented"]
+    },
+    {
+      "name": "StorageClearBytes", "units": "bytes visited", "role": "byte-history",
+      "definition": "Bytes visited by NAM-controlled clear operations, including already-empty reference slots; partial initialization cleanup visits only its initialized prefix. Not backend allocation zeroing or arbitrary consumer writes.",
+      "implementation": ["NativeMemoryAccounting.cs#AddHotHistory(metrics, ref metrics.StorageClearBytes, checked((long)byteLength));"],
+      "overflow": "Saturates with HistoryOverflowed without changing clear ranges or initialization authority.",
+      "additionalProofs": ["NativeProductionAccountingTests.ReferenceCleanupDistinguishesVisitedSlotsFromActualZeroWrites", "NativeProductionAccountingTests.PartialInitializationCleanupCountsOnlyTheInitializedReferencePrefix"]
+    },
+    {
+      "name": "WrittenClearBytes", "units": "bytes zero-written", "role": "byte-history",
+      "definition": "Bytes actually zero-written by NAM-controlled clears. Direct range clears write their whole range; reference cleanup skips already-empty slots, so visited and written bytes can differ.",
+      "implementation": ["NativeMemoryAccounting.cs#AddHotHistory(metrics, ref metrics.WrittenClearBytes, checked((long)writtenBytes));"],
+      "overflow": "Saturates with HistoryOverflowed; failed/empty work receives no fabricated completed write credit.",
+      "additionalProofs": ["NativeProductionAccountingTests.ReferenceCleanupDistinguishesVisitedSlotsFromActualZeroWrites", "NativeProductionAccountingTests.PartialInitializationCleanupCountsOnlyTheInitializedReferencePrefix"]
+    },
+    {
+      "name": "CopiedBytes", "units": "bytes copied", "role": "byte-history",
+      "definition": "Actual completed NAM-controlled unmanaged bulk copy/memmove bytes. Excludes empty or same-start no-ops, opaque realloc, managed-root assignment and arbitrary consumer copy operations.",
+      "implementation": ["NativeMemoryAccounting.cs#AddHotHistory(metrics, ref metrics.CopiedBytes,"],
+      "overflow": "Saturates with HistoryOverflowed after successful movement; initialization/output and ownership remain correct.",
+      "additionalProofs": ["NativeCopyAccountingTests.BuilderBulkAppendAndBoundedExportCountRealCopiesNotOpaqueRealloc", "NativeCopyAccountingTests.CopyHistorySaturatesAfterSuccessfulMovementWithoutAffectingOutput", "NativeCopyAccountingTests.ManagedRootAssignmentDoesNotPretendToCopyUnmanagedPayloadBytes"]
+    }
+  ]
+}

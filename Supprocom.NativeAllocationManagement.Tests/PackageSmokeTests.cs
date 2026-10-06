@@ -19,6 +19,38 @@ public sealed class PackageSmokeTests
     }
 
     [Fact]
+    public async Task PackageProcessDiagnosticOracleMatchesEveryField()
+    {
+        PackageEvidence package = await GetPackageAsync();
+        WriteEvidence(package);
+        string consumerRoot = CreateConsumerRoot();
+        try
+        {
+            WriteConsumerProject(consumerRoot, package, excludeAnalyzer: false, suppressDiagnostics: false,
+                executable: true, treatWarningsAsErrors: true);
+            File.Copy(Path.Combine(FindRepositoryRoot(), "conformance", "native-process-diagnostic-oracle.cs"),
+                Path.Combine(consumerRoot, "NativeProcessDiagnosticOracle.cs"));
+            await File.WriteAllTextAsync(Path.Combine(consumerRoot, "Program.cs"),
+                """
+                using Supprocom.NativeAllocationManagement.Conformance;
+
+                NativeProcessDiagnosticOracle.Run();
+                System.Console.WriteLine("process-oracle schemas=1 fields=20 paths=workspace,builder,transfer cleanup=complete");
+                """);
+            string project = Path.Combine(consumerRoot, "Consumer.csproj");
+            CommandResult restore = await RunDotnetAsync(
+                $"restore \"{project}\" --nologo --force --no-cache --packages \"{Path.Combine(consumerRoot, ".packages")}\" --source \"{package.SourceDirectory}\"", consumerRoot);
+            Assert.True(restore.ExitCode == 0, restore.Output);
+            CommandResult build = await RunDotnetAsync($"build \"{project}\" --no-restore --nologo", consumerRoot);
+            Assert.True(build.ExitCode == 0, build.Output);
+            CommandResult run = await RunDotnetAsync($"run --project \"{project}\" --no-build --no-restore", consumerRoot);
+            Assert.True(run.ExitCode == 0, run.Output);
+            Assert.Contains("process-oracle schemas=1 fields=20 paths=workspace,builder,transfer cleanup=complete", run.Output, StringComparison.Ordinal);
+        }
+        finally { DeleteConsumerRoot(consumerRoot); }
+    }
+
+    [Fact]
     public async Task PackageBudgetDiagnosticOracleMatchesEveryField()
     {
         PackageEvidence package = await GetPackageAsync();
