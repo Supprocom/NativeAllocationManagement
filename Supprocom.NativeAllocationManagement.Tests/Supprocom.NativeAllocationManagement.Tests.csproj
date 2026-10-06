@@ -31,6 +31,7 @@
     <None Include="..\conformance\native-owner-diagnostic-contracts.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\conformance\native-fast-pool-probe-contracts.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\conformance\native-fast-bump-probe-contracts.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\conformance\native-concurrent-arena-observation-contracts.json" CopyToOutputDirectory="PreserveNewest" />
     <Compile Include="..\conformance\native-owner-diagnostic-oracle.cs" Link="Conformance\NativeOwnerDiagnosticOracle.cs" />
     <None Include="..\conformance\native-layout-diagnostic-contracts.json" CopyToOutputDirectory="PreserveNewest" />
     <Compile Include="..\conformance\native-layout-diagnostic-oracle.cs" Link="Conformance\NativeLayoutDiagnosticOracle.cs" />

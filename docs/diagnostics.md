@@ -132,6 +132,20 @@ Arena reset/recycle changes range epochs, not this invariant. The inventory
 also explicitly classifies the arena's internal initialization-kernel getter
 as an operation capability—not an omitted counter or serializable snapshot.
 
+The [concurrent-arena observation repair](../conformance/native-concurrent-arena-observation-contracts.json)
+defines three existing private probes precisely. Initialization includes actual
+fast-lane and compact-transfer reservations; entered operations include nested
+fast-local and compact-transfer borrows. These are different units: an initializing
+fast reservation without an operation token is not a borrowed callback.
+Private traversal reports the real synchronized search frontier; the public
+snapshot separately resolves the cached fast segment. These can legitimately
+differ, so a synchronized frontier of zero is not missing fast-lane telemetry.
+The getters calculate from existing state only on cold reads, with no additional
+allocation-path counters or writes. The kernel gate cannot make fast-lane writes
+an atomic multi-field snapshot: reconcile at a stable callback/handshake or a
+quiescent boundary. Absent-current zeros do not authorize returned handles.
+This narrowly bound registry does not close the remaining full private inventory.
+
 See [prepared page diagnostics](prepared-pools.md#prepared-snapshot-inventory)
 for full retained capacity, historical occupancy, exhaustion, managed bank costs
 and sparse-page retention.

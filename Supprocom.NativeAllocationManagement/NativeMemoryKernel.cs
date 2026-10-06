@@ -1870,6 +1870,20 @@ internal sealed class NativeArenaTransferBatchState
         return count;
     }
 
+    internal int CountInitializersForObservation()
+    {
+        int count = 0;
+        foreach (ref NativeArenaTransferBatchSlot slot in _slots.AsSpan())
+        {
+            if (ReadLifecycle(ref slot) == NativeAllocationLifecycle.Initializing)
+            {
+                count = checked(count + 1);
+            }
+        }
+
+        return count;
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal bool TryBeginInitialization(
         int slotIndex,
@@ -3608,7 +3622,28 @@ internal sealed class NativeOwnerKernel
     {
         lock (_gate)
         {
-            return _current?.InitializationsInProgress ?? 0;
+            NativeGeneration? generation = _current;
+            if (generation is null)
+            {
+                return 0;
+            }
+
+            int count = generation.InitializationsInProgress;
+            if (_kind == NativeOwnerKind.Arena)
+            {
+                foreach (NativeArenaTransferBatchState batch in generation.ArenaTransferBatchSnapshot)
+                {
+                    count = checked(count + batch.CountInitializersForObservation());
+                }
+
+                if (Volatile.Read(ref _arenaFastInitializerActive) != 0
+                    && ReferenceEquals(_arenaFastGeneration ?? generation, generation))
+                {
+                    count = checked(count + 1);
+                }
+            }
+
+            return count;
         }
     }
 
@@ -3616,7 +3651,23 @@ internal sealed class NativeOwnerKernel
     {
         lock (_gate)
         {
-            return _current?.ActiveOperations ?? 0;
+            NativeGeneration? generation = _current;
+            if (generation is null)
+            {
+                return 0;
+            }
+
+            int count = generation.ActiveOperations;
+            if (_kind == NativeOwnerKind.Arena)
+            {
+                count = checked(count + CountArenaTransferOperations(generation));
+                if (ReferenceEquals(Volatile.Read(ref _arenaFastHazardGeneration), generation))
+                {
+                    count = checked(count + Volatile.Read(ref _arenaFastOperationDepth));
+                }
+            }
+
+            return count;
         }
     }
 
