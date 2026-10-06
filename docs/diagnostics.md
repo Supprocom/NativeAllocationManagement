@@ -255,3 +255,20 @@ diagnostic schemas, complete trace payload semantics, performance, or release
 readiness. Tests reject missing, duplicate or newly unmapped budget fields and
 broken source/test links. Source anchors and XML definitions complement, but do
 not replace, the independent transition assertions and actual test evidence.
+
+The [concurrent owner-wrapper probe contracts](../conformance/native-concurrent-wrapper-probe-contracts.json)
+cover exactly 28 typed observations and two internal kernel-authority properties
+declared on `NativeConcurrentPool<int>` and `NativeConcurrentArena`. Definitions
+include actual units, consistency, reset, overflow and cold observation costs,
+including allocating detached ordinal arrays. Pool initializer reservations and
+entered borrow tokens are different units. Current gauges exclude old generations;
+metadata capacities are not live counts. Arena synchronized search frontiers are
+not the public preferred fast cache. Two pool exhaustion-injection hooks are
+classified as mutation, not telemetry.
+
+Executable contracts match complete compiled property names/types and exercise
+initialization/failure, nested borrows, roots, detached copies and stale authority.
+Coordinated quarantine/exhaustion proof links also execute in the full suite.
+These internal probes are not package APIs or an atomic multi-property snapshot.
+This does not close other runtime/lease/demo/public API contracts or establish
+performance, native-platform compatibility or release acceptance.
