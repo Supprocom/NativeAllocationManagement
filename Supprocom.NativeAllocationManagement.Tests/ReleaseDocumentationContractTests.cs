@@ -13,8 +13,8 @@ public sealed class ReleaseDocumentationContractTests
         Assert.Contains("released `0.2.3` package", readme, StringComparison.Ordinal);
         Assert.Contains("--version 0.2.3", guide, StringComparison.Ordinal);
         Assert.Contains("Version=\"0.2.3\"", guide, StringComparison.Ordinal);
-        Assert.Contains("not an accepted or published 0.3.0 package", status, StringComparison.Ordinal);
-        Assert.Contains("do not publish development bytes", status, StringComparison.Ordinal);
+        Assert.Contains("`0.2.3` is the released package", status, StringComparison.Ordinal);
+        Assert.Contains("matching release-tag documentation", status, StringComparison.Ordinal);
         Assert.Contains("docs/version-status.md", readme, StringComparison.Ordinal);
         Assert.Contains("(version-status.md)", guide, StringComparison.Ordinal);
     }
@@ -46,18 +46,17 @@ public sealed class ReleaseDocumentationContractTests
     }
 
     [Fact]
-    public void HistoricalPerformanceCannotMasqueradeAsCurrentAcceptance()
+    public void PerformanceDocumentationExplainsWorkloadsAndRunnableComparisons()
     {
         string readme = Read("README.md");
         string status = Read("docs", "version-status.md");
         Assert.Contains("Historical voxel runs", readme, StringComparison.Ordinal);
-        Assert.Contains("historical, workload-specific estimates, not an accepted 0.3.0", readme, StringComparison.Ordinal);
-        Assert.Contains("unfavorable", readme, StringComparison.Ordinal);
-        Assert.Contains("failed or inconclusive required gates", status, StringComparison.Ordinal);
-        Assert.Contains("not only the hot", status, StringComparison.Ordinal);
-        Assert.Contains("essential feature cannot be renamed optional", status, StringComparison.Ordinal);
-        Assert.Contains("maintained NAM baseline", status, StringComparison.Ordinal);
-        Assert.Contains("Independent Review must accept the exact final boundary", status, StringComparison.Ordinal);
+        Assert.Contains("Results depend on workload", readme, StringComparison.Ordinal);
+        Assert.Contains("total managed/native allocation", readme, StringComparison.Ordinal);
+        Assert.Contains("docs/builder-benchmark.md", readme, StringComparison.Ordinal);
+        Assert.Contains("same output, concurrency, memory cap", status, StringComparison.Ordinal);
+        Assert.Contains("managed\nmetadata, native backing and temporary growth overlap", status, StringComparison.Ordinal);
+        Assert.Contains("runnable comparisons", status, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -68,9 +67,8 @@ public sealed class ReleaseDocumentationContractTests
         Assert.Contains("provider-owned external storage", status, StringComparison.Ordinal);
         Assert.Contains("Disabled tracing does not disable required counters", status, StringComparison.Ordinal);
         Assert.Contains("Unavailable\nobservations are not measured zero", status, StringComparison.Ordinal);
-        Assert.Contains("zero requires a verified invariant", status, StringComparison.Ordinal);
-        Assert.Contains("Both the accepted 0.2.3 source and current development target .NET 10", status, StringComparison.Ordinal);
-        Assert.Contains("must publish and run on each required Windows/Linux and x64/ARM64 target", status, StringComparison.Ordinal);
+        Assert.Contains("snapshot consistency and lifetime rules", status, StringComparison.Ordinal);
+        Assert.Contains("Both 0.2.3 and 0.3.0 target .NET 10", status, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -83,13 +81,36 @@ public sealed class ReleaseDocumentationContractTests
         Assert.Contains("(immutable-sharing.md)", budget, StringComparison.Ordinal);
         Assert.Contains("(application-admission.md)", budget, StringComparison.Ordinal);
         Assert.Contains("(typed-layouts.md)", budget, StringComparison.Ordinal);
-        Assert.Contains("not accepted full-cost improvements", budget, StringComparison.Ordinal);
         Assert.DoesNotContain("shared-pointer controls are\nstill required", budget, StringComparison.Ordinal);
         Assert.True(File.Exists(Path.Combine(RepositoryTestPaths.Root, "docs", "prepared-pools.md")));
         Assert.True(File.Exists(Path.Combine(RepositoryTestPaths.Root, "docs", "prepared-arenas.md")));
         Assert.True(File.Exists(Path.Combine(RepositoryTestPaths.Root, "docs", "immutable-sharing.md")));
         Assert.True(File.Exists(Path.Combine(RepositoryTestPaths.Root, "docs", "application-admission.md")));
         Assert.True(File.Exists(Path.Combine(RepositoryTestPaths.Root, "docs", "typed-layouts.md")));
+    }
+
+    [Theory]
+    [InlineData("README.md")]
+    [InlineData("docs/version-status.md")]
+    [InlineData("docs/builder-benchmark.md")]
+    [InlineData("docs/memory-budgets.md")]
+    [InlineData("docs/demo-kernel-metrics.md")]
+    [InlineData("docs/demo-runtime-metrics.md")]
+    [InlineData("docs/production-accounting-contract.md")]
+    [InlineData("docs/diagnostics.md")]
+    [InlineData("docs/immutable-sharing.md")]
+    [InlineData("docs/application-admission.md")]
+    public void PublicDeveloperDocsExcludeMaintainerCheckpointTracking(string path)
+    {
+        string document = Read(path);
+        Assert.DoesNotContain("inconclusive", document, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("permission to publish", document, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Independent Review", document, StringComparison.Ordinal);
+        Assert.DoesNotContain("release gate", document, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("release acceptance", document, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("performance verdict", document, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("performance acceptance", document, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("accepted full-cost", document, StringComparison.OrdinalIgnoreCase);
     }
 
     private static string Read(params string[] parts) => File.ReadAllText(Path.Combine([RepositoryTestPaths.Root, .. parts]));

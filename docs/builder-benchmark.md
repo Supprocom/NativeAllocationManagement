@@ -10,8 +10,8 @@ The paired command defaults to `ManagedExactArray`: directly initialize exact
 arrays and consume their bytes through spans. `--managed-baseline ManagedListPrefix`
 retains geometric List growth but hands its live prefix to the consumer without
 ToArray or upload copies. `--managed-baseline ManagedList` preserves the historical
-List/ToArray/byte-array materialization comparison; that is not sufficient by
-itself to justify NAM. All sides retain identical generated values, sequence
+List/ToArray/byte-array materialization comparison. All sides retain identical
+generated values, sequence
 ordering, checksum, batch sizes and the one-slot channel. Managed value packets
 hold storage references without an additional per-packet heap owner.
 
@@ -31,11 +31,9 @@ with identical batch seed resets and output. It removes geometric growth,
 stack-to-builder batch copies and per-batch builder entry checks. It does not
 remove ownership/control objects, budget admission, publication or cleanup.
 `PreLease` remains the reported input but is not used by this explicit exact-size
-path. Growing workers and the paired default are unchanged; this path is not an
-unknown-size workload or an accepted performance/allocation advantage. Compare
+path. Use the growing workers for unknown-size production. Compare
 its complete measured batch against `ManagedExactArray`, counting GC allocation
-plus successful requested backing bytes. Fewer copies or zero replacements alone
-do not establish the required simultaneous gain.
+plus successful requested backing bytes.
 
 An explicitly supplied option requires a nonblank value and may occur only once.
 A trailing `--native-budget-bytes`, another option in place of its value or a
@@ -64,12 +62,11 @@ worker invocation with those environment settings unset.
 The existing steady-state time/GC-allocation number excludes setup and warm-up;
 phase observations are separate measurements, not components to add to that
 time. Its `PerformanceAdvantage` field is a time-only observation, not the full
-performance-and-allocation release verdict. A smaller GC number does not include
+total-allocation measurement. A smaller GC number does not include
 native growth requests. Use actual budget histories on budgeted workers for
 that defined domain; legacy unbudgeted request volume is unavailable. This does
-not measure opaque backend overhead or establish shared-cap equivalence, managed
-pooling, the published previous-NAM matrix, normal-compilation confidence, or
-complete four-phase allocation acceptance. Those remain required 0.3.0 gates.
+not measure opaque backend overhead. Managed pooling, shared-cap comparisons
+and application-specific reuse need corresponding workloads.
 
 `LifecycleEvidence` and every nested measurement are required in newly serialized
 worker evidence: absent observations cannot deserialize into invented zero
@@ -80,7 +77,7 @@ wall time and absolute before/after process CPU, process-wide GC allocation,
 collection counts, last-observed GC heap size, and implemented native accounting
 counters. CPU sampling overhead is excluded from the GC allocation boundaries;
 accounting/CPU observers are initialized before preparation on both sides.
-These are development-worker observations, not cold process startup costs.
+Process startup is outside these phase observations.
 
 The legacy GC allocation/collection/heap fields now correspond only to the
 complete measured batch, ending before RSS queries and the separate probe.
@@ -93,7 +90,7 @@ event deltas within the same nonsaturated epoch. Outstanding, detached and
 retired byte fields are current gauges, not cumulative allocated byte volume.
 The probe's managed `GC.KeepAlive` boundary is not physical GC reclamation. Do not
 sum these four phases into an application-lifetime or terminal-reclamation
-claim, or substitute this evidence for the full performance/memory release gates.
+measurement.
 
 `WorkingSetBeforeBytes` and `WorkingSetAfterBytes` are endpoint resident-memory
 observations. `PeakWorkingSetBytes` is the OS-reported process-lifetime working-set
@@ -104,4 +101,4 @@ The pooled worker's `PeakObservedWorkingSetBytes` has the same lifetime definiti
 ending before its separately measured disposal. Endpoints cannot reconstruct
 these peaks. Isolated builder runs preserve the worker's own observation without
 parent RSS polling. A missing/nonpositive OS peak fails evidence collection,
-instead of inventing zero; actual platform readiness remains a release gate.
+instead of reporting zero.

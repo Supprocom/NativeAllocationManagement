@@ -3,7 +3,6 @@
 `PressureRuntimeSnapshot.Capture` reports actual cold runtime/process/kernel
 observations. Its20 properties and the two nested compilation properties have
 [typed contracts and executable proofs](../conformance/pressure-runtime-diagnostic-contracts.json).
-This is not the complete release API/diagnostic inventory or a performance verdict.
 
 Capture is sequential, not atomic. It first obtains one `GCMemoryInfo`, then reads
 process, GC/configuration and kernel values. Sampling itself can allocate managed
@@ -100,15 +99,11 @@ do not use `GetValueOrDefault()` to turn unavailable data back into a measuremen
 These immutable transport values have no collector, update/reset operation or
 inferred overflow history. Their presence says only that a caller supplied a
 value. Mean calculations and measurement provenance belong to that report's
-producer, not this parser. Other legacy properties are not certified by this
-narrow wire correction. The [wire inventory and omission/zero proofs](../conformance/voxel-diagnostic-wire-contracts.json)
-bind the exact covered fields and must not be called a complete release inventory.
+producer, not this parser. The [wire field contract](../conformance/voxel-diagnostic-wire-contracts.json)
+lists the fields and their omission/null/zero behavior.
 
-Required-member tracking has JSON-ingestion cost. Nullable legacy fields also
-add availability representation to their record layouts. Neither is claimed as
-an allocation/speed optimization; final whole-workload evidence must include the
-actual report-processing cost. Allocator state, layout and native hot paths are
-unchanged by these wire contracts.
+Required-member tracking has JSON-ingestion cost; nullable fields also carry
+availability state. Include report processing when benchmarking telemetry.
 
 Definitions follow primary .NET10 documentation for [GC observations and missing
 collections](https://learn.microsoft.com/en-us/dotnet/api/system.gcmemoryinfo?view=net-10.0),
@@ -118,5 +113,3 @@ collections](https://learn.microsoft.com/en-us/dotnet/api/system.gcmemoryinfo?vi
 [actual GC configuration](https://learn.microsoft.com/en-us/dotnet/api/system.gc.getconfigurationvariables?view=net-10.0),
 [working sets](https://learn.microsoft.com/en-us/dotnet/api/system.diagnostics.process.workingset64?view=net-10.0)
 and [available processor count](https://learn.microsoft.com/en-us/dotnet/api/system.environment.processorcount?view=net-10.0).
-Local contracts do not certify final Windows/ARM64/trimming/NativeAOT deployments,
-general performance superiority or0.3.0 shipping acceptance.

@@ -71,8 +71,5 @@ stale/released non-default values. Default values reject observation. Field-byte
 measurements sum declared representations, excluding CLR headers, inter-field
 padding, referenced objects and application queue/scheduling storage.
 
-This additional cold admission, metadata and cleanup work must have a measured
-end-to-end justification against previous NAM and an optimized managed byte-quota
-and pooling implementation with the same outputs, cap and retention. No benchmark
-superiority or release acceptance follows from correctness or zero-allocation
-movement alone.
+When benchmarking admission, include metadata preparation and cleanup alongside
+payload production. Compare equivalent byte quotas, pooling and retention.

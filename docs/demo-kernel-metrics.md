@@ -3,7 +3,6 @@
 `CgroupMemorySnapshot` observes a Linux kernel cgroup, not NAM's budget or one
 process's exclusive memory. Its 29-property inventory is checked against compiled
 metadata by [the diagnostic contracts](../conformance/cgroup-diagnostic-contracts.json).
-It is not the complete release API/diagnostic inventory or a performance verdict.
 
 `Read` resolves `/proc/self/cgroup` memberships through `/proc/self/mountinfo`
 filesystem/controller, mounted subtree root and mountpoint. It uses whole path
@@ -73,5 +72,3 @@ Definitions follow the primary [proc mountinfo contract](https://docs.kernel.org
 [v1 bandwidth statistics](https://docs.kernel.org/scheduler/sched-bwc.html),
 [v2 CPU interface](https://docs.kernel.org/admin-guide/cgroup-v2.html) and
 [pinned v6.17 accounting fields](https://github.com/torvalds/linux/blob/v6.17/kernel/sched/cpuacct.c).
-Fixture file observations and local Linux tests do not certify every kernel,
-Windows/ARM64 deployment, process RSS limit or complete 0.3.0 release.

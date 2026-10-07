@@ -1,7 +1,6 @@
 # Native backing budgets
 
-This page describes [unreleased 0.3.0 development](version-status.md), not the
-released 0.2.3 API or an accepted performance/compatibility claim.
+This page describes [unreleased 0.3.0 development](version-status.md).
 
 `NativeMemoryBudget` is a shared admission domain for complete NAM-requested
 native backing extents. It does not claim to bound process RSS, CLR object
@@ -18,16 +17,10 @@ reuse. [Prepared arenas](prepared-arenas.md) establish exact ordinary/scoped
 lane bounds; [immutable sharing](immutable-sharing.md) prepares fixed strong/weak
 binding banks. [Application admission](application-admission.md) admits declared
 payloads before production, and [typed layouts](typed-layouts.md) share one backing
-owner. These are implemented contracts, not accepted full-cost improvements.
-All essential diagnostic definitions, equivalent managed/previous-NAM performance
-and final source/package/target gates remain mandatory before release.
+owner.
 
 Budgeted owner constructors require all arguments explicitly. Existing optional
-owner signatures and defaults are preserved. Their narrow RS0027 exceptions
-are confined to those existing constructors: each new budget-first overload is
-fully required and has strictly greater arity than every previously supported
-call, so it cannot change existing overload resolution. This avoids replacing
-published defaults with an expanded family of forwarding overloads.
+owner signatures and defaults are preserved.
 
 For aligned backing, admission includes the native header and known backend
 size rounding. The [.NET Unix backend](https://github.com/dotnet/dotnet/blob/b0f34d51fccc69fd334253924abd8d6853fad7aa/src/runtime/src/libraries/System.Private.CoreLib/src/System/Runtime/InteropServices/NativeMemory.Unix.cs)

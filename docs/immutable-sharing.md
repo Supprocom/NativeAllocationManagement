@@ -5,8 +5,7 @@ replacement for ordinary managed ownership. Use `NativeTransfer<T>` as the
 default heap-storable owner. Immutable sharing is justified only when an actual
 fan-out workload avoids more copying or lifetime coordination than its prepared
 metadata, boundary synchronization, and cleanup cost. Correctness and zero
-managed allocation alone do not establish that justification. The complete
-release requires equivalent managed and previous-NAM end-to-end evidence.
+managed allocation alone do not establish that justification.
 
 ## Preparation and ownership
 
@@ -152,4 +151,3 @@ analysis enabled, in traced and untraced configurations. Its callbacks are stati
 it does not capture owning values to inspect an entered read. Independent local
 fault, nested-read admission/drain and real provider-storage cases verify complete
 snapshots at those boundaries without weakening the package's capture rule.
-These proofs do not constitute performance acceptance or a complete release inventory.

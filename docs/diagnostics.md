@@ -261,9 +261,7 @@ distinguish ordinary acquisition rollback from application backing failure that
 preserves pending admission for retry. `FailedAllocationCount` counts both;
 cancelling an unprepared permission is neither an allocation failure nor a free.
 
-This inventory covers the budget snapshot only. It does not certify the other
-diagnostic schemas, complete trace payload semantics, performance, or release
-readiness. Tests reject missing, duplicate or newly unmapped budget fields and
+Tests reject missing, duplicate or newly unmapped budget fields and
 broken source/test links. Source anchors and XML definitions complement, but do
 not replace, the independent transition assertions and actual test evidence.
 
@@ -281,5 +279,3 @@ Executable contracts match complete compiled property names/types and exercise
 initialization/failure, nested borrows, roots, detached copies and stale authority.
 Coordinated quarantine/exhaustion proof links also execute in the full suite.
 These internal probes are not package APIs or an atomic multi-property snapshot.
-This does not close other runtime/lease/demo/public API contracts or establish
-performance, native-platform compatibility or release acceptance.

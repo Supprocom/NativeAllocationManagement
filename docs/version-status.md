@@ -2,18 +2,12 @@
 
 ## Released package versus development source
 
-`0.2.3` is the released package boundary. `main` contains unreleased 0.3.0
-development, not an accepted or published 0.3.0 package. The project temporarily
-retains `<Version>0.2.3</Version>`; do not publish development bytes under that
-already released identity. The final shipping version, public API and diagnostic
-release baselines, release notes, installation guide and feed must agree before
-publication. Use the matching release-tag documentation for installed 0.2.3.
+`0.2.3` is the released package. `main` contains unreleased 0.3.0 development.
+Use the matching release-tag documentation for installed 0.2.3 applications;
+the new APIs described on `main` belong to 0.3.0.
 
-Both the accepted 0.2.3 source and current development target .NET 10.
-Development uses pinned .NET SDK 10.0.302 and stable C# 13. Do not describe the
-.NET 10 target as a new 0.3.0 change from 0.2.3, or infer NativeAOT, trimming or
-ARM64 readiness from a library analyzer build. Actual final-source consumers
-must publish and run on each required Windows/Linux and x64/ARM64 target.
+Both 0.2.3 and 0.3.0 target .NET 10. Source builds use .NET SDK 10.0.302
+and C# 13.
 
 ## Transfer representation and lifetime migration
 
@@ -51,33 +45,15 @@ initialized logical bytes and physical backing are separate domains; moving or
 sharing a binding does not manufacture another charge or physical allocation.
 
 Optional tracing uses bounded managed event storage and has its own cost/loss
-history. Disabled tracing does not disable required counters. Every essential
-diagnostic must have a definition, units, scope, real update/derivation, consistency
-and lifetime rules, positive/negative tests and retained evidence. Unavailable
-observations are not measured zero; zero requires a verified invariant. No stub,
-fabricated success, disabled essential test or placeholder satisfies completion.
+history. Disabled tracing does not disable required counters. Unavailable
+observations are not measured zero. See [diagnostics](diagnostics.md) for units,
+snapshot consistency and lifetime rules, and [memory budgets](memory-budgets.md)
+for admission and accounting behavior.
 
-## Performance and release acceptance
+## Measuring your application
 
-Historical voxel percentages are workload-specific evidence, not an accepted
-0.3.0 performance claim. Current local complete-cost admission, layout, prepared
-and smart-pointer comparisons include failed or inconclusive required gates.
-Do not relabel them as accepted because correctness passes, native GC allocation
-is low, or a warmed loop is faster. Prefer expert managed C# until NAM removes
-more real work or memory demand than it introduces under the same useful-output,
-concurrency, cap and retention contract.
-
-Compare preparation, warm-up, admission/refusal, initialization, access, movement,
-sharing, growth, retention, enabled/disabled tracing and cleanup—not only the hot
-loop. Include metadata and temporary overlapping backing; keep original samples,
-uncertainty and unfavorable outcomes. Both deployment-default and controlled
-compilation settings and the maintained NAM baseline are required. A failed
-essential feature cannot be renamed optional or hidden to pass the release gate.
-
-Complete API/lifecycle/diagnostic inventory, all demos and actual PowerShell
-coverage, clean enabled analyzers, final target consumers and immutable
-packages/symbols/source/evidence are required. Local development checkpoints are
-not release acceptance. Independent Review must accept the exact final boundary
-before the later eligible release/deployment handoff; publication then requires
-feed and isolated-install verification. No current claim of complete 0.3.0,
-universal native superiority or final platform readiness is made here.
+Compare NAM with managed storage using the same output, concurrency, memory cap
+and retention policy. Include preparation, processing and cleanup, managed
+metadata, native backing and temporary growth overlap. The
+[builder benchmark](builder-benchmark.md) and [voxel pipeline](../.Demos/01-VoxelChunkPipeline/README.md)
+provide runnable comparisons and explain their reported measurements.
