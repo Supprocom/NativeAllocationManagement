@@ -123,7 +123,7 @@ public readonly record struct NativeMemoryTraceEvent
     public long ReservedBytes { get; }
     /// <summary>Gets the owner-local backing acquisition ordinal when supplied, otherwise unavailable.</summary>
     public long? AllocationOrdinal { get; }
-    /// <summary>Gets the ownership control, typed-layout identity for layout preparation/initialization, operation-specific detach identity, or actual generation, as defined by the event kind; otherwise unavailable.</summary>
+    /// <summary>Gets the ownership control, fast-pool movement token, typed-layout identity for layout preparation/initialization, operation-specific detach identity, or actual generation, as defined by the event kind; otherwise unavailable.</summary>
     public long? CorrelationId { get; internal init; }
     /// <summary>Gets the actual allocator generation for generation lifecycle transitions, including generation zero; otherwise unavailable.</summary>
     public long? Generation => Kind is NativeMemoryTraceKind.GenerationDetached

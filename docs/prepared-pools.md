@@ -34,13 +34,32 @@ remainder. Each slot has exactly the declared element capacity, with a 64-byte
 aligned stride. A shorter final page contains only the remaining declared slots.
 Padding is charged; it does not enlarge exposed slot capacity.
 
-Within retained capacity, NAM rent/complete initialization, bounded access,
-return, snapshots and expected exhaustion allocate no managed storage or native
+Within retained capacity, NAM rent/complete initialization, destructive lexical
+movement, bounded access, return, snapshots and expected exhaustion allocate no managed storage or native
 backing and do not grow metadata. Consumer callbacks can still allocate. There
 is no implicit refill, OS residency guarantee, zero-page-fault guarantee, or
-guarantee about unrelated runtime work. The existing destructive transfer move
-is a different API and remains outside this page-slot guarantee until its
-separate required 0.3.0 correction is complete.
+guarantee about unrelated runtime work.
+
+`Pooled<T>.Move(ref source)` reuses the slot's existing identity metadata. It
+clears the source on success and invalidates its previous aliases without copying
+the payload. The destination retains the source's cleanup obligation and stays
+on the pool's construction thread. The capability remains a lexical ref structure,
+not a heap-storable or cross-thread pointer. Use `NativeTransfer<T>` for those
+different ownership requirements.
+
+```csharp
+Pooled<byte> source = pool.Rent(4096, static writer => writer.Fill(42));
+using Pooled<byte> destination = Pooled<byte>.Move(ref source);
+_ = destination.Read(static view => view[0]);
+// source is now default; do not access or dispose it.
+```
+
+Movement validates before consumption. A stale/default source, wrong thread,
+entered borrow or exhausted monotonic identity is an error; failure leaves the
+source unchanged so its actual owner can still return it. This differs from
+`NativeTransfer<T>.Move`, whose source is consumed on failure. Using bindings
+are read-only and cannot be passed by ref; keep a movable source in an ordinary
+local and put its final destination in a using or proven finally cleanup.
 
 `TryRent` returns false only for `ShapeExceeded` or `NoAvailableSlot`. A negative
 length, null initializer, wrong thread, closed owner, unprepared owner, exhausted
@@ -105,6 +124,11 @@ ordinal. Disabled tracing constructs no payload, and warmed reuse emits no
 redundant budget event or budget-lock operation. Existing bounded/drop semantics
 apply. The internal ordinal probe now reports actual physical acquisition order,
 including ordinary independent slabs, rather than an always-empty array.
+Lexical movement emits `Moved` only after publishing its new slot token. Its
+correlation identity is that never-reused token, backing ordinal is the actual
+page (or ordinary slab), and extent is the complete slot stride including
+padding. It does not claim a physical allocation, free or budget transfer.
+Disabled movement tracing performs no budget locking or event construction.
 
 Fewer backend calls and zero warmed allocation are structural facts, not general
 performance superiority. Required release measurements include preparation,

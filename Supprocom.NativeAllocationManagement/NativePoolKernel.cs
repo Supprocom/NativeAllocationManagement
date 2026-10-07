@@ -352,6 +352,32 @@ internal sealed unsafe class NativePoolKernel<T>
         slab.BorrowCount--;
     }
 
+    internal long Move(int slabIndex, long token)
+    {
+        ValidateOwner(nameof(Pooled<T>.Move));
+        ref Slab slab = ref ValidateLease(slabIndex, token, nameof(Pooled<T>.Move));
+        if (slab.BorrowCount != 0)
+        {
+            ThrowActiveMove();
+        }
+
+        // Take a never-reused identity before changing either the slot or binding.
+        // Exhaustion therefore leaves the original lease able to return its slot.
+        long nextToken = TakeLeaseToken();
+        slab.Token = nextToken;
+        if (_budget is { TraceEnabled: true } budget)
+        {
+            Page page = _preparation.SlotCount == 0
+                ? default : _pages[slabIndex / _preparation.SlotsPerPage];
+            nuint slotExtent = _preparation.SlotCount == 0
+                ? slab.AllocationBytes : page.AllocationBytes / (nuint)page.SlotCount;
+            budget.RecordOwnershipTransition(NativeMemoryTraceKind.Moved, Id,
+                nextToken, slotExtent,
+                _preparation.SlotCount == 0 ? slab.Ordinal : page.Ordinal);
+        }
+        return nextToken;
+    }
+
     [MethodImpl(MethodImplOptions.NoInlining)]
     internal void Return(
         int slabIndex,
@@ -877,6 +903,12 @@ internal sealed unsafe class NativePoolKernel<T>
     private static void ThrowActiveBorrow() =>
         throw new InvalidOperationException(
             "A pooled lease cannot return during an active callback.");
+
+    [DoesNotReturn]
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void ThrowActiveMove() =>
+        throw new InvalidOperationException(
+            "A pooled lease cannot move during an active callback; the source remains owning.");
 
     [DoesNotReturn]
     [MethodImpl(MethodImplOptions.NoInlining)]

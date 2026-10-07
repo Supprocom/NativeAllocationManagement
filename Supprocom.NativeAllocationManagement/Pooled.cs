@@ -34,6 +34,23 @@ public readonly ref struct Pooled<T>
     /// <summary>Gets the immutable physical element capacity.</summary>
     public int Capacity => _capacity;
 
+    /// <summary>Moves this lexical lease without allocating or copying its payload and clears the source.</summary>
+    /// <remarks>
+    /// Previous aliases become stale. Unlike NativeTransfer.Move, failure preserves
+    /// the source so it can still return its slot. Movement requires the owner thread
+    /// and no entered borrow; it does not grant heap storage or cross-thread access.
+    /// </remarks>
+    [SuppressMessage("Design", "CA1000", Justification = "Destructive lexical movement consumes the exact element type through a ref source.")]
+    public static Pooled<T> Move(scoped ref Pooled<T> source)
+    {
+        NativePoolKernel<T> kernel = source.GetKernel(nameof(Move));
+        long token = kernel.Move(source._slabIndex, source._token);
+        Pooled<T> destination = new(kernel, source._slabIndex, token,
+            source._length, source._capacity);
+        source = default;
+        return destination;
+    }
+
     /// <summary>Clears the logical range during one validated borrow.</summary>
     public void Clear()
     {

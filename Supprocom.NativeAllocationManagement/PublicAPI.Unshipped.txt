@@ -1,4 +1,5 @@
 #nullable enable
+static Supprocom.NativeAllocationManagement.Pooled<T>.Move(scoped ref Supprocom.NativeAllocationManagement.Pooled<T> source) -> Supprocom.NativeAllocationManagement.Pooled<T>
 Supprocom.NativeAllocationManagement.NativeMemoryReservation<T>.NativeMemoryReservation() -> void
 Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.ReservationCancelled = 26 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
 Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.ReservationInitializationFailed = 27 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind

@@ -2407,7 +2407,11 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 }
             }
 
-            if (IsHandleCreatingInvocation(operation))
+            if (IsPooledMoveInvocation(operation))
+            {
+                ProcessPooledMove(operation);
+            }
+            else if (IsHandleCreatingInvocation(operation))
             {
                 RegisterHandle(operation);
             }
@@ -2810,7 +2814,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     value);
             }
 
-            if (value is not null && value is not IObjectCreationOperation && !IsHandleCreatingInvocation(value))
+            if (value is not null && value is not IObjectCreationOperation
+                && !IsHandleCreatingInvocation(value) && !IsPooledMoveInvocation(value))
             {
                 Target target = GetTarget(operation.Target);
                 if (IsHandleType(value.Type) && GetHandle(value) is HandleState handle)
@@ -2858,7 +2863,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     value);
             }
 
-            if (value is not null && value is not IObjectCreationOperation && !IsHandleCreatingInvocation(value))
+            if (value is not null && value is not IObjectCreationOperation
+                && !IsHandleCreatingInvocation(value) && !IsPooledMoveInvocation(value))
             {
                 Target target = new(operation.Symbol, operation.Syntax);
                 if (IsHandleType(value.Type) && GetHandle(value) is HandleState handle)
@@ -2958,6 +2964,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             {
                 if (operation.Parent is IInvocationOperation composite
                     && (IsNonRetainingCompositeLeaseOperation(composite)
+                        || IsPooledMoveInvocation(composite) && operation.Parameter?.RefKind == RefKind.Ref
                         || IsPreparedTryAcquisition(composite) && operation.Parameter?.Ordinal == 2))
                 {
                     base.VisitArgument(operation);
@@ -5495,6 +5502,53 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             {
                 _regions.Add(new RegionScope(target.Symbol.Name, scope, operation.Syntax.Span.Start));
             }
+        }
+
+        private bool IsPooledMoveInvocation(IOperation operation) =>
+            operation is IInvocationOperation invocation
+            && string.Equals(invocation.TargetMethod.Name, "Move", StringComparison.Ordinal)
+            && NativeSymbols.Is(invocation.TargetMethod.ContainingType, _symbols.Pooled)
+            && NativeSymbols.Is(invocation.Type, _symbols.Pooled)
+            && invocation.Arguments.Length == 1
+            && invocation.Arguments[0].Parameter?.RefKind == RefKind.Ref;
+
+        private void ProcessPooledMove(IInvocationOperation operation)
+        {
+            IArgumentOperation argument = operation.Arguments[0];
+            HandleState? source = GetHandle(Unwrap(argument.Value));
+            if (source is null || !CheckHandleUse(source, argument.Syntax, "Move"))
+            {
+                if (source is null)
+                {
+                    Report(NativeAllocationDiagnosticDescriptors.PooledEscape,
+                        argument.Syntax, "the unproven move source", "Move");
+                }
+                return;
+            }
+
+            if (IsActivelyBorrowed(source))
+            {
+                Report(NativeAllocationDiagnosticDescriptors.InvalidLifecycle,
+                    operation.Syntax, source.DisplayName, "Move during a bounded callback");
+                return;
+            }
+
+            Target target = FindTarget(operation);
+            if (target.Symbol is not ILocalSymbol)
+            {
+                Report(NativeAllocationDiagnosticDescriptors.PooledEscape,
+                    operation.Syntax, source.DisplayName,
+                    target.Symbol?.Name ?? "an escaping destination");
+                return;
+            }
+
+            source.Returned = true;
+            ReportPooledBindingReplacement(target.Symbol, operation.Syntax);
+            _handles[target.Symbol] = new HandleState(target.Symbol, source.Owner,
+                source.Generation, IsUsingSyntax(operation.Syntax, target.Symbol), operation.Syntax)
+            {
+                GenerationRelation = source.GenerationRelation
+            };
         }
 
         private void RegisterHandle(IInvocationOperation operation)
