@@ -19,7 +19,6 @@ public sealed class NativeBuilder<T> : IDisposable
     private int _count;
     private int _capacity;
     private NativeBlock _block;
-    private readonly NativeMemoryBudget? _budget;
     private readonly long _id = NativeOwnerIdentity.Next();
 
     /// <summary>Creates an empty direct native builder.</summary>
@@ -46,7 +45,6 @@ public sealed class NativeBuilder<T> : IDisposable
     private NativeBuilder(int preLease, NativeMemoryBudget? budget)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(preLease);
-        _budget = budget;
         _block = NativeBlockAllocator.Allocate<T>(
             preLease,
             nameof(NativeBuilder<T>),
@@ -958,7 +956,7 @@ public sealed class NativeBuilder<T> : IDisposable
             required,
             nameof(NativeBuilder<T>),
             "NativeBuilder.Grow",
-            _budget,
+            _block.Budget,
             throwOnBudgetFailure,
             out NativeBlock replacement,
             out int capacity,
