@@ -238,20 +238,56 @@ internal static partial class NativeGeneratedScenarios
             CheckPool(pool, budget, model, occupied);
             return;
         }
-        using (lease)
+        Pooled<int> acquisitionAlias = lease;
+        try
         {
             Require(expected, "prepared slot acquisition differs");
             model.Successful++;
             model.PeakOccupied = Math.Max(model.PeakOccupied, occupied + 1);
             CheckPool(pool, budget, model, occupied + 1);
             ExercisePool(pool, budget, model, occupied + 1);
-            Require(lease.Read(static view => view[0]) == 19, "another slot damaged existing output");
+
+            // Derive movement from the existing program state without changing
+            // the acquisition RNG stream. The model owns the same slot throughout.
+            int moves = (model.Step + occupied) % 4;
+            model.Trace($"pool-move step={model.Step} occupied={occupied + 1} request={request} moves={moves}");
+            for (int movement = 0; movement < moves; movement++)
+            {
+                Pooled<int> previous = lease;
+                Pooled<int> destination = Pooled<int>.Move(ref lease);
+                Require(lease.Length == 0 && lease.Capacity == 0, "successful movement did not clear its source binding");
+                lease = destination;
+                RequireReturnedPoolAlias(previous);
+                CheckPool(pool, budget, model, occupied + 1);
+            }
+            if (moves != 0) RequireReturnedPoolAlias(acquisitionAlias);
+            Require(lease.Read(static view =>
+            {
+                int sum = 0;
+                foreach (ref readonly int value in view.AsSpan()) sum += value;
+                return sum;
+            }) == request * 19, "movement or another slot damaged initialized output");
         }
-        bool rejected = false;
-        try { _ = lease.Read(static view => view[0]); }
-        catch (NativeAllocationReturnedException) { rejected = true; }
-        Require(rejected, "returned slot alias remained usable");
+        finally { lease.Dispose(); }
+        RequireReturnedPoolAlias(lease);
+        RequireReturnedPoolAlias(acquisitionAlias);
         CheckPool(pool, budget, model, occupied);
+    }
+
+    private static void RequireReturnedPoolAlias(scoped Pooled<int> alias)
+    {
+        bool rejectedRead = false;
+        try { _ = alias.Read(static view => view[0]); }
+        catch (NativeAllocationReturnedException) { rejectedRead = true; }
+        Require(rejectedRead, "stale prepared slot authority remained readable");
+        bool rejectedReturn = false;
+        try { alias.Dispose(); }
+        catch (NativeAllocationReturnedException) { rejectedReturn = true; }
+        Require(rejectedReturn, "stale prepared slot authority returned a live slot");
+        bool rejectedMove = false;
+        try { _ = Pooled<int>.Move(ref alias); }
+        catch (NativeAllocationReturnedException) { rejectedMove = true; }
+        Require(rejectedMove, "stale prepared slot authority published another binding");
     }
 
     private static void CheckPool(NativePool<int> pool, NativeMemoryBudget budget, PoolOracle model, int occupied)
