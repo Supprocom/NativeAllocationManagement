@@ -51,7 +51,9 @@ internal static class NativeMemoryAccounting
 
     internal const int ThreadMetricSlotCapacity = 64;
     private static readonly Lock HotGate = new();
-    private static readonly NativeHotMetrics?[] HotMetrics = new NativeHotMetrics[ThreadMetricSlotCapacity];
+    // Physical allocation/free and snapshots need no per-thread shard bank.
+    // Acquire it under HotGate only when an actual hot-counter owner is claimed.
+    private static NativeHotMetrics?[]? HotMetrics;
     private static readonly NativeHotMetrics SharedHotMetrics = new() { Shared = true, Epoch = 0 };
     private static int _claimedSlotCount;
     private static NativeHotMetricsSnapshot _completedHotMetrics;
@@ -142,7 +144,8 @@ internal static class NativeMemoryAccounting
         NativeMemoryTestHooks.AccountingClaimBoundary(1);
         lock (HotGate)
         {
-            foreach (ref NativeHotMetrics? slot in HotMetrics.AsSpan())
+            NativeHotMetrics?[] bank = HotMetrics ??= new NativeHotMetrics[ThreadMetricSlotCapacity];
+            foreach (ref NativeHotMetrics? slot in bank.AsSpan())
             {
                 NativeHotMetrics? metrics = slot;
                 if (metrics is null)

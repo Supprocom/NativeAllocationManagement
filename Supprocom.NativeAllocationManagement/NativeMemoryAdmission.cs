@@ -70,7 +70,9 @@ public sealed partial class NativeMemoryBudget
                 long ownerId = NativeOwnerIdentity.NextWithoutPreparation();
                 control = layout is null ? new(this, ownerId, length)
                     : (NativeMemoryReservationControl<T>)(object)new NativeLayoutControl(this, ownerId, layout);
-                NativeMemoryAccounting.PrepareThread();
+                // Layout activation clears alignment padding and promises prepared
+                // counter metadata. Ordinary direct filling needs no hot shard.
+                if (layout is not null) NativeMemoryAccounting.PrepareThread();
             }
             catch
             {

@@ -419,7 +419,7 @@ public sealed class NativeProductionAccountingTests
         NativeMemoryTestHooks.Reset();
         try
         {
-            Array slots = (Array)AccountingField("HotMetrics").GetValue(null)!;
+            Array? slots = null;
             for (int iteration = 0; iteration < NativeMemoryAccounting.ThreadMetricSlotCapacity * 3; iteration++)
             {
                 Thread thread = new(static () =>
@@ -429,12 +429,16 @@ public sealed class NativeProductionAccountingTests
                 });
                 thread.Start();
                 Assert.True(thread.Join(TimeSpan.FromSeconds(10)));
+                Array actualSlots = (Array)AccountingField("HotMetrics").GetValue(null)!;
+                slots ??= actualSlots;
+                Assert.Same(slots, actualSlots);
             }
             NativeMemoryStatistics result = NativeMemoryDiagnostics.Snapshot();
             Assert.Equal(NativeMemoryAccounting.ThreadMetricSlotCapacity * 3, result.BumpTraversalVisitCount);
             Assert.Equal(result.BumpTraversalVisitCount * 2, result.ReclaimedRangeReuseCount);
             Assert.Equal(result.BumpTraversalVisitCount * 8, result.ReclaimedRangeReuseBytes);
             Assert.Same(slots, AccountingField("HotMetrics").GetValue(null));
+            Assert.NotNull(slots);
             Assert.Equal(NativeMemoryAccounting.ThreadMetricSlotCapacity, slots.Length);
             Assert.False(result.HistoryOverflowed);
         }
