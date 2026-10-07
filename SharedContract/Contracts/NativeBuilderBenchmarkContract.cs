@@ -3,7 +3,9 @@ namespace Supprocom.NativeAllocationManagement.Demos.VoxelChunkPipeline.SharedCo
 public enum NativeBuilderBenchmarkImplementation
 {
     ManagedList,
-    NativeBuilder
+    NativeBuilder,
+    ManagedListPrefix,
+    ManagedExactArray
 }
 
 public sealed record NativeBuilderBenchmarkOptions(
@@ -13,7 +15,12 @@ public sealed record NativeBuilderBenchmarkOptions(
     int Iterations,
     int WarmupIterations,
     int SampleCount,
-    int Seed);
+    int Seed)
+{
+    /// <summary>The explicit managed comparison; known output sizing is the default.</summary>
+    public NativeBuilderBenchmarkImplementation ManagedBaseline { get; init; } =
+        NativeBuilderBenchmarkImplementation.ManagedExactArray;
+}
 
 public sealed record NativeBuilderPhaseEvidence(
     double AllocationMilliseconds,

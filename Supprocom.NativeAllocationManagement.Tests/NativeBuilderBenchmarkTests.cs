@@ -5,6 +5,75 @@ namespace Supprocom.NativeAllocationManagement.Tests;
 
 public sealed class NativeBuilderBenchmarkTests
 {
+    [Theory]
+    [InlineData(NativeBuilderBenchmarkImplementation.ManagedListPrefix, 1)]
+    [InlineData(NativeBuilderBenchmarkImplementation.ManagedListPrefix, 3)]
+    [InlineData(NativeBuilderBenchmarkImplementation.ManagedListPrefix, 17)]
+    [InlineData(NativeBuilderBenchmarkImplementation.ManagedListPrefix, 8192)]
+    [InlineData(NativeBuilderBenchmarkImplementation.ManagedExactArray, 1)]
+    [InlineData(NativeBuilderBenchmarkImplementation.ManagedExactArray, 3)]
+    [InlineData(NativeBuilderBenchmarkImplementation.ManagedExactArray, 17)]
+    [InlineData(NativeBuilderBenchmarkImplementation.ManagedExactArray, 8192)]
+    public void CopyAvoidingManagedOutputsMatchTheIndependentMaterializedOracle(
+        NativeBuilderBenchmarkImplementation implementation, int count)
+    {
+        NativeBuilderBenchmarkOptions options = CreateOptions() with { ElementCount = count, PreLease = 0 };
+        NativeBuilderExactOutput expected = NativeBuilderBenchmark.BuildManagedOutput(options);
+        NativeBuilderExactOutput actual = NativeBuilderBenchmark.BuildManagedOutput(options, implementation);
+        Assert.Equal(expected.Opaque, actual.Opaque);
+        Assert.Equal(expected.Transparent, actual.Transparent);
+    }
+
+    [Theory]
+    [InlineData(NativeBuilderBenchmarkImplementation.ManagedList)]
+    [InlineData(NativeBuilderBenchmarkImplementation.ManagedListPrefix)]
+    [InlineData(NativeBuilderBenchmarkImplementation.ManagedExactArray)]
+    public void SelectedManagedBaselineOwnsEveryOtherFirstPosition(NativeBuilderBenchmarkImplementation implementation)
+    {
+        for (int index = 0; index < 10; index++)
+            Assert.Equal((index & 1) == 0 ? implementation : NativeBuilderBenchmarkImplementation.NativeBuilder,
+                NativeBuilderBenchmark.GetFirstImplementation(index, implementation));
+    }
+
+    [Fact]
+    public void KnownSizingIsTheExplicitDefaultAndInvalidSelectionCannotStartWorkers()
+    {
+        Assert.Equal(NativeBuilderBenchmarkImplementation.ManagedExactArray, CreateOptions().ManagedBaseline);
+        Assert.Throws<ArgumentOutOfRangeException>(() => NativeBuilderBenchmark.GetFirstImplementation(
+            0, NativeBuilderBenchmarkImplementation.NativeBuilder));
+        Assert.Throws<ArgumentOutOfRangeException>(() => NativeBuilderBenchmark.GetFirstImplementation(
+            0, (NativeBuilderBenchmarkImplementation)999));
+    }
+
+    [Theory]
+    [InlineData(NativeBuilderBenchmarkImplementation.ManagedListPrefix)]
+    [InlineData(NativeBuilderBenchmarkImplementation.ManagedExactArray)]
+    public async Task CopyAvoidingWorkersPublishTheSameActualChannelOutput(NativeBuilderBenchmarkImplementation implementation)
+    {
+        NativeBuilderBenchmarkOptions options = CreateOptions() with { ManagedBaseline = implementation };
+        NativeBuilderWorkerEvidence managed = await NativeBuilderBenchmark.RunIsolatedWorkerAsync(implementation, options);
+        NativeBuilderWorkerEvidence native = await NativeBuilderBenchmark.RunIsolatedWorkerAsync(
+            NativeBuilderBenchmarkImplementation.NativeBuilder, options);
+        Assert.Equal(implementation, managed.Implementation);
+        Assert.True(managed.ExactParity);
+        Assert.True(native.ExactParity);
+        Assert.Equal(managed.ExactOutputSha256, native.ExactOutputSha256);
+        Assert.Equal(managed.Checksum, native.Checksum);
+        Assert.Equal(managed.LogicalBytes, native.LogicalBytes);
+        Assert.Equal(0, managed.NativeFreshSegmentAllocationDelta);
+        Assert.Equal(0, managed.NativeRetainedBytes);
+        Assert.Equal(0, native.NativeRetainedBytes);
+    }
+
+    [Fact]
+    public async Task PairedDefaultActuallySelectsTheCopyAvoidingKnownSizeWorker()
+    {
+        NativeBuilderBenchmarkReport report = await NativeBuilderBenchmark.RunPairedAsync(CreateOptions());
+        Assert.True(report.ExactParity);
+        Assert.True(report.BalancedOrder);
+        Assert.All(report.Pairs, pair => Assert.Equal(NativeBuilderBenchmarkImplementation.ManagedExactArray, pair.Managed.Implementation));
+    }
+
     [Fact]
     public void NativeBuilderOutputMatchesListAndToArray()
     {

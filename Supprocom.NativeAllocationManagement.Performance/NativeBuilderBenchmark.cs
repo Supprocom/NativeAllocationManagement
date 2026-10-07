@@ -82,17 +82,17 @@ internal static class NativeBuilderBenchmark
             sampleIndex++)
         {
             NativeBuilderBenchmarkImplementation first =
-                GetFirstImplementation(sampleIndex);
+                GetFirstImplementation(sampleIndex, options.ManagedBaseline);
             NativeBuilderWorkerEvidence firstEvidence =
                 await RunIsolatedWorkerAsync(first, options).ConfigureAwait(false);
             NativeBuilderBenchmarkImplementation second =
-                first == NativeBuilderBenchmarkImplementation.ManagedList
+                first == options.ManagedBaseline
                     ? NativeBuilderBenchmarkImplementation.NativeBuilder
-                    : NativeBuilderBenchmarkImplementation.ManagedList;
+                    : options.ManagedBaseline;
             NativeBuilderWorkerEvidence secondEvidence =
                 await RunIsolatedWorkerAsync(second, options).ConfigureAwait(false);
             NativeBuilderWorkerEvidence managed =
-                first == NativeBuilderBenchmarkImplementation.ManagedList
+                first == options.ManagedBaseline
                     ? firstEvidence
                     : secondEvidence;
             NativeBuilderWorkerEvidence native =
@@ -126,7 +126,7 @@ internal static class NativeBuilderBenchmark
 , pair.Native.ExactOutputSha256, StringComparison.Ordinal) && pair.Managed.Checksum == pair.Native.Checksum);
         bool balancedOrder = pairs.Count(pair =>
                 pair.FirstImplementation
-                    == NativeBuilderBenchmarkImplementation.ManagedList)
+                    == options.ManagedBaseline)
             == options.SampleCount / 2
             && pairs.Count(pair =>
                 pair.FirstImplementation
@@ -163,6 +163,8 @@ internal static class NativeBuilderBenchmark
         NativeBuilderBenchmarkOptions options)
     {
         ValidateOptions(options);
+        if (!Enum.IsDefined(implementation))
+            throw new ArgumentOutOfRangeException(nameof(implementation));
         Stopwatch setupClock = Stopwatch.StartNew();
         NativeBuilderExactOutput expected = BuildManagedOutput(options);
         string exactHash = ComputeExactHash(expected);
@@ -178,17 +180,18 @@ internal static class NativeBuilderBenchmark
         else
         {
             exactParity = OutputsEqual(
-                BuildManagedOutput(options),
+                BuildManagedOutput(options, implementation),
                 expected);
         }
 
         setupClock.Stop();
         Stopwatch warmupClock = Stopwatch.StartNew();
         NativeBuilderBatchResult warmup = implementation
-            == NativeBuilderBenchmarkImplementation.ManagedList
+            != NativeBuilderBenchmarkImplementation.NativeBuilder
                 ? await RunManagedBatchAsync(
                     options,
-                    options.WarmupIterations).ConfigureAwait(false)
+                    options.WarmupIterations,
+                    implementation).ConfigureAwait(false)
                 : await RunNativeBatchAsync(
                     options,
                     options.WarmupIterations).ConfigureAwait(false);
@@ -212,10 +215,11 @@ internal static class NativeBuilderBenchmark
         NativeMemoryTestMetrics statisticsBefore =
             NativeMemoryTestHooks.Snapshot();
         NativeBuilderBatchResult measured = implementation
-            == NativeBuilderBenchmarkImplementation.ManagedList
+            != NativeBuilderBenchmarkImplementation.NativeBuilder
                 ? await RunManagedBatchAsync(
                     options,
-                    options.Iterations).ConfigureAwait(false)
+                    options.Iterations,
+                    implementation).ConfigureAwait(false)
                 : await RunNativeBatchAsync(
                     options,
                     options.Iterations).ConfigureAwait(false);
@@ -234,8 +238,8 @@ internal static class NativeBuilderBenchmark
         NativeMemoryTestMetrics statistics =
             NativeMemoryTestHooks.Snapshot();
         NativeBuilderPhaseEvidence phaseEvidence = implementation
-            == NativeBuilderBenchmarkImplementation.ManagedList
-                ? MeasureManagedPhases(options)
+            != NativeBuilderBenchmarkImplementation.NativeBuilder
+                ? MeasureManagedPhases(options, implementation)
                 : MeasureNativePhases(options);
         long logicalBytes = checked(
             (long)options.ElementCount
@@ -291,10 +295,15 @@ internal static class NativeBuilderBenchmark
 
     internal static NativeBuilderBenchmarkImplementation
         GetFirstImplementation(int sampleIndex)
+        => GetFirstImplementation(sampleIndex, NativeBuilderBenchmarkImplementation.ManagedList);
+
+    internal static NativeBuilderBenchmarkImplementation
+        GetFirstImplementation(int sampleIndex, NativeBuilderBenchmarkImplementation managedBaseline)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(sampleIndex);
+        ValidateManagedBaseline(managedBaseline);
         return (sampleIndex & 1) == 0
-            ? NativeBuilderBenchmarkImplementation.ManagedList
+            ? managedBaseline
             : NativeBuilderBenchmarkImplementation.NativeBuilder;
     }
 
@@ -322,10 +331,19 @@ internal static class NativeBuilderBenchmark
         }
     }
 
+    internal static NativeBuilderExactOutput BuildManagedOutput(
+        NativeBuilderBenchmarkOptions options,
+        NativeBuilderBenchmarkImplementation implementation)
+    {
+        ValidateManagedBaseline(implementation);
+        return CreateManagedPacket(options, implementation).CopyExactOutput();
+    }
+
     private static async Task<NativeBuilderBatchResult>
         RunManagedBatchAsync(
             NativeBuilderBenchmarkOptions options,
-            int iterations)
+            int iterations,
+            NativeBuilderBenchmarkImplementation implementation)
     {
         Channel<ManagedBuilderVoxelPacket> channel =
             Channel.CreateBounded<ManagedBuilderVoxelPacket>(
@@ -344,7 +362,6 @@ internal static class NativeBuilderBenchmark
                 in channel.Reader.ReadAllAsync().ConfigureAwait(false))
             {
                 checksum = unchecked(checksum + packet.Consume());
-                packet.Dispose();
             }
 
             return checksum;
@@ -357,16 +374,8 @@ internal static class NativeBuilderBenchmark
                 iteration < iterations;
                 iteration++)
             {
-                ManagedBuilderVoxelPacket? packet = CreateManagedPacket(options);
-                try
-                {
-                    await channel.Writer.WriteAsync(packet).ConfigureAwait(false);
-                    packet = null; // The channel consumer now owns the packet.
-                }
-                finally
-                {
-                    packet?.Dispose();
-                }
+                ManagedBuilderVoxelPacket packet = CreateManagedPacket(options, implementation);
+                await channel.Writer.WriteAsync(packet).ConfigureAwait(false);
             }
         }
         finally
@@ -449,8 +458,47 @@ internal static class NativeBuilderBenchmark
     }
 
     private static ManagedBuilderVoxelPacket CreateManagedPacket(
-        NativeBuilderBenchmarkOptions options) =>
-        new(BuildManagedOutput(options));
+        NativeBuilderBenchmarkOptions options,
+        NativeBuilderBenchmarkImplementation implementation)
+    {
+        (int opaqueCount, int transparentCount) = GetOutputCounts(options.ElementCount);
+        object opaque = AllocateManagedStorage(implementation, opaqueCount, options.PreLease);
+        object transparent = AllocateManagedStorage(implementation, transparentCount, options.PreLease);
+        InitializeManagedStorage(opaque, implementation, opaqueCount, options, transparentOutput: false);
+        InitializeManagedStorage(transparent, implementation, transparentCount, options, transparentOutput: true);
+        return PublishManagedPacket(opaque, transparent, implementation);
+    }
+
+    private static object AllocateManagedStorage(
+        NativeBuilderBenchmarkImplementation implementation, int count, int preLease) =>
+        implementation == NativeBuilderBenchmarkImplementation.ManagedExactArray
+            ? GC.AllocateUninitializedArray<uint>(count)
+            : new List<uint>(preLease);
+
+    private static void InitializeManagedStorage(object storage,
+        NativeBuilderBenchmarkImplementation implementation, int count,
+        NativeBuilderBenchmarkOptions options, bool transparentOutput)
+    {
+        if (implementation != NativeBuilderBenchmarkImplementation.ManagedExactArray)
+        {
+            AppendToList((List<uint>)storage, count, options, transparentOutput);
+            return;
+        }
+
+        Span<uint> values = (uint[])storage;
+        for (int offset = 0; offset < count; offset += options.BatchSize)
+        {
+            int length = Math.Min(options.BatchSize, count - offset);
+            FillBatch(values.Slice(offset, length), offset, options.Seed, transparentOutput);
+        }
+    }
+
+    private static ManagedBuilderVoxelPacket PublishManagedPacket(object opaque,
+        object transparent, NativeBuilderBenchmarkImplementation implementation) =>
+        implementation == NativeBuilderBenchmarkImplementation.ManagedList
+            ? new(ManagedBuilderVoxelPacket.ToUpload(((List<uint>)opaque).ToArray()),
+                ManagedBuilderVoxelPacket.ToUpload(((List<uint>)transparent).ToArray()), implementation)
+            : new(opaque, transparent, implementation);
 
     private static NativeBuilderVoxelPacket CreateNativePacket(
         NativeBuilderBenchmarkOptions options)
@@ -677,43 +725,32 @@ internal static class NativeBuilderBenchmark
             offset));
 
     private static NativeBuilderPhaseEvidence MeasureManagedPhases(
-        NativeBuilderBenchmarkOptions options)
+        NativeBuilderBenchmarkOptions options,
+        NativeBuilderBenchmarkImplementation implementation)
     {
         long totalStart = Stopwatch.GetTimestamp();
         long phaseStart = Stopwatch.GetTimestamp();
         (int opaqueCount, int transparentCount) =
             GetOutputCounts(options.ElementCount);
-        List<uint> opaque = new(options.PreLease);
-        List<uint> transparent = new(options.PreLease);
+        object opaque = AllocateManagedStorage(implementation, opaqueCount, options.PreLease);
+        object transparent = AllocateManagedStorage(implementation, transparentCount, options.PreLease);
         Channel<ManagedBuilderVoxelPacket> channel =
             Channel.CreateBounded<ManagedBuilderVoxelPacket>(1);
         double allocation = ElapsedMilliseconds(phaseStart);
 
         phaseStart = Stopwatch.GetTimestamp();
-        AppendToList(
-            opaque,
-            opaqueCount,
-            options,
-            transparentOutput: false);
-        AppendToList(
-            transparent,
-            transparentCount,
-            options,
-            transparentOutput: true);
+        InitializeManagedStorage(opaque, implementation, opaqueCount, options, transparentOutput: false);
+        InitializeManagedStorage(transparent, implementation, transparentCount, options, transparentOutput: true);
         double initialization = ElapsedMilliseconds(phaseStart);
 
         phaseStart = Stopwatch.GetTimestamp();
-        using ManagedBuilderVoxelPacket packet = new(
-            new NativeBuilderExactOutput(
-                opaque.ToArray(),
-                transparent.ToArray()));
+        ManagedBuilderVoxelPacket packet = PublishManagedPacket(opaque, transparent, implementation);
         double publication = ElapsedMilliseconds(phaseStart);
 
         phaseStart = Stopwatch.GetTimestamp();
         if (!channel.Writer.TryWrite(packet)
-            || !channel.Reader.TryRead(out ManagedBuilderVoxelPacket? received))
+            || !channel.Reader.TryRead(out ManagedBuilderVoxelPacket received))
         {
-            packet.Dispose();
             throw new InvalidOperationException(
                 "The managed builder phase handoff failed.");
         }
@@ -723,7 +760,8 @@ internal static class NativeBuilderBenchmark
         long checksum = received.Consume();
         double access = ElapsedMilliseconds(phaseStart);
         phaseStart = Stopwatch.GetTimestamp();
-        received.Dispose();
+        GC.KeepAlive(received.Opaque);
+        GC.KeepAlive(received.Transparent);
         double disposal = ElapsedMilliseconds(phaseStart);
         Volatile.Write(ref _sink, checksum);
         return new NativeBuilderPhaseEvidence(
@@ -930,6 +968,8 @@ internal static class NativeBuilderBenchmark
         arguments.Add("--seed");
         arguments.Add(options.Seed.ToString(
             CultureInfo.InvariantCulture));
+        arguments.Add("--managed-baseline");
+        arguments.Add(options.ManagedBaseline.ToString());
     }
 
     private static void ValidatePair(
@@ -938,7 +978,7 @@ internal static class NativeBuilderBenchmark
         NativeBuilderBenchmarkOptions options)
     {
         if (managed.Implementation
-                != NativeBuilderBenchmarkImplementation.ManagedList
+                != options.ManagedBaseline
             || native.Implementation
                 != NativeBuilderBenchmarkImplementation.NativeBuilder
             || managed.ElementCount != options.ElementCount
@@ -990,7 +1030,13 @@ internal static class NativeBuilderBenchmark
             ReadInt32Option(
                 args,
                 "--seed",
-                DefaultSeed));
+                DefaultSeed))
+        {
+            ManagedBaseline = Enum.Parse<NativeBuilderBenchmarkImplementation>(
+                ReadOptionalOption(args, "--managed-baseline")
+                    ?? nameof(NativeBuilderBenchmarkImplementation.ManagedExactArray),
+                ignoreCase: true)
+        };
         ValidateOptions(options);
         return options;
     }
@@ -998,6 +1044,7 @@ internal static class NativeBuilderBenchmark
     private static void ValidateOptions(
         NativeBuilderBenchmarkOptions options)
     {
+        ValidateManagedBaseline(options.ManagedBaseline);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
             options.ElementCount, nameof(options));
         ArgumentOutOfRangeException.ThrowIfNegative(
@@ -1019,6 +1066,14 @@ internal static class NativeBuilderBenchmark
                 "The native builder sample count must be even.",
                 nameof(options));
         }
+    }
+
+    private static void ValidateManagedBaseline(NativeBuilderBenchmarkImplementation implementation)
+    {
+        if (implementation is not (NativeBuilderBenchmarkImplementation.ManagedList
+            or NativeBuilderBenchmarkImplementation.ManagedListPrefix
+            or NativeBuilderBenchmarkImplementation.ManagedExactArray))
+            throw new ArgumentOutOfRangeException(nameof(implementation), implementation, "Select a managed builder baseline.");
     }
 
     private static int ReadInt32Option(
@@ -1076,28 +1131,25 @@ internal static class NativeBuilderBenchmark
         return options;
     }
 
-    private sealed class ManagedBuilderVoxelPacket : IDisposable
+    [StructLayout(LayoutKind.Sequential)]
+    private readonly record struct ManagedBuilderVoxelPacket(object Opaque, object Transparent,
+        NativeBuilderBenchmarkImplementation Implementation)
     {
-        private readonly byte[] _opaqueUpload;
-        private readonly byte[] _transparentUpload;
+        internal long Consume() => ConsumeUploads(GetUpload(Opaque), GetUpload(Transparent));
 
-        internal ManagedBuilderVoxelPacket(
-            NativeBuilderExactOutput output)
+        internal NativeBuilderExactOutput CopyExactOutput() => new(
+            MemoryMarshal.Cast<byte, uint>(GetUpload(Opaque)).ToArray(),
+            MemoryMarshal.Cast<byte, uint>(GetUpload(Transparent)).ToArray());
+
+        private ReadOnlySpan<byte> GetUpload(object storage) => Implementation switch
         {
-            _opaqueUpload = ToUpload(output.Opaque);
-            _transparentUpload = ToUpload(output.Transparent);
-        }
+            NativeBuilderBenchmarkImplementation.ManagedList => (byte[])storage,
+            NativeBuilderBenchmarkImplementation.ManagedListPrefix => MemoryMarshal.AsBytes(CollectionsMarshal.AsSpan((List<uint>)storage)),
+            NativeBuilderBenchmarkImplementation.ManagedExactArray => MemoryMarshal.AsBytes(((uint[])storage).AsSpan()),
+            _ => throw new InvalidOperationException("The managed packet contains an unsupported storage kind.")
+        };
 
-        internal long Consume() => ConsumeUploads(
-            _opaqueUpload,
-            _transparentUpload);
-
-        public void Dispose()
-        {
-            GC.KeepAlive(this);
-        }
-
-        private static byte[] ToUpload(uint[] source)
+        internal static byte[] ToUpload(uint[] source)
         {
             byte[] upload = new byte[checked(
                 source.Length * sizeof(uint))];
