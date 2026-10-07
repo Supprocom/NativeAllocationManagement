@@ -27,6 +27,8 @@ public sealed partial class NativeMemoryBudget
     private long _rejectedAllocationCount;
     private long _failedAllocationCount;
     private long _activeAllocationCount;
+    private long _acquiredBackingBytes;
+    private long _replacementBackingBytes;
     private bool _historyOverflowed;
 
     /// <summary>Creates a shared domain with an immutable native extent limit.</summary>
@@ -67,7 +69,11 @@ public sealed partial class NativeMemoryBudget
                 _reallocationCount, _freeCount, _activeAllocationCount,
                 _rejectedAllocationCount, _failedAllocationCount,
                 _trace.Length, _traceCount, _droppedTraceEventCount, _traceOverflowed,
-                _historyOverflowed);
+                _historyOverflowed)
+            {
+                AcquiredBackingBytes = _acquiredBackingBytes,
+                ReplacementBackingBytes = _replacementBackingBytes
+            };
         }
     }
 
@@ -164,6 +170,7 @@ public sealed partial class NativeMemoryBudget
             // bounds this exact gauge by CapacityBytes, independently of history.
             _activeAllocationCount++;
             IncrementHistory(ref _allocationCount);
+            NativeOwnerHistory.Add(ref _acquiredBackingBytes, bytes, ref _historyOverflowed);
             RecordTrace(traceKind, ownerId, byteLength, allocationOrdinal: allocationOrdinal);
         }
     }
@@ -189,7 +196,10 @@ public sealed partial class NativeMemoryBudget
             {
                 _activeAllocationCount++;
                 IncrementHistory(ref _allocationCount);
+                NativeOwnerHistory.Add(ref _acquiredBackingBytes, bytes, ref _historyOverflowed);
             }
+            else
+                NativeOwnerHistory.Add(ref _replacementBackingBytes, bytes, ref _historyOverflowed);
             RecordTrace(NativeMemoryTraceKind.Reallocated, ownerId, byteLength, previousByteLength,
                 allocationOrdinal: allocationOrdinal);
         }
@@ -388,6 +398,10 @@ public readonly record struct NativeMemoryBudgetStatistics
     public long AllocationCount { get; }
     /// <summary>Gets successful realloc calls, including realloc of a null pointer.</summary>
     public long ReallocationCount { get; }
+    /// <summary>Gets the sum of successful fresh nonempty requested backing extents, including realloc from null; retained reuse, failed/refused attempts and releases do not change this lifetime history.</summary>
+    public long AcquiredBackingBytes { get; internal init; }
+    /// <summary>Gets the sum of full successful realloc target extents for previously nonempty backing, not net growth or opaque backend physical allocation volume; disjoint from AcquiredBackingBytes.</summary>
+    public long ReplacementBackingBytes { get; internal init; }
     /// <summary>Gets physical release calls; replacing backing by realloc is not a free call.</summary>
     public long FreeCount { get; }
     /// <summary>Gets the exact charged backing allocation gauge, independent of saturated lifetime histories.</summary>
@@ -404,7 +418,7 @@ public readonly record struct NativeMemoryBudgetStatistics
     public long DroppedTraceEventCount { get; }
     /// <summary>Gets whether event identities were exhausted or the dropped count ceased being exact.</summary>
     public bool TraceOverflowed { get; }
-    /// <summary>Gets whether a lifetime event counter saturated; values at long.MaxValue are then lower bounds.</summary>
+    /// <summary>Gets whether a lifetime event or byte history saturated; values at long.MaxValue are then lower bounds.</summary>
     public bool HistoryOverflowed { get; }
 }
 

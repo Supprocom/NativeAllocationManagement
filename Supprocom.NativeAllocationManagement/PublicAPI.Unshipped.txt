@@ -470,6 +470,8 @@ Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.PeakCommittedB
 Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.PeakAdmittedBytes.get -> long
 Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.AllocationCount.get -> long
 Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.ReallocationCount.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.AcquiredBackingBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.ReplacementBackingBytes.get -> long
 Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.FreeCount.get -> long
 Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.ActiveAllocationCount.get -> long
 Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.RejectedAllocationCount.get -> long

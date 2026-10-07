@@ -149,19 +149,17 @@ public sealed class NativeMemoryReservationTests
         NativeMemoryReservation<int> current = NativeMemoryReservation<int>.Move(ref source);
         source = current;
         object control = current.ControlForTest!;
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int index = 0; index < 10_000; index++)
-        {
-            current = NativeMemoryReservation<int>.Move(ref source);
-            source = current;
-        }
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
-        Assert.Equal(10_001, current.CaptureSnapshot().ReservationMoveCount);
+        _ = MeasureReservationMoves(ref source);
+        long moveAllocated = MeasureReservationMoves(ref source);
+        Assert.NotNull(source);
+        current = source.Value;
+        Assert.Equal(0, moveAllocated);
+        Assert.Equal(20_001, current.CaptureSnapshot().ReservationMoveCount);
         current.PrepareBacking();
         NativeLeaseInitializer<int> initializer = static writer => writer.Write(17);
         NativeTransfer<int> warm = WarmActivation();
         warm.Dispose();
-        before = GC.GetAllocatedBytesForCurrentThread();
+        long before = GC.GetAllocatedBytesForCurrentThread();
         NativeTransfer<int> unique = NativeMemoryReservation<int>.Activate(ref source, initializer);
         long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
         try
@@ -561,6 +559,18 @@ public sealed class NativeMemoryReservationTests
         Assert.True(budget.TryReserve<int>(1, out NativeMemoryReservation<int>? source, out _));
         if (prepared) source.Value.PrepareBacking();
         return new WeakReference(source.Value.ControlForTest!);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static long MeasureReservationMoves(ref NativeMemoryReservation<int>? source)
+    {
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        for (int index = 0; index < 10_000; index++)
+        {
+            NativeMemoryReservation<int> current = NativeMemoryReservation<int>.Move(ref source);
+            source = current;
+        }
+        return GC.GetAllocatedBytesForCurrentThread() - before;
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]

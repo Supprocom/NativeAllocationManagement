@@ -97,6 +97,8 @@ not addresses. Budget state is never reset by internal process-measurement reset
 | `PeakAdmittedBytes` | Lifetime maximum committed-plus-reserved admission demand, including conservative old-plus-new overlap. |
 | `AllocationCount` | Successful fresh backing acquisitions, including realloc from null. |
 | `ReallocationCount` | Successful realloc calls, including realloc from null; it overlaps that acquisition case. |
+| `AcquiredBackingBytes` | Lifetime sum of full successfully acquired nonempty NAM-requested extents, including realloc from null and application-prepared backing. Releases do not subtract history. No charged reuse or failed/refused attempt is counted. |
+| `ReplacementBackingBytes` | Lifetime sum of full successful realloc targets for previously nonempty backing. Not net growth; excludes realloc from null, already counted in acquisition bytes. |
 | `FreeCount` | Physical release calls; realloc is not an invented free event. |
 | `ActiveAllocationCount` | Exact current charged allocation gauge, updated at acquisition and physical release under the existing domain lock. It cannot be derived from two saturated lifetime histories. Each live allocation owns at least one byte, so admission bounds the gauge by the immutable byte ceiling. |
 | `RejectedAllocationCount` | Requests whose minimum complete extent did not fit, before native allocation. A failed preference with a successful exact fallback is not a rejection. |
@@ -105,7 +107,18 @@ not addresses. Budget state is never reset by internal process-measurement reset
 | `TraceCount` | Events currently retained in the ring, never larger than its capacity. |
 | `DroppedTraceEventCount` | Events overwritten or omitted after sequence exhaustion, not those omitted by a short copy destination. Saturates at `long.MaxValue`; check `TraceOverflowed`. |
 | `TraceOverflowed` | True if event identities were exhausted or the dropped count ceased to be exact. This diagnostic condition never interrupts a successful allocation or physical release. |
-| `HistoryOverflowed` | A lifetime event counter exceeded Int64's representable history. Counts at `long.MaxValue` are lower bounds; other unsaturated counts remain exact. Charged allocations, bytes, reservations and peaks remain exact and do not depend on history subtraction. |
+| `HistoryOverflowed` | A lifetime event or byte history exceeded Int64's representable history. Values at `long.MaxValue` are lower bounds; other unsaturated histories remain exact. Charged allocations, bytes, reservations and peaks remain exact and do not depend on history subtraction. |
+
+The two byte histories partition successful backing requests. They are available
+without tracing, survive ring overwrites and owner cleanup, and do not double
+count realloc from null. Sum them only with checked/wider arithmetic when exact
+histories are required. They measure NAM-requested extents, not bytes newly
+allocated inside opaque realloc, private backend overhead, realloc's physical
+peak, process RSS or complete allocation volume. They cannot alone establish a
+memory-allocation win over C#; managed metadata and backend limits still matter.
+Updates run only at existing successful backing transitions under the existing
+budget gate: two lifetime fields, no trace buffer or new synchronization. Warmed
+reuse, reservations, ordinary refusal and snapshots add no byte-history writes.
 
 Lifetime acquisition/realloc/free/refusal/failure counters saturate with the visible
 `HistoryOverflowed` flag, rather than throwing after a successful physical storage

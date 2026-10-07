@@ -53,6 +53,7 @@ public sealed class NativeBudgetDiagnosticContractTests
                     CommittedBytes = 16,
                     PeakCommittedBytes = 16,
                     AllocationCount = 1,
+                    AcquiredBackingBytes = 16,
                     ActiveAllocationCount = 1
                 };
                 NativeBudgetDiagnosticOracle.Verify(budget, expected.WithEvents(5), "application-backend-failure:retry-prepared");
@@ -112,7 +113,7 @@ public sealed class NativeBudgetDiagnosticContractTests
         string[] expected = typeof(NativeBudgetDiagnosticOracle.Expected).GetProperties(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
             .Select(static property => property.Name).Order(StringComparer.Ordinal).ToArray();
         JsonElement[] fields = contract.GetProperty("fields").EnumerateArray().ToArray();
-        Assert.Equal(17, actual.Length);
+        Assert.Equal(19, actual.Length);
         Assert.Equal(actual, expected);
         Assert.Equal(actual, fields.Select(static field => field.GetProperty("name").GetString()!).Order(StringComparer.Ordinal).ToArray());
         foreach (JsonElement field in fields)

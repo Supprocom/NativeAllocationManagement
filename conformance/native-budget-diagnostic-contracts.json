@@ -76,6 +76,20 @@
       "additionalProofs": ["NativeMemoryBudgetTests.PublishedReallocCountersMatchActualCallsAndExtentChanges", "NativeMemoryBudgetTests.ZeroLengthDoesNotFabricateBackingEvents", "NativeBudgetHistoryTests.SaturatedCompletedHistoriesDoNotBlockNewBackingOrPhysicalRelease"]
     },
     {
+      "name": "AcquiredBackingBytes", "units": "requested backing bytes", "role": "history",
+      "definition": "Lifetime sum of full successful fresh nonempty backing requests, including realloc from null and application-prepared backing. Release does not subtract history; retained reuse, zero extents, pending/cancelled permission and failed/refused acquisition add none. This is not backend-private allocation volume or RSS.",
+      "implementation": ["NativeMemoryBudget.cs#NativeOwnerHistory.Add(ref _acquiredBackingBytes, bytes, ref _historyOverflowed);", "NativeMemoryAdmission.cs#NativeOwnerHistory.Add(ref _acquiredBackingBytes, bytes, ref _historyOverflowed);"],
+      "overflow": "Nonthrowing saturation at Int64.MaxValue; a further positive byte sets HistoryOverflowed. Charges and release remain exact. No reset.",
+      "additionalProofs": ["NativeBudgetBackingRequestTests.VariableAcquisitionsSurviveReleaseTraceLossAndRejectedOrFailedAttempts", "NativeBudgetBackingRequestTests.PendingFailedPreparedAndActivatedPermissionCountBackingExactlyOnce", "NativeBudgetBackingRequestTests.ConcurrentDomainsHistoryCountsEverySuccessfulExtent", "NativeBudgetBackingRequestTests.ByteHistorySaturationCannotInterruptBackingOrCleanup"]
+    },
+    {
+      "name": "ReplacementBackingBytes", "units": "requested realloc target bytes", "role": "history",
+      "definition": "Lifetime sum of full target extents of successful reallocations of previously nonempty backing. Not net growth or bytes newly allocated inside opaque realloc. Disjoint from AcquiredBackingBytes; realloc from null contributes only to acquisition bytes.",
+      "implementation": ["NativeMemoryBudget.cs#NativeOwnerHistory.Add(ref _replacementBackingBytes, bytes, ref _historyOverflowed);"],
+      "overflow": "Nonthrowing saturation at Int64.MaxValue with HistoryOverflowed on lost exactness; replacement state, charge and cleanup do not depend on history.",
+      "additionalProofs": ["NativeBudgetBackingRequestTests.NullReallocationAndReplacementTargetsAreDisjoint", "NativeBudgetBackingRequestTests.ByteHistorySaturationCannotInterruptBackingOrCleanup", "NativeBudgetBackingRequestTests.RetainedReuseAndSnapshotsDoNotAddRequestBytesOrAllocate"]
+    },
+    {
       "name": "ActiveAllocationCount", "units": "charged backing allocations", "role": "gauge",
       "definition": "Exact live nonempty backing allocation count. Admission alone adds none; replacing nonempty backing preserves one; successful realloc from null adds one; physical release removes one.",
       "implementation": ["NativeMemoryBudget.cs#_activeAllocationCount++;", "NativeMemoryBudget.cs#_activeAllocationCount--;", "NativeMemoryAdmission.cs#_activeAllocationCount++;"],
@@ -126,7 +140,7 @@
     },
     {
       "name": "HistoryOverflowed", "units": "boolean", "role": "overflow",
-      "definition": "Sticky budget-domain history saturation disclosure, including application-admission histories. A counter reaching exactly Int64.MaxValue is still exact until another event occurs; current gauges are unaffected.",
+      "definition": "Sticky budget-domain event/byte history saturation disclosure, including application-admission histories. A counter reaching exactly Int64.MaxValue is still exact until additional positive history occurs; current gauges are unaffected.",
       "implementation": ["NativeMemoryBudget.cs#if (counter == long.MaxValue)", "NativeMemoryBudget.cs#_historyOverflowed = true;", "NativeMemoryAdmission.cs#HistoryOverflowed = _historyOverflowed,"],
       "overflow": "Sticky true; saturated histories become lower bounds without preventing admission reconciliation or physical cleanup.",
       "additionalProofs": ["NativeBudgetHistoryTests.ExactMaximumHistoryRemainsExactUntilAnotherEventActuallyOccurs", "NativeBudgetHistoryTests.SaturatedCompletedHistoriesDoNotBlockNewBackingOrPhysicalRelease", "NativeBudgetHistoryTests.PagePreparationRollbackReleasesRealPagesDespiteSaturatedAcquisitionAndFreeHistory"]

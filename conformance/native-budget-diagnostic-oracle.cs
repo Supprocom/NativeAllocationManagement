@@ -26,6 +26,7 @@ internal static class NativeBudgetDiagnosticOracle
                 PeakCommittedBytes = 8,
                 PeakAdmittedBytes = 8,
                 AllocationCount = 1,
+                AcquiredBackingBytes = 8,
                 ActiveAllocationCount = 1
             };
             Verify(budget, expected.WithEvents(2), "builder:allocated");
@@ -37,7 +38,8 @@ internal static class NativeBudgetDiagnosticOracle
                 CommittedBytes = 16,
                 PeakCommittedBytes = 16,
                 PeakAdmittedBytes = 24,
-                ReallocationCount = 1
+                ReallocationCount = 1,
+                ReplacementBackingBytes = 16
             };
             Verify(budget, expected.WithEvents(4), "builder:reallocated");
             if (builder.TryEnsureCapacity(17) || builder.Capacity != 4 || builder.Count != 1)
@@ -95,6 +97,7 @@ internal static class NativeBudgetDiagnosticOracle
                 CommittedBytes = 16,
                 PeakCommittedBytes = 16,
                 AllocationCount = 1,
+                AcquiredBackingBytes = 16,
                 ActiveAllocationCount = 1
             };
             Verify(budget, expected.WithEvents(5), "prepared:acquired-unpublished");
@@ -119,6 +122,8 @@ internal static class NativeBudgetDiagnosticOracle
         Check(nameof(actual.PeakAdmittedBytes), actual.PeakAdmittedBytes, expected.PeakAdmittedBytes, stage);
         Check(nameof(actual.AllocationCount), actual.AllocationCount, expected.AllocationCount, stage);
         Check(nameof(actual.ReallocationCount), actual.ReallocationCount, expected.ReallocationCount, stage);
+        Check(nameof(actual.AcquiredBackingBytes), actual.AcquiredBackingBytes, expected.AcquiredBackingBytes, stage);
+        Check(nameof(actual.ReplacementBackingBytes), actual.ReplacementBackingBytes, expected.ReplacementBackingBytes, stage);
         Check(nameof(actual.FreeCount), actual.FreeCount, expected.FreeCount, stage);
         Check(nameof(actual.ActiveAllocationCount), actual.ActiveAllocationCount, expected.ActiveAllocationCount, stage);
         Check(nameof(actual.RejectedAllocationCount), actual.RejectedAllocationCount, expected.RejectedAllocationCount, stage);
@@ -166,6 +171,9 @@ internal static class NativeBudgetDiagnosticOracle
         long RejectedAllocationCount, long FailedAllocationCount, int TraceCapacity,
         int TraceCount, long DroppedTraceEventCount, bool TraceOverflowed, bool HistoryOverflowed)
     {
+        public long AcquiredBackingBytes { get; init; }
+        public long ReplacementBackingBytes { get; init; }
+
         internal static Expected Empty(long id, long capacityBytes, int traceCapacity) =>
             new(id, capacityBytes, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, traceCapacity, 0, 0, false, false);
 

@@ -251,7 +251,7 @@ collection or change allocator accounting.
 ## Maintained semantic contracts
 
 The [budget contract inventory](../conformance/native-budget-diagnostic-contracts.json)
-defines all 17 `NativeMemoryBudgetStatistics` fields, their units, domain scope,
+defines all 19 `NativeMemoryBudgetStatistics` fields, their units, domain scope,
 reset and overflow rules, implementation anchors, and executable proof links.
 An [independent whole-snapshot oracle](../conformance/native-budget-diagnostic-oracle.cs)
 checks actual builder growth/refusal/release and pending/prepared reservation

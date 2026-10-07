@@ -149,6 +149,7 @@ public sealed partial class NativeMemoryBudget
             {
                 _activeAllocationCount++;
                 IncrementHistory(ref _allocationCount);
+                NativeOwnerHistory.Add(ref _acquiredBackingBytes, bytes, ref _historyOverflowed);
                 RecordTrace(NativeMemoryTraceKind.Allocated, ownerId, byteLength, allocationOrdinal: 1);
             }
             RecordTrace(NativeMemoryTraceKind.ReservationBackingPrepared, ownerId, byteLength,

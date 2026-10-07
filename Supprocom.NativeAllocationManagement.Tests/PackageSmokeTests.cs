@@ -408,7 +408,7 @@ public sealed class PackageSmokeTests
 
                 NativeBudgetDiagnosticOracle.Run(traceCapacity: 0);
                 NativeBudgetDiagnosticOracle.Run(traceCapacity: 4);
-                System.Console.WriteLine("budget-oracle schemas=1 fields=17 modes=2 paths=builder,pending,prepared");
+                System.Console.WriteLine("budget-oracle schemas=1 fields=19 modes=2 paths=builder,pending,prepared");
                 """);
             string project = Path.Combine(consumerRoot, "Consumer.csproj");
             CommandResult restore = await RunDotnetAsync(
@@ -418,7 +418,7 @@ public sealed class PackageSmokeTests
             Assert.True(build.ExitCode == 0, build.Output);
             CommandResult run = await RunDotnetAsync($"run --project \"{project}\" --no-build --no-restore", consumerRoot);
             Assert.True(run.ExitCode == 0, run.Output);
-            Assert.Contains("budget-oracle schemas=1 fields=17 modes=2 paths=builder,pending,prepared", run.Output, StringComparison.Ordinal);
+            Assert.Contains("budget-oracle schemas=1 fields=19 modes=2 paths=builder,pending,prepared", run.Output, StringComparison.Ordinal);
         }
         finally { DeleteConsumerRoot(consumerRoot); }
     }
