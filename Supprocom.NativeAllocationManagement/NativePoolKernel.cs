@@ -13,7 +13,7 @@ internal sealed unsafe class NativePoolKernel<T>
     private const string OwnerKind = "NativePool";
 
     private readonly NativeMemoryReturn _returnMemoryOnDispose;
-    private readonly NativeMemoryBudget? _budget;
+    private NativeMemoryBudget? _budget;
     internal long Id { get; } = NativeOwnerIdentity.Next();
     private readonly int _ownerThreadId;
     private readonly int[] _freeHeads = [];
@@ -1036,6 +1036,7 @@ internal sealed unsafe class NativePoolKernel<T>
         }
 
         _retainedBytes = 0;
+        _budget = null;
     }
 
     private void FreeSlab(ref Slab slab)

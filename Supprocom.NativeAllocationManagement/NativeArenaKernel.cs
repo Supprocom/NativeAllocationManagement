@@ -14,7 +14,7 @@ internal sealed unsafe partial class NativeArenaKernel
         SegmentAlignment);
 
     private readonly NativeMemoryReturn _returnMemoryOnDispose;
-    private readonly NativeMemoryBudget? _budget;
+    private NativeMemoryBudget? _budget;
     internal long Id { get; } = NativeOwnerIdentity.Next();
     private readonly int _ownerThreadId;
     private ArenaLane _ordinary;
@@ -817,6 +817,7 @@ internal sealed unsafe partial class NativeArenaKernel
         FreeLane(ref _scoped);
         _retainedBytes = 0;
         _segmentCount = 0;
+        _budget = null;
     }
 
     private void FreeLane(ref ArenaLane lane, NativeMemoryTraceKind traceKind = NativeMemoryTraceKind.Released)

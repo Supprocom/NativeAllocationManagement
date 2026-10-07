@@ -12,7 +12,7 @@ internal sealed unsafe class NativeRegionKernel
         NativeSegment.Alignment);
 
     private readonly NativeMemoryReturn _returnMemoryOnDispose;
-    private readonly NativeMemoryBudget? _budget;
+    private NativeMemoryBudget? _budget;
     internal long Id { get; } = NativeOwnerIdentity.Next();
     private readonly int _ownerThreadId;
     private NativeOwnerLifecycle _lifecycle;
@@ -461,6 +461,7 @@ internal sealed unsafe class NativeRegionKernel
                 metricsEpoch);
             segment = next;
         }
+        _budget = null;
     }
 
     private NativeAllocationStateException CreateState(

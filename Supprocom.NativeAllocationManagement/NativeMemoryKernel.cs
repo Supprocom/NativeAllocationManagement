@@ -799,7 +799,7 @@ internal sealed class NativeSegment
     private int _detached;
     private long _metricsEpoch;
     private readonly bool _ownsNativeMemory;
-    private readonly NativeMemoryBudget? _budget;
+    private NativeMemoryBudget? _budget;
     private readonly long _allocationOrdinal;
     private readonly NativeOwnerBackingHistory? _backingHistory;
 
@@ -1041,6 +1041,7 @@ internal sealed class NativeSegment
         _budget?.Release(AllocationByteLength, _backingHistory?.OwnerId ?? 0,
             allocationOrdinal: _allocationOrdinal);
         NativeMemoryAccounting.RecordFree(AllocationByteLength, Volatile.Read(ref _detached) != 0, _metricsEpoch);
+        _budget = null;
     }
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "MA0055", Justification = "Emergency native-memory cleanup supplements mandatory deterministic disposal.")]
@@ -2220,7 +2221,7 @@ internal sealed class NativeGenerationOwner
     private int _released;
     private int _detached;
     private readonly long _metricsEpoch;
-    private readonly NativeMemoryBudget? _traceBudget;
+    private NativeMemoryBudget? _traceBudget;
     private readonly long _ownerId;
 
     internal NativeGenerationOwner(long generation, NativeMemoryBudget? budget, long ownerId)
@@ -2296,6 +2297,7 @@ internal sealed class NativeGenerationOwner
         }
 
         nuint detachedBytes = 0;
+        NativeMemoryBudget? traceBudget;
         lock (_gate)
         {
             if (_segments is null)
@@ -2303,12 +2305,14 @@ internal sealed class NativeGenerationOwner
                 return;
             }
 
+            traceBudget = _traceBudget;
+
 #pragma warning disable HLQ012 // Retain the enumerator's mutation checks during ownership cleanup; a span removes them.
             foreach (NativeSegment segment in _segments)
             {
                 if (segment.MarkDetached())
                 {
-                    if (_traceBudget is not null)
+                    if (traceBudget is not null)
                     {
                         detachedBytes += segment.AllocationByteLength;
                     }
@@ -2321,7 +2325,7 @@ internal sealed class NativeGenerationOwner
         }
 
         NativeMemoryAccounting.RecordDetachedGeneration(_metricsEpoch);
-        _traceBudget?.RecordGenerationTransition(
+        traceBudget?.RecordGenerationTransition(
             NativeMemoryTraceKind.GenerationDetached, _ownerId, Generation, detachedBytes);
     }
 
@@ -2329,6 +2333,7 @@ internal sealed class NativeGenerationOwner
     internal void ReleaseToNative()
     {
         nuint releasedBytes = 0;
+        NativeMemoryBudget? traceBudget;
         lock (_gate)
         {
             if (Interlocked.Exchange(ref _released, 1) != 0)
@@ -2339,12 +2344,14 @@ internal sealed class NativeGenerationOwner
             List<NativeSegment>? segments = _segments;
             _segments = null;
             _payloadCapacityBytes = 0;
+            traceBudget = _traceBudget;
+            _traceBudget = null;
             if (segments is not null)
             {
 #pragma warning disable HLQ012 // Retain the enumerator's mutation checks during ownership cleanup; a span removes them.
                 foreach (NativeSegment segment in segments)
                 {
-                    if (_traceBudget is not null && segment.Pointer != IntPtr.Zero)
+                    if (traceBudget is not null && segment.Pointer != IntPtr.Zero)
                     {
                         releasedBytes += segment.AllocationByteLength;
                     }
@@ -2354,7 +2361,7 @@ internal sealed class NativeGenerationOwner
             }
         }
 
-        _traceBudget?.RecordGenerationTransition(
+        traceBudget?.RecordGenerationTransition(
             NativeMemoryTraceKind.GenerationReleased, _ownerId, Generation, releasedBytes);
         GC.SuppressFinalize(this);
     }
@@ -3235,7 +3242,7 @@ internal sealed class NativeOwnerKernel
     private readonly NativeOwnerKind _kind;
     private readonly string _ownerKind;
     private readonly NativeMemoryReturn _returnMemoryOnDispose;
-    private readonly NativeMemoryBudget? _budget;
+    private NativeMemoryBudget? _budget;
     private readonly int _storageElementSize;
     private readonly NativeOwnerBackingHistory _backingHistory;
     private readonly nuint _preLease;
@@ -8905,6 +8912,7 @@ internal sealed class NativeOwnerKernel
                     _retiredGenerations.Clear();
                     _quarantinedGenerations.Clear();
                     _lifecycle = NativeOwnerLifecycle.Disposed;
+                    _budget = null;
                     GC.SuppressFinalize(this);
                     return;
                 }
@@ -8934,6 +8942,7 @@ internal sealed class NativeOwnerKernel
                     _retiredGenerations.Clear();
                     _quarantinedGenerations.Clear();
                     _lifecycle = NativeOwnerLifecycle.Disposed;
+                    _budget = null;
                     GC.SuppressFinalize(this);
                     return;
                 }
@@ -8963,6 +8972,7 @@ internal sealed class NativeOwnerKernel
                 _retiredGenerations.Clear();
                 _quarantinedGenerations.Clear();
                 _lifecycle = NativeOwnerLifecycle.Disposed;
+                _budget = null;
                 GC.SuppressFinalize(this);
             }
             catch

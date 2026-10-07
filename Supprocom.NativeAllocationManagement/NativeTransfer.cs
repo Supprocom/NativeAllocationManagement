@@ -154,7 +154,9 @@ internal class NativeTransferControl<T>
         _backingBytes = checked((long)(_borrowedBacking ? segment!.ByteLength : segment?.AllocationByteLength ?? 0));
         _generation = generation;
         _allocationId = allocationId;
-        _block = default;
+        // A closed kernel no longer roots its domain. The existing block slot
+        // keeps this control's still-pending ownership trace until real return.
+        _block = new NativeBlock(IntPtr.Zero, 0, 0, kernel.BudgetForSharing);
         _length = allocationState.Length;
         _capacity = allocationState.Capacity;
         _state = Active;
