@@ -225,6 +225,9 @@ internal static class NativeBuilderBenchmark
                     options.Iterations).ConfigureAwait(false);
         process.Refresh();
         long workingSetAfter = process.WorkingSet64;
+        long peakWorkingSet = process.PeakWorkingSet64;
+        if (peakWorkingSet <= 0)
+            throw new InvalidDataException("The runtime did not provide a usable process working-set high-water mark.");
         long managedAllocated = GC.GetTotalAllocatedBytes(
             precise: true) - allocatedBefore;
         long expectedMeasuredChecksum = unchecked(
@@ -274,7 +277,7 @@ internal static class NativeBuilderBenchmark
             GC.GetGCMemoryInfo().HeapSizeBytes,
             workingSetBefore,
             workingSetAfter,
-            Math.Max(workingSetBefore, workingSetAfter),
+            peakWorkingSet,
             statistics.OutstandingNativeBytes,
             statistics.AllocationCount,
             statistics.AllocationCount
@@ -888,32 +891,17 @@ internal static class NativeBuilderBenchmark
         Task<string> errorTask =
             process.StandardError.ReadToEndAsync();
         Task exitTask = process.WaitForExitAsync();
-        long peakWorkingSet = 0;
-        Stopwatch timeoutClock = Stopwatch.StartNew();
-        while (!exitTask.IsCompleted)
+        try
         {
-            if (timeoutClock.Elapsed > TimeSpan.FromSeconds(60))
-            {
+            await exitTask.WaitAsync(TimeSpan.FromSeconds(60)).ConfigureAwait(false);
+        }
+        catch (TimeoutException exception)
+        {
+            if (!process.HasExited)
                 process.Kill(entireProcessTree: true);
-                throw new TimeoutException(
-                    $"The {implementation} native builder worker exceeded 60 seconds.");
-            }
-
-            try
-            {
-                process.Refresh();
-                peakWorkingSet = Math.Max(
-                    peakWorkingSet,
-                    process.WorkingSet64);
-            }
-            catch (InvalidOperationException)
-            {
-                break;
-            }
-
-            await Task.WhenAny(
-                exitTask,
-                Task.Delay(TimeSpan.FromMilliseconds(2))).ConfigureAwait(false);
+            await exitTask.ConfigureAwait(false);
+            throw new TimeoutException(
+                $"The {implementation} native builder worker exceeded 60 seconds.", exception);
         }
 
         await exitTask.ConfigureAwait(false);
@@ -931,12 +919,7 @@ internal static class NativeBuilderBenchmark
                 CompactJsonOptions)
             ?? throw new InvalidDataException(
                 "The native builder worker did not return evidence.");
-        return evidence with
-        {
-            PeakWorkingSetBytes = Math.Max(
-                peakWorkingSet,
-                evidence.PeakWorkingSetBytes)
-        };
+        return evidence;
     }
 
     private static void AddWorkerArguments(

@@ -244,6 +244,9 @@ internal static class PooledPerformanceRegression
             execution.ReadNativeStatistics();
         process.Refresh();
         long workingSetAfter = process.WorkingSet64;
+        long peakWorkingSet = process.PeakWorkingSet64;
+        if (peakWorkingSet <= 0)
+            throw new InvalidDataException("The runtime did not provide a usable process working-set high-water mark.");
         long allocated = GC.GetTotalAllocatedBytes(precise: true)
             - allocatedBefore;
         long requiredChecksum = unchecked(
@@ -275,7 +278,7 @@ internal static class PooledPerformanceRegression
             GC.CollectionCount(2) - gen2Before,
             workingSetBefore,
             workingSetAfter,
-            Math.Max(workingSetBefore, workingSetAfter),
+            peakWorkingSet,
             freshAfter - freshBefore,
             retainedBefore,
             retainedAfter,

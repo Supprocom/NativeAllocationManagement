@@ -30,3 +30,14 @@ native growth requests, retained extents, metadata preparation, or backend
 overhead. This comparison does not yet establish shared-cap equivalence, managed
 pooling, the published previous-NAM matrix, normal-compilation confidence, or
 complete four-phase allocation acceptance. Those remain required 0.3.0 gates.
+
+`WorkingSetBeforeBytes` and `WorkingSetAfterBytes` are endpoint resident-memory
+observations. `PeakWorkingSetBytes` is the OS-reported process-lifetime working-set
+high-water mark through the post-measurement refresh, before the separate phase
+probe and report serialization. It includes startup, setup and warm-up; it is not
+a resettable steady-state peak, native-only extent or complete process budget.
+The pooled worker's `PeakObservedWorkingSetBytes` has the same lifetime definition,
+ending before its separately measured disposal. Endpoints cannot reconstruct
+these peaks. Isolated builder runs preserve the worker's own observation without
+parent RSS polling. A missing/nonpositive OS peak fails evidence collection,
+instead of inventing zero; actual platform readiness remains a release gate.
