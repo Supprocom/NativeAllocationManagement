@@ -14,6 +14,7 @@ public sealed class NativeBuilderBenchmarkTests
     [InlineData(NativeBuilderBenchmarkImplementation.ManagedExactArray)]
     [InlineData(NativeBuilderBenchmarkImplementation.NativeBuilder)]
     [InlineData(NativeBuilderBenchmarkImplementation.NativeBuilderBudgeted)]
+    [InlineData(NativeBuilderBenchmarkImplementation.NativeBuilderBudgetedDirect)]
     public async Task LifecycleCountersCoverActualDistinctWorkerInvocations(NativeBuilderBenchmarkImplementation implementation)
     {
         NativeBuilderBenchmarkOptions options = CreateOptions() with
@@ -45,7 +46,8 @@ public sealed class NativeBuilderBenchmarkTests
         Assert.Equal(after.Native.AllocationCount - before.Native.AllocationCount, evidence.NativeFreshSegmentAllocationDelta);
         Assert.True(lifecycle.MeasuredBatch.ElapsedMilliseconds >= evidence.ElapsedMilliseconds);
         long nativeOwnersPerPacket = implementation is NativeBuilderBenchmarkImplementation.NativeBuilder
-            or NativeBuilderBenchmarkImplementation.NativeBuilderBudgeted ? 2 : 0;
+            or NativeBuilderBenchmarkImplementation.NativeBuilderBudgeted
+            or NativeBuilderBenchmarkImplementation.NativeBuilderBudgetedDirect ? 2 : 0;
         Assert.Equal(nativeOwnersPerPacket, NativeAcquisitions(lifecycle.PreparationAndValidation));
         Assert.Equal(nativeOwnersPerPacket * options.WarmupIterations, NativeAcquisitions(lifecycle.Warmup));
         Assert.Equal(nativeOwnersPerPacket * options.Iterations, NativeAcquisitions(lifecycle.MeasuredBatch));
@@ -241,6 +243,126 @@ public sealed class NativeBuilderBenchmarkTests
             acquiredPerPacket, replacementPerPacket, reallocationsPerPacket, 1);
         NativeBuilderWorkerEvidence restored = NativeBuilderBenchmark.DeserializeWorkerEvidence(JsonSerializer.Serialize(evidence));
         Assert.Equal(lifecycle, restored.LifecycleEvidence);
+    }
+
+    [Theory]
+    [InlineData(1, 1)]
+    [InlineData(3, 2)]
+    [InlineData(17, 4)]
+    [InlineData(1025, 256)]
+    public async Task KnownSizeBoundedWriterRemovesCopiesAndReplacementRequests(int elements, int batchSize)
+    {
+        NativeBuilderBenchmarkOptions options = CreateOptions() with
+        {
+            ElementCount = elements,
+            BatchSize = batchSize,
+            PreLease = 1,
+            NativeBaseline = NativeBuilderBenchmarkImplementation.NativeBuilderBudgetedDirect,
+            NativeBudgetCapacityBytes = 65536,
+            Iterations = 3,
+            WarmupIterations = 2
+        };
+        NativeBuilderWorkerEvidence evidence = await NativeBuilderBenchmark.RunWorkerAsync(options.NativeBaseline, options);
+        Assert.True(evidence.ExactParity);
+        NativeBuilderLifecycleEvidence lifecycle = evidence.LifecycleEvidence;
+        long packetBytes = (long)elements * sizeof(uint);
+        NativeBuilderBudgetObservation prepared = lifecycle.PreparationAndValidation.After.Budget!.Value;
+        AssertBudgetRequests(prepared, packetBytes, replacements: 0, reallocations: 0);
+        AssertBudgetPhaseRequests(lifecycle.Warmup, prepared, packetBytes, 0, 0, 2);
+        AssertBudgetPhaseRequests(lifecycle.MeasuredBatch, lifecycle.Warmup.After.Budget!.Value, packetBytes, 0, 0, 3);
+        AssertBudgetPhaseRequests(lifecycle.SeparatePhaseProbe, lifecycle.MeasuredBatch.After.Budget!.Value, packetBytes, 0, 0, 1);
+        AssertNoBuilderCopies(lifecycle.PreparationAndValidation);
+        AssertNoBuilderCopies(lifecycle.Warmup);
+        AssertNoBuilderCopies(lifecycle.MeasuredBatch);
+        AssertNoBuilderCopies(lifecycle.SeparatePhaseProbe);
+        long expectedAllocations = elements < 4 ? 1 : 2;
+        Assert.Equal(expectedAllocations, prepared.AllocationCount);
+        Assert.Equal(expectedAllocations * 3, NativeAcquisitions(lifecycle.MeasuredBatch));
+        Assert.Equal(lifecycle, NativeBuilderBenchmark.DeserializeWorkerEvidence(JsonSerializer.Serialize(evidence)).LifecycleEvidence);
+    }
+
+    private static void AssertNoBuilderCopies(NativeBuilderLifecyclePhaseEvidence phase)
+    {
+        Assert.Equal(phase.Before.Native.CopiedBytes, phase.After.Native.CopiedBytes);
+        Assert.Equal(phase.Before.Native.ReallocationCount, phase.After.Native.ReallocationCount);
+    }
+
+    [Fact]
+    public async Task IsolatedKnownSizeWriterActuallyReceivesItsSelectionAndBudget()
+    {
+        NativeBuilderBenchmarkOptions options = CreateOptions() with
+        {
+            ElementCount = 17,
+            PreLease = 999,
+            BatchSize = 4,
+            NativeBaseline = NativeBuilderBenchmarkImplementation.NativeBuilderBudgetedDirect,
+            // Producer, queued packet and entered consumer can each own one packet.
+            NativeBudgetCapacityBytes = 204
+        };
+        NativeBuilderWorkerEvidence native = await NativeBuilderBenchmark.RunIsolatedWorkerAsync(options.NativeBaseline, options);
+        NativeBuilderWorkerEvidence managed = await NativeBuilderBenchmark.RunIsolatedWorkerAsync(options.ManagedBaseline, options);
+        Assert.Equal(options.NativeBaseline, native.Implementation);
+        Assert.Equal(managed.ExactOutputSha256, native.ExactOutputSha256);
+        Assert.Equal(managed.Checksum, native.Checksum);
+        AssertBudgetRequests(native.LifecycleEvidence.PreparationAndValidation.After.Budget!.Value, 68, 0, 0);
+        Assert.Equal(204, native.LifecycleEvidence.PreparationAndValidation.After.Budget!.Value.CapacityBytes);
+    }
+
+    [Theory]
+    [InlineData(0L, 0L, 52L)]
+    [InlineData(52L, 1L, 16L)]
+    public async Task KnownSizeConstructorRefusalAwaitsCleanup(long capacity, long allocatedOwners, long refusedBytes)
+    {
+        NativeBuilderBenchmarkOptions options = CreateOptions() with { ElementCount = 17, BatchSize = 4 };
+        NativeMemoryBudget budget = new(capacity);
+        NativeMemoryStatistics before = NativeMemoryDiagnostics.Snapshot();
+        NativeMemoryBudgetExceededException failure = await Assert.ThrowsAsync<NativeMemoryBudgetExceededException>(
+            () => NativeBuilderBenchmark.RunNativeBatchAsync(options, 2, budget,
+                NativeBuilderBenchmarkImplementation.NativeBuilderBudgetedDirect));
+        NativeMemoryStatistics after = NativeMemoryDiagnostics.Snapshot();
+        NativeMemoryBudgetStatistics ended = budget.CaptureStatistics();
+        Assert.Equal((nuint)refusedBytes, failure.RequestedBytes);
+        Assert.Equal(before.OutstandingNativeBytes, after.OutstandingNativeBytes);
+        Assert.Equal(before.DetachedNativeBytes, after.DetachedNativeBytes);
+        Assert.Equal(before.RetiredNativeBytes, after.RetiredNativeBytes);
+        Assert.Equal(allocatedOwners, after.AllocationCount - before.AllocationCount);
+        Assert.Equal(allocatedOwners, after.FreeCount - before.FreeCount);
+        Assert.Equal(0, ended.CommittedBytes);
+        Assert.Equal(0, ended.ReservedBytes);
+        Assert.Equal(0, ended.ActiveAllocationCount);
+        Assert.Equal(allocatedOwners, ended.AllocationCount);
+        Assert.Equal(allocatedOwners, ended.FreeCount);
+        Assert.Equal(1, ended.RejectedAllocationCount);
+        Assert.Equal(0, ended.FailedAllocationCount);
+        Assert.Equal(0, ended.ReplacementBackingBytes);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    [InlineData(4)]
+    [InlineData(5)]
+    public async Task ExplicitMalformedBudgetNeverFallsBackToUnlimitedCapacity(int shape)
+    {
+        string[] args = shape switch
+        {
+            0 => ["--native-builder-worker", "--implementation", "NativeBuilderBudgeted", "--native-budget-bytes"],
+            1 => ["--native-builder-worker", "--implementation", "NativeBuilderBudgeted", "--native-budget-bytes", "--elements", "17"],
+            2 => ["--native-builder-worker", "--implementation", "NativeBuilderBudgeted", "--native-budget-bytes", " "],
+            3 => ["--native-builder-worker", "--implementation", "NativeBuilderBudgeted", "--native-budget-bytes", "1", "--native-budget-bytes", "2"],
+            4 => ["--native-builder-worker", "--implementation", "NativeBuilderBudgeted", "--native-budget-bytes", "-1"],
+            _ => ["--native-builder-worker", "--implementation", "NativeBuilderBudgeted", "--native-budget-bytes", "bad"]
+        };
+        NativeMemoryStatistics before = NativeMemoryDiagnostics.Snapshot();
+        if (shape == 4)
+            await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => NativeBuilderBenchmark.RunCommandAsync(args));
+        else if (shape == 5)
+            await Assert.ThrowsAsync<FormatException>(() => NativeBuilderBenchmark.RunCommandAsync(args));
+        else
+            await Assert.ThrowsAsync<ArgumentException>(() => NativeBuilderBenchmark.RunCommandAsync(args));
+        Assert.Equal(before, NativeMemoryDiagnostics.Snapshot());
     }
 
     [Theory]

@@ -24,6 +24,24 @@ ceiling (default `Int64.MaxValue`), not a managed-allocation or process-RSS cap.
 No admission, allocation, growth, handoff or release cost is omitted from the
 applicable complete phase. Tracing is disabled for this comparison.
 
+`--native-baseline NativeBuilderBudgetedDirect` is a separate known-size
+integration of the existing bounded writer API. Each output gets its exact
+capacity, then one static state writer initializes the destination directly,
+with identical batch seed resets and output. It removes geometric growth,
+stack-to-builder batch copies and per-batch builder entry checks. It does not
+remove ownership/control objects, budget admission, publication or cleanup.
+`PreLease` remains the reported input but is not used by this explicit exact-size
+path. Growing workers and the paired default are unchanged; this path is not an
+unknown-size workload or an accepted performance/allocation advantage. Compare
+its complete measured batch against `ManagedExactArray`, counting GC allocation
+plus successful requested backing bytes. Fewer copies or zero replacements alone
+do not establish the required simultaneous gain.
+
+An explicitly supplied option requires a nonblank value and may occur only once.
+A trailing `--native-budget-bytes`, another option in place of its value or a
+duplicate fails before any payload allocation; it never selects an unlimited
+budget. Negative and nonnumeric budget values also fail.
+
 Every worker boundary requires a `Budget` property. It contains all 19 real
 budget fields after budgeted preparation; it is `null` (unavailable), not
 invented zero, before preparation and on managed/unbudgeted paths. The worker

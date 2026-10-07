@@ -8,7 +8,8 @@ public enum NativeBuilderBenchmarkImplementation
     NativeBuilder,
     ManagedListPrefix,
     ManagedExactArray,
-    NativeBuilderBudgeted
+    NativeBuilderBudgeted,
+    NativeBuilderBudgetedDirect
 }
 
 public sealed record NativeBuilderBenchmarkOptions(

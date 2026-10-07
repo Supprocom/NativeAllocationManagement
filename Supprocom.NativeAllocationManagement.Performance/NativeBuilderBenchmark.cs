@@ -170,7 +170,7 @@ internal static class NativeBuilderBenchmark
         _ = CaptureWorkerObservation(process);
         NativeBuilderWorkerObservation setupBefore = CaptureWorkerObservation(process);
         Stopwatch setupClock = Stopwatch.StartNew();
-        NativeMemoryBudget? budget = implementation == NativeBuilderBenchmarkImplementation.NativeBuilderBudgeted
+        NativeMemoryBudget? budget = IsBudgetedImplementation(implementation)
             ? new NativeMemoryBudget(options.NativeBudgetCapacityBytes)
             : null;
         NativeBuilderExactOutput expected = BuildManagedOutput(options);
@@ -180,7 +180,7 @@ internal static class NativeBuilderBenchmark
         if (IsNativeImplementation(implementation))
         {
             NativeBuilderExactOutput nativeOutput =
-                BuildNativeOutput(options, budget);
+                BuildNativeOutput(options, budget, implementation);
             exactParity = OutputsEqual(nativeOutput, expected);
         }
         else
@@ -201,7 +201,7 @@ internal static class NativeBuilderBenchmark
                     implementation).ConfigureAwait(false)
                 : await RunNativeBatchAsync(
                     options,
-                    options.WarmupIterations, budget).ConfigureAwait(false);
+                    options.WarmupIterations, budget, implementation).ConfigureAwait(false);
         warmupClock.Stop();
         NativeBuilderWorkerObservation warmupAfter = CaptureWorkerObservation(process, afterWork: true, budget);
         if (warmup.Checksum != unchecked(
@@ -224,7 +224,7 @@ internal static class NativeBuilderBenchmark
                     implementation).ConfigureAwait(false)
                 : await RunNativeBatchAsync(
                     options,
-                    options.Iterations, budget).ConfigureAwait(false);
+                    options.Iterations, budget, implementation).ConfigureAwait(false);
         double batchMilliseconds = ElapsedMilliseconds(batchStart);
         NativeBuilderWorkerObservation measuredAfter = CaptureWorkerObservation(process, afterWork: true, budget);
         NativeMemoryTestMetrics statistics = NativeMemoryTestHooks.Snapshot();
@@ -246,7 +246,7 @@ internal static class NativeBuilderBenchmark
         long probeStart = Stopwatch.GetTimestamp();
         NativeBuilderPhaseEvidence phaseEvidence = !IsNativeImplementation(implementation)
                 ? MeasureManagedPhases(options, implementation)
-                : MeasureNativePhases(options, budget);
+                : MeasureNativePhases(options, budget, implementation);
         double probeMilliseconds = ElapsedMilliseconds(probeStart);
         NativeBuilderWorkerObservation probeAfter = CaptureWorkerObservation(process, afterWork: true, budget);
         long logicalBytes = checked(
@@ -386,9 +386,10 @@ internal static class NativeBuilderBenchmark
     }
 
     internal static NativeBuilderExactOutput BuildNativeOutput(
-        NativeBuilderBenchmarkOptions options, NativeMemoryBudget? budget = null)
+        NativeBuilderBenchmarkOptions options, NativeMemoryBudget? budget = null,
+        NativeBuilderBenchmarkImplementation implementation = NativeBuilderBenchmarkImplementation.NativeBuilder)
     {
-        NativeBuilderVoxelPacket packet = CreateNativePacket(options, budget);
+        NativeBuilderVoxelPacket packet = CreateNativePacket(options, budget, implementation);
         try
         {
             return packet.CopyExactOutput();
@@ -461,7 +462,8 @@ internal static class NativeBuilderBenchmark
     internal static async Task<NativeBuilderBatchResult>
         RunNativeBatchAsync(
             NativeBuilderBenchmarkOptions options,
-            int iterations, NativeMemoryBudget? budget)
+            int iterations, NativeMemoryBudget? budget,
+            NativeBuilderBenchmarkImplementation implementation = NativeBuilderBenchmarkImplementation.NativeBuilder)
     {
         Channel<NativeBuilderVoxelPacket> channel =
             Channel.CreateBounded<NativeBuilderVoxelPacket>(
@@ -502,7 +504,7 @@ internal static class NativeBuilderBenchmark
                 iteration++)
             {
                 NativeBuilderVoxelPacket? packet =
-                    CreateNativePacket(options, budget);
+                    CreateNativePacket(options, budget, implementation);
                 try
                 {
                     await channel.Writer.WriteAsync(packet).ConfigureAwait(false);
@@ -571,23 +573,26 @@ internal static class NativeBuilderBenchmark
             : new(opaque, transparent, implementation);
 
     private static NativeBuilderVoxelPacket CreateNativePacket(
-        NativeBuilderBenchmarkOptions options, NativeMemoryBudget? budget)
+        NativeBuilderBenchmarkOptions options, NativeMemoryBudget? budget,
+        NativeBuilderBenchmarkImplementation implementation)
     {
+        (int opaqueCount, int transparentCount) = GetOutputCounts(options.ElementCount);
+        bool direct = implementation == NativeBuilderBenchmarkImplementation.NativeBuilderBudgetedDirect;
+        int opaqueCapacity = direct ? opaqueCount : options.PreLease;
+        int transparentCapacity = direct ? transparentCount : options.PreLease;
         using NativeBuilder<uint> opaque = budget is null
-            ? new(preLease: options.PreLease) : new(budget, preLease: options.PreLease);
+            ? new(preLease: opaqueCapacity) : new(budget, preLease: opaqueCapacity);
         using NativeBuilder<uint> transparent = budget is null
-            ? new(preLease: options.PreLease) : new(budget, preLease: options.PreLease);
-        (int opaqueCount, int transparentCount) =
-            GetOutputCounts(options.ElementCount);
-        AppendToBuilder(
+            ? new(preLease: transparentCapacity) : new(budget, preLease: transparentCapacity);
+        InitializeBuilder(
             opaque,
             opaqueCount,
-            options,
+            options, direct,
             transparentOutput: false);
-        AppendToBuilder(
+        InitializeBuilder(
             transparent,
             transparentCount,
-            options,
+            options, direct,
             transparentOutput: true);
         return PublishNativePacket(opaque, transparent);
     }
@@ -654,6 +659,38 @@ internal static class NativeBuilderBenchmark
                 options.Seed,
                 transparentOutput);
             AppendToList(values, current);
+        }
+    }
+
+    private static void InitializeBuilder(
+        NativeBuilder<uint> builder, int elementCount,
+        NativeBuilderBenchmarkOptions options, bool direct, bool transparentOutput)
+    {
+        if (direct)
+        {
+            DirectBuilderWriteState state = new(options.BatchSize, options.Seed, transparentOutput);
+            builder.Write<DirectBuilderWriteState, DirectBuilderWriteAction>(elementCount, in state);
+            return;
+        }
+
+        AppendToBuilder(builder, elementCount, options, transparentOutput);
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private readonly record struct DirectBuilderWriteState(int BatchSize, int Seed, bool TransparentOutput);
+
+    private readonly struct DirectBuilderWriteAction : INativeBuilderWriteAction<uint, DirectBuilderWriteState>
+    {
+        public static void Invoke(scoped NativeBuilderWriter<uint> writer, scoped in DirectBuilderWriteState state)
+        {
+            Span<uint> values = writer.AsSpan();
+            for (int offset = 0; offset < values.Length; offset += state.BatchSize)
+            {
+                int length = Math.Min(state.BatchSize, values.Length - offset);
+                FillBatch(values.Slice(offset, length), offset, state.Seed, state.TransparentOutput);
+            }
+
+            writer.Commit(values.Length);
         }
     }
 
@@ -845,30 +882,33 @@ internal static class NativeBuilderBenchmark
     }
 
     private static NativeBuilderPhaseEvidence MeasureNativePhases(
-        NativeBuilderBenchmarkOptions options, NativeMemoryBudget? budget)
+        NativeBuilderBenchmarkOptions options, NativeMemoryBudget? budget,
+        NativeBuilderBenchmarkImplementation implementation)
     {
         long totalStart = Stopwatch.GetTimestamp();
         long phaseStart = Stopwatch.GetTimestamp();
+        (int opaqueCount, int transparentCount) = GetOutputCounts(options.ElementCount);
+        bool direct = implementation == NativeBuilderBenchmarkImplementation.NativeBuilderBudgetedDirect;
+        int opaqueCapacity = direct ? opaqueCount : options.PreLease;
+        int transparentCapacity = direct ? transparentCount : options.PreLease;
         using NativeBuilder<uint> opaque = budget is null
-            ? new(preLease: options.PreLease) : new(budget, preLease: options.PreLease);
+            ? new(preLease: opaqueCapacity) : new(budget, preLease: opaqueCapacity);
         using NativeBuilder<uint> transparent = budget is null
-            ? new(preLease: options.PreLease) : new(budget, preLease: options.PreLease);
+            ? new(preLease: transparentCapacity) : new(budget, preLease: transparentCapacity);
         Channel<NativeBuilderVoxelPacket> channel =
             Channel.CreateBounded<NativeBuilderVoxelPacket>(1);
         double allocation = ElapsedMilliseconds(phaseStart);
 
-        (int opaqueCount, int transparentCount) =
-            GetOutputCounts(options.ElementCount);
         phaseStart = Stopwatch.GetTimestamp();
-        AppendToBuilder(
+        InitializeBuilder(
             opaque,
             opaqueCount,
-            options,
+            options, direct,
             transparentOutput: false);
-        AppendToBuilder(
+        InitializeBuilder(
             transparent,
             transparentCount,
-            options,
+            options, direct,
             transparentOutput: true);
         double initialization = ElapsedMilliseconds(phaseStart);
 
@@ -995,7 +1035,7 @@ internal static class NativeBuilderBenchmark
         NativeBuilderLifecycleEvidence lifecycle = evidence.LifecycleEvidence;
         if (lifecycle.PreparationAndValidation.Before.Budget is not null)
             throw new InvalidDataException("The native builder budget was prepared outside the measured preparation phase.");
-        bool budgeted = evidence.Implementation == NativeBuilderBenchmarkImplementation.NativeBuilderBudgeted;
+        bool budgeted = IsBudgetedImplementation(evidence.Implementation);
         NativeBuilderBudgetObservation? prepared = lifecycle.PreparationAndValidation.After.Budget;
         ValidateBudgetObservation(prepared, budgeted, previous: null);
         NativeBuilderBudgetObservation? warmed = ValidateBudgetPhase(lifecycle.Warmup, budgeted, prepared);
@@ -1098,7 +1138,7 @@ internal static class NativeBuilderBenchmark
             || native.BatchSize != options.BatchSize
             || managed.Iterations != options.Iterations
             || native.Iterations != options.Iterations
-            || (options.NativeBaseline == NativeBuilderBenchmarkImplementation.NativeBuilderBudgeted
+            || (IsBudgetedImplementation(options.NativeBaseline)
                 && native.LifecycleEvidence.PreparationAndValidation.After.Budget?.CapacityBytes != options.NativeBudgetCapacityBytes)
             || !managed.ExactParity
             || !native.ExactParity
@@ -1195,7 +1235,11 @@ internal static class NativeBuilderBenchmark
     }
 
     private static bool IsNativeImplementation(NativeBuilderBenchmarkImplementation implementation)
-        => implementation is NativeBuilderBenchmarkImplementation.NativeBuilder or NativeBuilderBenchmarkImplementation.NativeBuilderBudgeted;
+        => implementation == NativeBuilderBenchmarkImplementation.NativeBuilder || IsBudgetedImplementation(implementation);
+
+    private static bool IsBudgetedImplementation(NativeBuilderBenchmarkImplementation implementation)
+        => implementation is NativeBuilderBenchmarkImplementation.NativeBuilderBudgeted
+            or NativeBuilderBenchmarkImplementation.NativeBuilderBudgetedDirect;
 
     private static void ValidateNativeBaseline(NativeBuilderBenchmarkImplementation implementation)
     {
@@ -1232,17 +1276,23 @@ internal static class NativeBuilderBenchmark
         string[] args,
         string name)
     {
+        string? value = null;
         for (int index = 0;
-            index < args.Length - 1;
+            index < args.Length;
             index++)
         {
             if (string.Equals(args[index], name, StringComparison.Ordinal))
             {
-                return args[index + 1];
+                if (value is not null)
+                    throw new ArgumentException($"The option '{name}' is duplicated.", nameof(args));
+                if (index + 1 == args.Length || string.IsNullOrWhiteSpace(args[index + 1])
+                    || args[index + 1].StartsWith("--", StringComparison.Ordinal))
+                    throw new ArgumentException($"The option '{name}' requires a value.", nameof(args));
+                value = args[++index];
             }
         }
 
-        return null;
+        return value;
     }
 
     private static string GetInformationalVersion(
