@@ -330,7 +330,19 @@ public sealed class NativeLayoutTests
     }
 
     [Fact]
-    public void FirstPreparedCallerStateSpecializationNeedsNoNamDelegateAdapter()
+    public async Task FirstPreparedCallerStateSpecializationNeedsNoNamDelegateAdapter()
+    {
+        // Keep the first specialization cold, but run its allocation window on a
+        // dedicated thread rather than inside the framework's test invocation.
+        (long allocated, int value) = await Task.Factory.StartNew(
+            MeasureFirstPreparedCallerSpecialization, CancellationToken.None,
+            TaskCreationOptions.LongRunning, TaskScheduler.Default);
+        Assert.Equal(0, allocated);
+        Assert.Equal(23, value);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static (long Allocated, int Value) MeasureFirstPreparedCallerSpecialization()
     {
         NativeLayoutBuilder builder = new(1);
         NativeLayoutField<int> field = builder.Add<int>(1);
@@ -344,8 +356,7 @@ public sealed class NativeLayoutTests
         long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
         try
         {
-            Assert.Equal(0, allocated);
-            Assert.Equal(23, owner.Read(field, static (view, token) => view.Region(token)[0]));
+            return (allocated, owner.Read(field, static (view, token) => view.Region(token)[0]));
         }
         finally { owner.Dispose(); }
     }

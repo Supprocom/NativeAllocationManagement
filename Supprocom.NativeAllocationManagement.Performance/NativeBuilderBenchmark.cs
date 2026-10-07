@@ -82,12 +82,12 @@ internal static class NativeBuilderBenchmark
             sampleIndex++)
         {
             NativeBuilderBenchmarkImplementation first =
-                GetFirstImplementation(sampleIndex, options.ManagedBaseline);
+                GetFirstImplementation(sampleIndex, options.ManagedBaseline, options.NativeBaseline);
             NativeBuilderWorkerEvidence firstEvidence =
                 await RunIsolatedWorkerAsync(first, options).ConfigureAwait(false);
             NativeBuilderBenchmarkImplementation second =
                 first == options.ManagedBaseline
-                    ? NativeBuilderBenchmarkImplementation.NativeBuilder
+                    ? options.NativeBaseline
                     : options.ManagedBaseline;
             NativeBuilderWorkerEvidence secondEvidence =
                 await RunIsolatedWorkerAsync(second, options).ConfigureAwait(false);
@@ -96,7 +96,7 @@ internal static class NativeBuilderBenchmark
                     ? firstEvidence
                     : secondEvidence;
             NativeBuilderWorkerEvidence native =
-                first == NativeBuilderBenchmarkImplementation.NativeBuilder
+                first == options.NativeBaseline
                     ? firstEvidence
                     : secondEvidence;
             ValidatePair(managed, native, options);
@@ -130,7 +130,7 @@ internal static class NativeBuilderBenchmark
             == options.SampleCount / 2
             && pairs.Count(pair =>
                 pair.FirstImplementation
-                    == NativeBuilderBenchmarkImplementation.NativeBuilder)
+                    == options.NativeBaseline)
                 == options.SampleCount / 2;
         return new NativeBuilderBenchmarkReport(
             options,
@@ -170,15 +170,17 @@ internal static class NativeBuilderBenchmark
         _ = CaptureWorkerObservation(process);
         NativeBuilderWorkerObservation setupBefore = CaptureWorkerObservation(process);
         Stopwatch setupClock = Stopwatch.StartNew();
+        NativeMemoryBudget? budget = implementation == NativeBuilderBenchmarkImplementation.NativeBuilderBudgeted
+            ? new NativeMemoryBudget(options.NativeBudgetCapacityBytes)
+            : null;
         NativeBuilderExactOutput expected = BuildManagedOutput(options);
         string exactHash = ComputeExactHash(expected);
         long expectedChecksum = Consume(expected);
         bool exactParity;
-        if (implementation
-            == NativeBuilderBenchmarkImplementation.NativeBuilder)
+        if (IsNativeImplementation(implementation))
         {
             NativeBuilderExactOutput nativeOutput =
-                BuildNativeOutput(options);
+                BuildNativeOutput(options, budget);
             exactParity = OutputsEqual(nativeOutput, expected);
         }
         else
@@ -189,20 +191,19 @@ internal static class NativeBuilderBenchmark
         }
 
         setupClock.Stop();
-        NativeBuilderWorkerObservation setupAfter = CaptureWorkerObservation(process, afterWork: true);
-        NativeBuilderWorkerObservation warmupBefore = CaptureWorkerObservation(process);
+        NativeBuilderWorkerObservation setupAfter = CaptureWorkerObservation(process, afterWork: true, budget);
+        NativeBuilderWorkerObservation warmupBefore = CaptureWorkerObservation(process, budget: budget);
         Stopwatch warmupClock = Stopwatch.StartNew();
-        NativeBuilderBatchResult warmup = implementation
-            != NativeBuilderBenchmarkImplementation.NativeBuilder
+        NativeBuilderBatchResult warmup = !IsNativeImplementation(implementation)
                 ? await RunManagedBatchAsync(
                     options,
                     options.WarmupIterations,
                     implementation).ConfigureAwait(false)
                 : await RunNativeBatchAsync(
                     options,
-                    options.WarmupIterations).ConfigureAwait(false);
+                    options.WarmupIterations, budget).ConfigureAwait(false);
         warmupClock.Stop();
-        NativeBuilderWorkerObservation warmupAfter = CaptureWorkerObservation(process, afterWork: true);
+        NativeBuilderWorkerObservation warmupAfter = CaptureWorkerObservation(process, afterWork: true, budget);
         if (warmup.Checksum != unchecked(
             expectedChecksum * options.WarmupIterations))
         {
@@ -214,19 +215,18 @@ internal static class NativeBuilderBenchmark
         long workingSetBefore = process.WorkingSet64;
         NativeMemoryTestMetrics statisticsBefore =
             NativeMemoryTestHooks.Snapshot();
-        NativeBuilderWorkerObservation measuredBefore = CaptureWorkerObservation(process);
+        NativeBuilderWorkerObservation measuredBefore = CaptureWorkerObservation(process, budget: budget);
         long batchStart = Stopwatch.GetTimestamp();
-        NativeBuilderBatchResult measured = implementation
-            != NativeBuilderBenchmarkImplementation.NativeBuilder
+        NativeBuilderBatchResult measured = !IsNativeImplementation(implementation)
                 ? await RunManagedBatchAsync(
                     options,
                     options.Iterations,
                     implementation).ConfigureAwait(false)
                 : await RunNativeBatchAsync(
                     options,
-                    options.Iterations).ConfigureAwait(false);
+                    options.Iterations, budget).ConfigureAwait(false);
         double batchMilliseconds = ElapsedMilliseconds(batchStart);
-        NativeBuilderWorkerObservation measuredAfter = CaptureWorkerObservation(process, afterWork: true);
+        NativeBuilderWorkerObservation measuredAfter = CaptureWorkerObservation(process, afterWork: true, budget);
         NativeMemoryTestMetrics statistics = NativeMemoryTestHooks.Snapshot();
         process.Refresh();
         long workingSetAfter = process.WorkingSet64;
@@ -242,14 +242,13 @@ internal static class NativeBuilderBenchmark
                 "The measured native builder output checksum changed.");
         }
 
-        NativeBuilderWorkerObservation probeBefore = CaptureWorkerObservation(process);
+        NativeBuilderWorkerObservation probeBefore = CaptureWorkerObservation(process, budget: budget);
         long probeStart = Stopwatch.GetTimestamp();
-        NativeBuilderPhaseEvidence phaseEvidence = implementation
-            != NativeBuilderBenchmarkImplementation.NativeBuilder
+        NativeBuilderPhaseEvidence phaseEvidence = !IsNativeImplementation(implementation)
                 ? MeasureManagedPhases(options, implementation)
-                : MeasureNativePhases(options);
+                : MeasureNativePhases(options, budget);
         double probeMilliseconds = ElapsedMilliseconds(probeStart);
-        NativeBuilderWorkerObservation probeAfter = CaptureWorkerObservation(process, afterWork: true);
+        NativeBuilderWorkerObservation probeAfter = CaptureWorkerObservation(process, afterWork: true, budget);
         long logicalBytes = checked(
             (long)options.ElementCount
             * sizeof(uint)
@@ -309,7 +308,8 @@ internal static class NativeBuilderBenchmark
         };
     }
 
-    private static NativeBuilderWorkerObservation CaptureWorkerObservation(Process process, bool afterWork = false)
+    private static NativeBuilderWorkerObservation CaptureWorkerObservation(
+        Process process, bool afterWork = false, NativeMemoryBudget? budget = null)
     {
         // CPU queries may allocate: begin GC after the query, end GC before it.
         // The process-wide counter also covers async work resumed on another thread.
@@ -320,6 +320,7 @@ internal static class NativeBuilderBenchmark
         int gen2 = GC.CollectionCount(2);
         long heap = GC.GetGCMemoryInfo().HeapSizeBytes;
         NativeMemoryStatistics native = NativeMemoryDiagnostics.Snapshot();
+        NativeBuilderBudgetObservation? budgetObservation = CaptureBudgetObservation(budget);
         long cpuTicks = process.TotalProcessorTime.Ticks;
         if (!afterWork)
         {
@@ -335,7 +336,24 @@ internal static class NativeBuilderBenchmark
             new NativeBuilderNativeObservation(
                 native.MetricsEpoch, native.AllocationCount, native.ReallocationCount,
                 native.FreeCount, native.OutstandingNativeBytes, native.DetachedNativeBytes,
-                native.RetiredNativeBytes, native.CopiedBytes, native.HistoryOverflowed));
+                native.RetiredNativeBytes, native.CopiedBytes, native.HistoryOverflowed))
+        {
+            Budget = budgetObservation
+        };
+    }
+
+    private static NativeBuilderBudgetObservation? CaptureBudgetObservation(NativeMemoryBudget? budget)
+    {
+        if (budget is null)
+            return null;
+        NativeMemoryBudgetStatistics snapshot = budget.CaptureStatistics();
+        return new NativeBuilderBudgetObservation(
+            snapshot.Id, snapshot.CapacityBytes, snapshot.CommittedBytes, snapshot.ReservedBytes,
+            snapshot.PeakCommittedBytes, snapshot.PeakAdmittedBytes, snapshot.AllocationCount,
+            snapshot.ReallocationCount, snapshot.FreeCount, snapshot.ActiveAllocationCount,
+            snapshot.RejectedAllocationCount, snapshot.FailedAllocationCount, snapshot.TraceCapacity,
+            snapshot.TraceCount, snapshot.DroppedTraceEventCount, snapshot.TraceOverflowed,
+            snapshot.HistoryOverflowed, snapshot.AcquiredBackingBytes, snapshot.ReplacementBackingBytes);
     }
 
     internal static NativeBuilderBenchmarkImplementation
@@ -344,12 +362,17 @@ internal static class NativeBuilderBenchmark
 
     internal static NativeBuilderBenchmarkImplementation
         GetFirstImplementation(int sampleIndex, NativeBuilderBenchmarkImplementation managedBaseline)
+        => GetFirstImplementation(sampleIndex, managedBaseline, NativeBuilderBenchmarkImplementation.NativeBuilder);
+
+    internal static NativeBuilderBenchmarkImplementation GetFirstImplementation(int sampleIndex,
+        NativeBuilderBenchmarkImplementation managedBaseline, NativeBuilderBenchmarkImplementation nativeBaseline)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(sampleIndex);
         ValidateManagedBaseline(managedBaseline);
+        ValidateNativeBaseline(nativeBaseline);
         return (sampleIndex & 1) == 0
             ? managedBaseline
-            : NativeBuilderBenchmarkImplementation.NativeBuilder;
+            : nativeBaseline;
     }
 
     internal static NativeBuilderExactOutput BuildManagedOutput(
@@ -363,9 +386,9 @@ internal static class NativeBuilderBenchmark
     }
 
     internal static NativeBuilderExactOutput BuildNativeOutput(
-        NativeBuilderBenchmarkOptions options)
+        NativeBuilderBenchmarkOptions options, NativeMemoryBudget? budget = null)
     {
-        NativeBuilderVoxelPacket packet = CreateNativePacket(options);
+        NativeBuilderVoxelPacket packet = CreateNativePacket(options, budget);
         try
         {
             return packet.CopyExactOutput();
@@ -435,10 +458,10 @@ internal static class NativeBuilderBenchmark
             clock.Elapsed.TotalMilliseconds);
     }
 
-    private static async Task<NativeBuilderBatchResult>
+    internal static async Task<NativeBuilderBatchResult>
         RunNativeBatchAsync(
             NativeBuilderBenchmarkOptions options,
-            int iterations)
+            int iterations, NativeMemoryBudget? budget)
     {
         Channel<NativeBuilderVoxelPacket> channel =
             Channel.CreateBounded<NativeBuilderVoxelPacket>(
@@ -471,6 +494,7 @@ internal static class NativeBuilderBenchmark
         });
         await ready.Task.ConfigureAwait(false);
         Stopwatch clock = Stopwatch.StartNew();
+        long checksum;
         try
         {
             for (int iteration = 0;
@@ -478,7 +502,7 @@ internal static class NativeBuilderBenchmark
                 iteration++)
             {
                 NativeBuilderVoxelPacket? packet =
-                    CreateNativePacket(options);
+                    CreateNativePacket(options, budget);
                 try
                 {
                     await channel.Writer.WriteAsync(packet).ConfigureAwait(false);
@@ -493,9 +517,10 @@ internal static class NativeBuilderBenchmark
         finally
         {
             channel.Writer.TryComplete();
+            // A producer refusal must not return while the consumer still owns queued packets.
+            checksum = await consumer.ConfigureAwait(false);
         }
 
-        long checksum = await consumer.ConfigureAwait(false);
         clock.Stop();
         return new NativeBuilderBatchResult(
             checksum,
@@ -546,12 +571,12 @@ internal static class NativeBuilderBenchmark
             : new(opaque, transparent, implementation);
 
     private static NativeBuilderVoxelPacket CreateNativePacket(
-        NativeBuilderBenchmarkOptions options)
+        NativeBuilderBenchmarkOptions options, NativeMemoryBudget? budget)
     {
-        using NativeBuilder<uint> opaque = new(
-            preLease: options.PreLease);
-        using NativeBuilder<uint> transparent = new(
-            preLease: options.PreLease);
+        using NativeBuilder<uint> opaque = budget is null
+            ? new(preLease: options.PreLease) : new(budget, preLease: options.PreLease);
+        using NativeBuilder<uint> transparent = budget is null
+            ? new(preLease: options.PreLease) : new(budget, preLease: options.PreLease);
         (int opaqueCount, int transparentCount) =
             GetOutputCounts(options.ElementCount);
         AppendToBuilder(
@@ -820,14 +845,14 @@ internal static class NativeBuilderBenchmark
     }
 
     private static NativeBuilderPhaseEvidence MeasureNativePhases(
-        NativeBuilderBenchmarkOptions options)
+        NativeBuilderBenchmarkOptions options, NativeMemoryBudget? budget)
     {
         long totalStart = Stopwatch.GetTimestamp();
         long phaseStart = Stopwatch.GetTimestamp();
-        using NativeBuilder<uint> opaque = new(
-            preLease: options.PreLease);
-        using NativeBuilder<uint> transparent = new(
-            preLease: options.PreLease);
+        using NativeBuilder<uint> opaque = budget is null
+            ? new(preLease: options.PreLease) : new(budget, preLease: options.PreLease);
+        using NativeBuilder<uint> transparent = budget is null
+            ? new(preLease: options.PreLease) : new(budget, preLease: options.PreLease);
         Channel<NativeBuilderVoxelPacket> channel =
             Channel.CreateBounded<NativeBuilderVoxelPacket>(1);
         double allocation = ElapsedMilliseconds(phaseStart);
@@ -965,7 +990,58 @@ internal static class NativeBuilderBenchmark
                 "The native builder worker did not return evidence.");
         if (evidence.LifecycleEvidence is null)
             throw new InvalidDataException("The native builder worker did not report lifecycle evidence.");
+        if (!Enum.IsDefined(evidence.Implementation))
+            throw new InvalidDataException("The native builder worker reported an unknown implementation.");
+        NativeBuilderLifecycleEvidence lifecycle = evidence.LifecycleEvidence;
+        if (lifecycle.PreparationAndValidation.Before.Budget is not null)
+            throw new InvalidDataException("The native builder budget was prepared outside the measured preparation phase.");
+        bool budgeted = evidence.Implementation == NativeBuilderBenchmarkImplementation.NativeBuilderBudgeted;
+        NativeBuilderBudgetObservation? prepared = lifecycle.PreparationAndValidation.After.Budget;
+        ValidateBudgetObservation(prepared, budgeted, previous: null);
+        NativeBuilderBudgetObservation? warmed = ValidateBudgetPhase(lifecycle.Warmup, budgeted, prepared);
+        NativeBuilderBudgetObservation? measured = ValidateBudgetPhase(lifecycle.MeasuredBatch, budgeted, warmed);
+        _ = ValidateBudgetPhase(lifecycle.SeparatePhaseProbe, budgeted, measured);
         return evidence;
+    }
+
+    private static NativeBuilderBudgetObservation? ValidateBudgetPhase(
+        NativeBuilderLifecyclePhaseEvidence phase, bool budgeted, NativeBuilderBudgetObservation? previous)
+    {
+        ValidateBudgetObservation(phase.Before.Budget, budgeted, previous);
+        if (phase.Before.Budget != previous)
+            throw new InvalidDataException("The native builder budget changed between quiescent phases.");
+        ValidateBudgetObservation(phase.After.Budget, budgeted, phase.Before.Budget);
+        return phase.After.Budget;
+    }
+
+    private static void ValidateBudgetObservation(NativeBuilderBudgetObservation? observation,
+        bool budgeted, NativeBuilderBudgetObservation? previous)
+    {
+        if (!budgeted)
+        {
+            if (observation is not null)
+                throw new InvalidDataException("The unbudgeted worker reported an invented budget domain.");
+            return;
+        }
+        if (observation is not { } snapshot)
+            throw new InvalidDataException("The budgeted native builder worker did not report its budget domain.");
+        if (snapshot.BudgetId <= 0 || snapshot.CapacityBytes < 0
+            || snapshot.CommittedBytes != 0 || snapshot.ReservedBytes != 0 || snapshot.ActiveAllocationCount != 0
+            || snapshot.PeakCommittedBytes < 0 || snapshot.PeakAdmittedBytes < snapshot.PeakCommittedBytes
+            || snapshot.PeakAdmittedBytes > snapshot.CapacityBytes
+            || snapshot.AllocationCount < 0 || snapshot.ReallocationCount < 0 || snapshot.FreeCount != snapshot.AllocationCount
+            || snapshot.AcquiredBackingBytes < 0 || snapshot.ReplacementBackingBytes < 0
+            || snapshot.RejectedAllocationCount != 0 || snapshot.FailedAllocationCount != 0
+            || snapshot.TraceCapacity != 0 || snapshot.TraceCount != 0 || snapshot.DroppedTraceEventCount != 0
+            || snapshot.TraceOverflowed || snapshot.HistoryOverflowed)
+            throw new InvalidDataException("The native builder budget observation is not a complete successful quiescent measurement.");
+        if (previous is { } prior && (snapshot.BudgetId != prior.BudgetId
+            || snapshot.CapacityBytes != prior.CapacityBytes || snapshot.PeakCommittedBytes < prior.PeakCommittedBytes
+            || snapshot.PeakAdmittedBytes < prior.PeakAdmittedBytes || snapshot.AllocationCount < prior.AllocationCount
+            || snapshot.ReallocationCount < prior.ReallocationCount || snapshot.FreeCount < prior.FreeCount
+            || snapshot.AcquiredBackingBytes < prior.AcquiredBackingBytes
+            || snapshot.ReplacementBackingBytes < prior.ReplacementBackingBytes))
+            throw new InvalidDataException("The native builder budget identity or history changed incompatibly.");
     }
 
     private static void AddWorkerArguments(
@@ -999,6 +1075,10 @@ internal static class NativeBuilderBenchmark
             CultureInfo.InvariantCulture));
         arguments.Add("--managed-baseline");
         arguments.Add(options.ManagedBaseline.ToString());
+        arguments.Add("--native-baseline");
+        arguments.Add(options.NativeBaseline.ToString());
+        arguments.Add("--native-budget-bytes");
+        arguments.Add(options.NativeBudgetCapacityBytes.ToString(CultureInfo.InvariantCulture));
     }
 
     private static void ValidatePair(
@@ -1009,7 +1089,7 @@ internal static class NativeBuilderBenchmark
         if (managed.Implementation
                 != options.ManagedBaseline
             || native.Implementation
-                != NativeBuilderBenchmarkImplementation.NativeBuilder
+                != options.NativeBaseline
             || managed.ElementCount != options.ElementCount
             || native.ElementCount != options.ElementCount
             || managed.PreLease != options.PreLease
@@ -1018,6 +1098,8 @@ internal static class NativeBuilderBenchmark
             || native.BatchSize != options.BatchSize
             || managed.Iterations != options.Iterations
             || native.Iterations != options.Iterations
+            || (options.NativeBaseline == NativeBuilderBenchmarkImplementation.NativeBuilderBudgeted
+                && native.LifecycleEvidence.PreparationAndValidation.After.Budget?.CapacityBytes != options.NativeBudgetCapacityBytes)
             || !managed.ExactParity
             || !native.ExactParity
             || !string.Equals(managed.ExactOutputSha256
@@ -1064,7 +1146,12 @@ internal static class NativeBuilderBenchmark
             ManagedBaseline = Enum.Parse<NativeBuilderBenchmarkImplementation>(
                 ReadOptionalOption(args, "--managed-baseline")
                     ?? nameof(NativeBuilderBenchmarkImplementation.ManagedExactArray),
-                ignoreCase: true)
+                ignoreCase: true),
+            NativeBaseline = Enum.Parse<NativeBuilderBenchmarkImplementation>(
+                ReadOptionalOption(args, "--native-baseline")
+                    ?? nameof(NativeBuilderBenchmarkImplementation.NativeBuilderBudgeted),
+                ignoreCase: true),
+            NativeBudgetCapacityBytes = ReadInt64Option(args, "--native-budget-bytes", long.MaxValue)
         };
         ValidateOptions(options);
         return options;
@@ -1074,6 +1161,8 @@ internal static class NativeBuilderBenchmark
         NativeBuilderBenchmarkOptions options)
     {
         ValidateManagedBaseline(options.ManagedBaseline);
+        ValidateNativeBaseline(options.NativeBaseline);
+        ArgumentOutOfRangeException.ThrowIfNegative(options.NativeBudgetCapacityBytes, nameof(options));
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
             options.ElementCount, nameof(options));
         ArgumentOutOfRangeException.ThrowIfNegative(
@@ -1103,6 +1192,21 @@ internal static class NativeBuilderBenchmark
             or NativeBuilderBenchmarkImplementation.ManagedListPrefix
             or NativeBuilderBenchmarkImplementation.ManagedExactArray))
             throw new ArgumentOutOfRangeException(nameof(implementation), implementation, "Select a managed builder baseline.");
+    }
+
+    private static bool IsNativeImplementation(NativeBuilderBenchmarkImplementation implementation)
+        => implementation is NativeBuilderBenchmarkImplementation.NativeBuilder or NativeBuilderBenchmarkImplementation.NativeBuilderBudgeted;
+
+    private static void ValidateNativeBaseline(NativeBuilderBenchmarkImplementation implementation)
+    {
+        if (!IsNativeImplementation(implementation))
+            throw new ArgumentOutOfRangeException(nameof(implementation), implementation, "Select a native builder baseline.");
+    }
+
+    private static long ReadInt64Option(string[] args, string name, long defaultValue)
+    {
+        string? value = ReadOptionalOption(args, name);
+        return value is null ? defaultValue : long.Parse(value, CultureInfo.InvariantCulture);
     }
 
     private static int ReadInt32Option(
@@ -1268,7 +1372,7 @@ internal static class NativeBuilderBenchmark
     }
 
     [StructLayout(LayoutKind.Sequential)]
-    private readonly record struct NativeBuilderBatchResult(
+    internal readonly record struct NativeBuilderBatchResult(
         long Checksum,
         double ElapsedMilliseconds);
 }

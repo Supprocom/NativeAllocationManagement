@@ -15,6 +15,27 @@ itself to justify NAM. All sides retain identical generated values, sequence
 ordering, checksum, batch sizes and the one-slot channel. Managed value packets
 hold storage references without an additional per-packet heap owner.
 
+The paired native default is `NativeBuilderBudgeted`; `--native-baseline
+NativeBuilder` retains the explicit historical unbudgeted path. The budgeted
+worker creates one shared domain inside its preparation clock and gives it to
+both builders for correctness validation, warm-up, the measured batch and the
+separate probe. `--native-budget-bytes` sets its immutable NAM-requested extent
+ceiling (default `Int64.MaxValue`), not a managed-allocation or process-RSS cap.
+No admission, allocation, growth, handoff or release cost is omitted from the
+applicable complete phase. Tracing is disabled for this comparison.
+
+Every worker boundary requires a `Budget` property. It contains all 19 real
+budget fields after budgeted preparation; it is `null` (unavailable), not
+invented zero, before preparation and on managed/unbudgeted paths. The worker
+reader rejects missing fields, false availability, changing domains or
+capacity, overflow, unresolved charge and failed/refused successful-work claims.
+Successful `AcquiredBackingBytes` and `ReplacementBackingBytes` are disjoint
+requested-extent histories. Their phase deltas plus process-wide GC allocation
+provide a defined allocation domain; allocation-event counts and live endpoint
+gauges cannot reconstruct it. Replacement history counts the full successful
+target, not net growth. It does not reveal opaque realloc's newly allocated
+physical bytes, private allocator metadata or transient resident-memory peak.
+
 Example: run the performance executable with `--native-builder
 --managed-baseline ManagedExactArray --elements 262144 --prelease 1024
 --batch-size 256 --iterations 128 --warmup 16 --samples 12`. Each persisted worker
@@ -26,8 +47,9 @@ The existing steady-state time/GC-allocation number excludes setup and warm-up;
 phase observations are separate measurements, not components to add to that
 time. Its `PerformanceAdvantage` field is a time-only observation, not the full
 performance-and-allocation release verdict. A smaller GC number does not include
-native growth requests, retained extents, metadata preparation, or backend
-overhead. This comparison does not yet establish shared-cap equivalence, managed
+native growth requests. Use actual budget histories on budgeted workers for
+that defined domain; legacy unbudgeted request volume is unavailable. This does
+not measure opaque backend overhead or establish shared-cap equivalence, managed
 pooling, the published previous-NAM matrix, normal-compilation confidence, or
 complete four-phase allocation acceptance. Those remain required 0.3.0 gates.
 

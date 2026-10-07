@@ -7,7 +7,8 @@ public enum NativeBuilderBenchmarkImplementation
     ManagedList,
     NativeBuilder,
     ManagedListPrefix,
-    ManagedExactArray
+    ManagedExactArray,
+    NativeBuilderBudgeted
 }
 
 public sealed record NativeBuilderBenchmarkOptions(
@@ -22,6 +23,11 @@ public sealed record NativeBuilderBenchmarkOptions(
     /// <summary>The explicit managed comparison; known output sizing is the default.</summary>
     public NativeBuilderBenchmarkImplementation ManagedBaseline { get; init; } =
         NativeBuilderBenchmarkImplementation.ManagedExactArray;
+    /// <summary>The native feature measured by the paired command; the legacy unbudgeted path remains explicit.</summary>
+    public NativeBuilderBenchmarkImplementation NativeBaseline { get; init; } =
+        NativeBuilderBenchmarkImplementation.NativeBuilderBudgeted;
+    /// <summary>The budgeted worker's NAM-requested extent ceiling, not a managed or process-RSS cap.</summary>
+    public long NativeBudgetCapacityBytes { get; init; } = long.MaxValue;
 }
 
 public sealed record NativeBuilderPhaseEvidence(
@@ -45,6 +51,28 @@ public readonly record struct NativeBuilderNativeObservation(
     [property: JsonRequired] long CopiedBytes,
     [property: JsonRequired] bool HistoryOverflowed);
 
+/// <summary>All implemented budget fields at one quiescent worker boundary; requested histories are not opaque physical allocation volume.</summary>
+public readonly record struct NativeBuilderBudgetObservation(
+    [property: JsonRequired] long BudgetId,
+    [property: JsonRequired] long CapacityBytes,
+    [property: JsonRequired] long CommittedBytes,
+    [property: JsonRequired] long ReservedBytes,
+    [property: JsonRequired] long PeakCommittedBytes,
+    [property: JsonRequired] long PeakAdmittedBytes,
+    [property: JsonRequired] long AllocationCount,
+    [property: JsonRequired] long ReallocationCount,
+    [property: JsonRequired] long FreeCount,
+    [property: JsonRequired] long ActiveAllocationCount,
+    [property: JsonRequired] long RejectedAllocationCount,
+    [property: JsonRequired] long FailedAllocationCount,
+    [property: JsonRequired] int TraceCapacity,
+    [property: JsonRequired] int TraceCount,
+    [property: JsonRequired] long DroppedTraceEventCount,
+    [property: JsonRequired] bool TraceOverflowed,
+    [property: JsonRequired] bool HistoryOverflowed,
+    [property: JsonRequired] long AcquiredBackingBytes,
+    [property: JsonRequired] long ReplacementBackingBytes);
+
 /// <summary>Absolute counters at one worker-phase boundary; GC heap size is the last collection's observation.</summary>
 public readonly record struct NativeBuilderWorkerObservation(
     [property: JsonRequired] long Timestamp,
@@ -54,7 +82,12 @@ public readonly record struct NativeBuilderWorkerObservation(
     [property: JsonRequired] int Gen1Collections,
     [property: JsonRequired] int Gen2Collections,
     [property: JsonRequired] long ManagedHeapBytes,
-    [property: JsonRequired] NativeBuilderNativeObservation Native);
+    [property: JsonRequired] NativeBuilderNativeObservation Native)
+{
+    /// <summary>Real worker-domain snapshot, or null where the domain is genuinely unavailable.</summary>
+    [JsonRequired]
+    public NativeBuilderBudgetObservation? Budget { get; init; }
+}
 
 /// <summary>Complete invocation of a phase, including its channel/task setup where applicable.</summary>
 public readonly record struct NativeBuilderLifecyclePhaseEvidence(
