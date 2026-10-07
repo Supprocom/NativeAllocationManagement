@@ -20,7 +20,9 @@ public enum NativeTransferLifecycle
     /// <summary>Emergency cleanup has claimed an abandoned control.</summary>
     Finalizing,
     /// <summary>The allocator revoked payload authority; this control may still require cleanup of its references.</summary>
-    Invalidated
+    Invalidated,
+    /// <summary>Unique authority was consumed; a private immutable shared payload holds the remaining cleanup custody.</summary>
+    Shared
 }
 
 /// <summary>An allocation-free unique observation; concurrent fields are sampled, not a cross-owner transaction.</summary>
@@ -47,9 +49,9 @@ public readonly record struct NativeTransferStatistics
     public long MoveCount { get; internal init; }
     /// <summary>Gets one while the allocator and control accept the published unique binding, otherwise zero; aliases are not additional owners.</summary>
     public int LiveUniqueOwnerCount { get; internal init; }
-    /// <summary>Gets whether this managed control's return obligation remains uncompleted, including an invalidated or retiring payload.</summary>
+    /// <summary>Gets whether this control's cleanup obligation remains uncompleted, including an invalidated, retiring or shared payload; it does not grant unique access.</summary>
     public bool HasReturnObligation { get; internal init; }
-    /// <summary>Gets the initialized logical extent while payload authority remains live.</summary>
+    /// <summary>Gets the initialized logical extent while payload custody remains live; shared and unique lineage observations are not additive.</summary>
     public long InitializedPayloadBytes { get; internal init; }
     /// <summary>Gets the initial initialized logical extent, retained as a lifetime peak after return.</summary>
     public long PeakInitializedPayloadBytes { get; internal init; }

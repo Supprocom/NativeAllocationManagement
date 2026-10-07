@@ -242,10 +242,13 @@ internal sealed class NativeSharedControl<T> where T : unmanaged
             _released = true;
             _expired = true;
             Increment(ref _payloadReturns);
-            Trace(NativeMemoryTraceKind.PayloadReturned);
-            _ownedBytes = 0;
-            _borrowedBytes = 0;
-            _payload = null;
+            try { Trace(NativeMemoryTraceKind.PayloadReturned); }
+            finally
+            {
+                _ownedBytes = 0;
+                _borrowedBytes = 0;
+                _payload = null;
+            }
         }
     }
 
@@ -319,7 +322,7 @@ internal sealed class NativeSharedControl<T> where T : unmanaged
 
 internal sealed class NativeSharedPayload<T> where T : unmanaged
 {
-    private NativeTransfer<T>? _transfer;
+    private NativeTransferControl<T>? _custody;
     private NativeStorageLifetimePin _pin;
     private IntPtr _pointer;
     private int _returnState;
@@ -329,10 +332,9 @@ internal sealed class NativeSharedPayload<T> where T : unmanaged
 
     internal void Initialize(NativeTransfer<T> transfer)
     {
-        _transfer = transfer;
-        _pin = transfer.PinForSharing(out _pointer, out nuint ownedBytes, out nuint borrowedBytes, out NativeMemoryBudget? budget, out long ordinal);
+        _custody = transfer.CustodyForSharing;
+        _pin = _custody.PinForSharing(transfer.SharingAuthorityVersion, out _pointer, out nuint ownedBytes, out nuint borrowedBytes, out NativeMemoryBudget? budget, out long ordinal);
         Control.ConfigureStorage(ownedBytes, borrowedBytes, budget, ordinal);
-        transfer.AdoptSharedFinalization();
     }
 
     internal unsafe NativeReadOnlyLeaseView<T> GetView(int offset, int length) =>
@@ -346,23 +348,37 @@ internal sealed class NativeSharedPayload<T> where T : unmanaged
         {
             NativeMemoryTestHooks.CheckManagedPublicationBoundary("NativeShared.Return", 3, "payload authority return");
             _pin.Dispose();
-            _transfer?.Dispose();
-            _transfer = null;
-            _pointer = IntPtr.Zero;
-            Control.RecordPayloadReturn();
-            GC.SuppressFinalize(this);
+            _custody?.ReturnSharedStorage();
+            CompletePayloadReturn();
         }
-        catch
+        catch (Exception returnFailure)
         {
             Control.RecordReturnFailure();
-            Volatile.Write(ref _returnState, 0);
+            if (_custody is { StorageHasBeenReturned: true })
+            {
+                try { CompletePayloadReturn(); }
+                catch (Exception observationFailure)
+                {
+                    throw new AggregateException("Storage return completed but its observations failed.", returnFailure, observationFailure);
+                }
+            }
+            else if (_custody is not null) Volatile.Write(ref _returnState, 0);
             throw;
         }
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA1816", Justification = "Actual completed payload return disarms this payload's emergency finalizer, including a completion followed by an observation failure.")]
+    private void CompletePayloadReturn()
+    {
+        _custody = null;
+        _pointer = IntPtr.Zero;
+        Control.RecordPayloadReturn();
+        GC.SuppressFinalize(this);
+    }
+
     internal void AbortInitialization(NativeTransfer<T> transfer)
     {
-        _transfer ??= transfer;
+        _custody ??= transfer.CustodyForSharing;
         if (Control.BeginAbandonedRelease()) ReturnStorage();
     }
 
@@ -372,7 +388,7 @@ internal sealed class NativeSharedPayload<T> where T : unmanaged
     {
         try
         {
-            if (_transfer.HasValue)
+            if (_custody is not null)
             {
                 NativeMemoryTestHooks.NotifyBeforeOperationEntry("NativeShared.Finalize");
                 if (Control.BeginAbandonedRelease()) ReturnStorage();

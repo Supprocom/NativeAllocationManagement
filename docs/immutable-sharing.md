@@ -20,6 +20,24 @@ publication failures return its storage. If publication and cleanup both fail,
 an aggregate exception preserves both causes. The ordinary unique path acquires
 no reference-counting bank or shared payload wrapper.
 
+After conversion, the original transfer lineage reports `Lifecycle.Shared`, no
+active unique binding and `LiveUniqueOwnerCount == 0`. Its remaining return
+obligation describes private shared cleanup custody, not access authority. The
+shared payload stores that custody directly rather than retaining a public unique
+capability. Its allocator generation/allocation pin still protects backing until
+the last strong owner and entered shared reader finish. Preparing this pin does
+not invent a unique borrow or increase the unique borrow peak; earlier genuine
+unique borrows keep their recorded peak. Lineage backing/initialization fields and
+shared snapshots describe the same storage and must not be added together.
+
+If storage return completes before an observation/trace step throws, report the
+actual completed return and zero remaining associated backing, preserve the
+exception, and do not schedule another physical free. A failed return before
+completion retains shared cleanup custody and can be retried without reopening
+unique authority. These are correctness contracts, not measured performance
+claims. Full end-to-end comparisons still include preparation, metadata, boundary
+synchronization, cleanup and diagnostics against optimized managed C#.
+
 Keep the nullable source in a `try/finally` with `source?.Dispose()` around the
 conversion and its result. That cleanup is a no-op after a consumed move, but
 returns the still-owned source if preparation fails before consumption. A using

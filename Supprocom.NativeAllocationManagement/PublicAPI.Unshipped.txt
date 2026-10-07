@@ -93,6 +93,7 @@ Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.ReservationActivated 
 Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.ReservationReturned = 25 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
 Supprocom.NativeAllocationManagement.NativeTransferStatistics.HasReturnObligation.get -> bool
 Supprocom.NativeAllocationManagement.NativeTransferLifecycle.Invalidated = 7 -> Supprocom.NativeAllocationManagement.NativeTransferLifecycle
+Supprocom.NativeAllocationManagement.NativeTransferLifecycle.Shared = 8 -> Supprocom.NativeAllocationManagement.NativeTransferLifecycle
 Supprocom.NativeAllocationManagement.NativeTransfer<T>.CaptureSnapshot() -> Supprocom.NativeAllocationManagement.NativeTransferStatistics
 Supprocom.NativeAllocationManagement.NativeTransfer<T>.TryCompletePayloadReturn() -> bool
 Supprocom.NativeAllocationManagement.NativeTransferStatistics
