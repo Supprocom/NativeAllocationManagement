@@ -165,6 +165,10 @@ internal static class NativeBuilderBenchmark
         ValidateOptions(options);
         if (!Enum.IsDefined(implementation))
             throw new ArgumentOutOfRangeException(nameof(implementation));
+        using Process process = Process.GetCurrentProcess();
+        // Initialize process/accounting observers before the first boundary on both sides.
+        _ = CaptureWorkerObservation(process);
+        NativeBuilderWorkerObservation setupBefore = CaptureWorkerObservation(process);
         Stopwatch setupClock = Stopwatch.StartNew();
         NativeBuilderExactOutput expected = BuildManagedOutput(options);
         string exactHash = ComputeExactHash(expected);
@@ -185,6 +189,8 @@ internal static class NativeBuilderBenchmark
         }
 
         setupClock.Stop();
+        NativeBuilderWorkerObservation setupAfter = CaptureWorkerObservation(process, afterWork: true);
+        NativeBuilderWorkerObservation warmupBefore = CaptureWorkerObservation(process);
         Stopwatch warmupClock = Stopwatch.StartNew();
         NativeBuilderBatchResult warmup = implementation
             != NativeBuilderBenchmarkImplementation.NativeBuilder
@@ -196,6 +202,7 @@ internal static class NativeBuilderBenchmark
                     options,
                     options.WarmupIterations).ConfigureAwait(false);
         warmupClock.Stop();
+        NativeBuilderWorkerObservation warmupAfter = CaptureWorkerObservation(process, afterWork: true);
         if (warmup.Checksum != unchecked(
             expectedChecksum * options.WarmupIterations))
         {
@@ -203,17 +210,12 @@ internal static class NativeBuilderBenchmark
                 "The native builder warmup changed the output checksum.");
         }
 
-        long allocatedBefore = GC.GetTotalAllocatedBytes(
-            precise: true);
-        int gen0Before = GC.CollectionCount(0);
-        int gen1Before = GC.CollectionCount(1);
-        int gen2Before = GC.CollectionCount(2);
-        long heapBefore = GC.GetGCMemoryInfo().HeapSizeBytes;
-        using Process process = Process.GetCurrentProcess();
         process.Refresh();
         long workingSetBefore = process.WorkingSet64;
         NativeMemoryTestMetrics statisticsBefore =
             NativeMemoryTestHooks.Snapshot();
+        NativeBuilderWorkerObservation measuredBefore = CaptureWorkerObservation(process);
+        long batchStart = Stopwatch.GetTimestamp();
         NativeBuilderBatchResult measured = implementation
             != NativeBuilderBenchmarkImplementation.NativeBuilder
                 ? await RunManagedBatchAsync(
@@ -223,13 +225,15 @@ internal static class NativeBuilderBenchmark
                 : await RunNativeBatchAsync(
                     options,
                     options.Iterations).ConfigureAwait(false);
+        double batchMilliseconds = ElapsedMilliseconds(batchStart);
+        NativeBuilderWorkerObservation measuredAfter = CaptureWorkerObservation(process, afterWork: true);
+        NativeMemoryTestMetrics statistics = NativeMemoryTestHooks.Snapshot();
         process.Refresh();
         long workingSetAfter = process.WorkingSet64;
         long peakWorkingSet = process.PeakWorkingSet64;
         if (peakWorkingSet <= 0)
             throw new InvalidDataException("The runtime did not provide a usable process working-set high-water mark.");
-        long managedAllocated = GC.GetTotalAllocatedBytes(
-            precise: true) - allocatedBefore;
+        long managedAllocated = measuredAfter.ManagedAllocatedBytes - measuredBefore.ManagedAllocatedBytes;
         long expectedMeasuredChecksum = unchecked(
             expectedChecksum * options.Iterations);
         if (measured.Checksum != expectedMeasuredChecksum)
@@ -238,12 +242,14 @@ internal static class NativeBuilderBenchmark
                 "The measured native builder output checksum changed.");
         }
 
-        NativeMemoryTestMetrics statistics =
-            NativeMemoryTestHooks.Snapshot();
+        NativeBuilderWorkerObservation probeBefore = CaptureWorkerObservation(process);
+        long probeStart = Stopwatch.GetTimestamp();
         NativeBuilderPhaseEvidence phaseEvidence = implementation
             != NativeBuilderBenchmarkImplementation.NativeBuilder
                 ? MeasureManagedPhases(options, implementation)
                 : MeasureNativePhases(options);
+        double probeMilliseconds = ElapsedMilliseconds(probeStart);
+        NativeBuilderWorkerObservation probeAfter = CaptureWorkerObservation(process, afterWork: true);
         long logicalBytes = checked(
             (long)options.ElementCount
             * sizeof(uint)
@@ -270,11 +276,11 @@ internal static class NativeBuilderBenchmark
                 logicalBytes,
                 elapsedMilliseconds),
             managedAllocated,
-            GC.CollectionCount(0) - gen0Before,
-            GC.CollectionCount(1) - gen1Before,
-            GC.CollectionCount(2) - gen2Before,
-            heapBefore,
-            GC.GetGCMemoryInfo().HeapSizeBytes,
+            measuredAfter.Gen0Collections - measuredBefore.Gen0Collections,
+            measuredAfter.Gen1Collections - measuredBefore.Gen1Collections,
+            measuredAfter.Gen2Collections - measuredBefore.Gen2Collections,
+            measuredBefore.ManagedHeapBytes,
+            measuredAfter.ManagedHeapBytes,
             workingSetBefore,
             workingSetAfter,
             peakWorkingSet,
@@ -293,7 +299,43 @@ internal static class NativeBuilderBenchmark
             Environment.ProcessorCount,
             System.Runtime.GCSettings.IsServerGC,
             phaseEvidence,
-            exactParity);
+            exactParity)
+        {
+            LifecycleEvidence = new NativeBuilderLifecycleEvidence(
+                new(setupBefore, setupAfter, setupClock.Elapsed.TotalMilliseconds),
+                new(warmupBefore, warmupAfter, warmupClock.Elapsed.TotalMilliseconds),
+                new(measuredBefore, measuredAfter, batchMilliseconds),
+                new(probeBefore, probeAfter, probeMilliseconds))
+        };
+    }
+
+    private static NativeBuilderWorkerObservation CaptureWorkerObservation(Process process, bool afterWork = false)
+    {
+        // CPU queries may allocate: begin GC after the query, end GC before it.
+        // The process-wide counter also covers async work resumed on another thread.
+        long allocated = afterWork ? GC.GetTotalAllocatedBytes(precise: true) : 0;
+        long timestamp = afterWork ? Stopwatch.GetTimestamp() : 0;
+        int gen0 = GC.CollectionCount(0);
+        int gen1 = GC.CollectionCount(1);
+        int gen2 = GC.CollectionCount(2);
+        long heap = GC.GetGCMemoryInfo().HeapSizeBytes;
+        NativeMemoryStatistics native = NativeMemoryDiagnostics.Snapshot();
+        long cpuTicks = process.TotalProcessorTime.Ticks;
+        if (!afterWork)
+        {
+            allocated = GC.GetTotalAllocatedBytes(precise: true);
+            timestamp = Stopwatch.GetTimestamp();
+            gen0 = GC.CollectionCount(0);
+            gen1 = GC.CollectionCount(1);
+            gen2 = GC.CollectionCount(2);
+            heap = GC.GetGCMemoryInfo().HeapSizeBytes;
+        }
+        return new NativeBuilderWorkerObservation(
+            timestamp, cpuTicks, allocated, gen0, gen1, gen2, heap,
+            new NativeBuilderNativeObservation(
+                native.MetricsEpoch, native.AllocationCount, native.ReallocationCount,
+                native.FreeCount, native.OutstandingNativeBytes, native.DetachedNativeBytes,
+                native.RetiredNativeBytes, native.CopiedBytes, native.HistoryOverflowed));
     }
 
     internal static NativeBuilderBenchmarkImplementation
@@ -913,12 +955,16 @@ internal static class NativeBuilderBenchmark
                 $"The {implementation} native builder worker failed with exit code {process.ExitCode}: {error}");
         }
 
-        NativeBuilderWorkerEvidence evidence =
-            JsonSerializer.Deserialize<NativeBuilderWorkerEvidence>(
-                output.Trim(),
-                CompactJsonOptions)
+        return DeserializeWorkerEvidence(output.Trim());
+    }
+
+    internal static NativeBuilderWorkerEvidence DeserializeWorkerEvidence(string output)
+    {
+        NativeBuilderWorkerEvidence evidence = JsonSerializer.Deserialize<NativeBuilderWorkerEvidence>(output, CompactJsonOptions)
             ?? throw new InvalidDataException(
                 "The native builder worker did not return evidence.");
+        if (evidence.LifecycleEvidence is null)
+            throw new InvalidDataException("The native builder worker did not report lifecycle evidence.");
         return evidence;
     }
 

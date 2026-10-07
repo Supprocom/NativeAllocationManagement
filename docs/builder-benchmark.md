@@ -31,6 +31,30 @@ overhead. This comparison does not yet establish shared-cap equivalence, managed
 pooling, the published previous-NAM matrix, normal-compilation confidence, or
 complete four-phase allocation acceptance. Those remain required 0.3.0 gates.
 
+`LifecycleEvidence` and every nested measurement are required in newly serialized
+worker evidence: absent observations cannot deserialize into invented zero
+measurements; explicit null is rejected by the worker reader. It separates
+preparation plus correctness validation, warm-up, the complete measured batch
+(including channel/task setup), and the later one-packet phase probe. Each has
+wall time and absolute before/after process CPU, process-wide GC allocation,
+collection counts, last-observed GC heap size, and implemented native accounting
+counters. CPU sampling overhead is excluded from the GC allocation boundaries;
+accounting/CPU observers are initialized before preparation on both sides.
+These are development-worker observations, not cold process startup costs.
+
+The legacy GC allocation/collection/heap fields now correspond only to the
+complete measured batch, ending before RSS queries and the separate probe.
+Its legacy elapsed time still covers the inner producer/consumer loop, so use
+`LifecycleEvidence.MeasuredBatch.ElapsedMilliseconds` for complete invocation
+time. Process CPU is shared by all process threads and has OS timer granularity;
+GC heap size is the last collection's value, not instantaneous live storage.
+Native observations preserve the epoch and saturation indicator: only compare
+event deltas within the same nonsaturated epoch. Outstanding, detached and
+retired byte fields are current gauges, not cumulative allocated byte volume.
+The probe's managed `GC.KeepAlive` boundary is not physical GC reclamation. Do not
+sum these four phases into an application-lifetime or terminal-reclamation
+claim, or substitute this evidence for the full performance/memory release gates.
+
 `WorkingSetBeforeBytes` and `WorkingSetAfterBytes` are endpoint resident-memory
 observations. `PeakWorkingSetBytes` is the OS-reported process-lifetime working-set
 high-water mark through the post-measurement refresh, before the separate phase
