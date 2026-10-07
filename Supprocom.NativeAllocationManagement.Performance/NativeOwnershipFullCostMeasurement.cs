@@ -21,6 +21,13 @@ internal static class NativeOwnershipFullCostMeasurement
 
     internal static int RunCommand(string[] arguments)
     {
+        int warmupCycles = WarmupCycles;
+        if (arguments is [.. var required, "--warmup-cycles", string warmupText])
+        {
+            if (!int.TryParse(warmupText, NumberStyles.None, CultureInfo.InvariantCulture, out warmupCycles))
+                throw new ArgumentException("Warm-up cycles must be a nonnegative integer.", nameof(arguments));
+            arguments = required;
+        }
         if (arguments is not ["--ownership-full-cost-worker", "--implementation", string implementationText,
             "--contract", string contractText, "--cycles", string cyclesText]
             || !Enum.TryParse(implementationText, ignoreCase: false, out OwnershipFullCostImplementation implementation)
@@ -28,22 +35,28 @@ internal static class NativeOwnershipFullCostMeasurement
             || !Enum.TryParse(contractText, ignoreCase: false, out OwnershipFullCostContract contract)
             || !Enum.IsDefined(contract) || !string.Equals(contractText, contract.ToString(), StringComparison.Ordinal)
             || !int.TryParse(cyclesText, NumberStyles.None, CultureInfo.InvariantCulture, out int cycles))
-            throw new ArgumentException("Expected --ownership-full-cost-worker --implementation <Managed|Native> --contract <Unique|Shared|SharedWeak> --cycles <positive integer>.", nameof(arguments));
-        OwnershipFullCostReport report = Run(implementation, contract, cycles);
+            throw new ArgumentException("Expected --ownership-full-cost-worker --implementation <Managed|Native> --contract <Unique|Shared|SharedWeak> --cycles <positive integer> [--warmup-cycles <nonnegative integer>].", nameof(arguments));
+        OwnershipFullCostReport report = Run(implementation, contract, cycles, warmupCycles);
         Console.WriteLine(JsonSerializer.Serialize(report));
         return report.ExactOutput && report.ExactCleanup && report.ExactNativeAccounting ? 0 : 3;
     }
 
-    internal static OwnershipFullCostReport Run(OwnershipFullCostImplementation implementation, OwnershipFullCostContract contract, int cycles)
+    internal static OwnershipFullCostReport Run(OwnershipFullCostImplementation implementation, OwnershipFullCostContract contract, int cycles,
+        int warmupCycles = WarmupCycles)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(cycles);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(cycles, 1_000_000);
+        ArgumentOutOfRangeException.ThrowIfNegative(warmupCycles);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(warmupCycles, 1_000_000);
         if (!Enum.IsDefined(implementation)) throw new ArgumentOutOfRangeException(nameof(implementation));
         if (!Enum.IsDefined(contract)) throw new ArgumentOutOfRangeException(nameof(contract));
         _ = Fill; _ = UniqueRead; _ = SharedRead; _ = DetachedRead;
         long[] ticks = new long[cycles];
-        OwnershipFullCostPhase[] phases = new OwnershipFullCostPhase[4];
+        long[] warmupTicks = new long[warmupCycles];
+        OwnershipFullCostPhase[] phases = new OwnershipFullCostPhase[5];
         using Process process = Process.GetCurrentProcess();
+        OwnershipRuntimeConfiguration runtimeConfiguration = OwnershipRuntimeConfiguration.Capture();
+        OwnershipHostObservation hostBefore = OwnershipHostObservation.Capture();
         NativeMemoryStatistics before = NativeMemoryDiagnostics.Snapshot();
         NativeMemoryBudget? budget = null;
         NativeTransfer<byte>? observedUnique = null;
@@ -55,11 +68,18 @@ internal static class NativeOwnershipFullCostMeasurement
         OwnershipClock clock = OwnershipClock.Start(process);
         if (native) budget = new NativeMemoryBudget(peakBytes);
         phases[0] = clock.End("preparation", 1, 0, process);
+        clock = OwnershipClock.Start(process);
+        long firstChecksum = Visit(implementation, contract, budget, out observedUnique, out observedShared, out observedDetached);
+        phases[1] = clock.End("first-use full lifecycle", 1, firstChecksum, process);
         long warmChecksum = 0;
         clock = OwnershipClock.Start(process);
-        for (int cycle = 0; cycle < WarmupCycles; cycle++)
+        foreach (ref long cycleTicks in warmupTicks.AsSpan())
+        {
+            long start = Stopwatch.GetTimestamp();
             warmChecksum += Visit(implementation, contract, budget, out observedUnique, out observedShared, out observedDetached);
-        phases[1] = clock.End("warm-up full lifecycle", WarmupCycles, warmChecksum, process);
+            cycleTicks = Stopwatch.GetTimestamp() - start;
+        }
+        phases[2] = clock.End("counted warm-up full lifecycle", warmupCycles, warmChecksum, process);
         long checksum = 0;
         clock = OwnershipClock.Start(process);
         foreach (ref long cycleTicks in ticks.AsSpan())
@@ -68,17 +88,18 @@ internal static class NativeOwnershipFullCostMeasurement
             checksum += Visit(implementation, contract, budget, out observedUnique, out observedShared, out observedDetached);
             cycleTicks = Stopwatch.GetTimestamp() - start;
         }
-        phases[2] = clock.End("complete ownership lifecycle", cycles, checksum, process);
+        phases[3] = clock.End("post-warm-up full lifecycle", cycles, checksum, process);
         clock = OwnershipClock.Start(process);
         NativeMemoryBudgetStatistics? terminalBudget = budget?.CaptureStatistics();
         NativeTransferStatistics? unique = observedUnique?.CaptureSnapshot();
         NativeSharingStatistics? shared = observedShared?.CaptureSnapshot();
         NativeTransferStatistics? detached = observedDetached?.CaptureSnapshot();
         NativeMemoryStatistics after = NativeMemoryDiagnostics.Snapshot();
-        phases[3] = clock.End("terminal diagnostics", 1, 0, process);
+        phases[4] = clock.End("terminal diagnostics", 1, 0, process);
+        OwnershipHostObservation hostAfter = OwnershipHostObservation.Capture();
         if (before.MetricsEpoch != after.MetricsEpoch) throw new InvalidOperationException("Accounting epoch changed during the measured workload.");
         int acquisitions = sharing ? 2 : 1;
-        long expectedAcquisitions = acquisitions * (long)(cycles + WarmupCycles);
+        long expectedAcquisitions = acquisitions * (long)(1 + cycles + warmupCycles);
         bool cleanup = !native || terminalBudget is { CommittedBytes: 0, ReservedBytes: 0 }
             && unique is { OwnedBackingBytes: 0, ActiveBorrowCount: 0, HasReturnObligation: false }
             && (!sharing || shared is
@@ -98,17 +119,18 @@ internal static class NativeOwnershipFullCostMeasurement
             } && shared.Value.WeakCreationCount == (contract == OwnershipFullCostContract.SharedWeak ? 1 : 0)
                 && shared.Value.SuccessfulUpgradeCount == (contract == OwnershipFullCostContract.SharedWeak ? Upgrades : 0)
                 && shared.Value.ExpiredUpgradeCount == (contract == OwnershipFullCostContract.SharedWeak ? 1 : 0));
-        return new OwnershipFullCostReport(implementation, contract, cycles, WarmupCycles, PayloadBytes, SliceBytes, Moves, Reads,
+        return new OwnershipFullCostReport(2, implementation, contract, cycles, warmupCycles, PayloadBytes, SliceBytes, Moves, Reads,
             contract == OwnershipFullCostContract.SharedWeak ? Upgrades : 0,
             RuntimeInformation.RuntimeIdentifier, RuntimeInformation.ProcessArchitecture.ToString(), Environment.Version.ToString(),
             Environment.GetEnvironmentVariable("DOTNET_TieredCompilation"), Environment.GetEnvironmentVariable("DOTNET_TieredPGO"),
-            phases, ticks, Stopwatch.Frequency, checksum, ExpectedChecksum(contract, cycles), warmChecksum,
-            ExpectedChecksum(contract, WarmupCycles), peakBytes, sharing ? SliceBytes : 0,
+            phases, ticks, warmupTicks, Stopwatch.Frequency, firstChecksum, ExpectedChecksum(contract, 1), checksum, ExpectedChecksum(contract, cycles), warmChecksum,
+            ExpectedChecksum(contract, warmupCycles), peakBytes, sharing ? SliceBytes : 0,
             native ? expectedAcquisitions : null, before, after, terminalBudget, unique, shared, detached,
-            checksum == ExpectedChecksum(contract, cycles) && warmChecksum == ExpectedChecksum(contract, WarmupCycles), cleanup, accounting,
+            firstChecksum == ExpectedChecksum(contract, 1) && checksum == ExpectedChecksum(contract, cycles)
+                && warmChecksum == ExpectedChecksum(contract, warmupCycles), cleanup, accounting, runtimeConfiguration, hostBefore, hostAfter,
             native ? "Actual NAM requested extents, overlap, physical budget events and native ownership histories. Control snapshots are sampled outside lifecycles in their own timed phase."
                 : "Live exact managed array-element extents and explicit-copy overlap, excluding CLR headers. Managed atomic sharing bounds simultaneous strong ownership at two; weak control holds no payload reference after final release. Entered readers use GC-protected array references. No native stale-address/version bank is needed; native observations are unavailable (null). Dropping authority is not physical freeing or RSS relief.",
-            "Preparation, warm-up and complete ownership lifecycles include admission, backing, initialization, moves, conversion, sharing banks, all useful reads, observer upgrades/expiry, copies and cleanup. Instrumentation arrays, process-CPU-query allocation and report serialization are excluded on every side. No benefit, complete managed metadata, native matrix or release verdict.");
+            "The five disjoint timed phases include preparation, first-use lifecycle, counted warm-up, post-warm-up lifecycles and terminal diagnostics. Every lifecycle includes admission, backing, initialization, moves, conversion, sharing banks, useful reads, observer upgrades/expiry, copies and cleanup. A fixed warm-up count does not establish Tier1/OSR stabilization. Inner cycle ticks are correlated observations, not independent samples. Sum of phases is timed lifecycle cost, not process startup-to-exit time. Instrumentation arrays, host observations, process-CPU-query allocation and report serialization are excluded on every side.");
     }
 
     internal static long ExpectedChecksum(OwnershipFullCostContract contract, int cycles) => checked(cycles *
@@ -321,12 +343,14 @@ internal enum OwnershipFullCostImplementation { Managed, Native }
 internal enum OwnershipFullCostContract { Unique, Shared, SharedWeak }
 internal sealed record OwnershipFullCostPhase(string Name, int Operations, double WallMilliseconds, double CpuMilliseconds,
     long ManagedAllocatedBytes, int Gen0Collections, int Gen1Collections, int Gen2Collections, long Checksum);
-internal sealed record OwnershipFullCostReport(OwnershipFullCostImplementation Implementation, OwnershipFullCostContract Contract,
+internal sealed record OwnershipFullCostReport(int SchemaVersion, OwnershipFullCostImplementation Implementation, OwnershipFullCostContract Contract,
     int Cycles, int WarmupCycles, int PayloadBytes, int SliceBytes, int MovesPerCycle, int ReadsPerCycle, int UpgradesPerCycle,
     string Rid, string Architecture, string Runtime, string? TieredCompilation, string? TieredPgo,
-    OwnershipFullCostPhase[] Phases, long[] CycleTicks, long TimestampFrequency, long Checksum, long ExpectedChecksum,
+    OwnershipFullCostPhase[] Phases, long[] CycleTicks, long[] WarmupCycleTicks, long TimestampFrequency,
+    long FirstUseChecksum, long ExpectedFirstUseChecksum, long Checksum, long ExpectedChecksum,
     long WarmupChecksum, long ExpectedWarmupChecksum, long PeakLiveBackingBytes, long CopiedBytesPerCycle,
     long? NativeBackingAcquisitions, NativeMemoryStatistics ProcessBefore, NativeMemoryStatistics ProcessAfter,
     NativeMemoryBudgetStatistics? Budget, NativeTransferStatistics? TerminalUnique,
     NativeSharingStatistics? TerminalShared, NativeTransferStatistics? TerminalDetached,
-    bool ExactOutput, bool ExactCleanup, bool ExactNativeAccounting, string MemoryDomain, string MeasurementScope);
+    bool ExactOutput, bool ExactCleanup, bool ExactNativeAccounting, OwnershipRuntimeConfiguration RuntimeConfiguration,
+    OwnershipHostObservation HostBefore, OwnershipHostObservation HostAfter, string MemoryDomain, string MeasurementScope);
