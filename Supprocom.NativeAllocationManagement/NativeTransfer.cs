@@ -107,7 +107,7 @@ public readonly struct NativeTransfer<T> : IDisposable
 }
 
 // One acquisition-time control, not one wrapper/finalizer per move.
-internal class NativeTransferControl<T>
+internal partial class NativeTransferControl<T>
     where T : unmanaged
 {
     private protected const int Active = 1;
@@ -120,7 +120,7 @@ internal class NativeTransferControl<T>
     private const int Shared = 10;
 
     private NativeOwnerKernel? _kernel;
-    private NativeGeneration? _generationState;
+    private NativeSharedControl<T>? _sharingControl;
     private NativeAllocation? _allocationState;
     private readonly long _ownerId;
     private long _backingBytes;
@@ -137,16 +137,16 @@ internal class NativeTransferControl<T>
     private int _payloadReturned;
     private long _returnFailures;
     private bool _historyOverflowed;
+    private bool _sharingAllocationEntered;
+    private bool _sharingGenerationEntered;
 
     private NativeTransferControl(
         NativeOwnerKernel kernel,
-        NativeGeneration generationState,
         NativeAllocation allocationState,
         long generation,
         long allocationId)
     {
         _kernel = kernel;
-        _generationState = generationState;
         _allocationState = allocationState;
         _ownerId = kernel.Id;
         NativeSegment? segment = allocationState.Segment;
@@ -181,11 +181,14 @@ internal class NativeTransferControl<T>
     internal virtual NativeTransferStatistics CaptureSnapshot(long bindingVersion)
     {
         int state = Volatile.Read(ref _state);
+        // Failed pin preparation may leave the private moved binding able to
+        // retry cleanup. It never republishes a unique owner to the caller.
+        if (state == Active && _sharingControl is not null) state = Shared;
         long authority = Volatile.Read(ref _authorityVersion);
         bool returned = Volatile.Read(ref _payloadReturned) != 0;
         NativeOwnerKernel? kernel = Volatile.Read(ref _kernel);
-        NativeGeneration? generation = _generationState;
         NativeAllocation? allocation = _allocationState;
+        NativeGeneration? generation = allocation?.GenerationState;
         bool allocationActive = kernel is null || (generation is not null && allocation is not null
             && kernel.TransferAuthorityIsActive(generation, allocation, _generation, _allocationId));
         bool bindingActive = !returned && state == Active && authority == bindingVersion && allocationActive;
@@ -216,7 +219,7 @@ internal class NativeTransferControl<T>
             MoveCount = authority - 1,
             LiveUniqueOwnerCount = !returned && state == Active && allocationActive ? 1 : 0,
             HasReturnObligation = !returned,
-            InitializedPayloadBytes = !returned && (allocationActive || state == Shared || borrows != 0) ? initialized : 0,
+            InitializedPayloadBytes = backingPresent && (allocationActive || state == Shared || borrows != 0) ? initialized : 0,
             PeakInitializedPayloadBytes = initialized,
             OwnedBackingBytes = !backingPresent || _borrowedBacking ? 0 : _backingBytes,
             BorrowedBackingBytes = !backingPresent || !_borrowedBacking ? 0 : _backingBytes,
@@ -224,7 +227,7 @@ internal class NativeTransferControl<T>
             PayloadReturnCount = returned ? 1 : 0,
             PayloadReturnFailureCount = Volatile.Read(ref _returnFailures),
             HistoryOverflowed = Volatile.Read(ref _historyOverflowed),
-            ControlFieldBytes = 3L * IntPtr.Size + 6L * sizeof(long) + 6L * sizeof(int) + 2L * sizeof(bool) + Unsafe.SizeOf<NativeBlock>()
+            ControlFieldBytes = 3L * IntPtr.Size + 6L * sizeof(long) + 6L * sizeof(int) + 4L * sizeof(bool) + Unsafe.SizeOf<NativeBlock>()
         };
     }
 
@@ -254,89 +257,7 @@ internal class NativeTransferControl<T>
 
     internal int GetCapacity(long authorityVersion) => Validate(authorityVersion, nameof(NativeTransfer<T>.Capacity)).Capacity;
 
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA1816", Justification = "After actual pin acquisition the initialized finalizable shared payload assumes this control's cleanup custody; no public unique authority remains.")]
-    internal unsafe NativeStorageLifetimePin PinForSharing(long authorityVersion, out IntPtr pointer,
-        out nuint ownedBytes, out nuint borrowedBytes, out NativeMemoryBudget? budget, out long allocationOrdinal)
-    {
-        int observed = Interlocked.CompareExchange(ref _state, Moving, Active);
-        if (observed != Active) ThrowInactive("NativeShared.Pin", observed);
-        if (Volatile.Read(ref _authorityVersion) != authorityVersion)
-        {
-            Volatile.Write(ref _state, Active);
-            ThrowInactive("NativeShared.Pin", Moved);
-        }
-        if (NativeOperationAdmission.Close(ref _operationAdmission) != 0)
-        {
-            NativeOperationAdmission.Open(ref _operationAdmission);
-            Volatile.Write(ref _state, Active);
-            throw new InvalidOperationException("Shared custody cannot begin during an entered unique callback.");
-        }
-        try
-        {
-            NativeStorageLifetimePin pin = default;
-            if (_kernel is null)
-            {
-                pointer = _block.Pointer;
-                ownedBytes = _block.ByteLength;
-                borrowedBytes = 0;
-                budget = _block.Budget;
-                allocationOrdinal = _block.ByteLength == 0 ? 0 : 1;
-            }
-            else
-            {
-                _kernel.PrepareTransferReturnCapacity(_generation, _allocationId);
-                NativeOperationToken token = EnterKernelOperation("NativeShared.Pin");
-                try
-                {
-                    NativeSegment? segment = _allocationState!.Segment;
-                    pointer = _length == 0 ? IntPtr.Zero : (IntPtr)((byte*)segment!.Pointer + _allocationState.OffsetBytes);
-                    ownedBytes = segment?.AllocationByteLength ?? 0;
-                    borrowedBytes = segment is { AllocationByteLength: 0 } ? segment.ByteLength : 0;
-                    budget = _kernel.BudgetForSharing;
-                    allocationOrdinal = segment?.AllocationOrdinal ?? 0;
-                    pin = token.MoveToLifetimePin();
-                }
-                finally { token.Dispose(); }
-            }
-            Volatile.Write(ref _state, Shared);
-            GC.SuppressFinalize(this);
-            return pin;
-        }
-        catch
-        {
-            NativeOperationAdmission.Open(ref _operationAdmission);
-            Volatile.Write(ref _state, Active);
-            throw;
-        }
-    }
-
     internal bool StorageHasBeenReturned => Volatile.Read(ref _payloadReturned) != 0;
-
-    // Only the private shared payload has cleanup custody. Public unique calls
-    // still require Active plus their exact authority version.
-    internal void ReturnSharedStorage()
-    {
-        if (StorageHasBeenReturned) return;
-        int observed = Interlocked.CompareExchange(ref _state, Disposing, Shared);
-        if (observed == Active)
-        {
-            // Pin preparation failed before shared publication. Its private
-            // moved binding still owns cleanup; no stale public alias is revived.
-            Dispose(Volatile.Read(ref _authorityVersion));
-            return;
-        }
-        if (observed != Shared) ThrowInactive("NativeShared.Return", observed);
-        try
-        {
-            ReturnStorage("NativeTransfer.Dispose");
-            Volatile.Write(ref _state, Disposed);
-        }
-        catch
-        {
-            Volatile.Write(ref _state, StorageHasBeenReturned ? Disposed : Shared);
-            throw;
-        }
-    }
 
     /// <summary>Runs one synchronous bounded callback over the native span.</summary>
     internal void Access(long authorityVersion, NativeLeaseAction<T> action)
@@ -462,7 +383,6 @@ internal class NativeTransferControl<T>
         string operation) =>
         Create(
             kernel,
-            lease.GenerationState,
             lease.AllocationState,
             lease.Generation,
             lease.AllocationId,
@@ -474,7 +394,6 @@ internal class NativeTransferControl<T>
         string operation) =>
         Create(
             kernel,
-            allocation.GenerationState,
             allocation.AllocationState,
             allocation.Generation,
             allocation.AllocationId,
@@ -482,7 +401,6 @@ internal class NativeTransferControl<T>
 
     private static NativeTransferControl<T> Create(
         NativeOwnerKernel kernel,
-        NativeGeneration generationState,
         NativeAllocation allocationState,
         long generation,
         long allocationId,
@@ -492,7 +410,6 @@ internal class NativeTransferControl<T>
         {
             return new NativeTransferControl<T>(
                 kernel,
-                generationState,
                 allocationState,
                 generation,
                 allocationId);
@@ -528,7 +445,7 @@ internal class NativeTransferControl<T>
         }
 
         return _kernel.ValidateHandle(
-            _generationState!,
+            _allocationState!.GenerationState,
             _allocationState!,
             _generation,
             _allocationId,
@@ -538,7 +455,7 @@ internal class NativeTransferControl<T>
     private NativeOperationToken EnterKernelOperation(
         string operation) =>
         _kernel!.EnterOperation(
-            _generationState!,
+            _allocationState!.GenerationState,
             _allocationState!,
             _generation,
             _allocationId,
@@ -646,7 +563,7 @@ internal class NativeTransferControl<T>
             else
             {
                 _kernel.TransferLeaseAuthority(
-                    _generationState!,
+                    _allocationState!.GenerationState,
                     _allocationState!,
                     _generation,
                     _allocationId,
@@ -761,6 +678,11 @@ internal class NativeTransferControl<T>
 
     private void FinalizeLease()
     {
+        if (_sharingControl is not null)
+        {
+            FinalizeSharedPayload();
+            return;
+        }
         int observed = Volatile.Read(ref _state);
         if (!CanFinalize(observed)
             || Interlocked.CompareExchange(ref _state, Finalized, observed) != observed)
@@ -806,7 +728,6 @@ internal class NativeTransferControl<T>
     private protected void CompleteStorageReturn()
     {
         _kernel = null;
-        _generationState = null;
         _allocationState = null;
         _block = default;
         Volatile.Write(ref _payloadReturned, 1);

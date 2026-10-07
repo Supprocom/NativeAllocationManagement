@@ -319,9 +319,10 @@ public sealed class NativeMemoryReservationTests
     [Fact]
     public void OrdinaryUniqueControlsHaveNoReservationSpecificFields()
     {
-        string[] expected = ["_kernel", "_generationState", "_allocationState", "_ownerId", "_backingBytes",
+        string[] expected = ["_kernel", "_sharingControl", "_allocationState", "_ownerId", "_backingBytes",
             "_borrowedBacking", "_generation", "_allocationId", "_block", "_length", "_capacity", "_state",
-            "_operationAdmission", "_authorityVersion", "_peakBorrows", "_payloadReturned", "_returnFailures", "_historyOverflowed"];
+            "_operationAdmission", "_authorityVersion", "_peakBorrows", "_payloadReturned", "_returnFailures", "_historyOverflowed",
+            "_sharingAllocationEntered", "_sharingGenerationEntered"];
         Assert.Equal(expected.Order(StringComparer.Ordinal),
             typeof(NativeTransferControl<int>).GetFields(BindingFlags.Instance | BindingFlags.NonPublic)
                 .Select(static field => field.Name).Order(StringComparer.Ordinal));

@@ -9,13 +9,13 @@ namespace Supprocom.NativeAllocationManagement;
 [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1815", Justification = "An ownership binding has no value-equality contract; assignment aliases one release identity.")]
 public readonly struct NativeShared<T> : IDisposable where T : unmanaged
 {
-    private readonly NativeSharedPayload<T>? _payload;
+    private readonly NativeTransferControl<T>? _payload;
     private readonly int _slot;
     private readonly long _version;
     private readonly int _offset;
     private readonly int _length;
 
-    internal NativeShared(NativeSharedPayload<T> payload, int slot, long version, int offset, int length)
+    internal NativeShared(NativeTransferControl<T> payload, int slot, long version, int offset, int length)
     {
         _payload = payload; _slot = slot; _version = version; _offset = offset; _length = length;
     }
@@ -41,18 +41,18 @@ public readonly struct NativeShared<T> : IDisposable where T : unmanaged
         int length = observed.Length;
         NativeMemoryTestHooks.CheckManagedPublicationBoundary("NativeShared.Create", 1, "sharing metadata preparation");
         NativeSharedControl<T> control = new(preparation, observed.Id, length);
-        NativeSharedPayload<T> payload = new(control);
+        NativeTransferControl<T> payload = observed.CustodyForSharing;
         control.PreparePayloadReference(payload);
         NativeTransfer<T> moved = NativeTransfer<T>.Move(ref source);
         try
         {
-            payload.Initialize(moved);
+            payload.InitializeSharing(moved.SharingAuthorityVersion, control);
             NativeMemoryTestHooks.CheckManagedPublicationBoundary("NativeShared.Create", 2, "the initial strong binding");
             return control.PublishInitial(payload, length);
         }
         catch (Exception initializationFailure)
         {
-            try { payload.AbortInitialization(moved); }
+            try { payload.AbortSharingInitialization(); }
             catch (Exception cleanupFailure)
             {
                 throw new AggregateException("Shared publication and cleanup both failed.", initializationFailure, cleanupFailure);
@@ -83,7 +83,7 @@ public readonly struct NativeShared<T> : IDisposable where T : unmanaged
     public void Access(NativeReadOnlyLeaseAction<T> action)
     {
         ArgumentNullException.ThrowIfNull(action);
-        NativeSharedPayload<T> payload = Payload;
+        NativeTransferControl<T> payload = Payload;
         payload.Control.EnterRead(_slot, _version);
         Exception? callbackFailure = null;
         try { action(payload.GetView(_offset, _length)); }
@@ -95,7 +95,7 @@ public readonly struct NativeShared<T> : IDisposable where T : unmanaged
     public TResult Read<TResult>(NativeReadOnlyLeaseFunc<T, TResult> action)
     {
         ArgumentNullException.ThrowIfNull(action);
-        NativeSharedPayload<T> payload = Payload;
+        NativeTransferControl<T> payload = Payload;
         payload.Control.EnterRead(_slot, _version);
         Exception? callbackFailure = null;
         try { return action(payload.GetView(_offset, _length)); }
@@ -103,7 +103,7 @@ public readonly struct NativeShared<T> : IDisposable where T : unmanaged
         finally { EndRead(payload, callbackFailure); }
     }
 
-    private static void EndRead(NativeSharedPayload<T> payload, Exception? callbackFailure)
+    private static void EndRead(NativeTransferControl<T> payload, Exception? callbackFailure)
     {
         try { payload.Control.ExitRead(payload); }
         catch (Exception cleanupFailure) when (callbackFailure is not null)
@@ -119,7 +119,7 @@ public readonly struct NativeShared<T> : IDisposable where T : unmanaged
     {
         ArgumentNullException.ThrowIfNull(budget);
         detached = default;
-        NativeSharedPayload<T> payload = Payload;
+        NativeTransferControl<T> payload = Payload;
         payload.Control.EnterRead(_slot, _version);
         try
         {
@@ -154,7 +154,7 @@ public readonly struct NativeShared<T> : IDisposable where T : unmanaged
     /// <summary>Releases this independently acquired binding once; aliases cannot decrement ownership twice.</summary>
     public void Dispose() => Payload.Control.ReleaseStrong(Payload, _slot, _version);
 
-    private NativeSharedPayload<T> Payload => _payload
+    private NativeTransferControl<T> Payload => _payload
         ?? throw new NativeAllocationUninitializedException(nameof(NativeShared<T>), "ownership operation");
 }
 

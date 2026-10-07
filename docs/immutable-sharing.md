@@ -10,20 +10,22 @@ managed allocation alone do not establish that justification.
 ## Preparation and ownership
 
 `NativeShared<T>.Create(ref NativeTransfer<T>? source, preparation)` first
-allocates fixed strong/weak binding banks, control, and payload metadata, then
+allocates fixed strong/weak binding banks and observation metadata, then
 destructively consumes the source. The initial owner occupies one strong slot. With zero weak capacity, no payload
 weak-reference wrapper or private weak bank is allocated.
 Invalid preparation or metadata failure before the move preserves the source.
 Failure during or after destructive movement consumes it; initialization and
 publication failures return its storage. If publication and cleanup both fail,
 an aggregate exception preserves both causes. The ordinary unique path acquires
-no reference-counting bank or shared payload wrapper.
+no reference-counting bank or shared payload wrapper. Sharing reuses the source's
+acquisition-time custody control and emergency finalizer; it does not allocate a
+second payload owner or transfer responsibility between two finalizers.
 
 After conversion, the original transfer lineage reports `Lifecycle.Shared`, no
 active unique binding and `LiveUniqueOwnerCount == 0`. Its remaining return
 obligation describes private shared cleanup custody, not access authority. The
-shared payload stores that custody directly rather than retaining a public unique
-capability. Its allocator generation/allocation pin still protects backing until
+shared value references that same private custody rather than retaining a public
+unique capability. Its allocator generation/allocation admission still protects backing until
 the last strong owner and entered shared reader finish. Preparing this pin does
 not invent a unique borrow or increase the unique borrow peak; earlier genuine
 unique borrows keep their recorded peak. Lineage backing/initialization fields and
@@ -78,9 +80,12 @@ prepared capacity for weak observation. The weak bank is dropped when its final
 observer releases after expiration. Remaining control metadata
 becomes collectible when all actual CLR references end; disposing a value does
 not erase copies of that value held by its caller. Stale strong values retain no
-native return obligation after successful cleanup. Finalizable payload cleanup
-assumes the consumed unique control's emergency-finalization obligation, avoiding
-competing finalizers. Failed emergency return is retried at a later collection,
+native return obligation after successful cleanup. A deliberately retained stale
+unique alias also references this custody control: if sharing is abandoned without
+deterministic release, that CLR reference can delay emergency cleanup. It cannot
+access native storage or restore unique authority. Successful deterministic return
+clears the allocator and budget references despite stale unique or shared aliases.
+Failed emergency return is retried at a later collection,
 not spun or treated as timely memory-budget relief.
 
 A failed return does not receive success credit. Ownership remains expired and

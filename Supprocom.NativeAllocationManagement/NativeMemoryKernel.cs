@@ -2858,13 +2858,12 @@ internal ref struct NativeOperationToken
 
     internal void SetValue<T>(int index, T value) => _allocation.SetValue(index, value);
 
-    internal NativeStorageLifetimePin MoveToLifetimePin()
+    internal void MoveToSharingCustody(out bool allocationEntered, out bool generationEntered)
     {
-        NativeOwnerKernel kernel = _kernel ?? throw new InvalidOperationException("The operation token has already ended.");
-        NativeStorageLifetimePin pin = new(kernel, _generationState, _allocation,
-            _allocationEntered, _generationEntered, _operation);
+        if (_kernel is null) throw new InvalidOperationException("The operation token has already ended.");
+        allocationEntered = _allocationEntered;
+        generationEntered = _generationEntered;
         _kernel = null;
-        return pin;
     }
 
     public void Dispose()
