@@ -8,6 +8,50 @@ namespace Supprocom.NativeAllocationManagement.Tests;
 
 public sealed class PackageFixtureEvidenceTests
 {
+    [Fact]
+    public void DurableArchivePreservesExactNestedBytesAfterTheOriginalTreeIsRemoved()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "nam-durable-archive-" + Guid.NewGuid().ToString("N"));
+        string source = Path.Combine(root, "source");
+        string destination = Path.Combine(root, "retained");
+        Directory.CreateDirectory(Path.Combine(source, "nested"));
+        try
+        {
+            File.WriteAllBytes(Path.Combine(source, "package.nupkg"), new byte[] { 0, 1, 42, 255 });
+            File.WriteAllText(Path.Combine(source, "nested", "input.cs"), "// exact retained source");
+            string archivePath = PackageFixtureEvidence.ArchiveTree(source, destination, "fixture");
+            Directory.Delete(source, recursive: true);
+            using JsonDocument record = JsonDocument.Parse(File.ReadAllText(Path.ChangeExtension(archivePath, ".json")));
+            JsonElement receipt = record.RootElement;
+            Assert.Equal("fixture", receipt.GetProperty("Label").GetString());
+            Assert.Equal(source, receipt.GetProperty("SourceDirectory").GetString());
+            Assert.Equal(new FileInfo(archivePath).Length, receipt.GetProperty("Length").GetInt64());
+            using FileStream archived = File.OpenRead(archivePath);
+            Assert.Equal(Convert.ToHexString(SHA256.HashData(archived)), receipt.GetProperty("SHA256").GetString());
+            using ZipArchive zip = ZipFile.OpenRead(archivePath);
+            JsonElement[] files = receipt.GetProperty("Files").EnumerateArray().ToArray();
+            Assert.Equal(2, files.Length);
+            foreach (JsonElement file in files)
+            {
+                ZipArchiveEntry entry = zip.GetEntry(file.GetProperty("Path").GetString()!)!;
+                Assert.Equal(entry.Length, file.GetProperty("Length").GetInt64());
+                using Stream content = entry.Open();
+                Assert.Equal(Convert.ToHexString(SHA256.HashData(content)), file.GetProperty("SHA256").GetString());
+            }
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("nested")]
+    public void DurableArchiveCannotBeWrittenInsideItsSource(string relativeDestination)
+    {
+        string source = Path.Combine(Path.GetTempPath(), "nam-not-created-" + Guid.NewGuid().ToString("N"));
+        Assert.Throws<ArgumentException>(() => PackageFixtureEvidence.ArchiveTree(source, Path.Combine(source, relativeDestination), "fixture"));
+        Assert.False(Directory.Exists(source));
+    }
+
     [Theory]
     [InlineData(null, false)]
     [InlineData("", false)]

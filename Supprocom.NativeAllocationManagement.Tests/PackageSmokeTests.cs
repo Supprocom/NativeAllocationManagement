@@ -2535,6 +2535,8 @@ public sealed class PackageSmokeTests
             using FileStream executableBytes = File.OpenRead(executable);
             byte[] executableHash = await SHA256.HashDataAsync(executableBytes);
             _output.WriteLine($"publishedExecutableSha256={Convert.ToHexString(executableHash)}");
+            if (RetainPackageEvidence && PackageFixtureEvidence.RetainArchive(root, "executed-package-consumer") is { } consumerArchive)
+                _output.WriteLine($"durableConsumerArchive={consumerArchive}");
         }
         finally { DeleteConsumerRoot(root); }
     }
@@ -2608,6 +2610,8 @@ public sealed class PackageSmokeTests
         _output.WriteLine($"symbols={package.SymbolPath}");
         _output.WriteLine($"symbolsSha256={package.SymbolArtifactSha256}");
         _output.WriteLine($"symbolVerification={Path.Combine(package.SourceDirectory, "symbols-verification.json")}");
+        if (RetainPackageEvidence && PackageFixtureEvidence.RetainArchive(package.SourceDirectory, "verified-package-pair") is { } packageArchive)
+            _output.WriteLine($"durablePackageArchive={packageArchive}");
     }
 
     private static void WriteConsumerProject(

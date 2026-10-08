@@ -266,9 +266,13 @@ public sealed class NativeTransferDiagnosticsTests
         NativeBlock descriptor = (NativeBlock)typeof(NativeTransferControl<int>)
             .GetField("_block", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(observed.ControlForTest)!;
         Assert.Equal(IntPtr.Zero, descriptor.Pointer);
-        Assert.Equal((nuint)0, descriptor.ByteLength);
+        Assert.Equal((nuint)(initial.OwnedBackingBytes + initial.BorrowedBackingBytes), descriptor.ByteLength);
         Assert.Null(descriptor.Budget);
         Assert.Equal(initial.AllocationId, descriptor.OwnerId);
+        Assert.Equal(0L, (long)typeof(NativeTransferControl<int>)
+            .GetProperty("BackingOrdinal", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(observed.ControlForTest)!);
+        Assert.Null(typeof(NativeTransferControl<int>)
+            .GetField("_backingBytes", BindingFlags.Instance | BindingFlags.NonPublic));
         pool.Dispose();
         Assert.Equal(0, budget.CaptureStatistics().CommittedBytes);
         Assert.Equal(0, budget.CaptureStatistics().ReservedBytes);

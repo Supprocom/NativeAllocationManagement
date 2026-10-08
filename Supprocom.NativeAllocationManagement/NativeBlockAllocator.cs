@@ -226,7 +226,12 @@ internal readonly record struct NativeBlock(
     nuint ByteLength,
     long MetricsEpoch,
     NativeMemoryBudget? Budget = null,
-    long OwnerId = 0);
+    long OwnerId = 0)
+{
+    // An immutable extent is data, not an accessor boundary. Direct loads also
+    // stay direct in Tier0 when control snapshots and return retain its history.
+    internal readonly nuint ByteLength = ByteLength;
+}
 
 internal static class NativeAlignedAllocation
 {

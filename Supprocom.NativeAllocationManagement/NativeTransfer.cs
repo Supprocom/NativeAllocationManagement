@@ -123,7 +123,6 @@ internal partial class NativeTransferControl<T>
     private NativeSharedControl<T>? _sharingControl;
     private NativeAllocation? _allocationState;
     private readonly long _ownerId;
-    private long _backingBytes;
     private readonly bool _borrowedBacking;
     // Direct custody uses the descriptor's epoch/owner as allocation metadata.
     // Kernel custody has no direct block: the same two scalar slots hold its
@@ -152,10 +151,11 @@ internal partial class NativeTransferControl<T>
         _ownerId = kernel.Id;
         NativeSegment? segment = allocationState.Segment;
         _borrowedBacking = segment is { AllocationByteLength: 0 };
-        _backingBytes = checked((long)(_borrowedBacking ? segment!.ByteLength : segment?.AllocationByteLength ?? 0));
+        nuint backingBytes = _borrowedBacking ? segment!.ByteLength : segment?.AllocationByteLength ?? 0;
+        _ = checked((long)backingBytes);
         // A closed kernel no longer roots its domain. The existing block slot
         // keeps identity and still-pending trace custody until real return.
-        _block = new NativeBlock(IntPtr.Zero, 0, generation, kernel.BudgetForSharing, allocationId);
+        _block = new NativeBlock(IntPtr.Zero, backingBytes, generation, kernel.BudgetForSharing, allocationId);
         _length = allocationState.Length;
         _capacity = allocationState.Capacity;
         _state = Active;
@@ -169,7 +169,7 @@ internal partial class NativeTransferControl<T>
     {
         _block = block;
         _ownerId = block.OwnerId;
-        _backingBytes = checked((long)block.ByteLength);
+        _ = checked((long)block.ByteLength);
         _length = length;
         _capacity = capacity;
         _state = published ? Active : 0;
@@ -220,13 +220,13 @@ internal partial class NativeTransferControl<T>
             HasReturnObligation = !returned,
             InitializedPayloadBytes = backingPresent && (allocationActive || state == Shared || borrows != 0) ? initialized : 0,
             PeakInitializedPayloadBytes = initialized,
-            OwnedBackingBytes = !backingPresent || _borrowedBacking ? 0 : _backingBytes,
-            BorrowedBackingBytes = !backingPresent || !_borrowedBacking ? 0 : _backingBytes,
-            PeakOwnedBackingBytes = _borrowedBacking ? 0 : _backingBytes,
+            OwnedBackingBytes = !backingPresent || _borrowedBacking ? 0 : (long)_block.ByteLength,
+            BorrowedBackingBytes = !backingPresent || !_borrowedBacking ? 0 : (long)_block.ByteLength,
+            PeakOwnedBackingBytes = _borrowedBacking ? 0 : (long)_block.ByteLength,
             PayloadReturnCount = returned ? 1 : 0,
             PayloadReturnFailureCount = Volatile.Read(ref _returnFailures),
             HistoryOverflowed = Volatile.Read(ref _historyOverflowed),
-            ControlFieldBytes = 3L * IntPtr.Size + 4L * sizeof(long) + 6L * sizeof(int) + 4L * sizeof(bool) + Unsafe.SizeOf<NativeBlock>()
+            ControlFieldBytes = 3L * IntPtr.Size + 3L * sizeof(long) + 6L * sizeof(int) + 4L * sizeof(bool) + Unsafe.SizeOf<NativeBlock>()
         };
     }
 
@@ -617,14 +617,14 @@ internal partial class NativeTransferControl<T>
     }
 
     private protected long BackingOrdinal => _allocationState?.Segment?.AllocationOrdinal
-        ?? (_block.ByteLength == 0 ? 0 : 1);
+        ?? (_block.Pointer == IntPtr.Zero ? 0 : 1);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void TraceOwnership(NativeMemoryBudget? budget, NativeMemoryTraceKind kind, long? ordinal = null)
     {
         if (budget is not { TraceEnabled: true }) return;
         budget.RecordOwnershipTransition(kind, _ownerId, _block.OwnerId,
-            checked((nuint)_backingBytes), ordinal ?? BackingOrdinal);
+            _block.ByteLength, ordinal ?? BackingOrdinal);
     }
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "This boundary captures any failure to preserve cleanup and report the original error.")]
@@ -705,8 +705,6 @@ internal partial class NativeTransferControl<T>
     private protected bool StorageReturned => Volatile.Read(ref _payloadReturned) != 0;
     private protected int DeclaredLength => _length;
     private protected NativeBlock OwnedBlock => _block;
-    private protected long BackingBytes => _backingBytes;
-
     private protected bool TryTransition(int expected, int next) =>
         Interlocked.CompareExchange(ref _state, next, expected) == expected;
 
@@ -716,7 +714,7 @@ internal partial class NativeTransferControl<T>
     private protected void InstallOwnedBlock(NativeBlock block)
     {
         _block = block;
-        _backingBytes = checked((long)block.ByteLength);
+        _ = checked((long)block.ByteLength);
     }
 
     private protected void RecordReturnFailure() => NativeOwnerHistory.Increment(ref _returnFailures, ref _historyOverflowed);
@@ -729,8 +727,9 @@ internal partial class NativeTransferControl<T>
         _kernel = null;
         _allocationState = null;
         // Returned aliases keep numeric observation, never a pointer, budget,
-        // kernel or allocation record. Direct and kernel identities are stable.
-        _block = new NativeBlock(IntPtr.Zero, 0, _block.MetricsEpoch, OwnerId: _block.OwnerId);
+        // kernel or allocation record. Numeric extent is lifetime peak history,
+        // not live storage or authority. Direct and kernel identities are stable.
+        _block = new NativeBlock(IntPtr.Zero, _block.ByteLength, _block.MetricsEpoch, OwnerId: _block.OwnerId);
         Volatile.Write(ref _payloadReturned, 1);
     }
 

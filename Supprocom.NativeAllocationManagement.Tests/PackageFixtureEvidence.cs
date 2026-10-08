@@ -1,3 +1,4 @@
+using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Xml.Linq;
@@ -6,6 +7,64 @@ namespace Supprocom.NativeAllocationManagement.Tests;
 
 internal static class PackageFixtureEvidence
 {
+    internal static string? RetainArchive(string sourceDirectory, string label)
+    {
+        string? destination = Environment.GetEnvironmentVariable("NAM_DURABLE_PACKAGE_EVIDENCE_ROOT");
+        return string.IsNullOrEmpty(destination) ? null : ArchiveTree(sourceDirectory, destination, label);
+    }
+
+    internal static string ArchiveTree(string sourceDirectory, string destinationDirectory, string label)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(label);
+        string source = Path.GetFullPath(sourceDirectory);
+        string destination = Path.GetFullPath(destinationDirectory);
+        StringComparison comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        if (destination.Equals(source, comparison)
+            || destination.StartsWith(Path.TrimEndingDirectorySeparator(source) + Path.DirectorySeparatorChar, comparison))
+            throw new ArgumentException("The archive must be outside its source tree.", nameof(destinationDirectory));
+        foreach (string entry in Directory.EnumerateFileSystemEntries(source, "*", SearchOption.AllDirectories))
+            if ((File.GetAttributes(entry) & FileAttributes.ReparsePoint) != (FileAttributes)0)
+                throw new InvalidDataException("Retention cannot follow a link.");
+        Directory.CreateDirectory(destination);
+        string archivePath = Path.Combine(destination, Guid.NewGuid().ToString("N") + ".zip");
+        List<ArchiveEntryIdentity> manifest = [];
+        foreach (string file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal))
+        {
+            using FileStream input = File.OpenRead(file);
+            manifest.Add(new(Path.GetRelativePath(source, file).Replace('\\', '/'), input.Length,
+                Convert.ToHexString(SHA256.HashData(input))));
+        }
+        ZipFile.CreateFromDirectory(source, archivePath, CompressionLevel.Fastest, includeBaseDirectory: false);
+        using (ZipArchive archive = ZipFile.OpenRead(archivePath))
+        {
+            if (archive.Entries.Count(static entry => !entry.FullName.EndsWith('/')) != manifest.Count)
+                throw new InvalidDataException("Retained archive file closure differs.");
+            for (int index = 0; index < manifest.Count; index++)
+            {
+                ArchiveEntryIdentity expected = manifest[index];
+                ZipArchiveEntry entry = archive.GetEntry(expected.Path)
+                    ?? throw new InvalidDataException("Retained archive is missing a file.");
+                using Stream retained = entry.Open();
+                if (entry.Length != expected.Length
+                    || !string.Equals(Convert.ToHexString(SHA256.HashData(retained)), expected.SHA256, StringComparison.Ordinal))
+                    throw new InvalidDataException("Retained archive bytes differ from the produced file.");
+            }
+        }
+        using FileStream archiveBytes = File.OpenRead(archivePath);
+        File.WriteAllText(Path.ChangeExtension(archivePath, ".json"), JsonSerializer.Serialize(new
+        {
+            Label = label,
+            SourceDirectory = source,
+            Archive = archivePath,
+            Length = archiveBytes.Length,
+            SHA256 = Convert.ToHexString(SHA256.HashData(archiveBytes)),
+            Files = manifest
+        }));
+        return archivePath;
+    }
+
+    private sealed record ArchiveEntryIdentity(string Path, long Length, string SHA256);
+
     internal const string BuildProperties = """
         <Project>
           <PropertyGroup>

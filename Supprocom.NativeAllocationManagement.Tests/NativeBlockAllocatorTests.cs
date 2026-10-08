@@ -1,10 +1,37 @@
 using System.Numerics;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 
 namespace Supprocom.NativeAllocationManagement.Tests;
 
 public sealed class NativeBlockAllocatorTests
 {
+    [Fact]
+    public void ExtentIsOneImmutableFieldAndSurvivesDescriptorCopies()
+    {
+        const BindingFlags Fields = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+        FieldInfo extent = typeof(NativeBlock).GetField(nameof(NativeBlock.ByteLength), Fields)!;
+        Assert.NotNull(extent);
+        Assert.True(extent.IsInitOnly);
+        Assert.Equal(typeof(nuint), extent.FieldType);
+        Assert.Null(typeof(NativeBlock).GetProperty(nameof(NativeBlock.ByteLength), Fields));
+        Assert.Equal(5, typeof(NativeBlock).GetFields(Fields).Length);
+        NativeMemoryBudget budget = new(64);
+        NativeBlock descriptor = new((IntPtr)17, 64, 3, budget, 5);
+        NativeBlock copied = descriptor with { Pointer = IntPtr.Zero };
+        Assert.Equal((nuint)64, copied.ByteLength);
+        Assert.Equal(3, copied.MetricsEpoch);
+        Assert.Same(budget, copied.Budget);
+        Assert.Equal(5, copied.OwnerId);
+        (IntPtr pointer, nuint bytes, long epoch, NativeMemoryBudget? copiedBudget, long owner) = copied;
+        Assert.Equal(IntPtr.Zero, pointer);
+        Assert.Equal((nuint)64, bytes);
+        Assert.Equal(3, epoch);
+        Assert.Same(budget, copiedBudget);
+        Assert.Equal(5, owner);
+        Assert.Equal((nuint)0, default(NativeBlock).ByteLength);
+    }
+
     [Theory]
     [InlineData(0)]
     [InlineData(1)]

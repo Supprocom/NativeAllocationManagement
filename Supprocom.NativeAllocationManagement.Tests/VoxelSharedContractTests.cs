@@ -3917,7 +3917,10 @@ public sealed class VoxelSharedContractTests
                 "Could not start PowerShell.");
         Task<string> output = process.StandardOutput.ReadToEndAsync();
         Task<string> error = process.StandardError.ReadToEndAsync();
-        if (!process.WaitForExit(10_000))
+        // This bounds a validation-only CLI launcher, not a measured demo or
+        // compiler operation. Allow shared-host cold startup without relaxing
+        // any benchmark threshold or run-constrained execution deadline.
+        if (!process.WaitForExit(60_000))
         {
             process.Kill(entireProcessTree: true);
             throw new TimeoutException(

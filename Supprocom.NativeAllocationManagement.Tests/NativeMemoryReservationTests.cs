@@ -319,7 +319,7 @@ public sealed class NativeMemoryReservationTests
     [Fact]
     public void OrdinaryUniqueControlsHaveNoReservationSpecificFields()
     {
-        string[] expected = ["_kernel", "_sharingControl", "_allocationState", "_ownerId", "_backingBytes",
+        string[] expected = ["_kernel", "_sharingControl", "_allocationState", "_ownerId",
             "_borrowedBacking", "_block", "_length", "_capacity", "_state",
             "_operationAdmission", "_authorityVersion", "_peakBorrows", "_payloadReturned", "_returnFailures", "_historyOverflowed",
             "_sharingAllocationEntered", "_sharingGenerationEntered"];

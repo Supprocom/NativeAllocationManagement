@@ -48,7 +48,8 @@ internal partial class NativeTransferControl<T> where T : unmanaged
                     budget = _block.Budget;
                     ordinal = segment?.AllocationOrdinal ?? 0;
                     // Pooled storage is still returned through its kernel. This
-                    // zero-length block only caches the entered pointer/budget.
+                    // descriptor caches numeric extent and the entered pointer/budget;
+                    // it does not acquire direct-block return authority.
                     _block = _block with { Pointer = pointer };
                     token.MoveToSharingCustody(out _sharingAllocationEntered, out _sharingGenerationEntered);
                 }
