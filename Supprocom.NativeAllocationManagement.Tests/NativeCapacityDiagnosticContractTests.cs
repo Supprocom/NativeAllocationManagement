@@ -262,7 +262,7 @@ public sealed class NativeCapacityDiagnosticContractTests
         MethodInfo size = typeof(NativeCapacityDiagnosticContractTests).GetMethod(nameof(ElementSize), BindingFlags.Static | BindingFlags.NonPublic)!;
         Assert.Equal(NativeCapacityDiagnosticOracle.PoolSlotBytes, (int)size.MakeGenericMethod(slab).Invoke(null, null)!);
         Assert.Equal(NativeCapacityDiagnosticOracle.PoolPageBytes, (int)size.MakeGenericMethod(page).Invoke(null, null)!);
-        Type header = typeof(NativeArenaKernel).GetNestedType("ArenaSegmentHeader", BindingFlags.NonPublic)!;
+        Type header = typeof(NativeArena).GetNestedType("ArenaSegmentHeader", BindingFlags.NonPublic)!;
         int headerSize = (int)size.MakeGenericMethod(header).Invoke(null, null)!;
         Assert.Equal(56, headerSize);
         Assert.Equal(NativeCapacityDiagnosticOracle.ArenaHeaderBytes, (headerSize + 63) / 64 * 64);

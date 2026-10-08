@@ -425,19 +425,12 @@ public sealed class NativeArenaFastLaneTests
         NativeArena arena,
         string fieldName)
     {
-        FieldInfo kernelField = typeof(NativeArena).GetField(
-            "_kernel",
-            BindingFlags.Instance | BindingFlags.NonPublic)
-            ?? throw new Xunit.Sdk.XunitException(
-                "NativeArena does not contain its kernel field.");
-        object kernel = kernelField.GetValue(arena)
-            ?? throw new Xunit.Sdk.XunitException(
-                "NativeArena did not publish its kernel state.");
+        object kernel = arena;
         FieldInfo epochField = kernel.GetType().GetField(
             fieldName,
             BindingFlags.Instance | BindingFlags.NonPublic)
             ?? throw new Xunit.Sdk.XunitException(
-                "NativeArenaKernel does not contain the epoch field.");
+                "NativeArena does not contain the epoch field.");
         epochField.SetValue(kernel, ulong.MaxValue);
     }
 }

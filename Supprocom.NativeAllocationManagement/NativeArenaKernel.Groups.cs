@@ -2,7 +2,7 @@ using System.Runtime.CompilerServices;
 
 namespace Supprocom.NativeAllocationManagement;
 
-internal sealed unsafe partial class NativeArenaKernel
+public sealed unsafe partial class NativeArena
 {
     internal void BeginCompositeBorrow()
     {

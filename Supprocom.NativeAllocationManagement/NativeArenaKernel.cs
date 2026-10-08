@@ -4,7 +4,7 @@ using System.Runtime.InteropServices;
 
 namespace Supprocom.NativeAllocationManagement;
 
-internal sealed unsafe partial class NativeArenaKernel
+public sealed unsafe partial class NativeArena
 {
     private const nuint DefaultSegmentBytes = 4_096;
     private const nuint SegmentAlignment = 64;
@@ -15,7 +15,6 @@ internal sealed unsafe partial class NativeArenaKernel
 
     private readonly NativeMemoryReturn _returnMemoryOnDispose;
     private NativeMemoryBudget? _budget;
-    internal long Id { get; } = NativeOwnerIdentity.Next();
     private readonly int _ownerThreadId;
     private ArenaLane _ordinary;
     private ArenaLane _scoped;
@@ -36,11 +35,15 @@ internal sealed unsafe partial class NativeArenaKernel
     private bool _historyOverflowed;
     private int _segmentCount;
 
-    internal NativeArenaKernel(
+    private NativeArena(
         nuint preAllocateBytes,
         NativeMemoryReturn returnMemoryOnDispose,
-        NativeMemoryBudget? budget = null)
+        NativeMemoryBudget? budget,
+        bool requireBudget)
     {
+        if (requireBudget) ArgumentNullException.ThrowIfNull(budget);
+        NativeMemoryReturnValidation.Validate(returnMemoryOnDispose, nameof(returnMemoryOnDispose));
+        Id = NativeOwnerIdentity.Next();
         _returnMemoryOnDispose = returnMemoryOnDispose;
         _budget = budget;
         _ownerThreadId = Environment.CurrentManagedThreadId;
@@ -54,12 +57,6 @@ internal sealed unsafe partial class NativeArenaKernel
             ResetLane(ref _ordinary);
         }
     }
-
-    internal NativeOwnerLifecycle Lifecycle => _lifecycle;
-
-    internal ulong Generation => _generation;
-
-    internal ulong ScopeEpoch => _scopeEpoch;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ArenaLease<T> Scratch<T>(
@@ -199,7 +196,8 @@ internal sealed unsafe partial class NativeArenaKernel
         }
     }
 
-    internal void Reset()
+    /// <summary>Invalidates all leases and reuses all retained segments.</summary>
+    public void Reset()
     {
         ValidateBoundary(nameof(NativeArena.Reset));
         ulong nextGeneration = GetNextEpochOrClose(
@@ -220,7 +218,8 @@ internal sealed unsafe partial class NativeArenaKernel
         }
     }
 
-    internal void RecycleScoped()
+    /// <summary>Invalidates scoped leases and reuses scoped segments.</summary>
+    public void RecycleScoped()
     {
         ValidateBoundary(nameof(NativeArena.RecycleScoped));
         ulong nextScopeEpoch = GetNextEpochOrClose(
@@ -236,7 +235,8 @@ internal sealed unsafe partial class NativeArenaKernel
         }
     }
 
-    internal NativeOwnerStatistics GetStatistics()
+    /// <summary>Gets the current Arena storage statistics.</summary>
+    public NativeOwnerStatistics GetStatistics()
     {
         ValidateActive(nameof(GetStatistics));
         long requestedBytes = checked(
@@ -347,7 +347,9 @@ internal sealed unsafe partial class NativeArenaKernel
         return released;
     }
 
-    internal void Dispose()
+    /// <summary>Closes the Arena and applies its cleanup policy.</summary>
+    [SuppressMessage("Usage", "CA1816", Justification = "Close disarms finalization only after actual native return; ToGarbageCollector must retain its emergency finalizer while detached backing remains.")]
+    public void Dispose()
     {
         ValidateThread(nameof(Dispose));
         if (_lifecycle == NativeOwnerLifecycle.Disposed)
@@ -363,7 +365,7 @@ internal sealed unsafe partial class NativeArenaKernel
         Close();
     }
 
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA1816", Justification = "Closing the native arena deterministically disarms its emergency finalizer.")]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA1816", Justification = "This owning close helper disarms finalization only after actual native return; detached backing remains finalizable.")]
     private void Close()
     {
         _lifecycle = NativeOwnerLifecycle.Disposed;
@@ -988,9 +990,10 @@ internal sealed unsafe partial class NativeArenaKernel
             allocationId: 0,
             _lifecycle);
 
+    /// <summary>Returns abandoned or explicitly detached backing through emergency cleanup.</summary>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "MA0055", Justification = "Emergency native-memory cleanup supplements mandatory deterministic disposal.")]
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "An emergency finalizer must never let cleanup exceptions terminate the process.")]
-    ~NativeArenaKernel()
+    ~NativeArena()
     {
         try
         {

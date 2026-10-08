@@ -2,7 +2,7 @@ using System.Runtime.InteropServices;
 
 namespace Supprocom.NativeAllocationManagement;
 
-internal sealed unsafe partial class NativeArenaKernel
+public sealed unsafe partial class NativeArena
 {
     private NativeSegment? _externalBuffer;
     private IntPtr _externalHeaderMemory;
@@ -11,9 +11,17 @@ internal sealed unsafe partial class NativeArenaKernel
     private long _externalRetainedBytes;
     private int _externalHeaderCount;
 
-    internal NativeArenaKernel(SafeBuffer buffer, nuint byteOffset,
+    /// <summary>Prepares two bounded lanes in one provider-owned mapped range.</summary>
+    /// <param name="buffer">The provider whose safe-handle hold lasts until all lane backing is released.</param>
+    /// <param name="byteOffset">The aligned start of the declared range.</param>
+    /// <param name="preparation">Ordinary and scoped bounds; the scoped start must also be 64-byte aligned.</param>
+    /// <param name="budget">The admission ceiling for NAM-owned headers, not provider-owned mapped bytes.</param>
+    public NativeArena(SafeBuffer buffer, nuint byteOffset,
         NativeArenaPreparation preparation, NativeMemoryBudget budget)
     {
+        ArgumentNullException.ThrowIfNull(buffer);
+        ArgumentNullException.ThrowIfNull(budget);
+        Id = NativeOwnerIdentity.Next();
         _returnMemoryOnDispose = NativeMemoryReturn.ToNativeMemory;
         _budget = budget;
         _ownerThreadId = Environment.CurrentManagedThreadId;

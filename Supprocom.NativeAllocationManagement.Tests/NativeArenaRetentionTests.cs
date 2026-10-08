@@ -32,7 +32,7 @@ public sealed class NativeArenaRetentionTests
     {
         NativeMemoryBudget budget = new(512);
         using NativeArena arena = new(budget, new NativeArenaRetentionPolicy(256, 0), 256, NativeMemoryReturn.ToNativeMemory);
-        object kernel = typeof(NativeArena).GetField("_kernel", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(arena)!;
+        object kernel = arena;
         kernel.GetType().GetField("_retentionMaintenanceCount", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(kernel, long.MaxValue);
         Assert.False(arena.CaptureRetentionSnapshot().HistoryOverflowed);
         arena.Reset();
@@ -202,7 +202,7 @@ public sealed class NativeArenaRetentionTests
     {
         NativeMemoryBudget budget = new(512);
         using NativeArena arena = new(budget, new NativeArenaRetentionPolicy(256, 0), 256, NativeMemoryReturn.ToNativeMemory);
-        object kernel = typeof(NativeArena).GetField("_kernel", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(arena)!;
+        object kernel = arena;
         kernel.GetType().GetField("_retentionReleasedBytes", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(kernel, long.MaxValue);
         arena.Reset();
         NativeArenaRetentionStatistics snapshot = arena.CaptureRetentionSnapshot();

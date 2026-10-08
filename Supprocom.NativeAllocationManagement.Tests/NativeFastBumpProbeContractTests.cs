@@ -147,14 +147,14 @@ public sealed class NativeFastBumpProbeContractTests
     public void InitializationKernelPropertyIsAuthorityNotNumericTelemetry()
     {
         using NativeArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        NativeArenaKernel kernel = arena.KernelForInitialization;
-        Assert.Same(kernel, arena.KernelForInitialization);
+        NativeArena kernel = arena.KernelForInitialization;
+        Assert.Same(arena, kernel);
         Assert.Equal(arena.Id, kernel.Id);
-        Assert.Equal(NativeOwnerLifecycle.Active, kernel.Lifecycle);
+        Assert.Equal(NativeOwnerLifecycle.Active, kernel.CurrentLifecycle);
         _ = arena.Scratch<int>(1, static writer => writer.Write(59));
         Verify(arena, NativeOwnerLifecycle.Active);
         arena.Dispose();
-        Assert.Equal(NativeOwnerLifecycle.Disposed, kernel.Lifecycle);
+        Assert.Equal(NativeOwnerLifecycle.Disposed, kernel.CurrentLifecycle);
         Verify(arena, NativeOwnerLifecycle.Disposed);
     }
 
@@ -193,7 +193,7 @@ public sealed class NativeFastBumpProbeContractTests
                 if (string.Equals(entry.GetProperty("kind").GetString(), "authority", StringComparison.Ordinal))
                 {
                     Assert.Equal(nameof(NativeArena.KernelForInitialization), property.Name);
-                    Assert.Equal(typeof(NativeArenaKernel), property.PropertyType);
+                    Assert.Equal(typeof(NativeArena), property.PropertyType);
                     authorities++;
                 }
                 else

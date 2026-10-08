@@ -13,7 +13,7 @@ public static partial class NativeLeaseOperations
         where TSecond : unmanaged
     {
         ArgumentNullException.ThrowIfNull(action);
-        NativeArenaKernel kernel = first.KernelForComposite;
+        NativeArena kernel = first.KernelForComposite;
         kernel.BeginCompositeBorrow();
         try
         {
@@ -38,7 +38,7 @@ public static partial class NativeLeaseOperations
         where TThird : unmanaged
     {
         ArgumentNullException.ThrowIfNull(action);
-        NativeArenaKernel kernel = first.KernelForComposite;
+        NativeArena kernel = first.KernelForComposite;
         kernel.BeginCompositeBorrow();
         try
         {
@@ -66,7 +66,7 @@ public static partial class NativeLeaseOperations
         where TFourth : unmanaged
     {
         ArgumentNullException.ThrowIfNull(action);
-        NativeArenaKernel kernel = first.KernelForComposite;
+        NativeArena kernel = first.KernelForComposite;
         kernel.BeginCompositeBorrow();
         try
         {
@@ -97,7 +97,7 @@ public static partial class NativeLeaseOperations
         where TFifth : unmanaged
     {
         ArgumentNullException.ThrowIfNull(action);
-        NativeArenaKernel kernel = first.KernelForComposite;
+        NativeArena kernel = first.KernelForComposite;
         kernel.BeginCompositeBorrow();
         try
         {
@@ -133,7 +133,7 @@ public static partial class NativeLeaseOperations
         where TSeventh : unmanaged
     {
         ArgumentNullException.ThrowIfNull(action);
-        NativeArenaKernel kernel = first.KernelForComposite;
+        NativeArena kernel = first.KernelForComposite;
         kernel.BeginCompositeBorrow();
         try
         {
@@ -173,7 +173,7 @@ public static partial class NativeLeaseOperations
         where TEighth : unmanaged
     {
         ArgumentNullException.ThrowIfNull(action);
-        NativeArenaKernel kernel = first.KernelForComposite;
+        NativeArena kernel = first.KernelForComposite;
         kernel.BeginCompositeBorrow();
         try
         {
@@ -222,7 +222,7 @@ public static partial class NativeLeaseOperations
         ArgumentOutOfRangeException.ThrowIfNegative(secondLength);
         ArgumentOutOfRangeException.ThrowIfNegative(thirdLength);
         ArgumentOutOfRangeException.ThrowIfNegative(fourthLength);
-        NativeArenaKernel kernel = arena.KernelForInitialization;
+        NativeArena kernel = arena.KernelForInitialization;
         long payloadBytes = checked((long)firstLength * Unsafe.SizeOf<TFirst>()
             + (long)secondLength * Unsafe.SizeOf<TSecond>()
             + (long)thirdLength * Unsafe.SizeOf<TThird>()
@@ -309,7 +309,7 @@ public static partial class NativeLeaseOperations
         ArgumentOutOfRangeException.ThrowIfNegative(sixthLength);
         ArgumentOutOfRangeException.ThrowIfNegative(seventhLength);
         ArgumentOutOfRangeException.ThrowIfNegative(eighthLength);
-        NativeArenaKernel kernel = arena.KernelForInitialization;
+        NativeArena kernel = arena.KernelForInitialization;
         long payloadBytes = checked((long)firstLength * Unsafe.SizeOf<TFirst>()
             + (long)secondLength * Unsafe.SizeOf<TSecond>()
             + (long)thirdLength * Unsafe.SizeOf<TThird>()

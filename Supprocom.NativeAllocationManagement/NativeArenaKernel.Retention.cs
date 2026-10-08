@@ -1,7 +1,7 @@
 namespace Supprocom.NativeAllocationManagement;
 
 // Policy selection stays on cold growth and explicit maintenance, not warm bump access.
-internal sealed unsafe partial class NativeArenaKernel
+public sealed unsafe partial class NativeArena
 {
     private readonly bool _retentionEnabled;
     private readonly NativeArenaRetentionPolicy _retentionPolicy;
@@ -10,16 +10,24 @@ internal sealed unsafe partial class NativeArenaKernel
     private long _retentionMaintenanceCount;
     private long _retentionReleasedBytes;
 
-    internal NativeArenaKernel(NativeMemoryBudget budget, NativeArenaRetentionPolicy policy,
+    /// <summary>Creates an exact initial reservation with opt-in cold growth and whole-idle-unit retention limits.</summary>
+    /// <param name="budget">The complete native backing admission ceiling.</param>
+    /// <param name="retentionPolicy">The immutable ordinary growth and native idle-extent policy.</param>
+    /// <param name="preAllocateBytes">The exact initial usable reservation, which may itself be an outlier.</param>
+    /// <param name="returnMemoryOnDispose">The final cleanup policy.</param>
+    public NativeArena(NativeMemoryBudget budget, NativeArenaRetentionPolicy retentionPolicy,
         nuint preAllocateBytes, NativeMemoryReturn returnMemoryOnDispose)
     {
-        ArgumentOutOfRangeException.ThrowIfLessThan(policy.OrdinarySegmentCeilingBytes, SegmentAlignment, nameof(policy));
+        ArgumentNullException.ThrowIfNull(budget);
+        NativeMemoryReturnValidation.Validate(returnMemoryOnDispose, nameof(returnMemoryOnDispose));
+        Id = NativeOwnerIdentity.Next();
+        ArgumentOutOfRangeException.ThrowIfLessThan(retentionPolicy.OrdinarySegmentCeilingBytes, SegmentAlignment, nameof(retentionPolicy));
         _returnMemoryOnDispose = returnMemoryOnDispose;
         _budget = budget;
         _ownerThreadId = Environment.CurrentManagedThreadId;
         _lifecycle = NativeOwnerLifecycle.Active;
         _retentionEnabled = true;
-        _retentionPolicy = policy;
+        _retentionPolicy = retentionPolicy;
         if (preAllocateBytes != 0)
         {
             AppendSegment(ref _ordinary, preAllocateBytes, "exact declaration reservation");
@@ -70,7 +78,9 @@ internal sealed unsafe partial class NativeArenaKernel
         return snapshot;
     }
 
-    internal nuint MaintainRetention()
+    /// <summary>Applies the explicit policy to genuinely idle segments without invalidating any live scratch.</summary>
+    /// <remarks>Rejects unconfigured owners and entered borrows or initializers before release.</remarks>
+    public nuint MaintainRetention()
     {
         ValidateBoundary(nameof(NativeArena.MaintainRetention));
         if (!_retentionEnabled)

@@ -1,20 +1,17 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 
 namespace Supprocom.NativeAllocationManagement;
 
 /// <summary>Owns reusable heterogeneous bump storage for one thread.</summary>
-public sealed class NativeArena : IDisposable
+public sealed partial class NativeArena : IDisposable
 {
-    private readonly NativeArenaKernel _kernel;
-
     /// <summary>Gets the stable process-local allocator identity.</summary>
-    public long Id => _kernel.Id;
+    public long Id { get; }
 
     /// <summary>Captures actual thread-confined lane state without retaining native authority.</summary>
     public NativeOwnerDiagnosticSnapshot CaptureDiagnosticSnapshot() =>
-        _kernel.GetDiagnosticSnapshot();
+        GetDiagnosticSnapshot();
 
     /// <summary>Creates one active Arena with an optional raw byte reservation.</summary>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "RS0027", Justification = "Preserve the published optional signature; the budget-first overload has only required arguments and strictly greater arity, so it cannot capture any existing call.")]
@@ -22,13 +19,8 @@ public sealed class NativeArena : IDisposable
         nuint preAllocateBytes = 0,
         NativeMemoryReturn returnMemoryOnDispose =
             NativeMemoryReturn.ToGarbageCollector)
+        : this(preAllocateBytes, returnMemoryOnDispose, budget: null, requireBudget: false)
     {
-        NativeMemoryReturnValidation.Validate(
-            returnMemoryOnDispose,
-            nameof(returnMemoryOnDispose));
-        _kernel = new NativeArenaKernel(
-            preAllocateBytes,
-            returnMemoryOnDispose);
     }
 
     /// <summary>Creates an arena whose complete backing extents share one admission ceiling.</summary>
@@ -36,108 +28,55 @@ public sealed class NativeArena : IDisposable
     /// <param name="preAllocateBytes">The initial usable byte reservation; native headers are charged too.</param>
     /// <param name="returnMemoryOnDispose">The final storage cleanup policy.</param>
     public NativeArena(NativeMemoryBudget budget, nuint preAllocateBytes, NativeMemoryReturn returnMemoryOnDispose)
+        : this(preAllocateBytes, returnMemoryOnDispose, budget, requireBudget: true)
     {
-        ArgumentNullException.ThrowIfNull(budget);
-        NativeMemoryReturnValidation.Validate(returnMemoryOnDispose, nameof(returnMemoryOnDispose));
-        _kernel = new NativeArenaKernel(preAllocateBytes, returnMemoryOnDispose, budget);
-    }
-
-    /// <summary>Creates an exact initial reservation with opt-in cold growth and whole-idle-unit retention limits.</summary>
-    /// <param name="budget">The complete native backing admission ceiling.</param>
-    /// <param name="retentionPolicy">The immutable ordinary growth and native idle-extent policy.</param>
-    /// <param name="preAllocateBytes">The exact initial usable reservation, which may itself be an outlier.</param>
-    /// <param name="returnMemoryOnDispose">The final cleanup policy.</param>
-    public NativeArena(NativeMemoryBudget budget, NativeArenaRetentionPolicy retentionPolicy,
-        nuint preAllocateBytes, NativeMemoryReturn returnMemoryOnDispose)
-    {
-        ArgumentNullException.ThrowIfNull(budget);
-        NativeMemoryReturnValidation.Validate(returnMemoryOnDispose, nameof(returnMemoryOnDispose));
-        _kernel = new NativeArenaKernel(budget, retentionPolicy, preAllocateBytes, returnMemoryOnDispose);
     }
 
     /// <summary>Captures actual whole-unit idle retention, outlier extents and maintenance history without allocating.</summary>
-    public NativeArenaRetentionStatistics CaptureRetentionSnapshot() => _kernel.GetRetentionSnapshot();
-
-    /// <summary>Applies the explicit policy to genuinely idle segments without invalidating any live scratch.</summary>
-    /// <remarks>Rejects unconfigured owners and entered borrows or initializers before release.</remarks>
-    public nuint MaintainRetention() => _kernel.MaintainRetention();
-
-    /// <summary>Prepares both bounded lanes and prohibits fresh backing during execution.</summary>
-    /// <param name="preparation">Exact ordinary and scoped usable-byte bounds.</param>
-    /// <param name="budget">The shared ceiling for complete header and aligned backing extents.</param>
-    public NativeArena(NativeArenaPreparation preparation, NativeMemoryBudget budget)
-    {
-        ArgumentNullException.ThrowIfNull(budget);
-        _kernel = new NativeArenaKernel(preparation, budget);
-    }
-
-    /// <summary>Prepares two bounded lanes in one provider-owned mapped range.</summary>
-    /// <param name="buffer">The provider whose safe-handle hold lasts until all lane backing is released.</param>
-    /// <param name="byteOffset">The aligned start of the declared range.</param>
-    /// <param name="preparation">Ordinary and scoped bounds; the scoped start must also be 64-byte aligned.</param>
-    /// <param name="budget">The admission ceiling for NAM-owned headers, not provider-owned mapped bytes.</param>
-    public NativeArena(SafeBuffer buffer, nuint byteOffset, NativeArenaPreparation preparation, NativeMemoryBudget budget)
-    {
-        ArgumentNullException.ThrowIfNull(buffer);
-        ArgumentNullException.ThrowIfNull(budget);
-        _kernel = new NativeArenaKernel(buffer, byteOffset, preparation, budget);
-    }
+    public NativeArenaRetentionStatistics CaptureRetentionSnapshot() => GetRetentionSnapshot();
 
     /// <summary>Captures prepared lane capacity and recorded history without allocating or resetting it.</summary>
-    public NativePreparedArenaStatistics CapturePreparedSnapshot() => _kernel.GetPreparedSnapshot();
+    public NativePreparedArenaStatistics CapturePreparedSnapshot() => GetPreparedSnapshot();
 
     /// <summary>Tries a fully initialized ordinary scratch without growth; capacity refusal precedes initialization.</summary>
     public bool TryScratch<T>(int length, NativeLeaseInitializer<T> initializer, out ArenaLease<T> lease)
-        where T : unmanaged => _kernel.TryScratch(length, scoped: false, initializer, out lease);
+        where T : unmanaged => TryScratch(length, scoped: false, initializer, out lease);
 
     /// <summary>Tries a fully initialized scoped scratch without growth; capacity refusal precedes initialization.</summary>
     public bool TryScratchScoped<T>(int length, NativeLeaseInitializer<T> initializer, out ArenaLease<T> lease)
-        where T : unmanaged => _kernel.TryScratch(length, scoped: true, initializer, out lease);
+        where T : unmanaged => TryScratch(length, scoped: true, initializer, out lease);
 
     internal NativeOwnerLifecycle CurrentLifecycle =>
-        _kernel.Lifecycle;
+        _lifecycle;
 
-    internal NativeArenaKernel KernelForInitialization => _kernel;
+    internal NativeArena KernelForInitialization => this;
 
     // Compatibility probe retains the per-owner instance shape.
 #pragma warning disable CA1822
     internal int CurrentAllocationRecordCountForTest => 0;
 #pragma warning restore CA1822
 
-    /// <summary>Gets the current Arena storage statistics.</summary>
-    public NativeOwnerStatistics GetStatistics() =>
-        _kernel.GetStatistics();
-
     /// <summary>Initializes one generation-bound bump range.</summary>
     public ArenaLease<T> Scratch<T>(
         int length,
         NativeLeaseInitializer<T> initializer)
         where T : unmanaged =>
-        _kernel.Scratch(length, scoped: false, initializer);
+        Scratch(length, scoped: false, initializer);
 
     /// <summary>Initializes one scoped bump range.</summary>
     public ArenaLease<T> ScratchScoped<T>(
         int length,
         NativeLeaseInitializer<T> initializer)
         where T : unmanaged =>
-        _kernel.Scratch(length, scoped: true, initializer);
-
-    /// <summary>Invalidates all leases and reuses all retained segments.</summary>
-    public void Reset() => _kernel.Reset();
-
-    /// <summary>Invalidates scoped leases and reuses scoped segments.</summary>
-    public void RecycleScoped() => _kernel.RecycleScoped();
+        Scratch(length, scoped: true, initializer);
 
     /// <summary>Frees every idle tail segment.</summary>
     public nuint TrimRetainedMemory() =>
-        _kernel.TrimRetainedMemory(nuint.MaxValue);
+        TrimRetainedMemory(nuint.MaxValue);
 
     /// <summary>Frees idle tail segments until the byte budget is met.</summary>
     public nuint TrimRetainedMemoryByBytes(nuint bytesToRelease) =>
-        _kernel.TrimRetainedMemory(bytesToRelease);
-
-    /// <summary>Closes the Arena and applies its cleanup policy.</summary>
-    public void Dispose() => _kernel.Dispose();
+        TrimRetainedMemory(bytesToRelease);
 }
 
 /// <summary>A generation-bound capability for one Arena range.</summary>
@@ -145,7 +84,7 @@ public sealed class NativeArena : IDisposable
 public readonly ref struct ArenaLease<T>
     where T : unmanaged
 {
-    private readonly NativeArenaKernel? _kernel;
+    private readonly NativeArena? _kernel;
     private readonly IntPtr _pointer;
     private readonly int _length;
     private readonly ulong _generation;
@@ -153,7 +92,7 @@ public readonly ref struct ArenaLease<T>
     private readonly bool _scoped;
 
     internal ArenaLease(
-        NativeArenaKernel kernel,
+        NativeArena kernel,
         IntPtr pointer,
         int length,
         ulong generation,
@@ -259,7 +198,7 @@ public readonly ref struct ArenaLease<T>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ArenaBorrow<T> EnterBorrow(string operation)
     {
-        NativeArenaKernel kernel = GetKernel(operation);
+        NativeArena kernel = GetKernel(operation);
         IntPtr pointer = kernel.EnterBorrow(
             _pointer,
             _length,
@@ -274,9 +213,9 @@ public readonly ref struct ArenaLease<T>
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private NativeArenaKernel GetKernel(string operation)
+    private NativeArena GetKernel(string operation)
     {
-        NativeArenaKernel? kernel = _kernel;
+        NativeArena? kernel = _kernel;
         if (kernel is null)
         {
             ThrowUninitialized(operation);
@@ -285,9 +224,9 @@ public readonly ref struct ArenaLease<T>
         return kernel;
     }
 
-    internal NativeArenaKernel KernelForComposite => GetKernel(nameof(NativeLeaseOperations.Access));
+    internal NativeArena KernelForComposite => GetKernel(nameof(NativeLeaseOperations.Access));
 
-    internal NativeLeaseView<T> GetViewForComposite(NativeArenaKernel kernel, string operation)
+    internal NativeLeaseView<T> GetViewForComposite(NativeArena kernel, string operation)
     {
         if (!ReferenceEquals(kernel, GetKernel(operation)))
         {
@@ -328,10 +267,10 @@ public readonly ref struct ArenaLease<T>
 internal readonly ref struct ArenaBorrow<T>
     where T : unmanaged
 {
-    private readonly NativeArenaKernel _kernel;
+    private readonly NativeArena _kernel;
 
     internal ArenaBorrow(
-        NativeArenaKernel kernel,
+        NativeArena kernel,
         IntPtr pointer,
         int length)
     {
