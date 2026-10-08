@@ -672,11 +672,13 @@ public sealed class NativeLeaseStateAnalyzer : DiagnosticAnalyzer
 
             return type.OriginalDefinition.Name is
                 "NativePool"
+                or "NativePreparedPool"
                 or "NativeConcurrentPool"
                 or "NativeRegion"
                 or "NativeArena"
                 or "NativeConcurrentArena"
                 or "Pooled"
+                or "PreparedPooled"
                 or "ConcurrentPooled"
                 or "Local"
                 or "ArenaLease"

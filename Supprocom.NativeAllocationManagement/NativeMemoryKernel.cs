@@ -402,7 +402,7 @@ public readonly record struct NativeOwnerStatistics(
 /// <param name="ActiveRecords">Current active allocation records, transfer slots, the grouped fast scoped lane, or the direct builder/workspace block control.</param>
 /// <param name="ScopedRecords">Current scoped records, including the grouped fast scoped lane.</param>
 /// <param name="ReferenceRoots">Current managed reference roots held for native reference slots.</param>
-/// <param name="OrdinaryTraversalIndex">The forward bump-search frontier, or minus one without a current generation.</param>
+/// <param name="OrdinaryTraversalIndex">The actual bump-search frontier, ordinary pool returned-slot candidate, prepared pool free-list head, or minus one without a candidate.</param>
 /// <param name="ScopedTraversalIndex">The reverse scoped-search frontier; minus one denotes no candidate.</param>
 /// <param name="RetainedSegmentCount">The current storage bank's slab/bump segments, including attached backing, or the one possible direct block.</param>
 /// <param name="AvailableSegmentCount">Current idle slabs and completely idle bump segments.</param>

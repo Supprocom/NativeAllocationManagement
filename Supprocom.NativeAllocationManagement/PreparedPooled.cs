@@ -1,0 +1,229 @@
+using System.Runtime.CompilerServices;
+using System.Diagnostics.CodeAnalysis;
+
+namespace Supprocom.NativeAllocationManagement;
+
+/// <summary>A token-bound capability for one fixed-shape native slot.</summary>
+/// <typeparam name="T">The unmanaged value type in the slab.</typeparam>
+public readonly ref struct PreparedPooled<T>
+    where T : unmanaged
+{
+    private readonly NativePreparedPool<T>? _kernel;
+    private readonly int _slabIndex;
+    private readonly long _token;
+    private readonly int _length;
+    private readonly int _capacity;
+
+    internal PreparedPooled(
+        NativePreparedPool<T> kernel,
+        int slabIndex,
+        long token,
+        int length,
+        int capacity)
+    {
+        _kernel = kernel;
+        _slabIndex = slabIndex;
+        _token = token;
+        _length = length;
+        _capacity = capacity;
+    }
+
+    /// <summary>Gets the immutable logical element count.</summary>
+    public int Length => _length;
+
+    /// <summary>Gets the immutable physical element capacity.</summary>
+    public int Capacity => _capacity;
+
+    /// <summary>Moves this lexical lease without allocating or copying its payload and clears the source.</summary>
+    /// <remarks>
+    /// Previous aliases become stale. Unlike NativeTransfer.Move, failure preserves
+    /// the source so it can still return its slot. Movement requires the owner thread
+    /// and no entered borrow; it does not grant heap storage or cross-thread access.
+    /// </remarks>
+    [SuppressMessage("Design", "CA1000", Justification = "Destructive lexical movement consumes the exact element type through a ref source.")]
+    public static PreparedPooled<T> Move(scoped ref PreparedPooled<T> source)
+    {
+        NativePreparedPool<T> kernel = source.GetKernel(nameof(Move));
+        long token = kernel.Move(source._slabIndex, source._token);
+        PreparedPooled<T> destination = new(kernel, source._slabIndex, token,
+            source._length, source._capacity);
+        source = default;
+        return destination;
+    }
+
+    /// <summary>Clears the logical range during one validated borrow.</summary>
+    public void Clear()
+    {
+        PreparedPooledBorrow<T> borrow = EnterBorrow(nameof(Clear));
+        try
+        {
+            borrow.View.Clear();
+        }
+        finally
+        {
+            borrow.Dispose();
+        }
+    }
+
+    /// <summary>Copies one exact source during one validated borrow.</summary>
+    public void CopyFrom(scoped ReadOnlySpan<T> source)
+    {
+        if (source.Length != _length)
+        {
+            throw new ArgumentException(
+                "The source length must equal the pooled logical length.",
+                nameof(source));
+        }
+
+        PreparedPooledBorrow<T> borrow = EnterBorrow(nameof(CopyFrom));
+        try
+        {
+            borrow.View.CopyFrom(source);
+        }
+        finally
+        {
+            borrow.Dispose();
+        }
+    }
+
+    /// <summary>Copies the logical range during one validated borrow.</summary>
+    public void CopyTo(scoped Span<T> destination)
+    {
+        if (destination.Length < _length)
+        {
+            throw new ArgumentException(
+                "The destination must contain the pooled logical length.",
+                nameof(destination));
+        }
+
+        PreparedPooledBorrow<T> borrow = EnterBorrow(nameof(CopyTo));
+        try
+        {
+            borrow.View.CopyTo(destination);
+        }
+        finally
+        {
+            borrow.Dispose();
+        }
+    }
+
+    /// <summary>Runs one bounded write callback after one token check.</summary>
+    public void Access(NativeLeaseAction<T> action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        PreparedPooledBorrow<T> borrow = EnterBorrow(nameof(Access));
+        try
+        {
+            action(borrow.View);
+        }
+        finally
+        {
+            borrow.Dispose();
+        }
+    }
+
+    /// <summary>Runs one bounded read callback after one token check.</summary>
+    public TResult Read<TResult>(NativeLeaseFunc<T, TResult> action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        PreparedPooledBorrow<T> borrow = EnterBorrow(nameof(Read));
+        try
+        {
+            return action(borrow.View);
+        }
+        finally
+        {
+            borrow.Dispose();
+        }
+    }
+
+    /// <summary>Processes one logical prefix during one validated borrow.</summary>
+    public TResult Process<TState, TResult>(
+        int logicalLength,
+        TState state,
+        NativeSpanStateProcessor<T, TState, TResult> processor)
+    {
+        ArgumentNullException.ThrowIfNull(processor);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan((uint)logicalLength, (uint)_length, nameof(logicalLength));
+        NativePreparedPool<T> kernel = GetKernel(nameof(Process));
+        IntPtr pointer = kernel.EnterBorrow(
+            _slabIndex,
+            _token,
+            nameof(Process));
+        try
+        {
+            unsafe
+            {
+                return processor(
+                    new Span<T>((void*)pointer, logicalLength),
+                    state);
+            }
+        }
+        finally
+        {
+            kernel.ExitBorrow(_slabIndex);
+        }
+    }
+
+    /// <summary>Returns this slab exactly once.</summary>
+    public void Dispose() => GetKernel(nameof(Dispose)).Return(
+        _slabIndex,
+        _token,
+        _length);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal PreparedPooledBorrow<T> EnterBorrow(string operation)
+    {
+        NativePreparedPool<T> kernel = GetKernel(operation);
+        IntPtr pointer = kernel.EnterBorrow(
+            _slabIndex,
+            _token,
+            operation);
+        return new PreparedPooledBorrow<T>(
+            kernel,
+            _slabIndex,
+            pointer,
+            _length);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private NativePreparedPool<T> GetKernel(string operation)
+    {
+        NativePreparedPool<T>? kernel = _kernel;
+        if (kernel is null)
+        {
+            ThrowUninitialized(operation);
+        }
+
+        return kernel;
+    }
+
+    [DoesNotReturn]
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void ThrowUninitialized(string operation) =>
+        throw new NativeAllocationUninitializedException(
+            nameof(PreparedPooled<T>),
+            operation);
+}
+
+internal readonly ref struct PreparedPooledBorrow<T>
+    where T : unmanaged
+{
+    private readonly NativePreparedPool<T> _kernel;
+    private readonly int _slabIndex;
+
+    internal PreparedPooledBorrow(
+        NativePreparedPool<T> kernel,
+        int slabIndex,
+        IntPtr pointer,
+        int length)
+    {
+        _kernel = kernel;
+        _slabIndex = slabIndex;
+        View = new NativeLeaseView<T>(pointer, length);
+    }
+
+    internal NativeLeaseView<T> View { get; }
+
+    internal void Dispose() => _kernel.ExitBorrow(_slabIndex);
+}

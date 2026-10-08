@@ -107,6 +107,10 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 Namespace + "NativeConcurrentArena");
             Pooled = runtimeAssembly.GetTypeByMetadataName(
                 Namespace + "Pooled`1");
+            PreparedPool = runtimeAssembly.GetTypeByMetadataName(
+                Namespace + "NativePreparedPool`1");
+            PreparedPooled = runtimeAssembly.GetTypeByMetadataName(
+                Namespace + "PreparedPooled`1");
             ConcurrentPooled = runtimeAssembly.GetTypeByMetadataName(
                 Namespace + "ConcurrentPooled`1");
             Local = runtimeAssembly.GetTypeByMetadataName(
@@ -150,6 +154,10 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         internal INamedTypeSymbol? ConcurrentArena { get; }
 
         internal INamedTypeSymbol? Pooled { get; }
+
+        internal INamedTypeSymbol? PreparedPool { get; }
+
+        internal INamedTypeSymbol? PreparedPooled { get; }
 
         internal INamedTypeSymbol? ConcurrentPooled { get; }
 
@@ -240,6 +248,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         {
             return IsOwnerType(type)
                 || Is(type, Pooled)
+                || Is(type, PreparedPooled)
                 || Is(type, ConcurrentPooled)
                 || Is(type, Local)
                 || Is(type, ArenaLease)
@@ -260,6 +269,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         private bool IsOwnerType(ITypeSymbol? type)
         {
             return Is(type, Pool)
+                || Is(type, PreparedPool)
                 || Is(type, ConcurrentPool)
                 || Is(type, Region)
                 || Is(type, Arena)
@@ -5507,8 +5517,10 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         private bool IsPooledMoveInvocation(IOperation operation) =>
             operation is IInvocationOperation invocation
             && string.Equals(invocation.TargetMethod.Name, "Move", StringComparison.Ordinal)
-            && NativeSymbols.Is(invocation.TargetMethod.ContainingType, _symbols.Pooled)
-            && NativeSymbols.Is(invocation.Type, _symbols.Pooled)
+            && (NativeSymbols.Is(invocation.TargetMethod.ContainingType, _symbols.Pooled)
+                && NativeSymbols.Is(invocation.Type, _symbols.Pooled)
+                || NativeSymbols.Is(invocation.TargetMethod.ContainingType, _symbols.PreparedPooled)
+                && NativeSymbols.Is(invocation.Type, _symbols.PreparedPooled))
             && invocation.Arguments.Length == 1
             && invocation.Arguments[0].Parameter?.RefKind == RefKind.Ref;
 
@@ -5699,7 +5711,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             {
                 return false;
             }
-            bool pool = NativeSymbols.Is(invocation.TargetMethod.ContainingType, _symbols.Pool)
+            bool pool = (NativeSymbols.Is(invocation.TargetMethod.ContainingType, _symbols.Pool)
+                || NativeSymbols.Is(invocation.TargetMethod.ContainingType, _symbols.PreparedPool))
                 && string.Equals(invocation.TargetMethod.Name, "TryRent", StringComparison.Ordinal)
                 && invocation.Arguments.Length == 4;
             bool arena = NativeSymbols.Is(invocation.TargetMethod.ContainingType, _symbols.Arena)
@@ -5707,7 +5720,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 && invocation.Arguments.Length == 3;
             return IsPreparedTryGroupAcquisition(invocation) || (pool || arena)
                 && invocation.Arguments.Any(argument => argument.Parameter is { Ordinal: 2, RefKind: RefKind.Out }
-                    && NativeSymbols.Is(argument.Parameter.Type, pool ? _symbols.Pooled : _symbols.ArenaLease));
+                    && (pool ? IsNativePooled(argument.Parameter.Type)
+                        : NativeSymbols.Is(argument.Parameter.Type, _symbols.ArenaLease)));
         }
 
         private bool IsPreparedTryGroupAcquisition(IInvocationOperation invocation) =>
@@ -7710,7 +7724,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
         private bool RequiresDeterministicReturn(IObjectCreationOperation operation)
         {
-            if (NativeSymbols.Is(operation.Type, _symbols.Pool)
+            if ((NativeSymbols.Is(operation.Type, _symbols.Pool)
+                    || NativeSymbols.Is(operation.Type, _symbols.PreparedPool))
                 && operation.Constructor?.Parameters.Length == 2
                 && NativeSymbols.Is(operation.Constructor.Parameters[0].Type, _symbols.PoolPreparation))
             {
@@ -7913,6 +7928,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         private bool IsNativePool(ITypeSymbol? type)
         {
             return NativeSymbols.Is(type, _symbols.Pool)
+                || NativeSymbols.Is(type, _symbols.PreparedPool)
                 || NativeSymbols.Is(type, _symbols.ConcurrentPool);
         }
 
@@ -7930,6 +7946,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         private bool IsNativePooled(ITypeSymbol? type)
         {
             return NativeSymbols.Is(type, _symbols.Pooled)
+                || NativeSymbols.Is(type, _symbols.PreparedPooled)
                 || NativeSymbols.Is(type, _symbols.ConcurrentPooled);
         }
 

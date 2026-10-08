@@ -197,13 +197,22 @@ public sealed class NativeOwnerDiagnosticContractTests
             foreach (JsonElement field in fields)
             {
                 foreach (string key in new[] { "name", "units", "definition", "overflow" }) Assert.False(string.IsNullOrWhiteSpace(field.GetProperty(key).GetString()), key);
-                string[] parts = field.GetProperty("implementation").GetString()!.Split('#', 2);
-                Assert.Equal(2, parts.Length);
-                Assert.Contains(parts[1], File.ReadAllText(Path.Combine(root, "Supprocom.NativeAllocationManagement", parts[0])), StringComparison.Ordinal);
+                VerifyImplementationReference(field.GetProperty("implementation").GetString()!);
                 VerifyTestReference(field.GetProperty("proof").GetString()!);
+                if (field.TryGetProperty("additionalImplementations", out JsonElement implementations))
+                    foreach (JsonElement implementation in implementations.EnumerateArray()) VerifyImplementationReference(implementation.GetString()!);
+                if (field.TryGetProperty("additionalProofs", out JsonElement proofs))
+                    foreach (JsonElement proof in proofs.EnumerateArray()) VerifyTestReference(proof.GetString()!);
             }
         }
         Assert.Equal(47, total);
+    }
+
+    private static void VerifyImplementationReference(string reference)
+    {
+        string[] parts = reference.Split('#', 2);
+        Assert.Equal(2, parts.Length);
+        Assert.Contains(parts[1], File.ReadAllText(Path.Combine(RepositoryTestPaths.Root, "Supprocom.NativeAllocationManagement", parts[0])), StringComparison.Ordinal);
     }
 
     private static void VerifyTestReference(string reference)
