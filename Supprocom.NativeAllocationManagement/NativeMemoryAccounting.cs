@@ -50,11 +50,22 @@ internal static class NativeMemoryAccounting
     }
 
     internal const int ThreadMetricSlotCapacity = 64;
-    private static readonly Lock HotGate = new();
+    private static bool _hotAccountingInitialized;
+
+    private static class HotAccounting
+    {
+        internal static readonly Lock Gate = new();
+        internal static readonly NativeHotMetrics SharedMetrics = new() { Shared = true, Epoch = 0 };
+
+        // Strict initialization keeps physical-only counters allocation-free.
+        // Publication precedes the first possible hot producer; an observer
+        // then accesses Gate and waits for this constructor to finish.
+        static HotAccounting() => Volatile.Write(ref _hotAccountingInitialized, true);
+    }
+
     // Physical allocation/free and snapshots need no per-thread shard bank.
-    // Acquire it under HotGate only when an actual hot-counter owner is claimed.
+    // Acquire it under HotAccounting.Gate only when a hot-counter owner is claimed.
     private static NativeHotMetrics?[]? HotMetrics;
-    private static readonly NativeHotMetrics SharedHotMetrics = new() { Shared = true, Epoch = 0 };
     private static int _claimedSlotCount;
     private static NativeHotMetricsSnapshot _completedHotMetrics;
     private static bool _historyOverflowed;
@@ -84,7 +95,7 @@ internal static class NativeMemoryAccounting
     // Fault-injection state lives elsewhere and cannot disable these counters.
     internal static void ResetForTests()
     {
-        lock (HotGate)
+        lock (HotAccounting.Gate)
         {
             long next = checked(CurrentMetricsEpoch + 1);
             Volatile.Write(ref _metricsEpoch, next);
@@ -99,7 +110,7 @@ internal static class NativeMemoryAccounting
             Interlocked.Exchange(ref _retiredNativeBytes, 0);
             Volatile.Write(ref _historyOverflowed, false);
             _completedHotMetrics = default;
-            SharedHotMetrics.Reset(next);
+            HotAccounting.SharedMetrics.Reset(next);
         }
     }
 
@@ -135,14 +146,14 @@ internal static class NativeMemoryAccounting
         {
             // An observational record must not fail after producer work. The
             // preexisting shared bank needs no slot, wrapper or weak allocation.
-            return SharedHotMetrics;
+            return HotAccounting.SharedMetrics;
         }
     }
 
     private static NativeHotMetrics ClaimAvailableHotMetrics(long epoch)
     {
         NativeMemoryTestHooks.AccountingClaimBoundary(1);
-        lock (HotGate)
+        lock (HotAccounting.Gate)
         {
             NativeHotMetrics?[] bank = HotMetrics ??= new NativeHotMetrics[ThreadMetricSlotCapacity];
             foreach (ref NativeHotMetrics? slot in bank.AsSpan())
@@ -173,7 +184,7 @@ internal static class NativeMemoryAccounting
             }
             // Fixed metadata does not cap application threads. Only excess
             // threads use shared atomic history; ordinary slots remain local.
-            return SharedHotMetrics;
+            return HotAccounting.SharedMetrics;
         }
     }
 
@@ -234,7 +245,13 @@ internal static class NativeMemoryAccounting
 
     private static NativeHotMetricsSnapshot SnapshotHotMetrics()
     {
-        lock (HotGate)
+        if (!Volatile.Read(ref _hotAccountingInitialized))
+        {
+            // No hot producer can run before strict initialization publishes.
+            return default;
+        }
+
+        lock (HotAccounting.Gate)
         {
             long epoch = CurrentMetricsEpoch;
             NativeHotMetricsSnapshot total = _completedHotMetrics;
@@ -245,7 +262,7 @@ internal static class NativeMemoryAccounting
                     AccumulateHotMetrics(ref total, metrics);
                 }
             }
-            AccumulateHotMetrics(ref total, SharedHotMetrics);
+            AccumulateHotMetrics(ref total, HotAccounting.SharedMetrics);
             return total;
         }
     }

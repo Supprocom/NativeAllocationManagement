@@ -6,6 +6,63 @@ public sealed class NativeColdAccountingTests
 {
     private static readonly int[] Input = [3, 5, 7, 11];
 
+    [Fact]
+    public void PhysicalAccountingHasNoEagerObjectsAndHotInitializationIsStrict()
+    {
+        Type physical = typeof(NativeMemoryAccounting);
+        Assert.Null(physical.TypeInitializer);
+        Type hot = physical.GetNestedType("HotAccounting", BindingFlags.NonPublic)!;
+        Assert.NotNull(hot.TypeInitializer);
+        Assert.Equal((TypeAttributes)0, hot.Attributes & TypeAttributes.BeforeFieldInit);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(4096)]
+    public void PhysicalRecordsAndSnapshotsDoNotRegisterUnusedThreadHotMetrics(int length)
+    {
+        OnFreshThread(() =>
+        {
+            Assert.Null(ThreadAccounting());
+            NativeMemoryStatistics before = NativeMemoryDiagnostics.Snapshot();
+            NativeBlock block = NativeBlockAllocator.Allocate<byte>(length, "AccountingTest", "PhysicalOnly",
+                ownerId: NativeOwnerIdentity.NextWithoutPreparation());
+            try
+            {
+                NativeMemoryStatistics acquired = NativeMemoryDiagnostics.Snapshot();
+                Assert.Equal(before.OutstandingNativeBytes + length, acquired.OutstandingNativeBytes);
+                Assert.Equal(before.AllocationCount + (length == 0 ? 0 : 1), acquired.AllocationCount);
+                Assert.Equal(before.BumpTraversalVisitCount, acquired.BumpTraversalVisitCount);
+                Assert.Equal(before.CopiedBytes, acquired.CopiedBytes);
+                Assert.Null(ThreadAccounting());
+            }
+            finally { NativeBlockAllocator.Free(block); }
+            NativeMemoryStatistics returned = NativeMemoryDiagnostics.Snapshot();
+            Assert.Equal(before.OutstandingNativeBytes, returned.OutstandingNativeBytes);
+            Assert.Equal(before.FreeCount + (length == 0 ? 0 : 1), returned.FreeCount);
+            Assert.Null(ThreadAccounting());
+        });
+    }
+
+    [Fact]
+    public void RealHotHistoryPublishesInitializationBeforeAggregation()
+    {
+        NativeMemoryTestHooks.Reset();
+        try
+        {
+            OnFreshThread(static () =>
+            {
+                Assert.Null(ThreadAccounting());
+                NativeMemoryAccounting.RecordBumpTraversalVisit();
+                Assert.True((bool)typeof(NativeMemoryAccounting)
+                    .GetField("_hotAccountingInitialized", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)!);
+                Assert.Equal(1, NativeMemoryDiagnostics.Snapshot().BumpTraversalVisitCount);
+                Assert.NotNull(ThreadAccounting());
+            });
+        }
+        finally { NativeMemoryTestHooks.Reset(); }
+    }
+
     [Theory]
     [InlineData(0)]
     [InlineData(4096)]
