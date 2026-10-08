@@ -27,8 +27,8 @@ internal static class NativeCapacityDiagnosticOracle
             RetainedPageCount = 1,
             RetainedSlotCount = 2,
             AvailableSlotCount = 2,
-            RetainedBytes = 128,
-            PeakRetainedBytes = 128,
+            RetainedBytes = 32,
+            PeakRetainedBytes = 32,
             ManagedBankBytes = 2 * PoolSlotBytes + PoolPageBytes + PoolFreeHeadBytes,
             UnusedSlotBytes = 32
         };
@@ -76,8 +76,8 @@ internal static class NativeCapacityDiagnosticOracle
             }
             expected = expected with { OccupiedSlotCount = 0, AvailableSlotCount = 2, UnusedSlotBytes = 32 };
             Verify(pool.CapturePreparedSnapshot(), expected, "pool-page-idle");
-            if (budget.CaptureStatistics().CommittedBytes != 128) throw new InvalidOperationException("Idle backing was prematurely uncharged.");
-            if (pool.TrimRetainedMemory() != 128) throw new InvalidOperationException("Idle page trim extent differs.");
+            if (budget.CaptureStatistics().CommittedBytes != 32) throw new InvalidOperationException("Idle backing was prematurely uncharged.");
+            if (pool.TrimRetainedMemory() != 32) throw new InvalidOperationException("Idle page trim extent differs.");
             expected = expected with { RetainedPageCount = 0, RetainedSlotCount = 0, AvailableSlotCount = 0, RetainedBytes = 0, UnusedSlotBytes = 0 };
             Verify(pool.CapturePreparedSnapshot(), expected, "pool-page-physically-trimmed");
             if (pool.TryRent(1, static writer => writer.Fill(0), out Pooled<int> regrown, out _))

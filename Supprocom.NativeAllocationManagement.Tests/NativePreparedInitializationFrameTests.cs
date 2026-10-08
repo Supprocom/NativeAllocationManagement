@@ -51,7 +51,7 @@ public sealed class NativePreparedInitializationFrameTests
         Assert.Equal(0, pool.CurrentGenerationActiveOperationsForTest);
         Assert.Equal(0, pool.GetStatistics().RequestedBytes);
         Assert.Equal(1, budget.CaptureStatistics().AllocationCount);
-        Assert.Equal(192, budget.CaptureStatistics().CommittedBytes);
+        Assert.Equal(24, budget.CaptureStatistics().CommittedBytes);
         if (pool.TryRent(2, static writer => writer.Fill(19), out Pooled<int> reused, out _))
         {
             using (reused)

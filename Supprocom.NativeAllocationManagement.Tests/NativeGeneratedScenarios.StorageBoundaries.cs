@@ -12,7 +12,7 @@ internal static partial class NativeGeneratedScenarios
         {
             int length = random.Next(1, 5);
             int payload = random.Next(1, 1000);
-            trace($"sparse-page seed={seed} iteration={iteration} slots=4 slotsPerPage=2 slotCapacity=4 length={length} payload={payload} backing=256 tracing={traceCapacity}");
+            trace($"sparse-page seed={seed} iteration={iteration} slots=4 slotsPerPage=2 slotCapacity=4 length={length} payload={payload} backing=64 tracing={traceCapacity}");
             NativeMemoryBudget budget = new(256, traceCapacity);
             using NativePool<int> pool = new(new NativePoolPreparation(4, 4, 2), budget);
             using (Pooled<int> survivor = pool.Rent(length, writer => writer.Fill(payload)))
@@ -21,18 +21,18 @@ internal static partial class NativeGeneratedScenarios
                 using (ended)
                 {
                     Require(pool.CapturePreparedSnapshot().OccupiedSlotCount == 2
-                        && budget.CaptureStatistics().CommittedBytes == 256,
+                        && budget.CaptureStatistics().CommittedBytes == 64,
                         "dense phase must retain its two prepared pages before maintenance");
                 }
                 // One arbitrary occupied slot pins precisely one page. The other
                 // completely idle page is freed; the slot's numeric index does
                 // not need to be guessed from the allocator's private free list.
-                Require(pool.TrimRetainedMemory() == 128, "sparse page trim did not free exactly one idle page");
+                Require(pool.TrimRetainedMemory() == 32, "sparse page trim did not free exactly one idle page");
                 NativePreparedPoolStatistics sparse = pool.CapturePreparedSnapshot();
                 Require(sparse.RetainedPageCount == 1 && sparse.RetainedSlotCount == 2 && sparse.OccupiedSlotCount == 1
-                    && sparse.AvailableSlotCount == 1 && sparse.RetainedBytes == 128 && sparse.UnusedSlotBytes == 16,
+                    && sparse.AvailableSlotCount == 1 && sparse.RetainedBytes == 32 && sparse.UnusedSlotBytes == 16,
                     "one live slot's complete page charge or actual idle capacity differs");
-                Require(budget.CaptureStatistics().CommittedBytes == 128 && budget.CaptureStatistics().AllocationCount == 2
+                Require(budget.CaptureStatistics().CommittedBytes == 32 && budget.CaptureStatistics().AllocationCount == 2
                     && budget.CaptureStatistics().FreeCount == 1, "sparse retained charge was duplicated or lost");
                 using (Pooled<int> reused = pool.Rent(4, static writer => writer.Fill(23)))
                 {
@@ -48,7 +48,7 @@ internal static partial class NativeGeneratedScenarios
                     Require(pool.TrimRetainedMemory() == 0, "remaining live page was physically freed");
                 }
             }
-            Require(pool.TrimRetainedMemory() == 128 && budget.CaptureStatistics().CommittedBytes == 0
+            Require(pool.TrimRetainedMemory() == 32 && budget.CaptureStatistics().CommittedBytes == 0
                 && budget.CaptureStatistics().FreeCount == 2 && pool.CapturePreparedSnapshot().OccupiedSlotCount == 0,
                 "last sparse page did not clean up exactly");
             trace($"sparse-page cleanup seed={seed} iteration={iteration} allocatedPages=2 actualFrees=2 committed=0");

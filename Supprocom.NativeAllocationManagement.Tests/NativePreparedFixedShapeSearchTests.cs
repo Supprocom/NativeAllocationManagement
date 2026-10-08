@@ -74,8 +74,8 @@ public sealed class NativePreparedFixedShapeSearchTests
         Pooled<int> survivor = pool.Rent(1, static writer => writer.Write(37));
         try
         {
-            Assert.Equal((nuint)128, pool.TrimRetainedMemory());
-            Assert.Equal(64, budget.CaptureStatistics().CommittedBytes);
+            Assert.Equal((nuint)24, pool.TrimRetainedMemory());
+            Assert.Equal(12, budget.CaptureStatistics().CommittedBytes);
             Assert.Equal(1, pool.CapturePreparedSnapshot().RetainedSlotCount);
             Assert.False(pool.TryRent(3, static writer => writer.Fill(0), out _, out NativePoolExhaustionReason reason));
             Assert.Equal(NativePoolExhaustionReason.NoAvailableSlot, reason);
@@ -86,7 +86,7 @@ public sealed class NativePreparedFixedShapeSearchTests
         {
             Assert.Equal(41, reused.Read(static view => view[2]));
         }
-        Assert.Equal((nuint)64, pool.TrimRetainedMemory());
+        Assert.Equal((nuint)12, pool.TrimRetainedMemory());
         Assert.Equal(0, budget.CaptureStatistics().CommittedBytes);
         Assert.False(pool.TryRent(0, static _ => { }, out _, out NativePoolExhaustionReason empty));
         Assert.Equal(NativePoolExhaustionReason.NoAvailableSlot, empty);

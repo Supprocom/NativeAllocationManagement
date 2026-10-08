@@ -910,7 +910,7 @@ public sealed class PackageSmokeTests
                             if (pool.GetStatistics().HistoryOverflowed || pool.CaptureDiagnosticSnapshot().HistoryOverflowed) return 16;
                             if (snapshot.AvailableSlotCount != 2 || snapshot.RetainedPageCount != 1
                                 || snapshot.PeakOccupiedSlotCount != 1 || snapshot.SuccessfulRentCount != 1
-                                || snapshot.RetainedBytes != 128 || snapshot.ManagedBankBytes <= 0) return 3;
+                                || snapshot.RetainedBytes != 32 || snapshot.ManagedBankBytes <= 0) return 3;
                         }
                         System.Span<NativeMemoryTraceEvent> events = stackalloc NativeMemoryTraceEvent[8];
                         if (budget.CopyTraceTo(events) != 4 || budget.CaptureStatistics().CommittedBytes != 0

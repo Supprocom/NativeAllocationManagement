@@ -115,6 +115,8 @@ public sealed class NativePool<T> : IDisposable
     /// Preparation admits every page before acquiring backing or metadata.
     /// Dispose returns backing deterministically after all leases return.
     /// Trim removes idle pages without implicit refill; original bounds remain diagnostic.
+    /// Prepared slots are packed using the CLR element stride, without cache-line
+    /// padding or an additional SIMD-address alignment guarantee.
     /// </remarks>
     /// <param name="preparation">The positive simultaneous shape and page bounds.</param>
     /// <param name="budget">The optional shared backing domain, or null for no byte ceiling.</param>

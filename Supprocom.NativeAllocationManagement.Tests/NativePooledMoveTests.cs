@@ -29,7 +29,7 @@ public sealed class NativePooledMoveTests
         Assert.Equal(20, current.Read(static view => view[0] + view[1]));
         Assert.Equal(before, pool.GetStatistics());
         Assert.Equal(1, pool.CurrentAllocationRecordCountForTest);
-        Assert.Equal(64, budget.CaptureStatistics().CommittedBytes);
+        Assert.Equal(prepared ? 8 : 64, budget.CaptureStatistics().CommittedBytes);
         current.Dispose();
         AssertReturned(current);
         using Pooled<int> reused = pool.Rent(2, static writer => writer.Fill(31));
@@ -206,8 +206,8 @@ public sealed class NativePooledMoveTests
         Assert.Equal(pool.Id, moved.OwnerId);
         Assert.Equal(1, moved.AllocationOrdinal);
         Assert.Equal(2, moved.CorrelationId);
-        Assert.Equal((nuint)64, moved.RequestedBytes);
-        Assert.Equal(64, moved.CommittedBytes);
+        Assert.Equal((nuint)(prepared ? 8 : 64), moved.RequestedBytes);
+        Assert.Equal(prepared ? 8 : 64, moved.CommittedBytes);
         Assert.Equal(0, moved.ReservedBytes);
         Assert.Equal(1, budget.CaptureStatistics().AllocationCount);
         Assert.Equal(0, budget.CaptureStatistics().FreeCount);

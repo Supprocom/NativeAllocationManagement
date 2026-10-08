@@ -94,13 +94,13 @@ public sealed class NativeFastPoolProbeContractTests
                 other.Access(_ => Verify(pool, expected with { Records = 2, Operations = 1 }));
             }
             Verify(pool, expected with { Records = 1 });
-            Assert.Equal((nuint)128, pool.TrimRetainedMemory());
+            Assert.Equal((nuint)8, pool.TrimRetainedMemory());
             expected = expected with { Ordinals = [2] };
             Verify(pool, expected with { Records = 1 });
             Assert.Equal(23, survivor.Read(static view => view[0]));
         }
         Verify(pool, expected);
-        Assert.Equal((nuint)128, pool.TrimRetainedMemory());
+        Assert.Equal((nuint)8, pool.TrimRetainedMemory());
         expected = expected with { Ordinals = [] };
         Verify(pool, expected);
         Assert.False(pool.TryRent(1, static writer => writer.Write(31), out _, out NativePoolExhaustionReason reason));

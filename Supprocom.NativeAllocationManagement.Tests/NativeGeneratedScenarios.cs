@@ -219,7 +219,7 @@ internal static partial class NativeGeneratedScenarios
         using NativePool<int> pool = new(new NativePoolPreparation(4, 4, 2), budget);
         while (model.Remaining > 0) ExercisePool(pool, budget, model, 0);
         Require(pool.CapturePreparedSnapshot().OccupiedSlotCount == 0, "prepared pool retained occupied slots");
-        Require(pool.TrimRetainedMemory() == 256, "idle prepared page release differs");
+        Require(pool.TrimRetainedMemory() == 64, "idle prepared page release differs");
         Require(budget.CaptureStatistics().CommittedBytes == 0, "trimmed pool retained native charge");
         Require(!pool.TryRent(1, static writer => writer.Write(1), out _, out _), "trim implicitly refilled prepared pool");
     }
@@ -295,10 +295,10 @@ internal static partial class NativeGeneratedScenarios
         NativePreparedPoolStatistics actual = pool.CapturePreparedSnapshot();
         Require(actual.OccupiedSlotCount == occupied && actual.AvailableSlotCount == 4 - occupied, "prepared occupancy differs");
         Require(actual.PeakOccupiedSlotCount == model.PeakOccupied, "prepared occupancy high-water differs");
-        Require(actual.RetainedPageCount == 2 && actual.RetainedSlotCount == 4 && actual.RetainedBytes == 256, "prepared page extent differs");
+        Require(actual.RetainedPageCount == 2 && actual.RetainedSlotCount == 4 && actual.RetainedBytes == 64, "prepared page extent differs");
         Require(actual.UnusedSlotBytes == (4 - occupied) * 16, "usable idle bytes include padding or omit slots");
         Require(actual.SuccessfulRentCount == model.Successful && actual.RejectedShapeCount == model.RejectedShape && actual.RejectedFullCount == model.RejectedFull, "prepared history differs");
-        Require(budget.CaptureStatistics().AllocationCount == 2 && budget.CaptureStatistics().CommittedBytes == 256, "prepared execution grew native backing");
+        Require(budget.CaptureStatistics().AllocationCount == 2 && budget.CaptureStatistics().CommittedBytes == 64, "prepared execution grew native backing");
     }
 
     internal static void RunPreparedArena(int seed, int steps, Action<string> trace)

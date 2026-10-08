@@ -101,7 +101,10 @@ internal sealed unsafe class NativePoolKernel<T>
         _ownerThreadId = Environment.CurrentManagedThreadId;
         _preparation = preparation;
         nuint slotBytes = CalculateByteLength(preparation.SlotCapacity);
-        nuint stride = checked(slotBytes + SlabAlignment - 1) & ~(SlabAlignment - 1);
+        // This owner is thread-confined and exposes ordinary typed spans, not
+        // aligned SIMD addresses. Consecutive slots use the CLR element stride;
+        // cache-line padding and an over-aligned backend add no authority.
+        nuint stride = slotBytes;
         nuint totalBytes = checked(stride * (nuint)preparation.SlotCount);
         _ = checked((long)totalBytes);
         _budget?.Reserve(totalBytes, Id);
@@ -133,7 +136,7 @@ internal sealed unsafe class NativePoolKernel<T>
                     {
                         throw CreateAllocationFailure(bytes, "page preparation");
                     }
-                    memory = NativeMemory.AlignedAlloc(bytes, SlabAlignment);
+                    memory = NativeMemory.Alloc(bytes);
                     if (memory == null)
                     {
                         throw CreateAllocationFailure(bytes, "page preparation");
@@ -164,7 +167,7 @@ internal sealed unsafe class NativePoolKernel<T>
                 {
                     if (!committed && memory != null)
                     {
-                        NativeMemory.AlignedFree(memory);
+                        NativeMemory.Free(memory);
                         NativeMemoryAccounting.RecordFree(bytes, detached: false, epoch);
                     }
                 }
@@ -1239,7 +1242,7 @@ internal sealed unsafe class NativePoolKernel<T>
             return;
         }
         nuint bytes = page.AllocationBytes;
-        NativeMemory.AlignedFree((void*)page.Pointer);
+        NativeMemory.Free((void*)page.Pointer);
         _budget?.Release(bytes, Id,
             trimmed ? NativeMemoryTraceKind.Trimmed : NativeMemoryTraceKind.Released,
             page.Ordinal);

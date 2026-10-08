@@ -35,8 +35,8 @@ public sealed class NativeCapacityDiagnosticContractTests
             RetainedPageCount = 1,
             RetainedSlotCount = 1,
             AvailableSlotCount = 1,
-            RetainedBytes = 64,
-            PeakRetainedBytes = 64,
+            RetainedBytes = 4,
+            PeakRetainedBytes = 4,
             ManagedBankBytes = 64 + 40 + 128,
             UnusedSlotBytes = 4
         };
@@ -181,8 +181,8 @@ public sealed class NativeCapacityDiagnosticContractTests
                     RetainedSlotCount = 1,
                     OccupiedSlotCount = 1,
                     PeakOccupiedSlotCount = 1,
-                    RetainedBytes = 64,
-                    PeakRetainedBytes = 64,
+                    RetainedBytes = 4,
+                    PeakRetainedBytes = 4,
                     ManagedBankBytes = 232,
                     SuccessfulRentCount = long.MaxValue,
                     HistoryOverflowed = true
@@ -196,7 +196,7 @@ public sealed class NativeCapacityDiagnosticContractTests
                 Lifecycle = NativeOwnerLifecycle.Disposed,
                 Preparation = new(1, 1, 1),
                 PeakOccupiedSlotCount = 1,
-                PeakRetainedBytes = 64,
+                PeakRetainedBytes = 4,
                 ManagedBankBytes = 232,
                 SuccessfulRentCount = long.MaxValue,
                 HistoryOverflowed = true
@@ -278,11 +278,11 @@ public sealed class NativeCapacityDiagnosticContractTests
             RetainedPageCount = 2,
             RetainedSlotCount = 3,
             AvailableSlotCount = 3,
-            RetainedBytes = 384,
-            PeakRetainedBytes = 384,
+            RetainedBytes = 204,
+            PeakRetainedBytes = 204,
             ManagedBankBytes = 3 * 64 + 2 * 40 + 128,
             UnusedSlotBytes = 3 * 17 * sizeof(int)
-        }, "two-pages-short-final-page-aligned-slots");
+        }, "two-pages-short-final-page-packed-slots");
     }
 
     [Fact]

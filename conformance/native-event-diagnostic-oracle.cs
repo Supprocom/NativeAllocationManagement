@@ -187,15 +187,15 @@ internal static class NativeEventDiagnosticOracle
                 if (value.Read(static view => view[3]) != 42 || pool.TrimRetainedMemory() != 0)
                     throw new InvalidOperationException("A live page was altered or freed.");
             }
-            if (pool.TrimRetainedMemory() != 128) throw new InvalidOperationException("Idle page extent differs.");
+            if (pool.TrimRetainedMemory() != 32) throw new InvalidOperationException("Idle page extent differs.");
         }
         finally { pool.Dispose(); }
         return Verify(budget, before,
         [
-            Item(NativeMemoryTraceKind.Admitted, 128, 0, 128, owner),
-            Item(NativeMemoryTraceKind.PageAcquired, 128, 128, 0, owner, ordinal: 1),
-            Item(NativeMemoryTraceKind.Prepared, 128, 128, 0, owner),
-            Item(NativeMemoryTraceKind.Trimmed, 128, 0, 0, owner, ordinal: 1)
+            Item(NativeMemoryTraceKind.Admitted, 32, 0, 32, owner),
+            Item(NativeMemoryTraceKind.PageAcquired, 32, 32, 0, owner, ordinal: 1),
+            Item(NativeMemoryTraceKind.Prepared, 32, 32, 0, owner),
+            Item(NativeMemoryTraceKind.Trimmed, 32, 0, 0, owner, ordinal: 1)
         ]);
     }
 

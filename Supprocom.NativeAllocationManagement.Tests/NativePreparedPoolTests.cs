@@ -139,22 +139,22 @@ public sealed class NativePreparedPoolTests
         Pooled<int> survivor = pool.Rent(1, static writer => writer.Write(42));
         try
         {
-            survivor.Access(_ => Assert.Equal((nuint)128, pool.TrimRetainedMemory()));
+            survivor.Access(_ => Assert.Equal((nuint)8, pool.TrimRetainedMemory()));
             NativePreparedPoolStatistics sparse = pool.CapturePreparedSnapshot();
             Assert.Equal(1, sparse.RetainedPageCount);
             Assert.Equal(2, sparse.RetainedSlotCount);
             Assert.Equal(1, sparse.AvailableSlotCount);
-            Assert.Equal(128, sparse.RetainedBytes);
-            Assert.Equal(256, sparse.PeakRetainedBytes);
+            Assert.Equal(8, sparse.RetainedBytes);
+            Assert.Equal(16, sparse.PeakRetainedBytes);
             Assert.Equal(4, sparse.UnusedSlotBytes);
             Assert.Equal(42, survivor.Read(static view => view[0]));
-            Assert.Equal(128, budget.CaptureStatistics().CommittedBytes);
+            Assert.Equal(8, budget.CaptureStatistics().CommittedBytes);
         }
         finally
         {
             survivor.Dispose();
         }
-        Assert.Equal((nuint)128, pool.TrimRetainedMemory());
+        Assert.Equal((nuint)8, pool.TrimRetainedMemory());
         Assert.False(pool.TryRent(1, static writer => writer.Write(1), out _, out NativePoolExhaustionReason full));
         Assert.Equal(NativePoolExhaustionReason.NoAvailableSlot, full);
         Assert.Equal(0, budget.CaptureStatistics().CommittedBytes);
@@ -165,24 +165,24 @@ public sealed class NativePreparedPoolTests
     }
 
     [Fact]
-    public void LastPageIsExactAndSlotAlignmentPaddingIsIncludedInTheBudget()
+    public void LastPageAndEveryPackedSlotAreChargedAtTheirExactElementExtent()
     {
-        NativeMemoryBudget budget = new(5 * 64);
+        NativeMemoryBudget budget = new(15);
         using NativePool<byte> pool = new(new NativePoolPreparation(5, 3, 2), budget);
         NativePreparedPoolStatistics snapshot = pool.CapturePreparedSnapshot();
         Assert.Equal(3, snapshot.RetainedPageCount);
         Assert.Equal(5, snapshot.RetainedSlotCount);
-        Assert.Equal(5 * 64, snapshot.RetainedBytes);
+        Assert.Equal(15, snapshot.RetainedBytes);
         Assert.Equal(15, snapshot.UnusedSlotBytes);
         Assert.Equal(15, pool.GetStatistics().UsableCapacityBytes);
         Assert.Equal(3, pool.GetStatistics().FreshSegmentAllocationCount);
-        Assert.Equal(5 * 64, budget.CaptureStatistics().CommittedBytes);
+        Assert.Equal(15, budget.CaptureStatistics().CommittedBytes);
     }
 
     [Fact]
     public void PreparationRefusesTheCompleteExtentBeforeAnyBackendAcquisition()
     {
-        NativeMemoryBudget budget = new(255);
+        NativeMemoryBudget budget = new(15);
         Assert.Throws<NativeMemoryBudgetExceededException>(() => new NativePool<int>(new NativePoolPreparation(4, 1, 2), budget));
         Assert.Equal(0, budget.CaptureStatistics().AllocationCount);
         Assert.Equal(0, budget.CaptureStatistics().ReservedBytes);
@@ -218,7 +218,7 @@ public sealed class NativePreparedPoolTests
         Assert.Equal(0, snapshot.AvailableSlotCount);
         Assert.Equal(1, snapshot.SuccessfulRentCount);
         Assert.Equal(1, snapshot.PeakOccupiedSlotCount);
-        Assert.Equal(64, snapshot.PeakRetainedBytes);
+        Assert.Equal(16, snapshot.PeakRetainedBytes);
         Assert.Equal(0, snapshot.RetainedBytes);
         Assert.Equal(1, budget.CaptureStatistics().FreeCount);
     }
@@ -292,7 +292,7 @@ public sealed class NativePreparedPoolTests
     {
         NativeMemoryBudget budget = new(256, traceCapacity: 8);
         using NativePool<int> pool = new(new NativePoolPreparation(4, 1, 2), budget);
-        Assert.Equal((nuint)128, pool.TrimRetainedMemoryByBytes(1));
+        Assert.Equal((nuint)8, pool.TrimRetainedMemoryByBytes(1));
         pool.Dispose();
         Span<NativeMemoryTraceEvent> events = stackalloc NativeMemoryTraceEvent[8];
         Assert.Equal(6, budget.CopyTraceTo(events));
@@ -303,7 +303,7 @@ public sealed class NativePreparedPoolTests
         Assert.Equal(2, events[2].AllocationOrdinal);
         Assert.Equal(NativeMemoryTraceKind.Prepared, events[3].Kind);
         Assert.Null(events[3].AllocationOrdinal);
-        Assert.Equal(256, events[3].CommittedBytes);
+        Assert.Equal(16, events[3].CommittedBytes);
         Assert.Equal(NativeMemoryTraceKind.Trimmed, events[4].Kind);
         Assert.Equal(1, events[4].AllocationOrdinal);
         Assert.Equal(NativeMemoryTraceKind.Released, events[5].Kind);
