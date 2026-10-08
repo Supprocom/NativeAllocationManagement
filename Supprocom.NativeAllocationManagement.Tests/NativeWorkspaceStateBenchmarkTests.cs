@@ -189,8 +189,8 @@ public sealed class NativeWorkspaceStateBenchmarkTests
             WarmupCount: 1,
             MeasurementPassCount: 1,
             Seed: 123_456);
-        NativeBlock unrelated = NativeBlockAllocator.Allocate<int>(
-            1, "CleanupAttributionTest", "Setup");
+        NativeBlock unrelated = NativeBlockAllocator.Allocate(
+            sizeof(int), "CleanupAttributionTest", "Setup");
         bool unrelatedReleased = false;
         try
         {

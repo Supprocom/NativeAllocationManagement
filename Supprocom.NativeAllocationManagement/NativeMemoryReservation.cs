@@ -241,7 +241,7 @@ internal class NativeMemoryReservationControl<T> : NativeTransferControl<T> wher
         NativeBlock acquired = default;
         try
         {
-            acquired = NativeBlockAllocator.Allocate<T>(DeclaredLength,
+            acquired = NativeBlockAllocator.Allocate(RequiredBytes,
                 nameof(NativeMemoryReservation<T>), "NativeMemoryReservation.PrepareBacking", ownerId: Id);
             NativeBlock committed = Budget.CommitApplicationBacking(acquired, RequiredBytes, Id);
             InstallOwnedBlock(committed);

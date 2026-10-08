@@ -5,18 +5,16 @@ namespace Supprocom.NativeAllocationManagement;
 
 internal static unsafe class NativeBlockAllocator
 {
-    internal static NativeBlock Allocate<T>(
-        int capacity,
+    // Callers own their checked typed extent. The physical acquisition and
+    // rollback have one body, without a generic forwarding call in Tier0.
+    internal static NativeBlock Allocate(
+        nuint byteLength,
         string ownerKind,
         string operation,
         NativeMemoryBudget? budget = null,
         long ownerId = 0,
         bool alreadyReserved = false)
-        where T : unmanaged
     {
-        ArgumentOutOfRangeException.ThrowIfNegative(capacity);
-        nuint byteLength = checked(
-            (nuint)capacity * (nuint)Unsafe.SizeOf<T>());
         ValidateMetricsLength(byteLength);
         if (byteLength == 0)
         {

@@ -39,8 +39,8 @@ public sealed class NativeWorkspace<T> : IDisposable
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(preLease);
         _ownerThreadId = Environment.CurrentManagedThreadId;
-        _block = NativeBlockAllocator.Allocate<T>(
-            preLease,
+        _block = NativeBlockAllocator.Allocate(
+            checked((nuint)preLease * (nuint)Unsafe.SizeOf<T>()),
             nameof(NativeWorkspace<T>),
             "NativeWorkspace.Constructor",
             budget,

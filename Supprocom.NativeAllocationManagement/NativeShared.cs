@@ -130,7 +130,7 @@ public readonly struct NativeShared<T> : IDisposable where T : unmanaged
                 payload.Control.RecordDetachRefusal();
                 return false;
             }
-            NativeBlock block = NativeBlockAllocator.Allocate<T>(_length, nameof(NativeShared<T>),
+            NativeBlock block = NativeBlockAllocator.Allocate(bytes, nameof(NativeShared<T>),
                 "NativeShared.Detach", budget, ownerId, alreadyReserved: true);
             bool published = false;
             try

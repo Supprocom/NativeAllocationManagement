@@ -45,8 +45,8 @@ public sealed class NativeBuilder<T> : IDisposable
     private NativeBuilder(int preLease, NativeMemoryBudget? budget)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(preLease);
-        _block = NativeBlockAllocator.Allocate<T>(
-            preLease,
+        _block = NativeBlockAllocator.Allocate(
+            checked((nuint)preLease * (nuint)Unsafe.SizeOf<T>()),
             nameof(NativeBuilder<T>),
             "NativeBuilder.Constructor",
             budget,

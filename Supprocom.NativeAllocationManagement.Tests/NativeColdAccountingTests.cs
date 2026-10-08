@@ -25,7 +25,7 @@ public sealed class NativeColdAccountingTests
         {
             Assert.Null(ThreadAccounting());
             NativeMemoryStatistics before = NativeMemoryDiagnostics.Snapshot();
-            NativeBlock block = NativeBlockAllocator.Allocate<byte>(length, "AccountingTest", "PhysicalOnly",
+            NativeBlock block = NativeBlockAllocator.Allocate((nuint)length, "AccountingTest", "PhysicalOnly",
                 ownerId: NativeOwnerIdentity.NextWithoutPreparation());
             try
             {
