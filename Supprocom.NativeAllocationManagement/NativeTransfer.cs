@@ -125,8 +125,9 @@ internal partial class NativeTransferControl<T>
     private readonly long _ownerId;
     private long _backingBytes;
     private readonly bool _borrowedBacking;
-    private readonly long _generation;
-    private readonly long _allocationId;
+    // Direct custody uses the descriptor's epoch/owner as allocation metadata.
+    // Kernel custody has no direct block: the same two scalar slots hold its
+    // captured generation/allocation identity instead of duplicate fields.
     private NativeBlock _block;
     private readonly int _length;
     private readonly int _capacity;
@@ -152,11 +153,9 @@ internal partial class NativeTransferControl<T>
         NativeSegment? segment = allocationState.Segment;
         _borrowedBacking = segment is { AllocationByteLength: 0 };
         _backingBytes = checked((long)(_borrowedBacking ? segment!.ByteLength : segment?.AllocationByteLength ?? 0));
-        _generation = generation;
-        _allocationId = allocationId;
         // A closed kernel no longer roots its domain. The existing block slot
-        // keeps this control's still-pending ownership trace until real return.
-        _block = new NativeBlock(IntPtr.Zero, 0, 0, kernel.BudgetForSharing);
+        // keeps identity and still-pending trace custody until real return.
+        _block = new NativeBlock(IntPtr.Zero, 0, generation, kernel.BudgetForSharing, allocationId);
         _length = allocationState.Length;
         _capacity = allocationState.Capacity;
         _state = Active;
@@ -190,7 +189,7 @@ internal partial class NativeTransferControl<T>
         NativeAllocation? allocation = _allocationState;
         NativeGeneration? generation = allocation?.GenerationState;
         bool allocationActive = kernel is null || (generation is not null && allocation is not null
-            && kernel.TransferAuthorityIsActive(generation, allocation, _generation, _allocationId));
+            && kernel.TransferAuthorityIsActive(generation, allocation, _block.MetricsEpoch, _block.OwnerId));
         bool bindingActive = !returned && state == Active && authority == bindingVersion && allocationActive;
         int borrows = NativeOperationAdmission.Count(ref _operationAdmission);
         bool backingPresent = !returned && (kernel is null
@@ -199,7 +198,7 @@ internal partial class NativeTransferControl<T>
         return new()
         {
             OwnerId = _ownerId,
-            AllocationId = _allocationId == 0 ? _ownerId : _allocationId,
+            AllocationId = _block.OwnerId,
             BindingVersion = bindingVersion,
             AuthorityVersion = authority,
             BindingIsActive = bindingActive,
@@ -227,7 +226,7 @@ internal partial class NativeTransferControl<T>
             PayloadReturnCount = returned ? 1 : 0,
             PayloadReturnFailureCount = Volatile.Read(ref _returnFailures),
             HistoryOverflowed = Volatile.Read(ref _historyOverflowed),
-            ControlFieldBytes = 3L * IntPtr.Size + 6L * sizeof(long) + 6L * sizeof(int) + 4L * sizeof(bool) + Unsafe.SizeOf<NativeBlock>()
+            ControlFieldBytes = 3L * IntPtr.Size + 4L * sizeof(long) + 6L * sizeof(int) + 4L * sizeof(bool) + Unsafe.SizeOf<NativeBlock>()
         };
     }
 
@@ -447,8 +446,8 @@ internal partial class NativeTransferControl<T>
         return _kernel.ValidateHandle(
             _allocationState!.GenerationState,
             _allocationState!,
-            _generation,
-            _allocationId,
+            _block.MetricsEpoch,
+            _block.OwnerId,
             operation);
     }
 
@@ -457,8 +456,8 @@ internal partial class NativeTransferControl<T>
         _kernel!.EnterOperation(
             _allocationState!.GenerationState,
             _allocationState!,
-            _generation,
-            _allocationId,
+            _block.MetricsEpoch,
+            _block.OwnerId,
             operation);
 
     private protected void EnterTransferOperation(long authorityVersion, string operation)
@@ -565,8 +564,8 @@ internal partial class NativeTransferControl<T>
                 _kernel.TransferLeaseAuthority(
                     _allocationState!.GenerationState,
                     _allocationState!,
-                    _generation,
-                    _allocationId,
+                    _block.MetricsEpoch,
+                    _block.OwnerId,
                     "NativeTransfer.Move",
                     publication,
                     static state => state.Publish());
@@ -603,7 +602,7 @@ internal partial class NativeTransferControl<T>
         {
             NativeMemoryTestHooks.CheckManagedPublicationBoundary(operation, 4, "unique payload authority return");
             if (_kernel is null) NativeBlockAllocator.Free(_block);
-            else _kernel.ReturnLease(_generation, _allocationId, operation);
+            else _kernel.ReturnLease(_block.MetricsEpoch, _block.OwnerId, operation);
         }
         catch
         {
@@ -624,7 +623,7 @@ internal partial class NativeTransferControl<T>
     private void TraceOwnership(NativeMemoryBudget? budget, NativeMemoryTraceKind kind, long? ordinal = null)
     {
         if (budget is not { TraceEnabled: true }) return;
-        budget.RecordOwnershipTransition(kind, _ownerId, _allocationId == 0 ? _ownerId : _allocationId,
+        budget.RecordOwnershipTransition(kind, _ownerId, _block.OwnerId,
             checked((nuint)_backingBytes), ordinal ?? BackingOrdinal);
     }
 
@@ -729,7 +728,9 @@ internal partial class NativeTransferControl<T>
     {
         _kernel = null;
         _allocationState = null;
-        _block = default;
+        // Returned aliases keep numeric observation, never a pointer, budget,
+        // kernel or allocation record. Direct and kernel identities are stable.
+        _block = new NativeBlock(IntPtr.Zero, 0, _block.MetricsEpoch, OwnerId: _block.OwnerId);
         Volatile.Write(ref _payloadReturned, 1);
     }
 

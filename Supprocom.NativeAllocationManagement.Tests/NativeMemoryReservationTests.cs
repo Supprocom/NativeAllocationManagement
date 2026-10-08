@@ -320,7 +320,7 @@ public sealed class NativeMemoryReservationTests
     public void OrdinaryUniqueControlsHaveNoReservationSpecificFields()
     {
         string[] expected = ["_kernel", "_sharingControl", "_allocationState", "_ownerId", "_backingBytes",
-            "_borrowedBacking", "_generation", "_allocationId", "_block", "_length", "_capacity", "_state",
+            "_borrowedBacking", "_block", "_length", "_capacity", "_state",
             "_operationAdmission", "_authorityVersion", "_peakBorrows", "_payloadReturned", "_returnFailures", "_historyOverflowed",
             "_sharingAllocationEntered", "_sharingGenerationEntered"];
         Assert.Equal(expected.Order(StringComparer.Ordinal),

@@ -37,7 +37,7 @@ internal partial class NativeTransferControl<T> where T : unmanaged
             }
             else
             {
-                _kernel.PrepareTransferReturnCapacity(_generation, _allocationId);
+                _kernel.PrepareTransferReturnCapacity(_block.MetricsEpoch, _block.OwnerId);
                 NativeOperationToken token = EnterKernelOperation("NativeShared.Pin");
                 try
                 {

@@ -207,6 +207,73 @@ public sealed class NativeTransferDiagnosticsTests
         Assert.Equal(representedBytes, owner.CaptureSnapshot().ControlFieldBytes);
     }
 
+    [Theory]
+    [InlineData(0, 0, false)]
+    [InlineData(0, 1, false)]
+    [InlineData(1, 0, false)]
+    [InlineData(1, 1, false)]
+    [InlineData(2, 0, false)]
+    [InlineData(2, 1, false)]
+    [InlineData(0, 0, true)]
+    [InlineData(0, 1, true)]
+    [InlineData(1, 0, true)]
+    [InlineData(1, 1, true)]
+    [InlineData(2, 0, true)]
+    [InlineData(2, 1, true)]
+    public void ReturnedControlKeepsScalarIdentityButNoDescriptorCustody(int acquisition, int length, bool share)
+    {
+        NativeMemoryBudget budget = new(1_024, 32);
+        using NativeConcurrentPool<int> pool = new(budget, 4, 0, NativeMemoryReturn.ToNativeMemory, false);
+        NativeTransfer<int>? source = AcquireDescriptorControl(acquisition, length, budget, pool);
+        NativeTransfer<int> observed = source.Value;
+        NativeTransferStatistics initial = observed.CaptureSnapshot();
+        Assert.True(initial.OwnerId > 0);
+        Assert.True(initial.AllocationId > 0);
+        Assert.Equal(length, observed.Length);
+        NativeTransfer<int>? destination = NativeTransfer<int>.Move(ref source);
+        try
+        {
+            Assert.Null(source);
+            Assert.Equal(initial.AllocationId, destination.Value.CaptureSnapshot().AllocationId);
+            if (share)
+            {
+                using NativeShared<int> shared = NativeShared<int>.Create(ref destination, new(1, 0));
+                Assert.Equal(length * 42, shared.Read(static view =>
+                {
+                    int sum = 0;
+                    foreach (ref readonly int value in view.AsSpan()) sum += value;
+                    return sum;
+                }));
+            }
+            else
+            {
+                destination.Value.Dispose();
+                destination = null;
+            }
+        }
+        // Sharing consumes the nullable destination even when publication fails.
+#pragma warning disable CA1508
+        finally { destination?.Dispose(); source?.Dispose(); }
+#pragma warning restore CA1508
+        NativeTransferStatistics returned = observed.CaptureSnapshot();
+        Assert.Equal(initial.OwnerId, returned.OwnerId);
+        Assert.Equal(initial.AllocationId, returned.AllocationId);
+        Assert.Equal(initial.PeakOwnedBackingBytes, returned.PeakOwnedBackingBytes);
+        Assert.Equal(1, returned.PayloadReturnCount);
+        Assert.False(returned.HasReturnObligation);
+        Assert.False(returned.BindingIsActive);
+        Assert.Throws<ObjectDisposedException>(() => observed.Read(static view => view.Length));
+        NativeBlock descriptor = (NativeBlock)typeof(NativeTransferControl<int>)
+            .GetField("_block", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(observed.ControlForTest)!;
+        Assert.Equal(IntPtr.Zero, descriptor.Pointer);
+        Assert.Equal((nuint)0, descriptor.ByteLength);
+        Assert.Null(descriptor.Budget);
+        Assert.Equal(initial.AllocationId, descriptor.OwnerId);
+        pool.Dispose();
+        Assert.Equal(0, budget.CaptureStatistics().CommittedBytes);
+        Assert.Equal(0, budget.CaptureStatistics().ReservedBytes);
+    }
+
     [Fact]
     public void DefaultCapabilitiesCannotObserveOrCompleteFictitiousOwnership()
     {
@@ -311,6 +378,27 @@ public sealed class NativeTransferDiagnosticsTests
         using NativeBuilder<int> builder = new(budget, 4);
         builder.Append(42);
         return builder.Complete();
+    }
+
+    private static NativeTransfer<int> AcquireDescriptorControl(int acquisition, int length,
+        NativeMemoryBudget budget, NativeConcurrentPool<int> pool)
+    {
+        switch (acquisition)
+        {
+            case 0:
+                using (NativeBuilder<int> builder = new(budget, length))
+                {
+                    for (int index = 0; index < length; index++) builder.Append(42);
+                    return builder.Complete();
+                }
+            case 1:
+                return pool.RentTransferable(length, static writer => writer.Fill(42));
+            case 2:
+                Assert.True(budget.TryReserve<int>(length, out NativeMemoryReservation<int>? permission, out _));
+                return NativeMemoryReservation<int>.Activate(ref permission, static writer => writer.Fill(42));
+            default:
+                throw new ArgumentOutOfRangeException(nameof(acquisition));
+        }
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
