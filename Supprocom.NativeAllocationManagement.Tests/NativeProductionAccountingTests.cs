@@ -414,6 +414,43 @@ public sealed class NativeProductionAccountingTests
     }
 
     [Fact]
+    public void WarmAccountingPreservesTheExactBankAndRecordIdentitiesWithoutAllocating()
+    {
+        NativeMemoryTestHooks.Reset();
+        try
+        {
+            NativeMemoryAccounting.PrepareThread();
+            Array slots = (Array)AccountingField("HotMetrics").GetValue(null)!;
+            Assert.Equal(64, NativeMemoryAccounting.ThreadMetricSlotCapacity);
+            Assert.Equal(NativeMemoryAccounting.ThreadMetricSlotCapacity, slots.Length);
+            int claimed = (int)AccountingField("_claimedSlotCount").GetValue(null)!;
+            Assert.InRange(claimed, 1, slots.Length);
+            object?[] records = new object?[slots.Length];
+            for (int index = 0; index < slots.Length; index++)
+            {
+                records[index] = slots.GetValue(index);
+                if (index < claimed) Assert.NotNull(records[index]);
+                else Assert.Null(records[index]);
+            }
+            object threadRecord = AccountingField("_threadHotMetrics").GetValue(null)!;
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            for (int operation = 0; operation < 1_000; operation++)
+            {
+                NativeMemoryAccounting.RecordBumpTraversalVisit();
+            }
+            Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+            Assert.Same(slots, AccountingField("HotMetrics").GetValue(null));
+            Assert.Same(threadRecord, AccountingField("_threadHotMetrics").GetValue(null));
+            Assert.Equal(claimed, (int)AccountingField("_claimedSlotCount").GetValue(null)!);
+            for (int index = 0; index < slots.Length; index++) Assert.Same(records[index], slots.GetValue(index));
+            NativeMemoryStatistics result = NativeMemoryDiagnostics.Snapshot();
+            Assert.Equal(1_000, result.BumpTraversalVisitCount);
+            Assert.False(result.HistoryOverflowed);
+        }
+        finally { NativeMemoryTestHooks.Reset(); }
+    }
+
+    [Fact]
     public void ShortLivedThreadsPreserveHistoryInFixedMetadata()
     {
         NativeMemoryTestHooks.Reset();
