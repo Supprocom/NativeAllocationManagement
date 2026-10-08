@@ -116,7 +116,8 @@ internal static class PackageFixtureEvidence
     }
 
     internal static async Task CompleteAsync(string? directory, string executable, string arguments, string workingDirectory,
-        DateTimeOffset startedAt, int? exitCode, bool timedOut, string standardOutput, string standardError, double? deadlineSeconds = null)
+        DateTimeOffset startedAt, int? exitCode, bool timedOut, string standardOutput, string standardError, double? deadlineSeconds = null,
+        string? durableArchiveRoot = null)
     {
         if (directory is null) return;
         DateTimeOffset endedAt = DateTimeOffset.UtcNow;
@@ -135,5 +136,16 @@ internal static class PackageFixtureEvidence
         await File.WriteAllTextAsync(Path.Combine(directory, "command.json"), record).ConfigureAwait(false);
         await File.WriteAllTextAsync(Path.Combine(directory, "stdout.log"), standardOutput).ConfigureAwait(false);
         await File.WriteAllTextAsync(Path.Combine(directory, "stderr.log"), standardError).ConfigureAwait(false);
+        // A later intentional negative Rebuild removes the positive output.
+        // Retain it at the successful run boundary, not at fixture teardown.
+        // The observed command clock/deadline excludes this verification work.
+        if (exitCode == 0 && !timedOut && !string.IsNullOrEmpty(durableArchiveRoot)
+            && arguments.StartsWith("run ", StringComparison.Ordinal)
+            && Path.GetFileName(workingDirectory).StartsWith("nam-package-smoke-", StringComparison.Ordinal))
+        {
+            string archive = ArchiveTree(workingDirectory, durableArchiveRoot, "successful-package-run");
+            await File.WriteAllTextAsync(Path.Combine(directory, "consumer-archive.json"),
+                JsonSerializer.Serialize(new { Archive = archive, CapturedAt = DateTimeOffset.UtcNow })).ConfigureAwait(false);
+        }
     }
 }

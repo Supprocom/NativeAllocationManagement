@@ -9,6 +9,66 @@ namespace Supprocom.NativeAllocationManagement.Tests;
 public sealed class PackageFixtureEvidenceTests
 {
     [Fact]
+    public async Task SuccessfulRunKeepsPositiveBytesBeforeLaterNegativeRebuildRemovesThem()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "nam-positive-run-" + Guid.NewGuid().ToString("N"));
+        string consumer = Path.Combine(root, "nam-package-smoke-positive");
+        string output = Path.Combine(consumer, ".build", "bin", "Consumer", "debug");
+        Directory.CreateDirectory(output);
+        try
+        {
+            byte[] positive = [0, 42, 255];
+            await File.WriteAllBytesAsync(Path.Combine(output, "Consumer.dll"), positive);
+            string evidence = PackageFixtureEvidence.Begin(consumer, retain: true)!;
+            DateTimeOffset started = DateTimeOffset.UtcNow;
+            await PackageFixtureEvidence.CompleteAsync(evidence, "dotnet", "run --no-build --no-restore", consumer,
+                started, 0, timedOut: false, "positive execution", string.Empty, deadlineSeconds: 90,
+                durableArchiveRoot: Path.Combine(root, "durable"));
+            Directory.Delete(output, recursive: true);
+            using JsonDocument capture = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(evidence, "consumer-archive.json")));
+            string archivePath = capture.RootElement.GetProperty("Archive").GetString()!;
+            ZipArchive archive = await ZipFile.OpenAsync(archivePath, ZipArchiveMode.Read).ConfigureAwait(true);
+            await using (archive.ConfigureAwait(true))
+            {
+                Stream bytes = await archive.GetEntry(".build/bin/Consumer/debug/Consumer.dll")!.OpenAsync().ConfigureAwait(true);
+                await using (bytes.ConfigureAwait(true))
+                {
+                    byte[] hash = await SHA256.HashDataAsync(bytes);
+                    Assert.Equal(SHA256.HashData(positive), hash);
+                }
+            }
+            using JsonDocument command = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(evidence, "command.json")));
+            Assert.Equal(0, command.RootElement.GetProperty("ExitCode").GetInt32());
+            Assert.False(command.RootElement.GetProperty("TimedOut").GetBoolean());
+            Assert.Equal(90d, command.RootElement.GetProperty("DeadlineSeconds").GetDouble());
+            Assert.True(command.RootElement.GetProperty("EndedAt").GetDateTimeOffset()
+                <= capture.RootElement.GetProperty("CapturedAt").GetDateTimeOffset());
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Theory]
+    [InlineData("run --no-build", 1, false, true)]
+    [InlineData("run --no-build", 0, true, true)]
+    [InlineData("build", 0, false, true)]
+    [InlineData("run --no-build", 0, false, false)]
+    public async Task FailedTimedOutOtherOrUnselectedCommandsCannotBecomePositiveArchives(
+        string arguments, int exitCode, bool timedOut, bool selectArchive)
+    {
+        ArgumentNullException.ThrowIfNull(arguments);
+        string consumer = Path.Combine(Path.GetTempPath(), "nam-package-smoke-not-created-" + Guid.NewGuid().ToString("N"));
+        string evidence = PackageFixtureEvidence.Begin(Path.GetTempPath(), retain: true)!;
+        string destination = Path.Combine(Path.GetTempPath(), "nam-run-archive-not-created-" + Guid.NewGuid().ToString("N"));
+        await PackageFixtureEvidence.CompleteAsync(evidence, "dotnet", arguments, consumer, DateTimeOffset.UtcNow,
+            exitCode, timedOut, "observed stdout", "observed stderr", durableArchiveRoot: selectArchive ? destination : null);
+        Assert.False(Directory.Exists(destination));
+        Assert.False(File.Exists(Path.Combine(evidence, "consumer-archive.json")));
+        using JsonDocument command = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(evidence, "command.json")));
+        Assert.Equal(exitCode, command.RootElement.GetProperty("ExitCode").GetInt32());
+        Assert.Equal(timedOut, command.RootElement.GetProperty("TimedOut").GetBoolean());
+    }
+
+    [Fact]
     public void DurableArchivePreservesExactNestedBytesAfterTheOriginalTreeIsRemoved()
     {
         string root = Path.Combine(Path.GetTempPath(), "nam-durable-archive-" + Guid.NewGuid().ToString("N"));

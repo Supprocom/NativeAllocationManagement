@@ -2846,7 +2846,8 @@ public sealed class PackageSmokeTests
         string standardOutput = await stdout.ConfigureAwait(true);
         string standardError = await stderr.ConfigureAwait(true);
         await PackageFixtureEvidence.CompleteAsync(evidence, fileName, arguments, workingDirectory, startedAt,
-            process.ExitCode, timedOut: false, standardOutput, standardError, timeoutSeconds).ConfigureAwait(true);
+            process.ExitCode, timedOut: false, standardOutput, standardError, timeoutSeconds,
+            Environment.GetEnvironmentVariable("NAM_DURABLE_PACKAGE_EVIDENCE_ROOT")).ConfigureAwait(true);
         string output = standardOutput + Environment.NewLine + standardError;
         return new CommandResult(process.ExitCode, output);
     }
