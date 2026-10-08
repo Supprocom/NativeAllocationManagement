@@ -8,14 +8,14 @@ namespace Supprocom.NativeAllocationManagement;
 public readonly ref struct Pooled<T>
     where T : unmanaged
 {
-    private readonly NativePoolKernel<T>? _kernel;
+    private readonly NativePool<T>? _kernel;
     private readonly int _slabIndex;
     private readonly long _token;
     private readonly int _length;
     private readonly int _capacity;
 
     internal Pooled(
-        NativePoolKernel<T> kernel,
+        NativePool<T> kernel,
         int slabIndex,
         long token,
         int length,
@@ -43,7 +43,7 @@ public readonly ref struct Pooled<T>
     [SuppressMessage("Design", "CA1000", Justification = "Destructive lexical movement consumes the exact element type through a ref source.")]
     public static Pooled<T> Move(scoped ref Pooled<T> source)
     {
-        NativePoolKernel<T> kernel = source.GetKernel(nameof(Move));
+        NativePool<T> kernel = source.GetKernel(nameof(Move));
         long token = kernel.Move(source._slabIndex, source._token);
         Pooled<T> destination = new(kernel, source._slabIndex, token,
             source._length, source._capacity);
@@ -145,7 +145,7 @@ public readonly ref struct Pooled<T>
     {
         ArgumentNullException.ThrowIfNull(processor);
         ArgumentOutOfRangeException.ThrowIfGreaterThan((uint)logicalLength, (uint)_length, nameof(logicalLength));
-        NativePoolKernel<T> kernel = GetKernel(nameof(Process));
+        NativePool<T> kernel = GetKernel(nameof(Process));
         IntPtr pointer = kernel.EnterBorrow(
             _slabIndex,
             _token,
@@ -174,7 +174,7 @@ public readonly ref struct Pooled<T>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal PooledBorrow<T> EnterBorrow(string operation)
     {
-        NativePoolKernel<T> kernel = GetKernel(operation);
+        NativePool<T> kernel = GetKernel(operation);
         IntPtr pointer = kernel.EnterBorrow(
             _slabIndex,
             _token,
@@ -187,9 +187,9 @@ public readonly ref struct Pooled<T>
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private NativePoolKernel<T> GetKernel(string operation)
+    private NativePool<T> GetKernel(string operation)
     {
-        NativePoolKernel<T>? kernel = _kernel;
+        NativePool<T>? kernel = _kernel;
         if (kernel is null)
         {
             ThrowUninitialized(operation);
@@ -209,11 +209,11 @@ public readonly ref struct Pooled<T>
 internal readonly ref struct PooledBorrow<T>
     where T : unmanaged
 {
-    private readonly NativePoolKernel<T> _kernel;
+    private readonly NativePool<T> _kernel;
     private readonly int _slabIndex;
 
     internal PooledBorrow(
-        NativePoolKernel<T> kernel,
+        NativePool<T> kernel,
         int slabIndex,
         IntPtr pointer,
         int length)

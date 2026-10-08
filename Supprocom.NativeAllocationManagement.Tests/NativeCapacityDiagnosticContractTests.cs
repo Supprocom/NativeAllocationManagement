@@ -257,8 +257,8 @@ public sealed class NativeCapacityDiagnosticContractTests
     [Fact]
     public void IndependentBackingAndBankRepresentationMatchesActualStorage()
     {
-        Type slab = typeof(NativePoolKernel<int>).GetNestedType("Slab", BindingFlags.NonPublic)!.MakeGenericType(typeof(int));
-        Type page = typeof(NativePoolKernel<int>).GetNestedType("Page", BindingFlags.NonPublic)!.MakeGenericType(typeof(int));
+        Type slab = typeof(NativePool<int>).GetNestedType("Slab", BindingFlags.NonPublic)!.MakeGenericType(typeof(int));
+        Type page = typeof(NativePool<int>).GetNestedType("Page", BindingFlags.NonPublic)!.MakeGenericType(typeof(int));
         MethodInfo size = typeof(NativeCapacityDiagnosticContractTests).GetMethod(nameof(ElementSize), BindingFlags.Static | BindingFlags.NonPublic)!;
         Assert.Equal(NativeCapacityDiagnosticOracle.PoolSlotBytes, (int)size.MakeGenericMethod(slab).Invoke(null, null)!);
         Assert.Equal(NativeCapacityDiagnosticOracle.PoolPageBytes, (int)size.MakeGenericMethod(page).Invoke(null, null)!);
@@ -266,10 +266,9 @@ public sealed class NativeCapacityDiagnosticContractTests
         int headerSize = (int)size.MakeGenericMethod(header).Invoke(null, null)!;
         Assert.Equal(56, headerSize);
         Assert.Equal(NativeCapacityDiagnosticOracle.ArenaHeaderBytes, (headerSize + 63) / 64 * 64);
-        FieldInfo freeHeads = typeof(NativePoolKernel<int>).GetField("_freeHeads", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        FieldInfo freeHeads = typeof(NativePool<int>).GetField("_freeHeads", BindingFlags.Instance | BindingFlags.NonPublic)!;
         using NativePool<int> pool = new(new NativePoolPreparation(3, 17, 2), budget: null);
-        object kernel = typeof(NativePool<int>).GetField("_kernel", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(pool)!;
-        Assert.Equal(NativeCapacityDiagnosticOracle.PoolFreeHeadBytes, ((int[])freeHeads.GetValue(kernel)!).Length * sizeof(int));
+        Assert.Equal(NativeCapacityDiagnosticOracle.PoolFreeHeadBytes, ((int[])freeHeads.GetValue(pool)!).Length * sizeof(int));
         NativeCapacityDiagnosticOracle.Verify(pool.CapturePreparedSnapshot(), new NativeCapacityDiagnosticOracle.Pool
         {
             OwnerId = pool.Id,
@@ -328,7 +327,7 @@ public sealed class NativeCapacityDiagnosticContractTests
 
     private static void SetCounter(object owner, string field)
     {
-        object kernel = owner.GetType().GetField("_kernel", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(owner)!;
+        object kernel = owner.GetType().GetField("_kernel", BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(owner) ?? owner;
         kernel.GetType().GetField(field, BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(kernel, long.MaxValue);
     }
 

@@ -2,29 +2,23 @@ namespace Supprocom.NativeAllocationManagement;
 
 /// <summary>Owns reusable native slabs for one unmanaged element type.</summary>
 /// <typeparam name="T">The unmanaged value type in each slab.</typeparam>
-public sealed class NativePool<T> : IDisposable
+public sealed partial class NativePool<T> : IDisposable
     where T : unmanaged
 {
-    private readonly NativePoolKernel<T> _kernel;
-
     /// <summary>Gets the stable process-local allocator identity.</summary>
-    public long Id => _kernel.Id;
+    public long Id { get; }
 
     /// <summary>Captures actual thread-confined slab state without retaining native authority.</summary>
     public NativeOwnerDiagnosticSnapshot CaptureDiagnosticSnapshot() =>
-        _kernel.GetDiagnosticSnapshot();
+        GetDiagnosticSnapshot();
 
-    internal NativeOwnerLifecycle CurrentLifecycle => _kernel.Lifecycle;
+    internal NativeOwnerLifecycle CurrentLifecycle => _lifecycle;
 
     internal int CurrentAllocationRecordCountForTest =>
-        _kernel.LiveLeaseCount;
-
-    internal int CurrentInitializationCountForTest => _kernel.InitializationCount;
-
-    internal int CurrentGenerationActiveOperationsForTest => _kernel.ActiveOperationCount;
+        _liveLeaseCount;
 
     internal (int Slabs, int AvailableSlabs, int Bumps, int OwnerSegments)
-        CurrentBankCapacitiesForTest => _kernel.BankCapacities;
+        CurrentBankCapacitiesForTest => (_slabs.Length, _slabs.Length, 0, _pages.Length);
 
     // These structures genuinely do not exist in the unmanaged, thread-confined
     // pool model. There is no reference-root bank or generational retirement.
@@ -45,7 +39,7 @@ public sealed class NativePool<T> : IDisposable
 
 #pragma warning restore CA1822
 
-    internal long[] CurrentSegmentOrdinalsForTest => _kernel.GetSegmentOrdinals();
+    internal long[] CurrentSegmentOrdinalsForTest => GetSegmentOrdinals();
 
     internal void SetScopeEpochForTest(long value) =>
         throw new NotSupportedException(
@@ -80,14 +74,8 @@ public sealed class NativePool<T> : IDisposable
         nuint preAllocateBytes,
         NativeMemoryReturn returnMemoryOnDispose =
             NativeMemoryReturn.ToGarbageCollector)
+        : this(preLease, preAllocateBytes, returnMemoryOnDispose, budget: null, requireBudget: false)
     {
-        NativeMemoryReturnValidation.Validate(
-            returnMemoryOnDispose,
-            nameof(returnMemoryOnDispose));
-        _kernel = new NativePoolKernel<T>(
-            preLease,
-            preAllocateBytes,
-            returnMemoryOnDispose);
     }
 
     /// <summary>Creates a pool whose complete backing extents share one admission ceiling.</summary>
@@ -100,58 +88,16 @@ public sealed class NativePool<T> : IDisposable
         int preLease,
         nuint preAllocateBytes,
         NativeMemoryReturn returnMemoryOnDispose)
+        : this(preLease, preAllocateBytes, returnMemoryOnDispose, budget, requireBudget: true)
     {
-        ArgumentNullException.ThrowIfNull(budget);
-        NativeMemoryReturnValidation.Validate(returnMemoryOnDispose, nameof(returnMemoryOnDispose));
-        _kernel = new NativePoolKernel<T>(preLease, preAllocateBytes, returnMemoryOnDispose, budget);
-    }
-
-    /// <summary>Reads the current typed slab state.</summary>
-    public NativeOwnerStatistics GetStatistics() =>
-        _kernel.GetStatistics();
-
-    /// <summary>Prepares all fixed-shape slot metadata and backing pages without subsequent growth.</summary>
-    /// <remarks>
-    /// Preparation admits every page before acquiring backing or metadata.
-    /// Dispose returns backing deterministically after all leases return.
-    /// Trim removes idle pages without implicit refill; original bounds remain diagnostic.
-    /// Prepared slots are packed using the CLR element stride, without cache-line
-    /// padding or an additional SIMD-address alignment guarantee.
-    /// </remarks>
-    /// <param name="preparation">The positive simultaneous shape and page bounds.</param>
-    /// <param name="budget">The optional shared backing domain, or null for no byte ceiling.</param>
-    public NativePool(NativePoolPreparation preparation, NativeMemoryBudget? budget)
-    {
-        _kernel = new NativePoolKernel<T>(preparation, budget);
     }
 
     /// <summary>Captures actual prepared capacity and recorded history without allocating.</summary>
-    public NativePreparedPoolStatistics CapturePreparedSnapshot() => _kernel.GetPreparedStatistics();
-
-    /// <summary>Publishes a prepared slot, returning false only for expected shape or slot exhaustion.</summary>
-    /// <remarks>Invalid ownership and initialization failures throw; no partial lease is published.</remarks>
-    /// <param name="length">The required initialized elements, at most the prepared shape.</param>
-    /// <param name="initializer">The bounded complete initializer, invoked only after acquiring a slot.</param>
-    /// <param name="lease">The initialized owning capability on success; default on exhaustion.</param>
-    /// <param name="reason">The exact expected capacity refusal, or None on success.</param>
-    /// <returns>True only after initialization and publication.</returns>
-    public bool TryRent(int length, NativeLeaseInitializer<T> initializer,
-        out Pooled<T> lease, out NativePoolExhaustionReason reason) =>
-        _kernel.TryRent(length, initializer, out lease, out reason);
-
-    /// <summary>Initializes and publishes one pooled slab lease.</summary>
-    public Pooled<T> Rent(
-        int length,
-        NativeLeaseInitializer<T> initializer) =>
-        _kernel.Rent(length, initializer);
-
-    /// <summary>Frees all idle slabs.</summary>
-    public nuint TrimRetainedMemory() =>
-        _kernel.TrimRetainedMemory();
+    public NativePreparedPoolStatistics CapturePreparedSnapshot() => GetPreparedStatistics();
 
     /// <summary>Frees idle slabs until the byte budget is met.</summary>
     public nuint TrimRetainedMemoryByBytes(nuint bytesToRelease) =>
-        _kernel.TrimRetainedMemory(bytesToRelease);
+        TrimRetainedMemory(bytesToRelease);
 
     /// <summary>Frees idle slabs for one typed request budget.</summary>
     public nuint TrimRetainedMemoryByLeaseSize(int leaseLength = 1)
@@ -160,16 +106,6 @@ public sealed class NativePool<T> : IDisposable
         nuint bytes = checked(
             (nuint)(uint)leaseLength
             * (nuint)System.Runtime.CompilerServices.Unsafe.SizeOf<T>());
-        return _kernel.TrimRetainedMemory(bytes);
+        return TrimRetainedMemory(bytes);
     }
-
-    /// <summary>Ends worker-thread use and converts this pool into cleanup-only authority.</summary>
-    public void Retire() => _kernel.Retire();
-
-    /// <summary>Releases one retired pool from a coordinator thread.</summary>
-    public void ReleaseRetiredStorage() =>
-        _kernel.ReleaseRetiredStorage();
-
-    /// <summary>Closes the pool after all leases return.</summary>
-    public void Dispose() => _kernel.Dispose();
 }

@@ -63,8 +63,8 @@ public sealed class NativePooledMoveTests
     {
         using NativePool<int> pool = CreatePool(prepared, budget: null);
         Pooled<int> source = pool.Rent(2, static writer => writer.Fill(42));
-        NativePoolKernel<int> kernel = GetKernel(pool);
-        typeof(NativePoolKernel<int>).GetField("_leaseTokenCounter",
+        NativePool<int> kernel = pool;
+        typeof(NativePool<int>).GetField("_leaseTokenCounter",
             BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(kernel, long.MaxValue);
         try
         {
@@ -120,7 +120,7 @@ public sealed class NativePooledMoveTests
     {
         using NativePool<int> pool = CreatePool(prepared, budget: null);
         Pooled<int> source = pool.Rent(2, static writer => writer.Fill(42));
-        NativePoolKernel<int> kernel = GetKernel(pool);
+        NativePool<int> kernel = pool;
         // Exercise the public value operation on another thread, not a captured
         // ref structure. Construction uses internal test authority over slot zero.
         Exception? failure = null;
@@ -218,10 +218,6 @@ public sealed class NativePooledMoveTests
         prepared ? new(new NativePoolPreparation(1, 2, 1), budget)
             : budget is null ? new(2, NativeMemoryReturn.ToNativeMemory)
             : new(budget, 2, 0, NativeMemoryReturn.ToNativeMemory);
-
-    private static NativePoolKernel<int> GetKernel(NativePool<int> pool) =>
-        (NativePoolKernel<int>)typeof(NativePool<int>).GetField("_kernel",
-            BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(pool)!;
 
     private static void AssertUninitialized(scoped Pooled<int> value)
     {

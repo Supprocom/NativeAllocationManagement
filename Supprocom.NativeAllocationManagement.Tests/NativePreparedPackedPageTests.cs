@@ -37,7 +37,7 @@ public sealed class NativePreparedPackedPageTests
         Assert.Equal(totalBytes, pool.CapturePreparedSnapshot().RetainedBytes);
         Assert.Equal(totalBytes, budget.CaptureStatistics().CommittedBytes);
         Assert.Equal(2, pool.GetStatistics().FreshSegmentAllocationCount);
-        object kernel = typeof(NativePool<T>).GetField("_kernel", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(pool)!;
+        object kernel = pool;
         Array slots = (Array)kernel.GetType().GetField("_slabs", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(kernel)!;
         Assert.Equal(slotBytes, Pointer(slots, 1) - Pointer(slots, 0));
         Assert.Equal(slotBytes, Pointer(slots, 2) - Pointer(slots, 1));

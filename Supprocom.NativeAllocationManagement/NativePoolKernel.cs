@@ -5,7 +5,7 @@ using System.Runtime.InteropServices;
 
 namespace Supprocom.NativeAllocationManagement;
 
-internal sealed unsafe class NativePoolKernel<T>
+public sealed unsafe partial class NativePool<T>
     where T : unmanaged
 {
     private const int SizeClassCount = 32;
@@ -14,7 +14,6 @@ internal sealed unsafe class NativePoolKernel<T>
 
     private readonly NativeMemoryReturn _returnMemoryOnDispose;
     private NativeMemoryBudget? _budget;
-    internal long Id { get; } = NativeOwnerIdentity.Next();
     private readonly int _ownerThreadId;
     private readonly int[] _freeHeads = [];
     private Slab[] _slabs = [];
@@ -44,12 +43,16 @@ internal sealed unsafe class NativePoolKernel<T>
     private long _preparedInitializerFailures;
     private bool _historyOverflowed;
 
-    internal NativePoolKernel(
+    private NativePool(
         int preLease,
         nuint preAllocateBytes,
         NativeMemoryReturn returnMemoryOnDispose,
-        NativeMemoryBudget? budget = null)
+        NativeMemoryBudget? budget,
+        bool requireBudget)
     {
+        if (requireBudget) ArgumentNullException.ThrowIfNull(budget);
+        NativeMemoryReturnValidation.Validate(returnMemoryOnDispose, nameof(returnMemoryOnDispose));
+        Id = NativeOwnerIdentity.Next();
         ArgumentOutOfRangeException.ThrowIfNegative(preLease);
         _returnMemoryOnDispose = returnMemoryOnDispose;
         _budget = budget;
@@ -89,10 +92,19 @@ internal sealed unsafe class NativePoolKernel<T>
         }
     }
 
-    internal NativeOwnerLifecycle Lifecycle => _lifecycle;
-
-    internal NativePoolKernel(NativePoolPreparation preparation, NativeMemoryBudget? budget)
+    /// <summary>Prepares all fixed-shape slot metadata and backing pages without subsequent growth.</summary>
+    /// <remarks>
+    /// Preparation admits every page before acquiring backing or metadata.
+    /// Dispose returns backing deterministically after all leases return.
+    /// Trim removes idle pages without implicit refill; original bounds remain diagnostic.
+    /// Prepared slots are packed using the CLR element stride, without cache-line
+    /// padding or an additional SIMD-address alignment guarantee.
+    /// </remarks>
+    /// <param name="preparation">The positive simultaneous shape and page bounds.</param>
+    /// <param name="budget">The optional shared backing domain, or null for no byte ceiling.</param>
+    public NativePool(NativePoolPreparation preparation, NativeMemoryBudget? budget)
     {
+        Id = NativeOwnerIdentity.Next();
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(preparation.SlotCount, nameof(preparation));
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(preparation.SlotCapacity, nameof(preparation));
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(preparation.SlotsPerPage, nameof(preparation));
@@ -194,12 +206,7 @@ internal sealed unsafe class NativePoolKernel<T>
         }
     }
 
-    internal int LiveLeaseCount => _liveLeaseCount;
-
-    internal (int Slabs, int AvailableSlabs, int Bumps, int OwnerSegments) BankCapacities =>
-        (_slabs.Length, _slabs.Length, 0, _pages.Length);
-
-    internal int ActiveOperationCount
+    internal int CurrentGenerationActiveOperationsForTest
     {
         get
         {
@@ -212,7 +219,7 @@ internal sealed unsafe class NativePoolKernel<T>
         }
     }
 
-    internal int InitializationCount
+    internal int CurrentInitializationCountForTest
     {
         get
         {
@@ -225,8 +232,9 @@ internal sealed unsafe class NativePoolKernel<T>
         }
     }
 
+    /// <summary>Initializes and publishes one pooled slab lease.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal Pooled<T> Rent(
+    public Pooled<T> Rent(
         int length,
         NativeLeaseInitializer<T> initializer)
     {
@@ -242,7 +250,14 @@ internal sealed unsafe class NativePoolKernel<T>
             : InitializePreparedSlab(slabIndex, token, length, initializer);
     }
 
-    internal bool TryRent(int length, NativeLeaseInitializer<T> initializer,
+    /// <summary>Publishes a prepared slot, returning false only for expected shape or slot exhaustion.</summary>
+    /// <remarks>Invalid ownership and initialization failures throw; no partial lease is published.</remarks>
+    /// <param name="length">The required initialized elements, at most the prepared shape.</param>
+    /// <param name="initializer">The bounded complete initializer, invoked only after acquiring a slot.</param>
+    /// <param name="lease">The initialized owning capability on success; default on exhaustion.</param>
+    /// <param name="reason">The exact expected capacity refusal, or None on success.</param>
+    /// <returns>True only after initialization and publication.</returns>
+    public bool TryRent(int length, NativeLeaseInitializer<T> initializer,
         out Pooled<T> lease, out NativePoolExhaustionReason reason)
     {
         ArgumentNullException.ThrowIfNull(initializer);
@@ -403,7 +418,8 @@ internal sealed unsafe class NativePoolKernel<T>
         CacheReturnedSlab(slabIndex, length);
     }
 
-    internal NativeOwnerStatistics GetStatistics()
+    /// <summary>Reads the current typed slab state.</summary>
+    public NativeOwnerStatistics GetStatistics()
     {
         ValidateOwner(nameof(GetStatistics));
         var counts = GetStorageCounts();
@@ -495,7 +511,8 @@ internal sealed unsafe class NativePoolKernel<T>
         return (retained, available, usableBytes);
     }
 
-    internal nuint TrimRetainedMemory() =>
+    /// <summary>Frees all idle slabs.</summary>
+    public nuint TrimRetainedMemory() =>
         TrimRetainedMemory(nuint.MaxValue);
 
     internal nuint TrimRetainedMemory(nuint byteBudget)
@@ -545,7 +562,8 @@ internal sealed unsafe class NativePoolKernel<T>
         return released;
     }
 
-    internal void Retire()
+    /// <summary>Ends worker-thread use and converts this pool into cleanup-only authority.</summary>
+    public void Retire()
     {
         ValidateOwner(nameof(NativePool<T>.Retire));
         if (_liveLeaseCount != 0 || HasInFlightSlab())
@@ -557,8 +575,9 @@ internal sealed unsafe class NativePoolKernel<T>
         Volatile.Write(ref _retirementState, 1);
     }
 
+    /// <summary>Releases one retired pool from a coordinator thread.</summary>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA1816", Justification = "Coordinator-owned retirement cleanup disarms the emergency finalizer.")]
-    internal void ReleaseRetiredStorage()
+    public void ReleaseRetiredStorage()
     {
         int prior = Interlocked.CompareExchange(
             ref _retirementState,
@@ -574,8 +593,9 @@ internal sealed unsafe class NativePoolKernel<T>
         GC.SuppressFinalize(this);
     }
 
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA1816", Justification = "Internal pool-kernel disposal disarms its emergency finalizer; the outer owner exposes IDisposable.")]
-    internal void Dispose()
+    /// <summary>Closes the pool after all leases return.</summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA1816", Justification = "ToNativeMemory disposal suppresses finalization after physical cleanup. The explicit ToGarbageCollector policy must retain emergency finalization until the detached backing is actually freed.")]
+    public void Dispose()
     {
         ValidateThread(nameof(Dispose));
         if (Volatile.Read(ref _retirementState) != 0)
@@ -1175,9 +1195,11 @@ internal sealed unsafe class NativePoolKernel<T>
         throw new InvalidOperationException(
             $"The native lease initializer wrote {initializedLength} of {requiredLength} required elements.");
 
+    /// <summary>Returns abandoned or GC-detached backing through emergency cleanup.</summary>
+    /// <remarks>Call Dispose or ReleaseRetiredStorage for deterministic native release; finalization is not a scheduling or memory-ceiling guarantee.</remarks>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "MA0055", Justification = "Emergency native-memory cleanup supplements mandatory deterministic disposal.")]
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "An emergency finalizer must never let cleanup exceptions terminate the process.")]
-    ~NativePoolKernel()
+    ~NativePool()
     {
         try
         {

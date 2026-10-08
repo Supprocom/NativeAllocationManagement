@@ -227,8 +227,7 @@ public sealed class NativePreparedPoolTests
     public void HistoryOverflowCannotBreakSlotPublicationOrExpectedExhaustion()
     {
         using NativePool<int> pool = new(new NativePoolPreparation(1, 1, 1), budget: null);
-        object kernel = typeof(NativePool<int>).GetField("_kernel", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(pool)!;
-        kernel.GetType().GetField("_successfulPreparedRents", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(kernel, long.MaxValue);
+        typeof(NativePool<int>).GetField("_successfulPreparedRents", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(pool, long.MaxValue);
         using Pooled<int> lease = pool.Rent(1, static writer => writer.Write(42));
         Assert.Equal(42, lease.Read(static view => view[0]));
         Assert.Equal(long.MaxValue, pool.CapturePreparedSnapshot().SuccessfulRentCount);

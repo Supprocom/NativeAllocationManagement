@@ -262,7 +262,7 @@ public sealed class NativeOwnerHistoryTests
     }
 
     private static object GetKernel(object owner) =>
-        owner.GetType().GetField("_kernel", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(owner)!;
+        owner.GetType().GetField("_kernel", BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(owner) ?? owner;
 
     private static void SetHistory(object kernel, string name, long value) =>
         kernel.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(kernel, value);

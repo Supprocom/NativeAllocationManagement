@@ -135,14 +135,10 @@ public sealed class NativePoolSimpleTests
         using NativePool<int> pool = new(
             preLease: 1,
             returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        FieldInfo kernelField = typeof(NativePool<int>).GetField(
-            "_kernel",
-            BindingFlags.Instance | BindingFlags.NonPublic)!;
-        object kernel = kernelField.GetValue(pool)!;
-        FieldInfo tokenField = kernel.GetType().GetField(
+        FieldInfo tokenField = typeof(NativePool<int>).GetField(
             "_leaseTokenCounter",
             BindingFlags.Instance | BindingFlags.NonPublic)!;
-        tokenField.SetValue(kernel, long.MaxValue - 1);
+        tokenField.SetValue(pool, long.MaxValue - 1);
 
         Pooled<int> finalLease = pool.Rent(
             1,
@@ -688,7 +684,7 @@ public sealed class NativePoolSimpleTests
             "NativePoolKernel.cs"));
         string rent = GetSourceRange(
             source,
-            "internal Pooled<T> Rent(",
+            "public Pooled<T> Rent(",
             "internal IntPtr EnterBorrow(");
         string access = GetSourceRange(
             source,
@@ -697,7 +693,7 @@ public sealed class NativePoolSimpleTests
         string returned = GetSourceRange(
             source,
             "internal void Return(",
-            "internal NativeOwnerStatistics GetStatistics()");
+            "public NativeOwnerStatistics GetStatistics()");
 
         foreach (string path in new[] { rent, access, returned })
         {
