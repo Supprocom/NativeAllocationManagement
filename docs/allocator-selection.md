@@ -11,7 +11,8 @@ materializing, copying or allocating managed path.
 | Real requirement | NAM candidate | Required tradeoff |
 | --- | --- | --- |
 | One lexical unmanaged allocation boundary | NativeRegion | No escape or suspension; direct using construction and complete initialization. |
-| Repeated same-type buffers on one thread | NativePool with prepared slots | Prove simultaneous slot bounds; sparse pages and retained capacity still cost memory. |
+| Fixed-shape reusable buffers on one thread | NativePreparedPool | Prove simultaneous slot bounds; sparse pages and retained capacity still cost memory. |
+| Variable-size same-type buffers on one thread | NativePool | Explicit size-class reuse and growth; return policy controls physical cleanup. |
 | Heterogeneous ranges with one thread-affine lifetime | NativeArena | Use prepared bounds and required composite APIs; reset/recycle cannot invalidate entered work. |
 | Actual concurrent owner operations | Concurrent pool/arena | Measure coordination and generation retention; do not select it solely for an API gap. |
 | Grow unknown-size output into one contiguous result | NativeBuilder | Admit conservative resize overlap; copying/reallocation and peak capacity matter. |

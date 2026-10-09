@@ -14,10 +14,10 @@ internal static partial class NativeGeneratedScenarios
             int payload = random.Next(1, 1000);
             trace($"sparse-page seed={seed} iteration={iteration} slots=4 slotsPerPage=2 slotCapacity=4 length={length} payload={payload} backing=64 tracing={traceCapacity}");
             NativeMemoryBudget budget = new(256, traceCapacity);
-            using NativePool<int> pool = new(new NativePoolPreparation(4, 4, 2), budget);
-            using (Pooled<int> survivor = pool.Rent(length, writer => writer.Fill(payload)))
+            using NativePreparedPool<int> pool = new(new NativePoolPreparation(4, 4, 2), budget);
+            using (PreparedPooled<int> survivor = pool.Rent(length, writer => writer.Fill(payload)))
             {
-                Pooled<int> ended = pool.Rent(4, static writer => writer.Fill(19));
+                PreparedPooled<int> ended = pool.Rent(4, static writer => writer.Fill(19));
                 using (ended)
                 {
                     Require(pool.CapturePreparedSnapshot().OccupiedSlotCount == 2
@@ -34,7 +34,7 @@ internal static partial class NativeGeneratedScenarios
                     "one live slot's complete page charge or actual idle capacity differs");
                 Require(budget.CaptureStatistics().CommittedBytes == 32 && budget.CaptureStatistics().AllocationCount == 2
                     && budget.CaptureStatistics().FreeCount == 1, "sparse retained charge was duplicated or lost");
-                using (Pooled<int> reused = pool.Rent(4, static writer => writer.Fill(23)))
+                using (PreparedPooled<int> reused = pool.Rent(4, static writer => writer.Fill(23)))
                 {
                     bool rejectedStale = false;
                     try { _ = ended.Read(static view => view[0]); }

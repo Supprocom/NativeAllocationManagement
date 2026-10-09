@@ -8,13 +8,13 @@ public sealed class NativePreparedFixedShapeSearchTests
     [InlineData(17)]
     public void AlternatingShorterShapesUseEverySingleClassSlotWithoutChangingBacking(int capacity)
     {
-        using NativePool<int> pool = new(new NativePoolPreparation(3, capacity, 3), budget: null);
+        using NativePreparedPool<int> pool = new(new NativePoolPreparation(3, capacity, 3), budget: null);
         long backing = pool.GetStatistics().RetainedBytes;
         for (int round = 0; round < 4; round++)
         {
-            using Pooled<int> empty = pool.Rent(0, static _ => { });
-            using Pooled<int> shorter = pool.Rent(capacity - 1, static writer => writer.Fill(17));
-            using Pooled<int> full = pool.Rent(capacity, static writer => writer.Fill(19));
+            using PreparedPooled<int> empty = pool.Rent(0, static _ => { });
+            using PreparedPooled<int> shorter = pool.Rent(capacity - 1, static writer => writer.Fill(17));
+            using PreparedPooled<int> full = pool.Rent(capacity, static writer => writer.Fill(19));
             Assert.Equal(capacity, empty.Capacity);
             Assert.Equal(capacity, shorter.Capacity);
             Assert.Equal(capacity, full.Capacity);
@@ -37,9 +37,9 @@ public sealed class NativePreparedFixedShapeSearchTests
     [Fact]
     public void CachedShortShapeSurvivesOversizeRefusalAndFailedDifferentShape()
     {
-        using NativePool<int> pool = new(new NativePoolPreparation(2, 3, 2), budget: null);
-        Pooled<int> old = pool.Rent(1, static writer => writer.Write(23));
-        Pooled<int> stale = old;
+        using NativePreparedPool<int> pool = new(new NativePoolPreparation(2, 3, 2), budget: null);
+        PreparedPooled<int> old = pool.Rent(1, static writer => writer.Write(23));
+        PreparedPooled<int> stale = old;
         old.Dispose();
         Assert.Throws<InvalidOperationException>(() => pool.Rent(4, static writer => writer.Fill(0)));
         Assert.Throws<OperationCanceledException>(() => pool.Rent(2, static writer =>
@@ -47,7 +47,7 @@ public sealed class NativePreparedFixedShapeSearchTests
             writer.Write(29);
             throw new OperationCanceledException();
         }));
-        using Pooled<int> current = pool.Rent(3, static writer => writer.Fill(31));
+        using PreparedPooled<int> current = pool.Rent(3, static writer => writer.Fill(31));
         Assert.Equal(31, current.Read(static view => view[2]));
         try
         {
@@ -70,8 +70,8 @@ public sealed class NativePreparedFixedShapeSearchTests
     public void TrimmedClassHasNoRefillOrReusableAuthorityForPhysicallyFreedSlots()
     {
         NativeMemoryBudget budget = new(192);
-        using NativePool<int> pool = new(new NativePoolPreparation(3, 3, 1), budget);
-        Pooled<int> survivor = pool.Rent(1, static writer => writer.Write(37));
+        using NativePreparedPool<int> pool = new(new NativePoolPreparation(3, 3, 1), budget);
+        PreparedPooled<int> survivor = pool.Rent(1, static writer => writer.Write(37));
         try
         {
             Assert.Equal((nuint)24, pool.TrimRetainedMemory());
@@ -82,7 +82,7 @@ public sealed class NativePreparedFixedShapeSearchTests
             Assert.Equal(37, survivor.Read(static view => view[0]));
         }
         finally { survivor.Dispose(); }
-        using (Pooled<int> reused = pool.Rent(3, static writer => writer.Fill(41)))
+        using (PreparedPooled<int> reused = pool.Rent(3, static writer => writer.Fill(41)))
         {
             Assert.Equal(41, reused.Read(static view => view[2]));
         }

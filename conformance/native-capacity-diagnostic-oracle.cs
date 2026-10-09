@@ -7,9 +7,8 @@ namespace Supprocom.NativeAllocationManagement.Conformance;
 internal static class NativeCapacityDiagnosticOracle
 {
     internal const int ArenaHeaderBytes = 64;
-    internal const int PoolSlotBytes = 64;
+    internal const int PoolSlotBytes = 32;
     internal const int PoolPageBytes = 40;
-    internal const int PoolFreeHeadBytes = 32 * sizeof(int);
 
     internal static long ArenaExtent(int capacity) => capacity == 0 ? 0
         : OperatingSystem.IsWindows() ? checked(ArenaHeaderBytes + capacity)
@@ -18,7 +17,7 @@ internal static class NativeCapacityDiagnosticOracle
     internal static void RunPool(int traceCapacity)
     {
         NativeMemoryBudget budget = new(128, traceCapacity);
-        NativePool<int> pool = new(new NativePoolPreparation(2, 4, 2), budget);
+        NativePreparedPool<int> pool = new(new NativePoolPreparation(2, 4, 2), budget);
         Pool expected = new()
         {
             OwnerId = pool.Id,
@@ -29,30 +28,30 @@ internal static class NativeCapacityDiagnosticOracle
             AvailableSlotCount = 2,
             RetainedBytes = 32,
             PeakRetainedBytes = 32,
-            ManagedBankBytes = 2 * PoolSlotBytes + PoolPageBytes + PoolFreeHeadBytes,
+            ManagedBankBytes = 2 * PoolSlotBytes + PoolPageBytes,
             UnusedSlotBytes = 32
         };
         try
         {
             Verify(pool.CapturePreparedSnapshot(), expected, "pool-prepared");
             bool failed = false;
-            try { using Pooled<int> incomplete = pool.Rent(1, static _ => { }); }
+            try { using PreparedPooled<int> incomplete = pool.Rent(1, static _ => { }); }
             catch (InvalidOperationException) { failed = true; }
             if (!failed) throw new InvalidOperationException("Incomplete initialization was published.");
             expected = expected with { PeakOccupiedSlotCount = 1, InitializerFailureCount = 1 };
             Verify(pool.CapturePreparedSnapshot(), expected, "pool-incomplete-rolled-back");
-            using (Pooled<int> first = pool.Rent(4, static writer => writer.Fill(7)))
+            using (PreparedPooled<int> first = pool.Rent(4, static writer => writer.Fill(7)))
             {
                 expected = expected with { OccupiedSlotCount = 1, AvailableSlotCount = 1, SuccessfulRentCount = 1, UnusedSlotBytes = 16 };
                 Verify(pool.CapturePreparedSnapshot(), expected, "pool-sparse-page-pinned");
                 if (pool.TrimRetainedMemory() != 0) throw new InvalidOperationException("Live slot's page was freed.");
                 Verify(pool.CapturePreparedSnapshot(), expected, "pool-sparse-trim-cannot-free-live-page");
-                using (Pooled<int> second = pool.Rent(2, static writer => writer.Fill(11)))
+                using (PreparedPooled<int> second = pool.Rent(2, static writer => writer.Fill(11)))
                 {
                     expected = expected with
                     { OccupiedSlotCount = 2, PeakOccupiedSlotCount = 2, AvailableSlotCount = 0, SuccessfulRentCount = 2, UnusedSlotBytes = 0 };
                     Verify(pool.CapturePreparedSnapshot(), expected, "pool-dense");
-                    if (pool.TryRent(5, static writer => writer.Fill(0), out Pooled<int> oversized, out NativePoolExhaustionReason shape))
+                    if (pool.TryRent(5, static writer => writer.Fill(0), out PreparedPooled<int> oversized, out NativePoolExhaustionReason shape))
                     {
                         oversized.Dispose();
                         throw new InvalidOperationException("Oversized shape was accepted.");
@@ -60,7 +59,7 @@ internal static class NativeCapacityDiagnosticOracle
                     if (shape != NativePoolExhaustionReason.ShapeExceeded) throw new InvalidOperationException("Shape refusal was misclassified.");
                     expected = expected with { RejectedShapeCount = 1 };
                     Verify(pool.CapturePreparedSnapshot(), expected, "pool-shape-refused");
-                    if (pool.TryRent(1, static writer => writer.Fill(0), out Pooled<int> full, out NativePoolExhaustionReason reason))
+                    if (pool.TryRent(1, static writer => writer.Fill(0), out PreparedPooled<int> full, out NativePoolExhaustionReason reason))
                     {
                         full.Dispose();
                         throw new InvalidOperationException("Declared slot capacity was exceeded.");
@@ -80,7 +79,7 @@ internal static class NativeCapacityDiagnosticOracle
             if (pool.TrimRetainedMemory() != 32) throw new InvalidOperationException("Idle page trim extent differs.");
             expected = expected with { RetainedPageCount = 0, RetainedSlotCount = 0, AvailableSlotCount = 0, RetainedBytes = 0, UnusedSlotBytes = 0 };
             Verify(pool.CapturePreparedSnapshot(), expected, "pool-page-physically-trimmed");
-            if (pool.TryRent(1, static writer => writer.Fill(0), out Pooled<int> regrown, out _))
+            if (pool.TryRent(1, static writer => writer.Fill(0), out PreparedPooled<int> regrown, out _))
             {
                 regrown.Dispose();
                 throw new InvalidOperationException("Trimmed prepared pool regrew backing.");

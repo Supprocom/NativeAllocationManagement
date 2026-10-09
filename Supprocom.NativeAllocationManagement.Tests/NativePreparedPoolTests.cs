@@ -9,7 +9,7 @@ public sealed class NativePreparedPoolTests
     public void SixtyFourIndependentFourKiBSlotsUseFourPagesWithoutMetadataGrowth()
     {
         NativeMemoryBudget budget = new(64 * 4096);
-        using NativePool<byte> pool = new(new NativePoolPreparation(64, 4096, 16), budget);
+        using NativePreparedPool<byte> pool = new(new NativePoolPreparation(64, 4096, 16), budget);
         NativePreparedPoolStatistics prepared = pool.CapturePreparedSnapshot();
         Assert.Equal(4, prepared.RetainedPageCount);
         Assert.Equal(64, prepared.AvailableSlotCount);
@@ -32,9 +32,9 @@ public sealed class NativePreparedPoolTests
         Assert.Equal([1L, 2L, 3L, 4L], pool.CurrentSegmentOrdinalsForTest);
     }
 
-    private static void WithSlots(NativePool<byte> pool, int remaining, int length)
+    private static void WithSlots(NativePreparedPool<byte> pool, int remaining, int length)
     {
-        using Pooled<byte> lease = pool.Rent(length, static writer => writer.Fill(42));
+        using PreparedPooled<byte> lease = pool.Rent(length, static writer => writer.Fill(42));
         Assert.Equal(length, lease.Capacity);
         if (remaining > 1)
         {
@@ -54,8 +54,8 @@ public sealed class NativePreparedPoolTests
     public void ExhaustionDoesNotCallTheProducerOrChangePublishedStorage()
     {
         NativeMemoryBudget budget = new(64);
-        using NativePool<int> pool = new(new NativePoolPreparation(1, 4, 1), budget);
-        using Pooled<int> existing = pool.Rent(4, static writer => writer.Fill(7));
+        using NativePreparedPool<int> pool = new(new NativePoolPreparation(1, 4, 1), budget);
+        using PreparedPooled<int> existing = pool.Rent(4, static writer => writer.Fill(7));
         int calls = 0;
         Assert.False(pool.TryRent(5, writer => { calls++; writer.Fill(0); }, out _, out NativePoolExhaustionReason shape));
         Assert.Equal(NativePoolExhaustionReason.ShapeExceeded, shape);
@@ -74,10 +74,10 @@ public sealed class NativePreparedPoolTests
     public void SuccessfulTryRentAndExpectedExhaustionHaveNoManagedOrBackingAllocation()
     {
         NativeMemoryBudget budget = new(64);
-        using NativePool<int> pool = new(new NativePoolPreparation(1, 4, 1), budget);
+        using NativePreparedPool<int> pool = new(new NativePoolPreparation(1, 4, 1), budget);
         NativeLeaseInitializer<int> initialize = static writer => writer.Fill(42);
         _ = pool.CapturePreparedSnapshot();
-        if (pool.TryRent(4, initialize, out Pooled<int> warm, out _))
+        if (pool.TryRent(4, initialize, out PreparedPooled<int> warm, out _))
         {
             warm.Dispose();
         }
@@ -86,7 +86,7 @@ public sealed class NativePreparedPoolTests
         int refusals = 0;
         for (int iteration = 0; iteration < 1024; iteration++)
         {
-            if (pool.TryRent(4, initialize, out Pooled<int> lease, out _))
+            if (pool.TryRent(4, initialize, out PreparedPooled<int> lease, out _))
             {
                 successes++;
                 if (!pool.TryRent(4, initialize, out _, out NativePoolExhaustionReason reason)
@@ -110,7 +110,7 @@ public sealed class NativePreparedPoolTests
     [Fact]
     public void IncompleteAndThrowingInitializationReturnTheSlotWithoutPublication()
     {
-        using NativePool<int> pool = new(new NativePoolPreparation(2, 4, 2), budget: null);
+        using NativePreparedPool<int> pool = new(new NativePoolPreparation(2, 4, 2), budget: null);
         Assert.Throws<InvalidOperationException>(() => pool.TryRent(4, static writer => writer.Write(1), out _, out _));
         Assert.Throws<OperationCanceledException>(() => pool.TryRent(4,
             static writer => { writer.Write(1); throw new OperationCanceledException(); }, out _, out _));
@@ -120,7 +120,7 @@ public sealed class NativePreparedPoolTests
         Assert.Equal(1, snapshot.PeakOccupiedSlotCount);
         Assert.Equal(0, snapshot.OccupiedSlotCount);
         Assert.Equal(2, snapshot.AvailableSlotCount);
-        if (pool.TryRent(4, static writer => writer.Fill(7), out Pooled<int> lease, out _))
+        if (pool.TryRent(4, static writer => writer.Fill(7), out PreparedPooled<int> lease, out _))
         {
             Assert.Equal(7, lease.Read(static view => view[0]));
             lease.Dispose();
@@ -135,8 +135,8 @@ public sealed class NativePreparedPoolTests
     public void SparseTrimReleasesOnlyWholeIdlePagesAndNeverImplicitlyRefills()
     {
         NativeMemoryBudget budget = new(256);
-        using NativePool<int> pool = new(new NativePoolPreparation(4, 1, 2), budget);
-        Pooled<int> survivor = pool.Rent(1, static writer => writer.Write(42));
+        using NativePreparedPool<int> pool = new(new NativePoolPreparation(4, 1, 2), budget);
+        PreparedPooled<int> survivor = pool.Rent(1, static writer => writer.Write(42));
         try
         {
             survivor.Access(_ => Assert.Equal((nuint)8, pool.TrimRetainedMemory()));
@@ -168,7 +168,7 @@ public sealed class NativePreparedPoolTests
     public void LastPageAndEveryPackedSlotAreChargedAtTheirExactElementExtent()
     {
         NativeMemoryBudget budget = new(15);
-        using NativePool<byte> pool = new(new NativePoolPreparation(5, 3, 2), budget);
+        using NativePreparedPool<byte> pool = new(new NativePoolPreparation(5, 3, 2), budget);
         NativePreparedPoolStatistics snapshot = pool.CapturePreparedSnapshot();
         Assert.Equal(3, snapshot.RetainedPageCount);
         Assert.Equal(5, snapshot.RetainedSlotCount);
@@ -183,7 +183,7 @@ public sealed class NativePreparedPoolTests
     public void PreparationRefusesTheCompleteExtentBeforeAnyBackendAcquisition()
     {
         NativeMemoryBudget budget = new(15);
-        Assert.Throws<NativeMemoryBudgetExceededException>(() => new NativePool<int>(new NativePoolPreparation(4, 1, 2), budget));
+        Assert.Throws<NativeMemoryBudgetExceededException>(() => new NativePreparedPool<int>(new NativePoolPreparation(4, 1, 2), budget));
         Assert.Equal(0, budget.CaptureStatistics().AllocationCount);
         Assert.Equal(0, budget.CaptureStatistics().ReservedBytes);
         Assert.Equal(1, budget.CaptureStatistics().RejectedAllocationCount);
@@ -194,7 +194,7 @@ public sealed class NativePreparedPoolTests
     {
         NativeMemoryBudget budget = new(256);
         NativeMemoryTestHooks.FailNextAllocation();
-        Assert.Throws<NativeAllocationFailedException>(() => new NativePool<int>(new NativePoolPreparation(4, 1, 2), budget));
+        Assert.Throws<NativeAllocationFailedException>(() => new NativePreparedPool<int>(new NativePoolPreparation(4, 1, 2), budget));
         NativeMemoryBudgetStatistics snapshot = budget.CaptureStatistics();
         Assert.Equal(0, snapshot.CommittedBytes);
         Assert.Equal(0, snapshot.ReservedBytes);
@@ -206,8 +206,8 @@ public sealed class NativePreparedPoolTests
     public void TerminalCaptureKeepsHistoryAndClearsActualCapacity()
     {
         NativeMemoryBudget budget = new(64);
-        using NativePool<int> pool = new(new NativePoolPreparation(1, 4, 1), budget);
-        using (Pooled<int> lease = pool.Rent(4, static writer => writer.Fill(1)))
+        using NativePreparedPool<int> pool = new(new NativePoolPreparation(1, 4, 1), budget);
+        using (PreparedPooled<int> lease = pool.Rent(4, static writer => writer.Fill(1)))
         {
         }
         pool.Dispose();
@@ -226,9 +226,9 @@ public sealed class NativePreparedPoolTests
     [Fact]
     public void HistoryOverflowCannotBreakSlotPublicationOrExpectedExhaustion()
     {
-        using NativePool<int> pool = new(new NativePoolPreparation(1, 1, 1), budget: null);
-        typeof(NativePool<int>).GetField("_successfulPreparedRents", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(pool, long.MaxValue);
-        using Pooled<int> lease = pool.Rent(1, static writer => writer.Write(42));
+        using NativePreparedPool<int> pool = new(new NativePoolPreparation(1, 1, 1), budget: null);
+        typeof(NativePreparedPool<int>).GetField("_successfulPreparedRents", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(pool, long.MaxValue);
+        using PreparedPooled<int> lease = pool.Rent(1, static writer => writer.Write(42));
         Assert.Equal(42, lease.Read(static view => view[0]));
         Assert.Equal(long.MaxValue, pool.CapturePreparedSnapshot().SuccessfulRentCount);
         Assert.True(pool.CapturePreparedSnapshot().HistoryOverflowed);
@@ -257,7 +257,7 @@ public sealed class NativePreparedPoolTests
     {
         NativeMemoryBudget budget = new(256);
         NativeMemoryTestHooks.FailAtManagedPublicationBoundary(boundary);
-        Assert.Throws<InvalidOperationException>(() => new NativePool<int>(new NativePoolPreparation(4, 1, 2), budget));
+        Assert.Throws<InvalidOperationException>(() => new NativePreparedPool<int>(new NativePoolPreparation(4, 1, 2), budget));
         NativeMemoryBudgetStatistics snapshot = budget.CaptureStatistics();
         Assert.Equal(acquisitions, snapshot.AllocationCount);
         Assert.Equal(acquisitions, snapshot.FreeCount);
@@ -269,11 +269,11 @@ public sealed class NativePreparedPoolTests
     [Fact]
     public void StaleSlotAliasCannotBorrowOrReturnTheReusedSlot()
     {
-        using NativePool<int> pool = new(new NativePoolPreparation(1, 1, 1), budget: null);
-        Pooled<int> first = pool.Rent(1, static writer => writer.Write(1));
-        Pooled<int> stale = first;
+        using NativePreparedPool<int> pool = new(new NativePoolPreparation(1, 1, 1), budget: null);
+        PreparedPooled<int> first = pool.Rent(1, static writer => writer.Write(1));
+        PreparedPooled<int> stale = first;
         first.Dispose();
-        using Pooled<int> current = pool.Rent(1, static writer => writer.Write(42));
+        using PreparedPooled<int> current = pool.Rent(1, static writer => writer.Write(42));
         bool borrowRejected = false;
         bool returnRejected = false;
         try { _ = stale.Read(static view => view[0]); }
@@ -290,7 +290,7 @@ public sealed class NativePreparedPoolTests
     public void PageTracingIsBoundedAndCorrelatesPreparationAcquisitionTrimAndRelease()
     {
         NativeMemoryBudget budget = new(256, traceCapacity: 8);
-        using NativePool<int> pool = new(new NativePoolPreparation(4, 1, 2), budget);
+        using NativePreparedPool<int> pool = new(new NativePoolPreparation(4, 1, 2), budget);
         Assert.Equal((nuint)8, pool.TrimRetainedMemoryByBytes(1));
         pool.Dispose();
         Span<NativeMemoryTraceEvent> events = stackalloc NativeMemoryTraceEvent[8];
@@ -319,15 +319,15 @@ public sealed class NativePreparedPoolTests
     public void PreparedReuseWithEnabledBackingTraceEmitsNoRedundantBudgetEvents()
     {
         NativeMemoryBudget budget = new(64, traceCapacity: 1);
-        using NativePool<int> pool = new(new NativePoolPreparation(1, 1, 1), budget);
+        using NativePreparedPool<int> pool = new(new NativePoolPreparation(1, 1, 1), budget);
         Assert.Equal(2, budget.CaptureStatistics().DroppedTraceEventCount);
         NativeMemoryBudgetStatistics before = budget.CaptureStatistics();
         NativeLeaseInitializer<int> initialize = static writer => writer.Write(42);
-        using (Pooled<int> warm = pool.Rent(1, initialize)) { }
+        using (PreparedPooled<int> warm = pool.Rent(1, initialize)) { }
         long start = GC.GetAllocatedBytesForCurrentThread();
         for (int iteration = 0; iteration < 1024; iteration++)
         {
-            if (pool.TryRent(1, initialize, out Pooled<int> lease, out _)) lease.Dispose();
+            if (pool.TryRent(1, initialize, out PreparedPooled<int> lease, out _)) lease.Dispose();
         }
         Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - start);
         Assert.Equal(before, budget.CaptureStatistics());
@@ -354,19 +354,15 @@ public sealed class NativePreparedPoolTests
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000", Justification = "This fixture deliberately abandons the prepared owner to verify emergency page cleanup and prove a live budget/trace does not retain it.")]
     private static WeakReference CreateAbandonedPreparedPool(NativeMemoryBudget budget)
     {
-        NativePool<int> pool = new(new NativePoolPreparation(2, 1, 2), budget);
+        NativePreparedPool<int> pool = new(new NativePoolPreparation(2, 1, 2), budget);
         return new WeakReference(pool);
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void ProcessCannotExposeUninitializedCapacityBeyondThePublishedLogicalLength(bool prepared)
+    [Fact]
+    public void ProcessCannotExposeUninitializedCapacityBeyondThePublishedLogicalLength()
     {
-        using NativePool<int> pool = prepared
-            ? new(new NativePoolPreparation(1, 4, 1), budget: null)
-            : new(preLease: 4, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        using Pooled<int> lease = pool.Rent(1, static writer => writer.Write(42));
+        using NativePreparedPool<int> pool = new(new NativePoolPreparation(1, 4, 1), budget: null);
+        using PreparedPooled<int> lease = pool.Rent(1, static writer => writer.Write(42));
         int calls = 0;
         bool rejected = false;
         try

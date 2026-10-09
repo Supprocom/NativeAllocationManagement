@@ -46,10 +46,10 @@ public sealed class NativeInitializedPayloadHistoryTests
     [Fact]
     public void PreparedPoolNestedPublicationDoesNotCountTheOuterPendingProducer()
     {
-        using NativePool<int> pool = new(new NativePoolPreparation(4, 8, 2), new NativeMemoryBudget(512));
-        Pooled<int> outer = pool.Rent(3, writer =>
+        using NativePreparedPool<int> pool = new(new NativePoolPreparation(4, 8, 2), new NativeMemoryBudget(512));
+        PreparedPooled<int> outer = pool.Rent(3, writer =>
         {
-            using Pooled<int> inner = pool.Rent(2, static nested => nested.Fill(17));
+            using PreparedPooled<int> inner = pool.Rent(2, static nested => nested.Fill(17));
             AssertDemand(pool.GetStatistics(), 8, 8);
             writer.Fill(42);
             AssertDemand(pool.CaptureDiagnosticSnapshot(), 8, 8);

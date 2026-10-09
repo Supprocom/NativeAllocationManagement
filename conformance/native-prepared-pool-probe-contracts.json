@@ -1,0 +1,70 @@
+{
+  "completeReleaseInventory": false,
+  "schema": "Supprocom.NativeAllocationManagement.NativePreparedPool<T>",
+  "scope": "Every six actual nonpublic observation properties of the distinct fixed-shape thread-confined owner, through the friend assembly. This owner has slot and physical page banks, no variable-size head bank, returned cache, generation/root/quarantine storage. Public structural snapshots separately report those true absent-model invariants.",
+  "consistency": "Read on the construction thread at known mutation boundaries, including that thread's entered initializer/callback. Lifecycle and metadata probes do not themselves validate payload authority. Segment ordinal capture validates owner thread even after retirement/disposal; it allocates a detached numeric copy. No concurrent-snapshot claim.",
+  "resetPolicy": "No reset or refill. Slot occupancy follows initialization/publication/return; page ordinals disappear only on physical release. Slot/page bank capacities remain allocated after trim/disposal. Numeric ordinal observations are detached copies, never native authority.",
+  "unreviewedScope": "Six prepared typed observation properties only. Essential public owner/capacity/event fields have independent inventories; complete API/lifecycle, benefit, platform and final package/release gates remain open.",
+  "fields": [
+    {
+      "name": "CurrentLifecycle",
+      "valueType": "Supprocom.NativeAllocationManagement.NativeOwnerLifecycle",
+      "units": "owner lifecycle enum",
+      "definition": "Actual Active, Returned by coordinator retirement, or Disposed after cleanup; numeric observation does not authorize renting.",
+      "implementation": "NativePreparedPool.cs#CurrentLifecycle => _lifecycle;",
+      "overflow": "Finite gate state, no reopening.",
+      "allocation": "None.",
+      "proof": "NativeFastPoolProbeContractTests.PreparedProbesDistinguishSlotBanksFromWholePageRetention"
+    },
+    {
+      "name": "CurrentAllocationRecordCountForTest",
+      "valueType": "System.Int32",
+      "units": "live or initializing slab records",
+      "definition": "Actual occupied records including initializing and zero-length leases; returning or rollback debits once. This is not a physical segment or page count.",
+      "implementation": "NativePreparedPool.cs#_liveLeaseCount;",
+      "overflow": "Bounded by checked slab-bank capacity and valid slot publication.",
+      "allocation": "None.",
+      "proof": "NativeFastPoolProbeContractTests.PreparedProbesDistinguishSlotBanksFromWholePageRetention"
+    },
+    {
+      "name": "CurrentInitializationCountForTest",
+      "valueType": "System.Int32",
+      "units": "entered initializers",
+      "definition": "Scan of actual Initializing slab states within the allocated active prefix. Successful publication and exception rollback remove initialization state, not retained backing.",
+      "implementation": "NativePreparedPool.cs#count += slab.State == SlotState.Initializing ? 1 : 0;",
+      "overflow": "Nonnegative subset of the bounded active slab prefix.",
+      "allocation": "None; derived at observation, no extra per-initializer counter.",
+      "proof": "NativePreparedInitializationFrameTests.NestedPublicationAndOuterFailureKeepDistinctOccupancyAndHistory"
+    },
+    {
+      "name": "CurrentGenerationActiveOperationsForTest",
+      "valueType": "System.Int32",
+      "units": "entered operations",
+      "definition": "Actual sum of slab BorrowCount plus one per Initializing state. Nested borrows and an initializer plus a different live lease count separately. The legacy name does not imply this owner has generational storage.",
+      "implementation": "NativePreparedPool.cs#count = checked(count + slab.BorrowCount + (slab.State == SlotState.Initializing ? 1 : 0));",
+      "overflow": "Checked observation sum; cannot wrap into a valid smaller count.",
+      "allocation": "None; scan of existing state, not a new hot-path counter.",
+      "proof": "NativePreparedInitializationFrameTests.NestedPublicationAndOuterFailureKeepDistinctOccupancyAndHistory"
+    },
+    {
+      "name": "CurrentBankCapacitiesForTest",
+      "valueType": "System.ValueTuple`4[System.Int32,System.Int32,System.Int32,System.Int32]",
+      "units": "allocated metadata element capacities",
+      "definition": "Slabs and AvailableSlabs describe the same slot bank because free links are embedded. Bumps is absent. OwnerSegments is the real allocated page metadata capacity, not current retained pages; trim does not shrink either array.",
+      "implementation": "NativePreparedPool.cs#(_slabs.Length, _slabs.Length, 0, _pages.Length);",
+      "overflow": "Actual checked array lengths.",
+      "allocation": "None; value tuple copies existing lengths.",
+      "proof": "NativeFastPoolProbeContractTests.PreparedProbesDistinguishSlotBanksFromWholePageRetention"
+    },
+    {
+      "name": "CurrentSegmentOrdinalsForTest",
+      "valueType": "System.Int64[]",
+      "units": "physical acquisition identities",
+      "definition": "Fresh detached numeric copy of currently retained physical page acquisition identities in acquisition order. Empty logical leases still pin actual pages. Reuse adds no native acquisition and trim removes freed identities; there is no implicit reacquisition.",
+      "implementation": "NativePreparedPool.cs#long[] result = new long[GetStorageCounts().Retained];",
+      "overflow": "Physical ordinal allocation is checked before publication; capture cannot invent an unavailable identity.",
+      "allocation": "One numeric array per observation, including empty observation; not a no-allocation public capture API or hot-loop telemetry. Owner thread is checked before allocation.",
+      "proof": "NativeFastPoolProbeContractTests.PreparedProbesDistinguishSlotBanksFromWholePageRetention"
+    }
+  ]
+}

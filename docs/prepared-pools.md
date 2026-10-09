@@ -1,15 +1,14 @@
 # Prepared fixed-shape pools
 
-Use `NativePoolPreparation` when a workload genuinely needs a known number of
+Use `NativePreparedPool<T>` with `NativePoolPreparation` when a workload genuinely needs a known number of
 simultaneously live unmanaged buffers of one bounded shape. It groups those slots
-into pages and prepares both native backing and the complete slot/free-list/page
-banks. It is not a general heap or automatic sizing policy.
+into pages and prepares both native backing and the complete slot/page metadata banks and one embedded-link free list. It is not a general heap or automatic sizing policy.
 
 ```csharp
 NativeMemoryBudget budget = new(64 * 4096);
-using NativePool<byte> pool = new(new NativePoolPreparation(64, 4096, 16), budget);
+using NativePreparedPool<byte> pool = new(new NativePoolPreparation(64, 4096, 16), budget);
 if (pool.TryRent(4096, static writer => writer.Fill(42),
-    out Pooled<byte> lease, out NativePoolExhaustionReason reason))
+    out PreparedPooled<byte> lease, out NativePoolExhaustionReason reason))
 {
     try
     {
@@ -30,9 +29,9 @@ else
 This preparation makes four 64 KiB backing acquisitions, not 64 independent
 4 KiB acquisitions. All page extents are admitted before metadata or backing
 acquisition; a partial failure frees acquired pages and cancels the uncommitted
-remainder. Each slot has exactly the declared element capacity, with a 64-byte
-aligned stride. A shorter final page contains only the remaining declared slots.
-Padding is charged; it does not enlarge exposed slot capacity.
+remainder. Each slot has exactly the declared element capacity, packed at the CLR element
+stride without cache-line padding or an additional SIMD-address alignment guarantee. A shorter final page contains only the remaining declared slots.
+The admitted page extent is the exact sum of its slots.
 
 Within retained capacity, NAM rent/complete initialization, destructive lexical
 movement, bounded access, return, snapshots and expected exhaustion allocate no managed storage or native
@@ -40,7 +39,7 @@ backing and do not grow metadata. Consumer callbacks can still allocate. There
 is no implicit refill, OS residency guarantee, zero-page-fault guarantee, or
 guarantee about unrelated runtime work.
 
-`Pooled<T>.Move(ref source)` reuses the slot's existing identity metadata. It
+`PreparedPooled<T>.Move(ref source)` reuses the slot's existing identity metadata. It
 clears the source on success and invalidates its previous aliases without copying
 the payload. The destination retains the source's cleanup obligation and stays
 on the pool's construction thread. The capability remains a lexical ref structure,
@@ -48,8 +47,8 @@ not a heap-storable or cross-thread pointer. Use `NativeTransfer<T>` for those
 different ownership requirements.
 
 ```csharp
-Pooled<byte> source = pool.Rent(4096, static writer => writer.Fill(42));
-using Pooled<byte> destination = Pooled<byte>.Move(ref source);
+PreparedPooled<byte> source = pool.Rent(4096, static writer => writer.Fill(42));
+using PreparedPooled<byte> destination = PreparedPooled<byte>.Move(ref source);
 _ = destination.Read(static view => view[0]);
 // source is now default; do not access or dispose it.
 ```
@@ -62,7 +61,7 @@ are read-only and cannot be passed by ref; keep a movable source in an ordinary
 local and put its final destination in a using or proven finally cleanup.
 
 `TryRent` returns false only for `ShapeExceeded` or `NoAvailableSlot`. A negative
-length, null initializer, wrong thread, closed owner, unprepared owner, exhausted
+length, null initializer, wrong thread, closed owner, exhausted
 token identity, throwing initializer or incomplete initialization is an error,
 not ordinary capacity exhaustion. Failure returns a slot without exposing the
 partial payload. The failure output capability is default and cannot be borrowed
@@ -71,7 +70,7 @@ negated acquisition guards, including early-return guards; unguarded capability
 use remains unproven. Returning only a boolean and later testing an unrelated or
 reassigned value does not create ownership proof.
 
-Ordinary `Rent` also works on prepared pages, but throws for expected exhaustion;
+`Rent` also works on prepared pages, but throws for expected exhaustion;
 use `TryRent` when fullness is normal. Ordinary variable-shape pool constructors
 retain their existing behavior. A prepared owner deterministically releases its
 backing on Dispose after all leases return; emergency finalization is fallback,
@@ -95,7 +94,7 @@ and, indirectly, its whole page; dense and sparse retention must be measured.
 
 ## Prepared snapshot inventory
 
-All fields are derived or recorded by `NativePoolKernel.GetPreparedStatistics`
+All fields are derived or recorded by `NativePreparedPool.GetPreparedStatistics`
 on the construction thread. The value retains no authority, can observe closure,
 does not allocate or reset history, and remains owner-local for the full lifetime.
 Counts are integers; byte fields are bytes, not RSS. Tests in
@@ -103,7 +102,7 @@ Counts are integers; byte fields are bytes, not RSS. Tests in
 
 | Field | Definition and source |
 | --- | --- |
-| `OwnerId`, `Lifecycle` | Actual stable kernel identity and lifecycle. |
+| `OwnerId`, `Lifecycle` | Actual stable owner identity and lifecycle. |
 | `Preparation` | Original checked slot count, exact element capacity and page grouping. A caller-created default is not a valid preparation. |
 | `RetainedPageCount`, `RetainedSlotCount` | Physically present pages and their actual slot sum; reduced by trim or release. |
 | `OccupiedSlotCount` | Actual initializing/published live slot metadata, not entered-borrow count. |
@@ -113,7 +112,7 @@ Counts are integers; byte fields are bytes, not RSS. Tests in
 | `SuccessfulRentCount` | Actual complete initialization/publication events, not attempts. |
 | `RejectedShapeCount`, `RejectedFullCount` | Actual shape/full refusals before production; distinct from byte-ceiling refusal. |
 | `InitializerFailureCount` | Initializers that throw or do not write the required range; no publication or native free is invented. |
-| `ManagedBankBytes` | Allocated slot/page/free-head array element storage, including record padding; excludes CLR headers and outer owner size. Full managed allocation measurements must include those omitted costs. |
+| `ManagedBankBytes` | Allocated slot/page array element storage, including record padding; excludes CLR headers and outer owner size. Full managed allocation measurements must include those omitted costs. |
 | `UnusedSlotBytes` | Exposed element capacity of reusable retained slots; excludes stride padding and does not represent additional backing. |
 | `HistoryOverflowed` | An event count reached Int64 saturation; saturated values are lower bounds. Overflow cannot invalidate successful storage/slot transitions. |
 
@@ -126,8 +125,7 @@ apply. The internal ordinal probe now reports actual physical acquisition order,
 including ordinary independent slabs, rather than an always-empty array.
 Lexical movement emits `Moved` only after publishing its new slot token. Its
 correlation identity is that never-reused token, backing ordinal is the actual
-page (or ordinary slab), and extent is the complete slot stride including
-padding. It does not claim a physical allocation, free or budget transfer.
+page, and extent is the exact slot stride. It does not claim a physical allocation, free or budget transfer.
 Disabled movement tracing performs no budget locking or event construction.
 
 Fewer backend calls and zero warmed allocation are structural facts, not general

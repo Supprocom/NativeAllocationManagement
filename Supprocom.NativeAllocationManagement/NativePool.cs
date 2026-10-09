@@ -18,7 +18,7 @@ public sealed partial class NativePool<T> : IDisposable
         _liveLeaseCount;
 
     internal (int Slabs, int AvailableSlabs, int Bumps, int OwnerSegments)
-        CurrentBankCapacitiesForTest => (_slabs.Length, _slabs.Length, 0, _pages.Length);
+        CurrentBankCapacitiesForTest => (_slabs.Length, _slabs.Length, 0, 0);
 
     // These structures genuinely do not exist in the unmanaged, thread-confined
     // pool model. There is no reference-root bank or generational retirement.
@@ -91,9 +91,6 @@ public sealed partial class NativePool<T> : IDisposable
         : this(preLease, preAllocateBytes, returnMemoryOnDispose, budget, requireBudget: true)
     {
     }
-
-    /// <summary>Captures actual prepared capacity and recorded history without allocating.</summary>
-    public NativePreparedPoolStatistics CapturePreparedSnapshot() => GetPreparedStatistics();
 
     /// <summary>Frees idle slabs until the byte budget is met.</summary>
     public nuint TrimRetainedMemoryByBytes(nuint bytesToRelease) =>

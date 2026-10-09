@@ -178,11 +178,11 @@ internal static class NativeEventDiagnosticOracle
     {
         NativeMemoryBudget budget = new(128, traceCapacity);
         long before = Stopwatch.GetTimestamp();
-        NativePool<int> pool = new(new NativePoolPreparation(2, 4, 2), budget);
+        NativePreparedPool<int> pool = new(new NativePoolPreparation(2, 4, 2), budget);
         long owner = pool.Id;
         try
         {
-            using (Pooled<int> value = pool.Rent(4, static writer => writer.Fill(42)))
+            using (PreparedPooled<int> value = pool.Rent(4, static writer => writer.Fill(42)))
             {
                 if (value.Read(static view => view[3]) != 42 || pool.TrimRetainedMemory() != 0)
                     throw new InvalidOperationException("A live page was altered or freed.");

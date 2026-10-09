@@ -1,4 +1,3 @@
-using System.Numerics;
 using System.Reflection;
 
 namespace Supprocom.NativeAllocationManagement.Tests;
@@ -15,28 +14,21 @@ public sealed class NativePreparedPoolConstructionTests
     public void FreshMetadataHasCompleteDefaultsAndOneDescendingChainAcrossEveryPage(int slotCount, int capacity, int slotsPerPage)
     {
         NativeMemoryBudget budget = new(checked((long)slotCount * capacity));
-        using NativePool<byte> pool = new(new NativePoolPreparation(slotCount, capacity, slotsPerPage), budget);
+        using NativePreparedPool<byte> pool = new(new NativePoolPreparation(slotCount, capacity, slotsPerPage), budget);
         Array slots = (Array)Field(pool, "_slabs");
-        int[] heads = (int[])Field(pool, "_freeHeads");
-        int sizeClass = capacity <= 1 ? 0 : Math.Min(31, BitOperations.Log2((uint)(capacity - 1)) + 1);
         Assert.Equal(slotCount, slots.Length);
-        Assert.Equal(32, heads.Length);
-        Assert.Equal(1u << sizeClass, (uint)Field(pool, "_nonEmptyFreeClasses"));
-        for (int index = 0; index < heads.Length; index++)
-            Assert.Equal(index == sizeClass ? slotCount - 1 : -1, heads[index]);
+        Assert.Equal(slotCount - 1, (int)Field(pool, "_freeHead"));
+        Assert.Null(pool.GetType().GetField("_freeHeads", BindingFlags.Instance | BindingFlags.NonPublic));
+        Assert.Null(pool.GetType().GetField("_nonEmptyFreeClasses", BindingFlags.Instance | BindingFlags.NonPublic));
         for (int index = 0; index < slots.Length; index++)
         {
             object slot = slots.GetValue(index)!;
             Assert.NotEqual(IntPtr.Zero, (IntPtr)Field(slot, "Pointer"));
-            Assert.Equal(capacity, (int)Field(slot, "Capacity"));
             Assert.Equal(index - 1, (int)Field(slot, "Next"));
             Assert.Equal("Free", Field(slot, "State").ToString());
-            Assert.Equal((nuint)0, (nuint)Field(slot, "AllocationBytes"));
             Assert.Equal(0L, (long)Field(slot, "Token"));
             Assert.Equal(0, (int)Field(slot, "BorrowCount"));
-            Assert.Equal(0L, (long)Field(slot, "MetricsEpoch"));
-            Assert.Equal(0L, (long)Field(slot, "Ordinal"));
-            Assert.False((bool)Field(slot, "Detached"));
+            Assert.Equal(5, slot.GetType().GetFields(BindingFlags.Instance | BindingFlags.NonPublic).Length);
         }
         HoldAll(pool, slotCount, capacity);
         Assert.Equal(slotCount, pool.CapturePreparedSnapshot().AvailableSlotCount);
@@ -59,9 +51,9 @@ public sealed class NativePreparedPoolConstructionTests
         NativeMemoryTestHooks.FailAtManagedPublicationBoundary(boundary);
         InvalidOperationException failure = Assert.Throws<InvalidOperationException>(() =>
         {
-            using NativePool<byte> pool = new(new NativePoolPreparation(7, 13, 3), budget);
+            using NativePreparedPool<byte> pool = new(new NativePoolPreparation(7, 13, 3), budget);
         });
-        Assert.Contains("Injected managed publication failure during NativePool.Preparation", failure.Message, StringComparison.Ordinal);
+        Assert.Contains("Injected managed publication failure during NativePreparedPool.Preparation", failure.Message, StringComparison.Ordinal);
         NativeMemoryBudgetStatistics snapshot = budget.CaptureStatistics();
         Assert.Equal(acquiredPages, snapshot.AllocationCount);
         Assert.Equal(acquiredPages, snapshot.FreeCount);
@@ -73,9 +65,9 @@ public sealed class NativePreparedPoolConstructionTests
     private static object Field(object target, string name) =>
         target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(target)!;
 
-    private static void HoldAll(NativePool<byte> pool, int remaining, int capacity)
+    private static void HoldAll(NativePreparedPool<byte> pool, int remaining, int capacity)
     {
-        using Pooled<byte> lease = pool.Rent(capacity, static writer => writer.Fill(7));
+        using PreparedPooled<byte> lease = pool.Rent(capacity, static writer => writer.Fill(7));
         if (remaining > 1) HoldAll(pool, remaining - 1, capacity);
         else
         {

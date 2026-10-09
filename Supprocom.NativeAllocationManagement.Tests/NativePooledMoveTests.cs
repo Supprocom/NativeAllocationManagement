@@ -5,13 +5,11 @@ namespace Supprocom.NativeAllocationManagement.Tests;
 
 public sealed class NativePooledMoveTests
 {
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void MovementInvalidatesAliasesWithoutChangingTheSlotOrItsCharge(bool prepared)
+    [Fact]
+    public void MovementInvalidatesAliasesWithoutChangingTheSlotOrItsCharge()
     {
         NativeMemoryBudget budget = new(64);
-        using NativePool<int> pool = CreatePool(prepared, budget);
+        using NativePool<int> pool = CreatePool(budget);
         Pooled<int> source = pool.Rent(2, static writer => writer.Fill(7));
         Pooled<int> alias = source;
         NativeOwnerStatistics before = pool.GetStatistics();
@@ -29,7 +27,7 @@ public sealed class NativePooledMoveTests
         Assert.Equal(20, current.Read(static view => view[0] + view[1]));
         Assert.Equal(before, pool.GetStatistics());
         Assert.Equal(1, pool.CurrentAllocationRecordCountForTest);
-        Assert.Equal(prepared ? 8 : 64, budget.CaptureStatistics().CommittedBytes);
+        Assert.Equal(64, budget.CaptureStatistics().CommittedBytes);
         current.Dispose();
         AssertReturned(current);
         using Pooled<int> reused = pool.Rent(2, static writer => writer.Fill(31));
@@ -56,12 +54,10 @@ public sealed class NativePooledMoveTests
         AssertUninitialized(missing);
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void IdentityExhaustionLeavesTheOriginalLeaseUsableAndReturnable(bool prepared)
+    [Fact]
+    public void IdentityExhaustionLeavesTheOriginalLeaseUsableAndReturnable()
     {
-        using NativePool<int> pool = CreatePool(prepared, budget: null);
+        using NativePool<int> pool = CreatePool(budget: null);
         Pooled<int> source = pool.Rent(2, static writer => writer.Fill(42));
         NativePool<int> kernel = pool;
         typeof(NativePool<int>).GetField("_leaseTokenCounter",
@@ -81,12 +77,10 @@ public sealed class NativePooledMoveTests
         Assert.Equal(0, pool.CurrentAllocationRecordCountForTest);
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void EnteredBorrowRejectsMovementAndKeepsItsStorageAlive(bool prepared)
+    [Fact]
+    public void EnteredBorrowRejectsMovementAndKeepsItsStorageAlive()
     {
-        using NativePool<int> pool = CreatePool(prepared, budget: null);
+        using NativePool<int> pool = CreatePool(budget: null);
         Pooled<int> source = pool.Rent(2, static writer => writer.Fill(42));
         PooledBorrow<int> borrow = source.EnterBorrow("move rejection test");
         try
@@ -112,13 +106,11 @@ public sealed class NativePooledMoveTests
         destination.Dispose();
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
+    [Fact]
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "Capture all foreign-thread failures for assertions on the actual pool construction thread; an unhandled worker exception would terminate the test process.")]
-    public void WrongThreadCannotPublishAnotherTokenOrChangeTheOriginalLease(bool prepared)
+    public void WrongThreadCannotPublishAnotherTokenOrChangeTheOriginalLease()
     {
-        using NativePool<int> pool = CreatePool(prepared, budget: null);
+        using NativePool<int> pool = CreatePool(budget: null);
         Pooled<int> source = pool.Rent(2, static writer => writer.Fill(42));
         NativePool<int> kernel = pool;
         // Exercise the public value operation on another thread, not a captured
@@ -151,7 +143,7 @@ public sealed class NativePooledMoveTests
     public void PreparedRentMoveAccessReturnAndSnapshotsHaveNoRecurringAllocation()
     {
         NativeMemoryBudget budget = new(4096);
-        using NativePool<byte> pool = new(new NativePoolPreparation(1, 4096, 1), budget);
+        using NativePreparedPool<byte> pool = new(new NativePoolPreparation(1, 4096, 1), budget);
         NativeLeaseInitializer<byte> initialize = static writer => writer.Fill(7);
         NativeLeaseFunc<byte, int> read = static view => view[0] + view[^1];
         RunPreparedCycle(pool, initialize, read);
@@ -170,26 +162,24 @@ public sealed class NativePooledMoveTests
         Assert.Equal(1, budget.CaptureStatistics().AllocationCount);
         Assert.Equal(0, budget.CaptureStatistics().ReallocationCount);
         Assert.Equal(0, pool.CapturePreparedSnapshot().OccupiedSlotCount);
-        Assert.Equal(32, Unsafe.SizeOf<Pooled<byte>>());
+        Assert.Equal(32, Unsafe.SizeOf<PreparedPooled<byte>>());
     }
 
-    private static int RunPreparedCycle(NativePool<byte> pool,
+    private static int RunPreparedCycle(NativePreparedPool<byte> pool,
         NativeLeaseInitializer<byte> initialize, NativeLeaseFunc<byte, int> read)
     {
-        Assert.True(pool.TryRent(4096, initialize, out Pooled<byte> lease, out _));
-        for (int move = 0; move < 16; move++) lease = Pooled<byte>.Move(ref lease);
+        Assert.True(pool.TryRent(4096, initialize, out PreparedPooled<byte> lease, out _));
+        for (int move = 0; move < 16; move++) lease = PreparedPooled<byte>.Move(ref lease);
         int result = lease.Read(read);
         lease.Dispose();
         return result;
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void TraceUsesTheActualBackingOrdinalAndDoesNotInventACharge(bool prepared)
+    [Fact]
+    public void TraceUsesTheActualBackingOrdinalAndDoesNotInventACharge()
     {
         NativeMemoryBudget budget = new(64, 16);
-        using NativePool<int> pool = CreatePool(prepared, budget);
+        using NativePool<int> pool = CreatePool(budget);
         Pooled<int> source = pool.Rent(2, static writer => writer.Fill(7));
         Pooled<int> destination = Pooled<int>.Move(ref source);
         Span<NativeMemoryTraceEvent> events = stackalloc NativeMemoryTraceEvent[16];
@@ -206,17 +196,16 @@ public sealed class NativePooledMoveTests
         Assert.Equal(pool.Id, moved.OwnerId);
         Assert.Equal(1, moved.AllocationOrdinal);
         Assert.Equal(2, moved.CorrelationId);
-        Assert.Equal((nuint)(prepared ? 8 : 64), moved.RequestedBytes);
-        Assert.Equal(prepared ? 8 : 64, moved.CommittedBytes);
+        Assert.Equal((nuint)(64), moved.RequestedBytes);
+        Assert.Equal(64, moved.CommittedBytes);
         Assert.Equal(0, moved.ReservedBytes);
         Assert.Equal(1, budget.CaptureStatistics().AllocationCount);
         Assert.Equal(0, budget.CaptureStatistics().FreeCount);
         destination.Dispose();
     }
 
-    private static NativePool<int> CreatePool(bool prepared, NativeMemoryBudget? budget) =>
-        prepared ? new(new NativePoolPreparation(1, 2, 1), budget)
-            : budget is null ? new(2, NativeMemoryReturn.ToNativeMemory)
+    private static NativePool<int> CreatePool(NativeMemoryBudget? budget) =>
+        budget is null ? new(2, NativeMemoryReturn.ToNativeMemory)
             : new(budget, 2, 0, NativeMemoryReturn.ToNativeMemory);
 
     private static void AssertUninitialized(scoped Pooled<int> value)

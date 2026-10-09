@@ -216,7 +216,7 @@ internal static partial class NativeGeneratedScenarios
     {
         PoolOracle model = new(seed, steps, trace);
         NativeMemoryBudget budget = new(256);
-        using NativePool<int> pool = new(new NativePoolPreparation(4, 4, 2), budget);
+        using NativePreparedPool<int> pool = new(new NativePoolPreparation(4, 4, 2), budget);
         while (model.Remaining > 0) ExercisePool(pool, budget, model, 0);
         Require(pool.CapturePreparedSnapshot().OccupiedSlotCount == 0, "prepared pool retained occupied slots");
         Require(pool.TrimRetainedMemory() == 64, "idle prepared page release differs");
@@ -224,13 +224,13 @@ internal static partial class NativeGeneratedScenarios
         Require(!pool.TryRent(1, static writer => writer.Write(1), out _, out _), "trim implicitly refilled prepared pool");
     }
 
-    private static void ExercisePool(NativePool<int> pool, NativeMemoryBudget budget, PoolOracle model, int occupied)
+    private static void ExercisePool(NativePreparedPool<int> pool, NativeMemoryBudget budget, PoolOracle model, int occupied)
     {
         if (model.Remaining-- <= 0) return;
         int request = model.Random.Next(1, 7);
         model.Trace($"pool step={model.Step++} occupied={occupied} request={request}");
         bool expected = request <= 4 && occupied < 4;
-        if (!pool.TryRent(request, static writer => writer.Fill(19), out Pooled<int> lease, out NativePoolExhaustionReason reason))
+        if (!pool.TryRent(request, static writer => writer.Fill(19), out PreparedPooled<int> lease, out NativePoolExhaustionReason reason))
         {
             Require(!expected, "prepared slot acquisition differs");
             if (request > 4) { model.RejectedShape++; Require(reason == NativePoolExhaustionReason.ShapeExceeded, "shape refusal differs"); }
@@ -238,7 +238,7 @@ internal static partial class NativeGeneratedScenarios
             CheckPool(pool, budget, model, occupied);
             return;
         }
-        Pooled<int> acquisitionAlias = lease;
+        PreparedPooled<int> acquisitionAlias = lease;
         try
         {
             Require(expected, "prepared slot acquisition differs");
@@ -253,8 +253,8 @@ internal static partial class NativeGeneratedScenarios
             model.Trace($"pool-move step={model.Step} occupied={occupied + 1} request={request} moves={moves}");
             for (int movement = 0; movement < moves; movement++)
             {
-                Pooled<int> previous = lease;
-                Pooled<int> destination = Pooled<int>.Move(ref lease);
+                PreparedPooled<int> previous = lease;
+                PreparedPooled<int> destination = PreparedPooled<int>.Move(ref lease);
                 Require(lease.Length == 0 && lease.Capacity == 0, "successful movement did not clear its source binding");
                 lease = destination;
                 RequireReturnedPoolAlias(previous);
@@ -274,7 +274,7 @@ internal static partial class NativeGeneratedScenarios
         CheckPool(pool, budget, model, occupied);
     }
 
-    private static void RequireReturnedPoolAlias(scoped Pooled<int> alias)
+    private static void RequireReturnedPoolAlias(scoped PreparedPooled<int> alias)
     {
         bool rejectedRead = false;
         try { _ = alias.Read(static view => view[0]); }
@@ -285,12 +285,12 @@ internal static partial class NativeGeneratedScenarios
         catch (NativeAllocationReturnedException) { rejectedReturn = true; }
         Require(rejectedReturn, "stale prepared slot authority returned a live slot");
         bool rejectedMove = false;
-        try { _ = Pooled<int>.Move(ref alias); }
+        try { _ = PreparedPooled<int>.Move(ref alias); }
         catch (NativeAllocationReturnedException) { rejectedMove = true; }
         Require(rejectedMove, "stale prepared slot authority published another binding");
     }
 
-    private static void CheckPool(NativePool<int> pool, NativeMemoryBudget budget, PoolOracle model, int occupied)
+    private static void CheckPool(NativePreparedPool<int> pool, NativeMemoryBudget budget, PoolOracle model, int occupied)
     {
         NativePreparedPoolStatistics actual = pool.CapturePreparedSnapshot();
         Require(actual.OccupiedSlotCount == occupied && actual.AvailableSlotCount == 4 - occupied, "prepared occupancy differs");

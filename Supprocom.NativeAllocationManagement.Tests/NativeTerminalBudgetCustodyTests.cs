@@ -205,7 +205,7 @@ public sealed class NativeTerminalBudgetCustodyTests
         2 or 3 => new NativeArena(budget, model == 2 ? 0U : 64U, policy),
         4 or 5 => new NativeConcurrentPool<int>(budget, model == 4 ? 0 : 4, 0, policy, false),
         6 or 7 => new NativeConcurrentArena(budget, model == 6 ? 0U : 64U, policy, false),
-        8 => new NativePool<int>(new NativePoolPreparation(16, 4, 2), budget),
+        8 => new NativePreparedPool<int>(new NativePoolPreparation(16, 4, 2), budget),
         9 => new NativeArena(new NativeArenaPreparation(64, 64), budget),
         10 => new NativeConcurrentPool<int>(budget, 0, 0, policy, true),
         11 => new NativeConcurrentArena(budget, 0, policy, true),
@@ -215,6 +215,7 @@ public sealed class NativeTerminalBudgetCustodyTests
     private static NativeOwnerDiagnosticSnapshot Snapshot(IDisposable owner) => owner switch
     {
         NativePool<int> pool => pool.CaptureDiagnosticSnapshot(),
+        NativePreparedPool<int> pool => pool.CaptureDiagnosticSnapshot(),
         NativeArena arena => arena.CaptureDiagnosticSnapshot(),
         NativeConcurrentPool<int> pool => pool.CaptureDiagnosticSnapshot(),
         NativeConcurrentArena arena => arena.CaptureDiagnosticSnapshot(),
@@ -247,6 +248,10 @@ public sealed class NativeTerminalBudgetCustodyTests
     {
         switch (owner)
         {
+            case NativePreparedPool<int> pool:
+                using (PreparedPooled<int> lease = pool.Rent(1, static writer => writer.Write(42)))
+                    Assert.Equal(42, lease.Read(static view => view[0]));
+                break;
             case NativePool<int> pool:
                 using (Pooled<int> lease = pool.Rent(1, static writer => writer.Write(42)))
                     Assert.Equal(42, lease.Read(static view => view[0]));

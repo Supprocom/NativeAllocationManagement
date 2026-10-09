@@ -23,8 +23,8 @@ public sealed class NativePooledAcquisitionOverwriteAnalyzerTests
     public async Task ReplacementCannotEraseAnActivePooledObligation(bool regularFirst, string replacement)
     {
         string first = regularFirst
-            ? "Pooled<int> lease = left.Rent(4, static writer => writer.Fill(1));"
-            : "if (!left.TryRent(4, static writer => writer.Fill(1), out Pooled<int> lease, out _)) return;";
+            ? "PreparedPooled<int> lease = left.Rent(4, static writer => writer.Fill(1));"
+            : "if (!left.TryRent(4, static writer => writer.Fill(1), out PreparedPooled<int> lease, out _)) return;";
         string source = Wrap($$"""
             {{first}}
             /* replacement-start */
@@ -48,7 +48,7 @@ public sealed class NativePooledAcquisitionOverwriteAnalyzerTests
     public async Task ProvenCompletedBindingCanBeReused(string body)
     {
         string source = Wrap($$"""
-            if (!left.TryRent(4, static writer => writer.Fill(1), out Pooled<int> lease, out _)) return;
+            if (!left.TryRent(4, static writer => writer.Fill(1), out PreparedPooled<int> lease, out _)) return;
             {{body}}
             """);
         AssertCompiles(source);
@@ -59,7 +59,7 @@ public sealed class NativePooledAcquisitionOverwriteAnalyzerTests
     public async Task RefusedOrCompletedConditionalAcquisitionDoesNotInventAnOldObligation()
     {
         string source = Wrap("""
-            if (left.TryRent(4, static writer => writer.Fill(1), out Pooled<int> lease, out _)) lease.Dispose();
+            if (left.TryRent(4, static writer => writer.Fill(1), out PreparedPooled<int> lease, out _)) lease.Dispose();
             if (left.TryRent(4, static writer => writer.Fill(2), out lease, out _)) lease.Dispose();
             """);
         AssertCompiles(source);
@@ -70,7 +70,7 @@ public sealed class NativePooledAcquisitionOverwriteAnalyzerTests
     public async Task CompletedLoopIterationsDoNotInventAnActivePreviousAcquisition()
     {
         string source = Wrap("""
-            Pooled<int> lease = default;
+            PreparedPooled<int> lease = default;
             for (int index = 0; index < 3; index++)
                 if (left.TryRent(4, static writer => writer.Fill(1), out lease, out _)) lease.Dispose();
             """);
@@ -83,7 +83,7 @@ public sealed class NativePooledAcquisitionOverwriteAnalyzerTests
     [InlineData("new()")]
     public async Task EmptyCapabilityDoesNotInventOwnership(string value)
     {
-        string source = Wrap("Pooled<int> lease = " + value + ";");
+        string source = Wrap("PreparedPooled<int> lease = " + value + ";");
         AssertCompiles(source);
         await AssertAcceptedAsync(source);
     }
@@ -93,7 +93,7 @@ public sealed class NativePooledAcquisitionOverwriteAnalyzerTests
     [InlineData("new()")]
     public async Task EmptyCapabilityHasNoPayloadAccessAuthority(string value)
     {
-        string source = Wrap("Pooled<int> lease = " + value + "; _ = lease.Read(static view => view[0]);");
+        string source = Wrap("PreparedPooled<int> lease = " + value + "; _ = lease.Read(static view => view[0]);");
         AssertCompiles(source);
         ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(source);
         Assert.DoesNotContain(diagnostics, static diagnostic => string.Equals(diagnostic.Id, "AD0001", StringComparison.Ordinal));
@@ -104,7 +104,7 @@ public sealed class NativePooledAcquisitionOverwriteAnalyzerTests
     public async Task ClearingACompletedBindingAndReusingItDoesNotInventAnObligation()
     {
         string source = Wrap("""
-            if (!left.TryRent(4, static writer => writer.Fill(1), out Pooled<int> lease, out _)) return;
+            if (!left.TryRent(4, static writer => writer.Fill(1), out PreparedPooled<int> lease, out _)) return;
             lease.Dispose();
             lease = default;
             if (left.TryRent(4, static writer => writer.Fill(2), out lease, out _)) lease.Dispose();
@@ -119,7 +119,7 @@ public sealed class NativePooledAcquisitionOverwriteAnalyzerTests
     public async Task IncompleteLoopIterationsRetainTheirCleanupObligation(string body)
     {
         string source = Wrap($$"""
-            Pooled<int> lease = default;
+            PreparedPooled<int> lease = default;
             for (int index = 0; index < 3; index++) { {{body}} }
             """);
         AssertCompiles(source);
@@ -188,8 +188,8 @@ public sealed class NativePooledAcquisitionOverwriteAnalyzerTests
         {
             public static void Run(bool condition)
             {
-                using NativePool<int> left = new(new NativePoolPreparation(4, 16, 2), null);
-                using NativePool<int> right = new(new NativePoolPreparation(4, 16, 2), null);
+                using NativePreparedPool<int> left = new(new NativePoolPreparation(4, 16, 2), null);
+                using NativePreparedPool<int> right = new(new NativePoolPreparation(4, 16, 2), null);
                 {{body}}
             }
         }

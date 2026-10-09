@@ -82,13 +82,13 @@ public sealed class NativeFastPoolProbeContractTests
     [Fact]
     public void PreparedProbesDistinguishSlotBanksFromWholePageRetention()
     {
-        using NativePool<int> pool = new(new NativePoolPreparation(4, 1, 2), budget: null);
+        using NativePreparedPool<int> pool = new(new NativePoolPreparation(4, 1, 2), budget: null);
         Expected expected = new() { PageCapacity = 2, Ordinals = [1, 2] };
         Verify(pool, expected);
-        using (Pooled<int> survivor = pool.Rent(1, static writer => writer.Write(23)))
+        using (PreparedPooled<int> survivor = pool.Rent(1, static writer => writer.Write(23)))
         {
             Verify(pool, expected with { Records = 1 });
-            using (Pooled<int> other = pool.Rent(1, static writer => writer.Write(29)))
+            using (PreparedPooled<int> other = pool.Rent(1, static writer => writer.Write(29)))
             {
                 Verify(pool, expected with { Records = 2 });
                 other.Access(_ => Verify(pool, expected with { Records = 2, Operations = 1 }));
@@ -188,18 +188,25 @@ public sealed class NativeFastPoolProbeContractTests
     }
 
     [Fact]
-    public void ProbeInventoryExactlyMatchesAllTypedObservationsAndExecutableProofs()
+    public void ProbeInventoryExactlyMatchesAllTypedObservationsAndExecutableProofs() =>
+        VerifyInventory(typeof(NativePool<int>), "native-fast-pool-probe-contracts.json", 13);
+
+    [Fact]
+    public void PreparedProbeInventoryExactlyMatchesAllActualTypedObservationsAndProofs() =>
+        VerifyInventory(typeof(NativePreparedPool<int>), "native-prepared-pool-probe-contracts.json", 6);
+
+    private static void VerifyInventory(Type ownerType, string fileName, int expectedCount)
     {
         string root = RepositoryTestPaths.Root;
-        using JsonDocument document = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "conformance", "native-fast-pool-probe-contracts.json")));
+        using JsonDocument document = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "conformance", fileName)));
         JsonElement registry = document.RootElement;
         Assert.False(registry.GetProperty("completeReleaseInventory").GetBoolean());
         foreach (string key in new[] { "scope", "consistency", "resetPolicy", "unreviewedScope" })
             Assert.False(string.IsNullOrWhiteSpace(registry.GetProperty(key).GetString()), key);
-        PropertyInfo[] observations = typeof(NativePool<int>).GetProperties(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly)
+        PropertyInfo[] observations = ownerType.GetProperties(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly)
             .OrderBy(static property => property.Name, StringComparer.Ordinal).ToArray();
         JsonElement[] fields = registry.GetProperty("fields").EnumerateArray().ToArray();
-        Assert.Equal(13, observations.Length);
+        Assert.Equal(expectedCount, observations.Length);
         Assert.Equal(observations.Select(static property => property.Name), fields.Select(static field => field.GetProperty("name").GetString()!).Order(StringComparer.Ordinal), StringComparer.Ordinal);
         foreach (JsonElement field in fields)
         {
@@ -234,6 +241,25 @@ public sealed class NativeFastPoolProbeContractTests
         Assert.Equal(0, pool.CurrentScopeEpochForTest);
         Assert.Equal(0, pool.GenerationCounterForTest);
         Assert.Equal(expected.Ordinals, pool.CurrentSegmentOrdinalsForTest);
+    }
+
+    private static void Verify(NativePreparedPool<int> pool, Expected expected)
+    {
+        Assert.Equal(expected.Lifecycle, pool.CurrentLifecycle);
+        Assert.Equal(expected.Records, pool.CurrentAllocationRecordCountForTest);
+        Assert.Equal(expected.Initializations, pool.CurrentInitializationCountForTest);
+        Assert.Equal(expected.Operations, pool.CurrentGenerationActiveOperationsForTest);
+        Assert.Equal((expected.SlabCapacity, expected.SlabCapacity, 0, expected.PageCapacity), pool.CurrentBankCapacitiesForTest);
+        Assert.Equal(expected.Ordinals, pool.CurrentSegmentOrdinalsForTest);
+        NativeOwnerDiagnosticSnapshot actual = pool.CaptureDiagnosticSnapshot();
+        Assert.Equal(expected.Lifecycle, actual.Lifecycle);
+        Assert.Equal(expected.Records, actual.ActiveRecords);
+        Assert.Equal(0, actual.ReferenceRoots);
+        Assert.Equal(0, actual.RetiredGenerationCount);
+        Assert.Equal(0, actual.QuarantinedGenerationCount);
+        Assert.Equal(0, actual.QuarantinedSegmentCount);
+        Assert.Equal(0, actual.ScopeEpoch);
+        Assert.Equal(0, actual.Generation);
     }
 
     private sealed record Expected

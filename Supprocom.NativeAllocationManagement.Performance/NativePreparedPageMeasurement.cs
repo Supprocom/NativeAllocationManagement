@@ -45,6 +45,7 @@ internal static class NativePreparedPageMeasurement
         bool managed = implementation == PreparedPageImplementation.ManagedExactPages;
         NativeMemoryBudget? budget = null;
         NativePool<byte>? pool = null;
+        NativePreparedPool<byte>? preparedPool = null;
         byte[][]? pages = null;
         int pageCount = SlotCount / SlotsPerPage;
         NativeMemoryStatistics original = NativeMemoryDiagnostics.Snapshot();
@@ -77,16 +78,18 @@ internal static class NativePreparedPageMeasurement
                     budget = new NativeMemoryBudget(SlotCount * SlotBytes,
                         implementation == PreparedPageImplementation.PreparedTrace ? 64 : 0);
                 }
-                pool = prepared
-                    ? new NativePool<byte>(new NativePoolPreparation(SlotCount, SlotBytes, SlotsPerPage), budget)
-                    : new NativePool<byte>(0, NativeMemoryReturn.ToNativeMemory);
+                if (prepared)
+                    preparedPool = new(new NativePoolPreparation(SlotCount, SlotBytes, SlotsPerPage), budget);
+                else
+                    pool = new(0, NativeMemoryReturn.ToNativeMemory);
             }
             phases[0] = clock.End("preparation", 1, 0, process);
 
             clock = PageClock.Start(process);
             for (int round = 0; round < WarmupRounds; round++)
             {
-                long warm = managed ? VisitManaged(pages!, 0) : VisitNative(pool!, 0);
+                long warm = managed ? VisitManaged(pages!, 0)
+                    : preparedPool is not null ? VisitPrepared(preparedPool, 0) : VisitNative(pool!, 0);
                 if (warm != ExpectedChecksum(1)) throw new InvalidDataException("Warm-up output differs.");
             }
             phases[1] = clock.End("warm-up", WarmupRounds, ExpectedChecksum(WarmupRounds), process);
@@ -96,7 +99,8 @@ internal static class NativePreparedPageMeasurement
             foreach (ref long ticks in roundTicks.AsSpan())
             {
                 long start = Stopwatch.GetTimestamp();
-                checksum += managed ? VisitManaged(pages!, 0) : VisitNative(pool!, 0);
+                checksum += managed ? VisitManaged(pages!, 0)
+                    : preparedPool is not null ? VisitPrepared(preparedPool, 0) : VisitNative(pool!, 0);
                 ticks = Stopwatch.GetTimestamp() - start;
             }
             phases[2] = clock.End("prepared reuse", rounds, checksum, process);
@@ -121,13 +125,29 @@ internal static class NativePreparedPageMeasurement
                 retainedAfterReturn = 0;
                 phases[3] = clock.End("sparse maintenance", 1, sparseChecksum, process);
             }
+            else if (preparedPool is not null)
+            {
+                ownedAcquisitions = preparedPool.GetStatistics().FreshSegmentAllocationCount;
+                metadataBytes = preparedPool.CapturePreparedSnapshot().ManagedBankBytes;
+                retainedBeforeTrim = preparedPool.GetStatistics().RetainedBytes;
+                expectedSparseBytes = SlotBytes * SlotsPerPage;
+                clock = PageClock.Start(process);
+                using (PreparedPooled<byte> survivor = preparedPool.Rent(SlotBytes, Fill))
+                {
+                    _ = preparedPool.TrimRetainedMemory();
+                    retainedAfterTrim = preparedPool.GetStatistics().RetainedBytes;
+                    sparseChecksum = survivor.Read(Check);
+                }
+                _ = preparedPool.TrimRetainedMemory();
+                retainedAfterReturn = preparedPool.GetStatistics().RetainedBytes;
+                phases[3] = clock.End("sparse maintenance", 1, sparseChecksum, process);
+            }
             else
             {
                 ownedAcquisitions = pool!.GetStatistics().FreshSegmentAllocationCount;
-                bool prepared = implementation != PreparedPageImplementation.OrdinaryNativePool;
-                metadataBytes = prepared ? pool.CapturePreparedSnapshot().ManagedBankBytes : null;
+                metadataBytes = null;
                 retainedBeforeTrim = pool.GetStatistics().RetainedBytes;
-                expectedSparseBytes = prepared ? SlotBytes * SlotsPerPage : SlotBytes;
+                expectedSparseBytes = SlotBytes;
                 clock = PageClock.Start(process);
                 using (Pooled<byte> survivor = pool.Rent(SlotBytes, Fill))
                 {
@@ -142,20 +162,17 @@ internal static class NativePreparedPageMeasurement
 
             clock = PageClock.Start(process);
             if (managed) Array.Clear(pages!);
+            else if (preparedPool is not null)
+            {
+                NativePreparedPool<byte> terminalPool = preparedPool;
+                terminalPool.Dispose();
+                preparedPool = null;
+                terminalPrepared = terminalPool.CapturePreparedSnapshot();
+            }
             else
             {
-                if (implementation != PreparedPageImplementation.OrdinaryNativePool)
-                {
-                    NativePool<byte> terminalPool = pool!;
-                    terminalPool.Dispose();
-                    pool = null;
-                    terminalPrepared = terminalPool.CapturePreparedSnapshot();
-                }
-                else
-                {
-                    pool!.Dispose();
-                    pool = null;
-                }
+                pool!.Dispose();
+                pool = null;
             }
             terminalBudget = budget?.CaptureStatistics();
             phases[4] = clock.End("cleanup", 1, 0, process);
@@ -183,6 +200,7 @@ internal static class NativePreparedPageMeasurement
         finally
         {
             pool?.Dispose();
+            preparedPool?.Dispose();
             if (pages is not null) Array.Clear(pages);
         }
     }
@@ -195,6 +213,13 @@ internal static class NativePreparedPageMeasurement
     {
         using Pooled<byte> lease = pool.Rent(SlotBytes, Fill);
         long checksum = index + 1 < SlotCount ? VisitNative(pool, index + 1) : 0;
+        return checksum + lease.Read(Check);
+    }
+
+    private static long VisitPrepared(NativePreparedPool<byte> pool, int index)
+    {
+        using PreparedPooled<byte> lease = pool.Rent(SlotBytes, Fill);
+        long checksum = index + 1 < SlotCount ? VisitPrepared(pool, index + 1) : 0;
         return checksum + lease.Read(Check);
     }
 

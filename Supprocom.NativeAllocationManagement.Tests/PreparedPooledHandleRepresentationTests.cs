@@ -3,17 +3,17 @@ using System.Runtime.CompilerServices;
 
 namespace Supprocom.NativeAllocationManagement.Tests;
 
-public sealed class PooledHandleRepresentationTests
+public sealed class PreparedPooledHandleRepresentationTests
 {
     [Fact]
     public void ClosedHandlesKeepAuthorityWithoutAnUnusedPayloadPointer()
     {
         Assert.Equal(8, IntPtr.Size);
-        Assert.Equal(32, Unsafe.SizeOf<Pooled<byte>>());
-        Assert.Equal(32, Unsafe.SizeOf<Pooled<int>>());
+        Assert.Equal(32, Unsafe.SizeOf<PreparedPooled<byte>>());
+        Assert.Equal(32, Unsafe.SizeOf<PreparedPooled<int>>());
         Assert.Equal(16, Unsafe.SizeOf<Span<byte>>());
         Assert.Equal(16, Unsafe.SizeOf<Span<int>>());
-        string[] fields = typeof(Pooled<int>).GetFields(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly)
+        string[] fields = typeof(PreparedPooled<int>).GetFields(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly)
             .Select(static field => field.Name).Order(StringComparer.Ordinal).ToArray();
         Assert.Equal(["_capacity", "_kernel", "_length", "_slabIndex", "_token"], fields);
     }
@@ -21,11 +21,11 @@ public sealed class PooledHandleRepresentationTests
     [Fact]
     public void ReusedSlotStillRejectsOldAuthorityAndResolvesActualEnteredStorage()
     {
-        using NativePool<int> pool = new(preLease: 2, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        Pooled<int> initial = pool.Rent(2, static writer => writer.Fill(7));
-        Pooled<int> stale = initial;
+        using NativePreparedPool<int> pool = new(new NativePoolPreparation(1, 2, 1), budget: null);
+        PreparedPooled<int> initial = pool.Rent(2, static writer => writer.Fill(7));
+        PreparedPooled<int> stale = initial;
         initial.Dispose();
-        using Pooled<int> current = pool.Rent(2, static writer => writer.Fill(31));
+        using PreparedPooled<int> current = pool.Rent(2, static writer => writer.Fill(31));
         Assert.Equal(2, current.Length);
         Assert.Equal(2, current.Capacity);
         Assert.True(IsReturned(stale, dispose: false));
@@ -52,7 +52,7 @@ public sealed class PooledHandleRepresentationTests
     [InlineData(true)]
     public void DefaultHandleHasOnlyMetadataAndNeverGainsPayloadOrReturnAuthority(bool dispose)
     {
-        Pooled<int> missing = default;
+        PreparedPooled<int> missing = default;
         Assert.Equal(0, missing.Length);
         Assert.Equal(0, missing.Capacity);
         try
@@ -63,34 +63,12 @@ public sealed class PooledHandleRepresentationTests
         }
         catch (NativeAllocationUninitializedException exception)
         {
-            Assert.Equal(nameof(Pooled<int>), exception.OwnerKind);
-            Assert.Equal(dispose ? nameof(Pooled<int>.Dispose) : nameof(Pooled<int>.Read), exception.Operation);
+            Assert.Equal(nameof(PreparedPooled<int>), exception.OwnerKind);
+            Assert.Equal(dispose ? nameof(PreparedPooled<int>.Dispose) : nameof(PreparedPooled<int>.Read), exception.Operation);
         }
     }
 
-    [Fact]
-    public void ProcessCannotExposeUninitializedCapacityBeyondThePublishedLogicalLength()
-    {
-        using NativePool<int> pool = new(preLease: 4, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        using Pooled<int> lease = pool.Rent(1, static writer => writer.Write(42));
-        int calls = 0;
-        bool rejected = false;
-        try
-        {
-            _ = lease.Process(2, 0, (values, _) => { calls++; return values.Length; });
-        }
-        catch (ArgumentOutOfRangeException)
-        {
-            rejected = true;
-        }
-        Assert.True(rejected);
-        Assert.Equal(0, calls);
-        Assert.Equal(4, lease.Capacity);
-        Assert.Equal(1, lease.Length);
-        Assert.Equal(42, lease.Read(static view => view[0]));
-    }
-
-    private static bool IsReturned(scoped Pooled<int> value, bool dispose)
+    private static bool IsReturned(scoped PreparedPooled<int> value, bool dispose)
     {
         try
         {

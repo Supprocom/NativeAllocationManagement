@@ -121,7 +121,7 @@ public sealed class NativeBudgetHistoryTests
         SetHistory(budget, "_allocationCount", long.MaxValue);
         SetHistory(budget, "_freeCount", long.MaxValue);
         NativeMemoryTestHooks.FailAtManagedPublicationBoundary(3);
-        Assert.Throws<InvalidOperationException>(() => new NativePool<int>(new NativePoolPreparation(4, 1, 2), budget));
+        Assert.Throws<InvalidOperationException>(() => new NativePreparedPool<int>(new NativePoolPreparation(4, 1, 2), budget));
         NativeMemoryBudgetStatistics released = budget.CaptureStatistics();
         Assert.Equal(0, released.CommittedBytes);
         Assert.Equal(0, released.ReservedBytes);

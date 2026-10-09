@@ -33,7 +33,7 @@ public sealed class NativePreparedPackedPageTests
         int slotBytes = checked(3 * Unsafe.SizeOf<T>());
         long totalBytes = checked(5L * slotBytes);
         NativeMemoryBudget budget = new(totalBytes);
-        using NativePool<T> pool = new(new NativePoolPreparation(5, 3, 3), budget);
+        using NativePreparedPool<T> pool = new(new NativePoolPreparation(5, 3, 3), budget);
         Assert.Equal(totalBytes, pool.CapturePreparedSnapshot().RetainedBytes);
         Assert.Equal(totalBytes, budget.CaptureStatistics().CommittedBytes);
         Assert.Equal(2, pool.GetStatistics().FreshSegmentAllocationCount);
@@ -59,9 +59,9 @@ public sealed class NativePreparedPackedPageTests
         return ((IntPtr)slot.GetType().GetField("Pointer", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(slot)!).ToInt64();
     }
 
-    private static void HoldSlots<T>(NativePool<T> pool, int count, T value, T alternate) where T : unmanaged, IEquatable<T>
+    private static void HoldSlots<T>(NativePreparedPool<T> pool, int count, T value, T alternate) where T : unmanaged, IEquatable<T>
     {
-        using Pooled<T> lease = pool.Rent(3, writer => writer.Fill(value));
+        using PreparedPooled<T> lease = pool.Rent(3, writer => writer.Fill(value));
         if (count > 1) HoldSlots(pool, count - 1, alternate, value);
         else Assert.Equal(5, pool.CapturePreparedSnapshot().OccupiedSlotCount);
         Assert.True(lease.Process(3, value, static (values, expected) =>

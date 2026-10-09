@@ -38,8 +38,8 @@ public sealed class PackageSmokeTests
                 {
                     public static void Run()
                     {
-                        using NativePool<int> pool = new(new NativePoolPreparation(4, 16, 2), null);
-                        if (!pool.TryRent(4, static writer => writer.Fill(1), out Pooled<int> lease, out _)) return;
+                        using NativePreparedPool<int> pool = new(new NativePoolPreparation(4, 16, 2), null);
+                        if (!pool.TryRent(4, static writer => writer.Fill(1), out PreparedPooled<int> lease, out _)) return;
                         {{replacement}}
                     }
                 }
@@ -70,8 +70,8 @@ public sealed class PackageSmokeTests
             await File.WriteAllTextAsync(Path.Combine(consumerRoot, "Program.cs"), """
                 using System;
                 using Supprocom.NativeAllocationManagement;
-                using NativePool<int> pool = new(new NativePoolPreparation(4, 16, 2), null);
-                if (!pool.TryRent(4, static writer => writer.Fill(1), out Pooled<int> lease, out _)) throw new InvalidOperationException();
+                using NativePreparedPool<int> pool = new(new NativePoolPreparation(4, 16, 2), null);
+                if (!pool.TryRent(4, static writer => writer.Fill(1), out PreparedPooled<int> lease, out _)) throw new InvalidOperationException();
                 lease.Dispose();
                 if (!pool.TryRent(4, static writer => writer.Fill(2), out lease, out _)) throw new InvalidOperationException();
                 int value = lease.Read(static view => view[0]);
@@ -901,9 +901,9 @@ public sealed class PackageSmokeTests
                     public static int Main()
                     {
                         NativeMemoryBudget budget = new(128, traceCapacity: 8);
-                        using (NativePool<int> pool = new(new NativePoolPreparation(2, 4, 2), budget))
+                        using (NativePreparedPool<int> pool = new(new NativePoolPreparation(2, 4, 2), budget))
                         {
-                            if (!pool.TryRent(4, static writer => writer.Fill(42), out Pooled<int> lease, out _)) return 1;
+                            if (!pool.TryRent(4, static writer => writer.Fill(42), out PreparedPooled<int> lease, out _)) return 1;
                             try { if (lease.Read(static view => view[0]) != 42) return 2; }
                             finally { lease.Dispose(); }
                             NativePreparedPoolStatistics snapshot = pool.CapturePreparedSnapshot();
@@ -1173,8 +1173,8 @@ public sealed class PackageSmokeTests
                 {
                     public static void Main()
                     {
-                        using NativePool<int> pool = new(new NativePoolPreparation(2, 4, 2), null);
-                        pool.TryRent(4, static writer => writer.Fill(42), out Pooled<int> lease, out _);
+                        using NativePreparedPool<int> pool = new(new NativePoolPreparation(2, 4, 2), null);
+                        pool.TryRent(4, static writer => writer.Fill(42), out PreparedPooled<int> lease, out _);
                         lease.Dispose();
                     }
                 }

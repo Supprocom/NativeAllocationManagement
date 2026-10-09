@@ -220,9 +220,9 @@ public sealed class NativeProductionAccountingTests
     public void PreparedOperationsAndRepeatedPublicSnapshotsAllocateNoManagedStorage()
     {
         NativeMemoryBudget budget = new(1_024);
-        using NativePool<int> pool = new(new NativePoolPreparation(1, 4, 1), budget);
+        using NativePreparedPool<int> pool = new(new NativePoolPreparation(1, 4, 1), budget);
         NativeLeaseInitializer<int> initialize = static writer => writer.Fill(42);
-        if (pool.TryRent(4, initialize, out Pooled<int> warm, out _))
+        if (pool.TryRent(4, initialize, out PreparedPooled<int> warm, out _))
         {
             warm.Dispose();
         }
@@ -231,7 +231,7 @@ public sealed class NativeProductionAccountingTests
         long checksum = 0;
         for (int iteration = 0; iteration < 1_000; iteration++)
         {
-            if (!pool.TryRent(4, initialize, out Pooled<int> value, out _))
+            if (!pool.TryRent(4, initialize, out PreparedPooled<int> value, out _))
             {
                 throw new InvalidOperationException("Prepared accounting test exhausted.");
             }
@@ -304,8 +304,8 @@ public sealed class NativeProductionAccountingTests
         NativeMemoryTestHooks.Reset();
         try
         {
-            using NativePool<int> pool = new(new NativePoolPreparation(1, 4, 1), new NativeMemoryBudget(512));
-            Assert.True(pool.TryRent(4, static writer => writer.Fill(42), out Pooled<int> value, out _));
+            using NativePreparedPool<int> pool = new(new NativePoolPreparation(1, 4, 1), new NativeMemoryBudget(512));
+            Assert.True(pool.TryRent(4, static writer => writer.Fill(42), out PreparedPooled<int> value, out _));
             using (value)
             {
                 value.Access(static view => view.AsSpan().Clear());

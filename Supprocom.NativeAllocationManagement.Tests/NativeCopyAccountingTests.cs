@@ -58,18 +58,18 @@ public sealed class NativeCopyAccountingTests
         try
         {
             NativeMemoryBudget budget = new(512);
-            using NativePool<int> pool = new(new NativePoolPreparation(1, 4, 1), budget);
+            using NativePreparedPool<int> pool = new(new NativePoolPreparation(1, 4, 1), budget);
             NativeLeaseInitializer<int> initialize = static writer => writer.Write(Input.AsSpan());
             int[] exported = new int[4];
             NativeLeaseAction<int> export = view => view.CopyTo(exported);
-            Assert.True(pool.TryRent(4, initialize, out Pooled<int> warm, out _));
+            Assert.True(pool.TryRent(4, initialize, out PreparedPooled<int> warm, out _));
             warm.Access(export);
             warm.Dispose();
             long beforeCopies = NativeMemoryDiagnostics.Snapshot().CopiedBytes;
             long beforeAllocations = GC.GetAllocatedBytesForCurrentThread();
             for (int iteration = 0; iteration < 1_000; iteration++)
             {
-                if (!pool.TryRent(4, initialize, out Pooled<int> value, out _))
+                if (!pool.TryRent(4, initialize, out PreparedPooled<int> value, out _))
                     throw new InvalidOperationException("Prepared copy fixture exhausted.");
                 value.Access(export);
                 value.Dispose();
@@ -88,8 +88,8 @@ public sealed class NativeCopyAccountingTests
         NativeMemoryTestHooks.Reset();
         try
         {
-            using NativePool<int> pool = new(new NativePoolPreparation(1, 4, 1), new NativeMemoryBudget(512));
-            Assert.True(pool.TryRent(4, static writer => writer.Fill(42), out Pooled<int> value, out _));
+            using NativePreparedPool<int> pool = new(new NativePoolPreparation(1, 4, 1), new NativeMemoryBudget(512));
+            Assert.True(pool.TryRent(4, static writer => writer.Fill(42), out PreparedPooled<int> value, out _));
             using (value)
             {
                 value.Access(static view =>
@@ -156,8 +156,8 @@ public sealed class NativeCopyAccountingTests
             NativeMemoryAccounting.PrepareThread();
             object metrics = typeof(NativeMemoryAccounting).GetField("_threadHotMetrics", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)!;
             metrics.GetType().GetField("CopiedBytes", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(metrics, long.MaxValue);
-            using NativePool<int> pool = new(new NativePoolPreparation(1, 4, 1), new NativeMemoryBudget(512));
-            Assert.True(pool.TryRent(4, static writer => writer.Write(Input.AsSpan()), out Pooled<int> value, out _));
+            using NativePreparedPool<int> pool = new(new NativePoolPreparation(1, 4, 1), new NativeMemoryBudget(512));
+            Assert.True(pool.TryRent(4, static writer => writer.Write(Input.AsSpan()), out PreparedPooled<int> value, out _));
             using (value)
             {
                 Assert.Equal(29, value.Read(static view => view[3]));

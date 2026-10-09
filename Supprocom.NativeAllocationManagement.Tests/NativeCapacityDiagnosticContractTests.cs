@@ -26,7 +26,7 @@ public sealed class NativeCapacityDiagnosticContractTests
     [Fact]
     public void InitializingSlotIsOccupiedBeforePublicationAndFailureRollsBackEveryGauge()
     {
-        using NativePool<int> pool = new(new NativePoolPreparation(1, 1, 1), budget: null);
+        using NativePreparedPool<int> pool = new(new NativePoolPreparation(1, 1, 1), budget: null);
         NativeCapacityDiagnosticOracle.Pool expected = new()
         {
             OwnerId = pool.Id,
@@ -37,7 +37,7 @@ public sealed class NativeCapacityDiagnosticContractTests
             AvailableSlotCount = 1,
             RetainedBytes = 4,
             PeakRetainedBytes = 4,
-            ManagedBankBytes = 64 + 40 + 128,
+            ManagedBankBytes = 32 + 40,
             UnusedSlotBytes = 4
         };
         Assert.Throws<InvalidOperationException>(() => pool.Rent(1, _ =>
@@ -48,7 +48,7 @@ public sealed class NativeCapacityDiagnosticContractTests
         }));
         expected = expected with { PeakOccupiedSlotCount = 1, InitializerFailureCount = 1 };
         NativeCapacityDiagnosticOracle.Verify(pool.CapturePreparedSnapshot(), expected, "slot-failure-restores-authority-not-peak");
-        using (Pooled<int> retry = pool.Rent(1, static writer => writer.Write(42)))
+        using (PreparedPooled<int> retry = pool.Rent(1, static writer => writer.Write(42)))
         {
             NativeCapacityDiagnosticOracle.Verify(pool.CapturePreparedSnapshot(), expected with
             { OccupiedSlotCount = 1, AvailableSlotCount = 0, UnusedSlotBytes = 0, SuccessfulRentCount = 1 }, "same-slot-retry");
@@ -168,9 +168,9 @@ public sealed class NativeCapacityDiagnosticContractTests
         NativeMemoryBudget budget = new(512);
         if (kind == 0)
         {
-            using NativePool<int> pool = new(new NativePoolPreparation(1, 1, 1), budget);
+            using NativePreparedPool<int> pool = new(new NativePoolPreparation(1, 1, 1), budget);
             SetCounter(pool, "_successfulPreparedRents");
-            using (Pooled<int> value = pool.Rent(1, static writer => writer.Write(42)))
+            using (PreparedPooled<int> value = pool.Rent(1, static writer => writer.Write(42)))
             {
                 NativeCapacityDiagnosticOracle.Verify(pool.CapturePreparedSnapshot(), new NativeCapacityDiagnosticOracle.Pool
                 {
@@ -183,7 +183,7 @@ public sealed class NativeCapacityDiagnosticContractTests
                     PeakOccupiedSlotCount = 1,
                     RetainedBytes = 4,
                     PeakRetainedBytes = 4,
-                    ManagedBankBytes = 232,
+                    ManagedBankBytes = 72,
                     SuccessfulRentCount = long.MaxValue,
                     HistoryOverflowed = true
                 }, "saturated-pool-published");
@@ -197,7 +197,7 @@ public sealed class NativeCapacityDiagnosticContractTests
                 Preparation = new(1, 1, 1),
                 PeakOccupiedSlotCount = 1,
                 PeakRetainedBytes = 4,
-                ManagedBankBytes = 232,
+                ManagedBankBytes = 72,
                 SuccessfulRentCount = long.MaxValue,
                 HistoryOverflowed = true
             }, "saturated-pool-cleanup");
@@ -257,8 +257,8 @@ public sealed class NativeCapacityDiagnosticContractTests
     [Fact]
     public void IndependentBackingAndBankRepresentationMatchesActualStorage()
     {
-        Type slab = typeof(NativePool<int>).GetNestedType("Slab", BindingFlags.NonPublic)!.MakeGenericType(typeof(int));
-        Type page = typeof(NativePool<int>).GetNestedType("Page", BindingFlags.NonPublic)!.MakeGenericType(typeof(int));
+        Type slab = typeof(NativePreparedPool<int>).GetNestedType("Slot", BindingFlags.NonPublic)!.MakeGenericType(typeof(int));
+        Type page = typeof(NativePreparedPool<int>).GetNestedType("Page", BindingFlags.NonPublic)!.MakeGenericType(typeof(int));
         MethodInfo size = typeof(NativeCapacityDiagnosticContractTests).GetMethod(nameof(ElementSize), BindingFlags.Static | BindingFlags.NonPublic)!;
         Assert.Equal(NativeCapacityDiagnosticOracle.PoolSlotBytes, (int)size.MakeGenericMethod(slab).Invoke(null, null)!);
         Assert.Equal(NativeCapacityDiagnosticOracle.PoolPageBytes, (int)size.MakeGenericMethod(page).Invoke(null, null)!);
@@ -266,9 +266,10 @@ public sealed class NativeCapacityDiagnosticContractTests
         int headerSize = (int)size.MakeGenericMethod(header).Invoke(null, null)!;
         Assert.Equal(56, headerSize);
         Assert.Equal(NativeCapacityDiagnosticOracle.ArenaHeaderBytes, (headerSize + 63) / 64 * 64);
-        FieldInfo freeHeads = typeof(NativePool<int>).GetField("_freeHeads", BindingFlags.Instance | BindingFlags.NonPublic)!;
-        using NativePool<int> pool = new(new NativePoolPreparation(3, 17, 2), budget: null);
-        Assert.Equal(NativeCapacityDiagnosticOracle.PoolFreeHeadBytes, ((int[])freeHeads.GetValue(pool)!).Length * sizeof(int));
+        using NativePreparedPool<int> pool = new(new NativePoolPreparation(3, 17, 2), budget: null);
+        Assert.Null(typeof(NativePreparedPool<int>).GetField("_freeHeads", BindingFlags.Instance | BindingFlags.NonPublic));
+        Assert.Null(typeof(NativePreparedPool<int>).GetField("_nonEmptyFreeClasses", BindingFlags.Instance | BindingFlags.NonPublic));
+        Assert.Equal(2, (int)typeof(NativePreparedPool<int>).GetField("_freeHead", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(pool)!);
         NativeCapacityDiagnosticOracle.Verify(pool.CapturePreparedSnapshot(), new NativeCapacityDiagnosticOracle.Pool
         {
             OwnerId = pool.Id,
@@ -279,7 +280,7 @@ public sealed class NativeCapacityDiagnosticContractTests
             AvailableSlotCount = 3,
             RetainedBytes = 204,
             PeakRetainedBytes = 204,
-            ManagedBankBytes = 3 * 64 + 2 * 40 + 128,
+            ManagedBankBytes = 3 * 32 + 2 * 40,
             UnusedSlotBytes = 3 * 17 * sizeof(int)
         }, "two-pages-short-final-page-packed-slots");
     }

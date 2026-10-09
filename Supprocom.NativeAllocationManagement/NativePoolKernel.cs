@@ -17,8 +17,6 @@ public sealed unsafe partial class NativePool<T>
     private readonly int _ownerThreadId;
     private readonly int[] _freeHeads = [];
     private Slab[] _slabs = [];
-    private readonly Page[] _pages = [];
-    private readonly NativePoolPreparation _preparation;
     private uint _nonEmptyFreeClasses;
     private NativeOwnerLifecycle _lifecycle;
     private int _slabCount;
@@ -35,12 +33,7 @@ public sealed unsafe partial class NativePool<T>
     private long _trimCallCount;
     private long _freshSegmentAllocationCount;
     private long _nextAllocationOrdinal;
-    private int _peakOccupiedSlots;
     private long _peakRetainedBytes;
-    private long _successfulPreparedRents;
-    private long _rejectedPreparedShapes;
-    private long _rejectedPreparedFull;
-    private long _preparedInitializerFailures;
     private bool _historyOverflowed;
 
     private NativePool(
@@ -92,120 +85,6 @@ public sealed unsafe partial class NativePool<T>
         }
     }
 
-    /// <summary>Prepares all fixed-shape slot metadata and backing pages without subsequent growth.</summary>
-    /// <remarks>
-    /// Preparation admits every page before acquiring backing or metadata.
-    /// Dispose returns backing deterministically after all leases return.
-    /// Trim removes idle pages without implicit refill; original bounds remain diagnostic.
-    /// Prepared slots are packed using the CLR element stride, without cache-line
-    /// padding or an additional SIMD-address alignment guarantee.
-    /// </remarks>
-    /// <param name="preparation">The positive simultaneous shape and page bounds.</param>
-    /// <param name="budget">The optional shared backing domain, or null for no byte ceiling.</param>
-    public NativePool(NativePoolPreparation preparation, NativeMemoryBudget? budget)
-    {
-        Id = NativeOwnerIdentity.Next();
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(preparation.SlotCount, nameof(preparation));
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(preparation.SlotCapacity, nameof(preparation));
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(preparation.SlotsPerPage, nameof(preparation));
-        _returnMemoryOnDispose = NativeMemoryReturn.ToNativeMemory;
-        _budget = budget;
-        _ownerThreadId = Environment.CurrentManagedThreadId;
-        _preparation = preparation;
-        nuint slotBytes = CalculateByteLength(preparation.SlotCapacity);
-        // This owner is thread-confined and exposes ordinary typed spans, not
-        // aligned SIMD addresses. Consecutive slots use the CLR element stride;
-        // cache-line padding and an over-aligned backend add no authority.
-        nuint stride = slotBytes;
-        nuint totalBytes = checked(stride * (nuint)preparation.SlotCount);
-        _ = checked((long)totalBytes);
-        _budget?.Reserve(totalBytes, Id);
-        nuint remainingReservation = totalBytes;
-        bool prepared = false;
-        try
-        {
-            NativeMemoryTestHooks.CheckManagedPublicationBoundary("NativePool.Preparation", 1, "metadata banks");
-            _freeHeads = new int[SizeClassCount];
-            Array.Fill(_freeHeads, -1);
-            _slabs = new Slab[preparation.SlotCount];
-            _pages = new Page[1 + (preparation.SlotCount - 1) / preparation.SlotsPerPage];
-            _lifecycle = NativeOwnerLifecycle.Active;
-            foreach (ref Page page in _pages.AsSpan())
-            {
-                long ordinal = checked(++_nextAllocationOrdinal);
-                NativeMemoryTestHooks.CheckManagedPublicationBoundary("NativePool.Preparation",
-                    checked((int)ordinal + 1), "page acquisition");
-                int firstSlot = _slabCount;
-                int slots = Math.Min(preparation.SlotsPerPage, preparation.SlotCount - firstSlot);
-                nuint bytes = checked(stride * (nuint)slots);
-                void* memory = null;
-                bool committed = false;
-                long epoch = 0;
-                try
-                {
-                    long prospectiveBytes = checked(_retainedBytes + checked((long)bytes));
-                    if (NativeMemoryTestHooks.ConsumeForcedFailure())
-                    {
-                        throw CreateAllocationFailure(bytes, "page preparation");
-                    }
-                    memory = NativeMemory.Alloc(bytes);
-                    if (memory == null)
-                    {
-                        throw CreateAllocationFailure(bytes, "page preparation");
-                    }
-                    _peakRetainedBytes = Math.Max(_peakRetainedBytes, prospectiveBytes);
-                    epoch = NativeMemoryAccounting.RecordAllocation(bytes, zeroed: false);
-                    _budget?.Commit(bytes, Id, NativeMemoryTraceKind.PageAcquired, ordinal);
-                    remainingReservation -= bytes;
-                    committed = true;
-                    page = new Page((IntPtr)memory, bytes, firstSlot, slots,
-                        epoch, ordinal);
-                    _retainedBytes = prospectiveBytes;
-                    IncrementHistory(ref _freshSegmentAllocationCount);
-                    for (int offset = 0; offset < slots; offset++)
-                    {
-                        int index = _slabCount++;
-                        _slabs[index] = new Slab
-                        {
-                            Pointer = (IntPtr)((byte*)memory + checked(stride * (nuint)offset)),
-                            Capacity = preparation.SlotCapacity,
-                            State = SlabState.Free,
-                            Next = -1
-                        };
-                        PushFreeList(index);
-                    }
-                }
-                finally
-                {
-                    if (!committed && memory != null)
-                    {
-                        NativeMemory.Free(memory);
-                        NativeMemoryAccounting.RecordFree(bytes, detached: false, epoch);
-                    }
-                }
-            }
-            NativeMemoryTestHooks.CheckManagedPublicationBoundary("NativePool.Preparation", _pages.Length + 2, "prepared authority");
-            _budget?.RecordPreparation(totalBytes, Id);
-            prepared = true;
-        }
-        catch (OutOfMemoryException exception)
-        {
-            throw new NativeAllocationFailedException(totalBytes, OwnerKind, 0,
-                "page preparation", _lifecycle, exception);
-        }
-        finally
-        {
-            if (remainingReservation != 0)
-            {
-                _budget?.Cancel(remainingReservation, Id);
-            }
-            if (!prepared)
-            {
-                FreeAll();
-            }
-        }
-    }
-
     internal int CurrentGenerationActiveOperationsForTest
     {
         get
@@ -245,62 +124,7 @@ public sealed unsafe partial class NativePool<T>
 
         int slabIndex = TakeOrAddSlab(length);
 
-        return _preparation.SlotCount == 0
-            ? InitializeSlab(slabIndex, token, length, initializer)
-            : InitializePreparedSlab(slabIndex, token, length, initializer);
-    }
-
-    /// <summary>Publishes a prepared slot, returning false only for expected shape or slot exhaustion.</summary>
-    /// <remarks>Invalid ownership and initialization failures throw; no partial lease is published.</remarks>
-    /// <param name="length">The required initialized elements, at most the prepared shape.</param>
-    /// <param name="initializer">The bounded complete initializer, invoked only after acquiring a slot.</param>
-    /// <param name="lease">The initialized owning capability on success; default on exhaustion.</param>
-    /// <param name="reason">The exact expected capacity refusal, or None on success.</param>
-    /// <returns>True only after initialization and publication.</returns>
-    public bool TryRent(int length, NativeLeaseInitializer<T> initializer,
-        out Pooled<T> lease, out NativePoolExhaustionReason reason)
-    {
-        ArgumentNullException.ThrowIfNull(initializer);
-        ArgumentOutOfRangeException.ThrowIfNegative(length);
-        ValidateOwner(nameof(NativePool<T>.TryRent));
-        ValidatePrepared();
-        if (length > _preparation.SlotCapacity)
-        {
-            IncrementHistory(ref _rejectedPreparedShapes);
-            lease = default;
-            reason = NativePoolExhaustionReason.ShapeExceeded;
-            return false;
-        }
-        if (_returnedSlabIndex < 0 && _nonEmptyFreeClasses == 0)
-        {
-            IncrementHistory(ref _rejectedPreparedFull);
-            lease = default;
-            reason = NativePoolExhaustionReason.NoAvailableSlot;
-            return false;
-        }
-        long token = TakeLeaseToken();
-        int index = TakeOrAddSlab(length);
-        lease = InitializePreparedSlab(index, token, length, initializer);
-        reason = NativePoolExhaustionReason.None;
-        return true;
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private Pooled<T> InitializePreparedSlab(int slabIndex, long token, int length,
-        NativeLeaseInitializer<T> initializer)
-    {
-        _peakOccupiedSlots = Math.Max(_peakOccupiedSlots, _liveLeaseCount + 1);
-        try
-        {
-            Pooled<T> result = InitializeSlab(slabIndex, token, length, initializer);
-            IncrementHistory(ref _successfulPreparedRents);
-            return result;
-        }
-        catch
-        {
-            IncrementHistory(ref _preparedInitializerFailures);
-            throw;
-        }
+        return InitializeSlab(slabIndex, token, length, initializer);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -385,13 +209,8 @@ public sealed unsafe partial class NativePool<T>
         slab.Token = nextToken;
         if (_budget is { TraceEnabled: true } budget)
         {
-            Page page = _preparation.SlotCount == 0
-                ? default : _pages[slabIndex / _preparation.SlotsPerPage];
-            nuint slotExtent = _preparation.SlotCount == 0
-                ? slab.AllocationBytes : page.AllocationBytes / (nuint)page.SlotCount;
             budget.RecordOwnershipTransition(NativeMemoryTraceKind.Moved, Id,
-                nextToken, slotExtent,
-                _preparation.SlotCount == 0 ? slab.Ordinal : page.Ordinal);
+                nextToken, slab.AllocationBytes, slab.Ordinal);
         }
         return nextToken;
     }
@@ -478,23 +297,6 @@ public sealed unsafe partial class NativePool<T>
 
     private (int Retained, int Available, long UsableBytes) GetStorageCounts()
     {
-        if (_preparation.SlotCount != 0)
-        {
-            int pages = 0;
-            int availablePages = 0;
-            long pageUsableBytes = 0;
-            foreach (ref readonly Page page in _pages.AsSpan())
-            {
-                if (page.AllocationBytes == 0)
-                {
-                    continue;
-                }
-                pages++;
-                availablePages += IsPageIdle(page) ? 1 : 0;
-                pageUsableBytes += checked((long)page.SlotCount * _preparation.SlotCapacity * Unsafe.SizeOf<T>());
-            }
-            return (pages, availablePages, pageUsableBytes);
-        }
         int retained = 0;
         int available = 0;
         long usableBytes = 0;
@@ -520,25 +322,6 @@ public sealed unsafe partial class NativePool<T>
         ValidateOwner(nameof(NativePool<T>.TrimRetainedMemory));
         IncrementHistory(ref _trimCallCount);
         nuint released = 0;
-        if (_preparation.SlotCount != 0)
-        {
-            foreach (ref Page page in _pages.AsSpan())
-            {
-                if (released >= byteBudget || page.AllocationBytes == 0 || !IsPageIdle(page))
-                {
-                    continue;
-                }
-                released = checked(released + page.AllocationBytes);
-                foreach (ref Slab slot in _slabs.AsSpan(page.FirstSlot, page.SlotCount))
-                {
-                    slot = default;
-                }
-                FreePage(ref page, trimmed: true);
-            }
-            NativeOwnerHistory.Add(ref _trimmedBytes, checked((long)released), ref _historyOverflowed);
-            RebuildFreeListsWithoutFreedSlabs();
-            return released;
-        }
         RebuildFreeListsWithoutFreedSlabs();
         for (int index = 0; index < _slabCount; index++)
         {
@@ -673,18 +456,6 @@ public sealed unsafe partial class NativePool<T>
             return selectedSlab;
         }
 
-        if (_preparation.SlotCount != 0)
-        {
-            if (length > _preparation.SlotCapacity)
-            {
-                IncrementHistory(ref _rejectedPreparedShapes);
-            }
-            else
-            {
-                IncrementHistory(ref _rejectedPreparedFull);
-            }
-            throw new InvalidOperationException("Prepared pool capacity is exhausted; use TryRent for expected exhaustion.");
-        }
 
         int capacity = RoundCapacity(length);
         return AddSlab(
@@ -1085,11 +856,6 @@ public sealed unsafe partial class NativePool<T>
         }
 #pragma warning restore HLQ013
 
-        foreach (ref Page page in _pages.AsSpan())
-        {
-            FreePage(ref page);
-        }
-
         _retainedBytes = 0;
         _budget = null;
     }
@@ -1224,89 +990,6 @@ public sealed unsafe partial class NativePool<T>
         internal bool Detached;
     }
 
-    [StructLayout(LayoutKind.Sequential)]
-    private readonly struct Page
-    {
-        internal Page(IntPtr pointer, nuint allocationBytes, int firstSlot,
-            int slotCount, long metricsEpoch, long ordinal)
-        {
-            Pointer = pointer;
-            AllocationBytes = allocationBytes;
-            FirstSlot = firstSlot;
-            SlotCount = slotCount;
-            MetricsEpoch = metricsEpoch;
-            Ordinal = ordinal;
-        }
-        internal readonly IntPtr Pointer;
-        internal readonly nuint AllocationBytes;
-        internal readonly int FirstSlot;
-        internal readonly int SlotCount;
-        internal readonly long MetricsEpoch;
-        internal readonly long Ordinal;
-    }
-
-    private bool IsPageIdle(in Page page)
-    {
-        foreach (ref readonly Slab slab in _slabs.AsSpan(page.FirstSlot, page.SlotCount))
-        {
-            if (slab.State != SlabState.Free || slab.BorrowCount != 0)
-            {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private void FreePage(ref Page page, bool trimmed = false)
-    {
-        if (page.AllocationBytes == 0)
-        {
-            return;
-        }
-        nuint bytes = page.AllocationBytes;
-        NativeMemory.Free((void*)page.Pointer);
-        _budget?.Release(bytes, Id,
-            trimmed ? NativeMemoryTraceKind.Trimmed : NativeMemoryTraceKind.Released,
-            page.Ordinal);
-        NativeMemoryAccounting.RecordFree(bytes, detached: false, page.MetricsEpoch);
-        _retainedBytes -= checked((long)bytes);
-        page = default;
-    }
-
-    private void ValidatePrepared()
-    {
-        if (_preparation.SlotCount == 0)
-        {
-            throw new InvalidOperationException("This pool has no fixed-shape page preparation contract.");
-        }
-    }
-
-    internal NativePreparedPoolStatistics GetPreparedStatistics()
-    {
-        ValidateThread(nameof(NativePool<T>.CapturePreparedSnapshot));
-        ValidatePrepared();
-        int pages = 0;
-        int slots = 0;
-        foreach (ref readonly Page page in _pages.AsSpan())
-        {
-            if (page.AllocationBytes != 0)
-            {
-                pages++;
-                slots += page.SlotCount;
-            }
-        }
-        long bankBytes = checked((long)_slabs.Length * Unsafe.SizeOf<Slab>()
-            + (long)_pages.Length * Unsafe.SizeOf<Page>() + (long)_freeHeads.Length * sizeof(int));
-        NativePreparedPoolStatistics result = new(Id, _lifecycle, _preparation,
-            pages, slots, _liveLeaseCount, _peakOccupiedSlots, _retainedBytes, _peakRetainedBytes,
-            _successfulPreparedRents, _rejectedPreparedShapes, _rejectedPreparedFull,
-            _preparedInitializerFailures, bankBytes,
-            checked((long)(slots - _liveLeaseCount) * _preparation.SlotCapacity * Unsafe.SizeOf<T>()),
-            _historyOverflowed);
-        GC.KeepAlive(this);
-        return result;
-    }
-
     private void IncrementHistory(ref long counter) =>
         NativeOwnerHistory.Increment(ref counter, ref _historyOverflowed);
 
@@ -1315,27 +998,14 @@ public sealed unsafe partial class NativePool<T>
         ValidateThread(nameof(GetSegmentOrdinals));
         long[] result = new long[GetStorageCounts().Retained];
         int index = 0;
-        if (_preparation.SlotCount == 0)
+        foreach (ref readonly Slab slab in _slabs.AsSpan(0, _slabCount))
         {
-            foreach (ref readonly Slab slab in _slabs.AsSpan(0, _slabCount))
+            if (slab.AllocationBytes != 0)
             {
-                if (slab.AllocationBytes != 0)
-                {
-                    result[index++] = slab.Ordinal;
-                }
-            }
-            Array.Sort(result);
-        }
-        else
-        {
-            foreach (ref readonly Page page in _pages.AsSpan())
-            {
-                if (page.AllocationBytes != 0)
-                {
-                    result[index++] = page.Ordinal;
-                }
+                result[index++] = slab.Ordinal;
             }
         }
+        Array.Sort(result);
         GC.KeepAlive(this);
         return result;
     }

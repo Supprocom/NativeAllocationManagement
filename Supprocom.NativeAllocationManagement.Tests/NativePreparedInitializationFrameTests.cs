@@ -6,7 +6,7 @@ public sealed class NativePreparedInitializationFrameTests
     public void NestedPublicationAndOuterFailureKeepDistinctOccupancyAndHistory()
     {
         NativeMemoryBudget budget = new(192);
-        using NativePool<int> pool = new(new NativePoolPreparation(3, 2, 3), budget);
+        using NativePreparedPool<int> pool = new(new NativePoolPreparation(3, 2, 3), budget);
         OperationCanceledException expected = new("outer initialization cancelled");
         OperationCanceledException actual = Assert.Throws<OperationCanceledException>(() =>
             pool.TryRent(2, writer =>
@@ -15,7 +15,7 @@ public sealed class NativePreparedInitializationFrameTests
                 Assert.Equal(1, pool.CurrentGenerationActiveOperationsForTest);
                 Assert.Equal(1, pool.CapturePreparedSnapshot().OccupiedSlotCount);
                 writer.Write(11);
-                using (Pooled<int> nested = pool.Rent(2, nestedWriter =>
+                using (PreparedPooled<int> nested = pool.Rent(2, nestedWriter =>
                 {
                     Assert.Equal(2, pool.CurrentInitializationCountForTest);
                     Assert.Equal(2, pool.CurrentGenerationActiveOperationsForTest);
@@ -52,7 +52,7 @@ public sealed class NativePreparedInitializationFrameTests
         Assert.Equal(0, pool.GetStatistics().RequestedBytes);
         Assert.Equal(1, budget.CaptureStatistics().AllocationCount);
         Assert.Equal(24, budget.CaptureStatistics().CommittedBytes);
-        if (pool.TryRent(2, static writer => writer.Fill(19), out Pooled<int> reused, out _))
+        if (pool.TryRent(2, static writer => writer.Fill(19), out PreparedPooled<int> reused, out _))
         {
             using (reused)
             {
@@ -71,8 +71,8 @@ public sealed class NativePreparedInitializationFrameTests
     [Fact]
     public void EmptyPreparedPublicationStillOccupiesAndReturnsOneRealSlot()
     {
-        using NativePool<int> pool = new(new NativePoolPreparation(1, 2, 1), budget: null);
-        using (Pooled<int> empty = pool.Rent(0, writer =>
+        using NativePreparedPool<int> pool = new(new NativePoolPreparation(1, 2, 1), budget: null);
+        using (PreparedPooled<int> empty = pool.Rent(0, writer =>
         {
             Assert.Equal(0, writer.Length);
             Assert.Equal(0, writer.Remaining);

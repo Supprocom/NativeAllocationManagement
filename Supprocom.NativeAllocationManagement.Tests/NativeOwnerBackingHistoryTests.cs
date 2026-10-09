@@ -41,7 +41,7 @@ public sealed class NativeOwnerBackingHistoryTests
     public void PreparedPageAndArenaPeaksAreTheSameActualPhysicalHistory()
     {
         NativeMemoryBudget budget = new(512);
-        using NativePool<int> pool = new(new NativePoolPreparation(4, 4, 2), budget);
+        using NativePreparedPool<int> pool = new(new NativePoolPreparation(4, 4, 2), budget);
         long poolExtent = pool.CapturePreparedSnapshot().RetainedBytes;
         Assert.Equal(poolExtent, pool.CapturePreparedSnapshot().PeakRetainedBytes);
         AssertBacking(pool.CaptureDiagnosticSnapshot(), poolExtent, 0, poolExtent);

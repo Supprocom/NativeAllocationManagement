@@ -15,8 +15,8 @@ public sealed class NativePreparedPoolAnalyzerTests
             {
                 public static void Run()
                 {
-                    using NativePool<int> pool = new(new NativePoolPreparation(4, 16, 2), null);
-                    if (pool.TryRent(4, static writer => writer.Fill(42), out Pooled<int> lease, out var reason))
+                    using NativePreparedPool<int> pool = new(new NativePoolPreparation(4, 16, 2), null);
+                    if (pool.TryRent(4, static writer => writer.Fill(42), out PreparedPooled<int> lease, out var reason))
                     {
                         try { _ = lease.Read(static view => view[0]); }
                         finally { lease.Dispose(); }
@@ -38,8 +38,8 @@ public sealed class NativePreparedPoolAnalyzerTests
             {
                 public static void Run()
                 {
-                    using NativePool<int> pool = new(new NativePoolPreparation(4, 16, 2), null);
-                    if (!pool.TryRent(4, static writer => writer.Fill(42), out Pooled<int> lease, out _)) return;
+                    using NativePreparedPool<int> pool = new(new NativePoolPreparation(4, 16, 2), null);
+                    if (!pool.TryRent(4, static writer => writer.Fill(42), out PreparedPooled<int> lease, out _)) return;
                     _ = lease.Read(static view => view[0]);
                     lease.Dispose();
                 }
@@ -58,8 +58,8 @@ public sealed class NativePreparedPoolAnalyzerTests
             {
                 public static void Run()
                 {
-                    using NativePool<int> pool = new(new NativePoolPreparation(4, 16, 2), null);
-                    if (pool.TryRent(4, static writer => writer.Fill(42), out Pooled<int> lease, out _))
+                    using NativePreparedPool<int> pool = new(new NativePoolPreparation(4, 16, 2), null);
+                    if (pool.TryRent(4, static writer => writer.Fill(42), out PreparedPooled<int> lease, out _))
                         _ = lease.Read(static view => view[0]);
                 }
             }
@@ -68,8 +68,8 @@ public sealed class NativePreparedPoolAnalyzerTests
     }
 
     [Theory]
-    [InlineData("if (!pool.TryRent(4, static writer => writer.Fill(42), out Pooled<int> lease, out _)) lease.Dispose();", "NAM1004")]
-    [InlineData("pool.TryRent(4, static writer => writer.Fill(42), out Pooled<int> lease, out _); lease.Dispose();", "NAM1050")]
+    [InlineData("if (!pool.TryRent(4, static writer => writer.Fill(42), out PreparedPooled<int> lease, out _)) lease.Dispose();", "NAM1004")]
+    [InlineData("pool.TryRent(4, static writer => writer.Fill(42), out PreparedPooled<int> lease, out _); lease.Dispose();", "NAM1050")]
     public async Task FailedOrUnguardedCapabilitiesCannotBeUsed(string body, string expected)
     {
         ImmutableArray<Diagnostic> diagnostics = await AnalyzerContractTests.AnalyzeAsync(
@@ -79,7 +79,7 @@ public sealed class NativePreparedPoolAnalyzerTests
             {
                 public static void Run()
                 {
-                    using NativePool<int> pool = new(new NativePoolPreparation(4, 16, 2), null);
+                    using NativePreparedPool<int> pool = new(new NativePoolPreparation(4, 16, 2), null);
                     {{body}}
                 }
             }
@@ -97,7 +97,7 @@ public sealed class NativePreparedPoolAnalyzerTests
             {
                 public static void Run()
                 {
-                    NativePool<int> pool = new(new NativePoolPreparation(4, 16, 2), null);
+                    NativePreparedPool<int> pool = new(new NativePoolPreparation(4, 16, 2), null);
                 }
             }
             """);
@@ -114,8 +114,8 @@ public sealed class NativePreparedPoolAnalyzerTests
             {
                 public static void Run()
                 {
-                    using NativePool<int> pool = new(new NativePoolPreparation(4, 16, 2), null);
-                    if (pool.TryRent(reason: out _, lease: out Pooled<int> lease,
+                    using NativePreparedPool<int> pool = new(new NativePoolPreparation(4, 16, 2), null);
+                    if (pool.TryRent(reason: out _, lease: out PreparedPooled<int> lease,
                         initializer: static writer => writer.Fill(42), length: 4))
                         lease.Dispose();
                 }
@@ -134,8 +134,8 @@ public sealed class NativePreparedPoolAnalyzerTests
             {
                 public static void Run(bool condition)
                 {
-                    using NativePool<int> pool = new(new NativePoolPreparation(4, 16, 2), null);
-                    if (pool.TryRent(4, static writer => writer.Fill(42), out Pooled<int> lease, out _) && condition)
+                    using NativePreparedPool<int> pool = new(new NativePoolPreparation(4, 16, 2), null);
+                    if (pool.TryRent(4, static writer => writer.Fill(42), out PreparedPooled<int> lease, out _) && condition)
                         lease.Dispose();
                 }
             }
