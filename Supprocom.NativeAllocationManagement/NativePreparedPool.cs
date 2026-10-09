@@ -1,6 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 using Page = Supprocom.NativeAllocationManagement.NativePreparedPoolStorage.Page;
 using Slot = Supprocom.NativeAllocationManagement.NativePreparedPoolStorage.Slot;
 
@@ -13,37 +12,11 @@ namespace Supprocom.NativeAllocationManagement;
 /// Empty pages can be trimmed explicitly without refill. A surviving slot retains its complete page.
 /// This owner uses a local single-shape free list, not the variable-shape NativePool size classes.
 /// </remarks>
-public sealed unsafe class NativePreparedPool<T> : IDisposable
+public sealed unsafe class NativePreparedPool<T> : NativePreparedPoolBase, IDisposable
     where T : unmanaged
 {
-    private const string OwnerKind = "NativePreparedPool";
-    private NativeMemoryBudget? _budget;
-    private readonly int _ownerThreadId;
-    private readonly Slot[] _slabs = [];
-    private readonly Page[] _pages = [];
-    private readonly NativePoolPreparation _preparation;
-    private int _freeHead = -1;
-    private NativeOwnerLifecycle _lifecycle;
-    private int _liveLeaseCount;
-    private int _retirementState;
-    private long _leaseTokenCounter;
-    private long _requestedBytes;
-    private long _peakInitializedPayloadBytes;
-    private long _retainedBytes;
-    private long _trimmedBytes;
-    private long _trimCallCount;
-    private long _freshSegmentAllocationCount;
-    private long _nextAllocationOrdinal;
-    private int _peakOccupiedSlots;
-    private long _peakRetainedBytes;
-    private long _successfulPreparedRents;
-    private long _rejectedPreparedShapes;
-    private long _rejectedPreparedFull;
-    private long _preparedInitializerFailures;
-    private bool _historyOverflowed;
-
     /// <summary>Gets the stable process-local allocator identity.</summary>
-    public long Id { get; }
+    public long Id => _id;
 
     /// <summary>Prepares all fixed-shape slot metadata and backing pages without subsequent growth.</summary>
     /// <remarks>
@@ -56,42 +29,9 @@ public sealed unsafe class NativePreparedPool<T> : IDisposable
     /// <param name="preparation">The positive simultaneous shape and page bounds.</param>
     /// <param name="budget">The optional shared backing domain, or null for no byte ceiling.</param>
     public NativePreparedPool(NativePoolPreparation preparation, NativeMemoryBudget? budget)
+        : base(preparation, budget, Unsafe.SizeOf<T>())
     {
-        Id = NativeOwnerIdentity.Next();
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(preparation.SlotCount, nameof(preparation));
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(preparation.SlotCapacity, nameof(preparation));
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(preparation.SlotsPerPage, nameof(preparation));
-        _budget = budget;
-        _ownerThreadId = Environment.CurrentManagedThreadId;
-        _preparation = preparation;
-        nuint slotBytes = CalculateByteLength(preparation.SlotCapacity);
-        // This owner is thread-confined and exposes ordinary typed spans, not
-        // aligned SIMD addresses. Consecutive slots use the CLR element stride;
-        // cache-line padding and an over-aligned backend add no authority.
-        nuint stride = slotBytes;
-        nuint totalBytes = checked(stride * (nuint)preparation.SlotCount);
-        _ = checked((long)totalBytes);
-        bool prepared = false;
-        try
-        {
-            NativePreparedPoolStorage.Acquire(preparation, stride, totalBytes,
-                budget, Id, out _slabs, out _pages, out _lifecycle);
-            _freeHead = preparation.SlotCount - 1;
-            _retainedBytes = checked((long)totalBytes);
-            _peakRetainedBytes = _retainedBytes;
-            _freshSegmentAllocationCount = _pages.Length;
-            _nextAllocationOrdinal = _pages.Length;
-            prepared = true;
-        }
-        finally
-        {
-            if (!prepared)
-            {
-                _budget = null;
-            }
-        }
     }
-
 
     /// <summary>Captures actual thread-confined storage state without retaining native authority.</summary>
     public NativeOwnerDiagnosticSnapshot CaptureDiagnosticSnapshot() => GetDiagnosticSnapshot();
@@ -130,7 +70,6 @@ public sealed unsafe class NativePreparedPool<T> : IDisposable
             return count;
         }
     }
-
 
     /// <summary>Initializes and publishes one bounded fixed-shape slot.</summary>
     /// <param name="length">The complete initialized element count, at most the prepared capacity.</param>
@@ -336,76 +275,16 @@ public sealed unsafe class NativePreparedPool<T> : IDisposable
     /// <summary>Reads the current typed slab state.</summary>
     public NativeOwnerStatistics GetStatistics()
     {
-        ValidateOwner(nameof(GetStatistics));
-        var counts = GetStorageCounts();
-
-        return new NativeOwnerStatistics(
-            _lifecycle,
-            Generation: 0,
-            _requestedBytes,
-            _retainedBytes,
-            RetiredBytes: 0,
-            SegmentCount: counts.Retained,
-            AvailableSegmentCount: counts.Available,
-            RetiredSegmentCount: 0,
-            _trimmedBytes,
-            _trimCallCount,
-            _freshSegmentAllocationCount)
-        {
-            OwnerId = Id,
-            Model = NativeOwnerModel.ThreadConfinedPool,
-            HistoryOverflowed = _historyOverflowed,
-            OutstandingNativeBytes = _retainedBytes,
-            DetachedNativeBytes = 0,
-            PeakOutstandingNativeBytes = _peakRetainedBytes,
-            InitializedPayloadBytes = _requestedBytes,
-            PeakInitializedPayloadBytes = _peakInitializedPayloadBytes,
-            UsableCapacityBytes = counts.UsableBytes
-        };
+        NativeOwnerStatistics result = GetStatisticsCore(Unsafe.SizeOf<T>());
+        GC.KeepAlive(this);
+        return result;
     }
 
     internal NativeOwnerDiagnosticSnapshot GetDiagnosticSnapshot()
     {
-        ValidateThread(nameof(NativePreparedPool<T>.CaptureDiagnosticSnapshot));
-        var counts = GetStorageCounts();
-        NativeOwnerDiagnosticSnapshot snapshot = new(
-            _lifecycle, 0, 0, NativeMemoryAccounting.CurrentMetricsEpoch,
-            _liveLeaseCount, 0, 0,
-            _lifecycle == NativeOwnerLifecycle.Active ? _freeHead : -1,
-            -1, counts.Retained,
-            _lifecycle == NativeOwnerLifecycle.Active ? counts.Available : 0,
-            0, 0, 0, 0, 0, false)
-        {
-            OwnerId = Id,
-            Model = NativeOwnerModel.ThreadConfinedPool,
-            HistoryOverflowed = _historyOverflowed,
-            OutstandingNativeBytes = _retainedBytes,
-            DetachedNativeBytes = 0,
-            PeakOutstandingNativeBytes = _peakRetainedBytes,
-            InitializedPayloadBytes = _requestedBytes,
-            PeakInitializedPayloadBytes = _peakInitializedPayloadBytes
-        };
+        NativeOwnerDiagnosticSnapshot result = GetDiagnosticSnapshotCore(Unsafe.SizeOf<T>());
         GC.KeepAlive(this);
-        return snapshot;
-    }
-
-
-    private (int Retained, int Available, long UsableBytes) GetStorageCounts()
-    {
-        int pages = 0;
-        int availablePages = 0;
-        long usableBytes = 0;
-        foreach (ref readonly Page page in _pages.AsSpan())
-        {
-            if (page.AllocationBytes == 0)
-            {
-                continue;
-            }
-            pages++;
-            availablePages += IsPageIdle(page) ? 1 : 0;
-            usableBytes += checked((long)page.SlotCount * _preparation.SlotCapacity * Unsafe.SizeOf<T>());
-        }
-        return (pages, availablePages, usableBytes);
+        return result;
     }
 
     /// <summary>Frees all idle pages without refilling prepared capacity.</summary>
@@ -425,122 +304,26 @@ public sealed unsafe class NativePreparedPool<T> : IDisposable
         return TrimRetainedMemory(CalculateByteLength(leaseLength));
     }
 
-    private nuint TrimRetainedMemory(nuint byteBudget)
-    {
-        ValidateOwner(nameof(TrimRetainedMemory));
-        IncrementHistory(ref _trimCallCount);
-        nuint released = 0;
-        foreach (ref Page page in _pages.AsSpan())
-        {
-            if (released >= byteBudget || page.AllocationBytes == 0 || !IsPageIdle(page))
-            {
-                continue;
-            }
-            released = checked(released + page.AllocationBytes);
-            _slabs.AsSpan(page.FirstSlot, page.SlotCount).Clear();
-            FreePage(ref page, trimmed: true);
-        }
-        NativeOwnerHistory.Add(ref _trimmedBytes, checked((long)released), ref _historyOverflowed);
-        _freeHead = -1;
-        // Cleared slots have Next = 0 but no backing authority. Only retained
-        // page ranges may contribute free links; preserve descending pop order.
-        foreach (ref readonly Page page in _pages.AsSpan())
-        {
-            if (page.AllocationBytes == 0)
-            {
-                continue;
-            }
-            int end = page.FirstSlot + page.SlotCount;
-            for (int index = page.FirstSlot; index < end; index++)
-            {
-                if (_slabs[index].Next >= -1)
-                {
-                    _slabs[index].Next = _freeHead;
-                    _freeHead = index;
-                }
-            }
-        }
-        return released;
-    }
+    private nuint TrimRetainedMemory(nuint byteBudget) => TrimRetainedMemoryCore(byteBudget);
 
     /// <summary>Ends worker use and transfers cleanup-only authority to a coordinator.</summary>
-    public void Retire()
-    {
-        ValidateOwner(nameof(Retire));
-        // Initializing and borrowed slots are included in the live count. Return
-        // cannot decrement it while borrowed, so no redundant slot scan is needed.
-        if (_liveLeaseCount != 0)
-        {
-            ThrowLiveRetirementState();
-        }
-        _lifecycle = NativeOwnerLifecycle.Returned;
-        Volatile.Write(ref _retirementState, 1);
-    }
+    public void Retire() => RetireCore();
 
     /// <summary>Releases one retired pool from a coordinator thread.</summary>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA1816", Justification = "Coordinator-owned retirement cleanup disarms the emergency finalizer.")]
     public void ReleaseRetiredStorage()
     {
-        int prior = Interlocked.CompareExchange(
-            ref _retirementState,
-            2,
-            1);
-        if (prior != 1)
-        {
-            ThrowInvalidRetiredCleanup(prior);
-        }
-
-        _lifecycle = NativeOwnerLifecycle.Disposed;
-        FreeAll();
+        ReleaseRetiredStorageCore();
         GC.SuppressFinalize(this);
     }
-
 
     /// <summary>Closes the prepared pool after all initializing and published leases return.</summary>
     public void Dispose()
     {
-        ValidateThread(nameof(Dispose));
-        if (Volatile.Read(ref _retirementState) != 0)
+        if (DisposeCore())
         {
-            ThrowRetiredDispose();
+            GC.SuppressFinalize(this);
         }
-        if (_lifecycle == NativeOwnerLifecycle.Disposed)
-        {
-            return;
-        }
-        if (_liveLeaseCount != 0)
-        {
-            ThrowLiveLease();
-        }
-        _lifecycle = NativeOwnerLifecycle.Disposed;
-        FreeAll();
-        GC.SuppressFinalize(this);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private ref Slot ValidateLease(
-        int slabIndex,
-        long token,
-        string operation)
-    {
-        if ((uint)slabIndex >= (uint)_slabs.Length)
-        {
-            ThrowStaleIndex(slabIndex, operation);
-        }
-
-        ref Slot slab = ref _slabs[slabIndex];
-        if (slab.Next != NativePreparedPoolStorage.Leased
-            || slab.Token != token)
-        {
-            ThrowStaleToken(
-                slabIndex,
-                token,
-                slab.Token,
-                slab.BorrowCount,
-                operation);
-        }
-
-        return ref slab;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -551,126 +334,6 @@ public sealed unsafe class NativePreparedPool<T> : IDisposable
         {
             ThrowDisposed(operation);
         }
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void ValidateThread(string operation)
-    {
-        if (Environment.CurrentManagedThreadId == _ownerThreadId)
-        {
-            return;
-        }
-
-        ThrowWrongThread(operation);
-    }
-
-    [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    private static void ThrowActiveBorrow() =>
-        throw new InvalidOperationException(
-            "A pooled lease cannot return during an active callback.");
-
-    [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    private static void ThrowActiveMove() =>
-        throw new InvalidOperationException(
-            "A pooled lease cannot move during an active callback; the source remains owning.");
-
-    [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    private static void ThrowLiveLease() =>
-        throw new InvalidOperationException(
-            "NativePreparedPool cannot dispose while a pooled lease is active.");
-
-    [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    private static void ThrowLiveRetirementState() =>
-        throw new InvalidOperationException(
-            "NativePreparedPool cannot retire while a lease, initializer, or callback is active.");
-
-    [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    private static void ThrowRetiredDispose() =>
-        throw new InvalidOperationException(
-            "NativePreparedPool.Dispose cannot release retired storage. Use ReleaseRetiredStorage on the coordinator thread.");
-
-    [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    private static void ThrowInvalidRetiredCleanup(int state) =>
-        throw new InvalidOperationException(
-            state == 0
-                ? "NativePreparedPool must retire before coordinator cleanup."
-                : "NativePreparedPool retired storage was already released.");
-
-    [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    private void ThrowStaleIndex(int slabIndex, string operation) =>
-        throw new NativeAllocationReturnedException(
-            "The pooled slab index is stale.",
-            OwnerKind,
-            generation: 0,
-            currentGeneration: 0,
-            operation,
-            activeOperationCount: 0,
-            allocationId: slabIndex,
-            _lifecycle);
-
-    [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    private void ThrowStaleToken(
-        int slabIndex,
-        long token,
-        long currentToken,
-        int borrowCount,
-        string operation) =>
-        throw new NativeAllocationReturnedException(
-            "The pooled lease token is stale.",
-            OwnerKind,
-            generation: token,
-            currentGeneration: currentToken,
-            operation,
-            borrowCount,
-            slabIndex,
-            _lifecycle);
-
-    [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    private void ThrowDisposed(string operation) =>
-        throw new NativeAllocationDisposedException(
-            "The native pool is disposed.",
-            OwnerKind,
-            generation: 0,
-            currentGeneration: 0,
-            operation,
-            activeOperationCount: 0,
-            allocationId: 0,
-            _lifecycle);
-
-    [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    private void ThrowWrongThread(string operation) =>
-        throw new NativeAllocationStateException(
-            "NativePreparedPool is confined to its construction thread.",
-            OwnerKind,
-            generation: 0,
-            currentGeneration: 0,
-            operation,
-            activeOperationCount: 0,
-            allocationId: 0,
-            _lifecycle);
-
-
-    private void FreeAll()
-    {
-        // Slot authority is managed metadata; physical ownership lives only in pages.
-        Array.Clear(_slabs);
-        _freeHead = -1;
-        foreach (ref Page page in _pages.AsSpan())
-        {
-            FreePage(ref page);
-        }
-        _retainedBytes = 0;
-        _budget = null;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -703,12 +366,6 @@ public sealed unsafe class NativePreparedPool<T> : IDisposable
 
     [DoesNotReturn]
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static void ThrowLeaseTokenExhausted() =>
-        throw new InvalidOperationException(
-            "NativePreparedPool exhausted its lease-token authority.");
-
-    [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
     private static void ThrowIncompleteInitialization(
         int initializedLength,
         int requiredLength) =>
@@ -723,83 +380,26 @@ public sealed unsafe class NativePreparedPool<T> : IDisposable
     {
         try
         {
-            FreeAll();
+            FreeAllCore();
         }
         catch
         {
         }
     }
 
-
-    private bool IsPageIdle(in Page page)
-    {
-        foreach (ref readonly Slot slab in _slabs.AsSpan(page.FirstSlot, page.SlotCount))
-        {
-            if (slab.Next < -1 || slab.BorrowCount != 0)
-            {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private void FreePage(ref Page page, bool trimmed = false)
-    {
-        if (page.AllocationBytes == 0)
-        {
-            return;
-        }
-        nuint bytes = page.AllocationBytes;
-        NativeMemory.Free((void*)page.Pointer);
-        _budget?.Release(bytes, Id,
-            trimmed ? NativeMemoryTraceKind.Trimmed : NativeMemoryTraceKind.Released,
-            page.Ordinal);
-        NativeMemoryAccounting.RecordFree(bytes, detached: false, page.MetricsEpoch);
-        _retainedBytes -= checked((long)bytes);
-        page = default;
-    }
-
     internal NativePreparedPoolStatistics GetPreparedStatistics()
     {
-        ValidateThread(nameof(NativePreparedPool<T>.CapturePreparedSnapshot));
-        int pages = 0;
-        int slots = 0;
-        foreach (ref readonly Page page in _pages.AsSpan())
-        {
-            if (page.AllocationBytes != 0)
-            {
-                pages++;
-                slots += page.SlotCount;
-            }
-        }
-        long bankBytes = checked((long)_slabs.Length * Unsafe.SizeOf<Slot>()
-            + (long)_pages.Length * Unsafe.SizeOf<Page>());
-        NativePreparedPoolStatistics result = new(Id, _lifecycle, _preparation,
-            pages, slots, _liveLeaseCount, _peakOccupiedSlots, _retainedBytes, _peakRetainedBytes,
-            _successfulPreparedRents, _rejectedPreparedShapes, _rejectedPreparedFull,
-            _preparedInitializerFailures, bankBytes,
-            checked((long)(slots - _liveLeaseCount) * _preparation.SlotCapacity * Unsafe.SizeOf<T>()),
-            _historyOverflowed);
+        NativePreparedPoolStatistics result = GetPreparedStatisticsCore(Unsafe.SizeOf<T>());
         GC.KeepAlive(this);
         return result;
     }
-
 
     private void IncrementHistory(ref long counter) =>
         NativeOwnerHistory.Increment(ref counter, ref _historyOverflowed);
 
     private long[] GetSegmentOrdinals()
     {
-        ValidateThread(nameof(GetSegmentOrdinals));
-        long[] result = new long[GetStorageCounts().Retained];
-        int index = 0;
-        foreach (ref readonly Page page in _pages.AsSpan())
-        {
-            if (page.AllocationBytes != 0)
-            {
-                result[index++] = page.Ordinal;
-            }
-        }
+        long[] result = GetSegmentOrdinalsCore(Unsafe.SizeOf<T>());
         GC.KeepAlive(this);
         return result;
     }
@@ -808,4 +408,116 @@ public sealed unsafe class NativePreparedPool<T> : IDisposable
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static void ThrowCapacityExhausted() =>
         throw new InvalidOperationException("Prepared pool capacity is exhausted; use TryRent for expected exhaustion.");
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private ref Slot ValidateLease(
+        int slabIndex,
+        long token,
+        string operation)
+    {
+        if ((uint)slabIndex >= (uint)_slabs.Length)
+        {
+            ThrowStaleIndex(slabIndex, operation);
+        }
+
+        ref Slot slab = ref _slabs[slabIndex];
+        if (slab.Next != NativePreparedPoolStorage.Leased
+            || slab.Token != token)
+        {
+            ThrowStaleToken(
+                slabIndex,
+                token,
+                slab.Token,
+                slab.BorrowCount,
+                operation);
+        }
+
+        return ref slab;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void ValidateThread(string operation)
+    {
+        if (Environment.CurrentManagedThreadId == _ownerThreadId)
+        {
+            return;
+        }
+
+        ThrowWrongThread(operation);
+    }
+
+    [DoesNotReturn]
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void ThrowActiveBorrow() =>
+        throw new InvalidOperationException(
+            "A pooled lease cannot return during an active callback.");
+
+    [DoesNotReturn]
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void ThrowActiveMove() =>
+        throw new InvalidOperationException(
+            "A pooled lease cannot move during an active callback; the source remains owning.");
+
+    [DoesNotReturn]
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private void ThrowStaleIndex(int slabIndex, string operation) =>
+        throw new NativeAllocationReturnedException(
+            "The pooled slab index is stale.",
+            "NativePreparedPool",
+            generation: 0,
+            currentGeneration: 0,
+            operation,
+            activeOperationCount: 0,
+            allocationId: slabIndex,
+            _lifecycle);
+
+    [DoesNotReturn]
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private void ThrowStaleToken(
+        int slabIndex,
+        long token,
+        long currentToken,
+        int borrowCount,
+        string operation) =>
+        throw new NativeAllocationReturnedException(
+            "The pooled lease token is stale.",
+            "NativePreparedPool",
+            generation: token,
+            currentGeneration: currentToken,
+            operation,
+            borrowCount,
+            slabIndex,
+            _lifecycle);
+
+    [DoesNotReturn]
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private void ThrowDisposed(string operation) =>
+        throw new NativeAllocationDisposedException(
+            "The native pool is disposed.",
+            "NativePreparedPool",
+            generation: 0,
+            currentGeneration: 0,
+            operation,
+            activeOperationCount: 0,
+            allocationId: 0,
+            _lifecycle);
+
+    [DoesNotReturn]
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private void ThrowWrongThread(string operation) =>
+        throw new NativeAllocationStateException(
+            "NativePreparedPool is confined to its construction thread.",
+            "NativePreparedPool",
+            generation: 0,
+            currentGeneration: 0,
+            operation,
+            activeOperationCount: 0,
+            allocationId: 0,
+            _lifecycle);
+
+    [DoesNotReturn]
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void ThrowLeaseTokenExhausted() =>
+        throw new InvalidOperationException(
+            "NativePreparedPool exhausted its lease-token authority.");
 }

@@ -19,6 +19,7 @@ Supprocom.NativeAllocationManagement.PreparedPooled<T>.PreparedPooled() -> void
 Supprocom.NativeAllocationManagement.PreparedPooled<T>.Process<TState, TResult>(int logicalLength, TState state, Supprocom.NativeAllocationManagement.NativeSpanStateProcessor<T, TState, TResult>! processor) -> TResult
 Supprocom.NativeAllocationManagement.PreparedPooled<T>.Read<TResult>(Supprocom.NativeAllocationManagement.NativeLeaseFunc<T, TResult>! action) -> TResult
 static Supprocom.NativeAllocationManagement.PreparedPooled<T>.Move(scoped ref Supprocom.NativeAllocationManagement.PreparedPooled<T> source) -> Supprocom.NativeAllocationManagement.PreparedPooled<T>
+Supprocom.NativeAllocationManagement.NativePreparedPoolBase
 Supprocom.NativeAllocationManagement.NativePreparedPool<T>
 Supprocom.NativeAllocationManagement.NativePreparedPool<T>.NativePreparedPool(Supprocom.NativeAllocationManagement.NativePoolPreparation preparation, Supprocom.NativeAllocationManagement.NativeMemoryBudget? budget) -> void
 Supprocom.NativeAllocationManagement.NativePreparedPool<T>.CapturePreparedSnapshot() -> Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics

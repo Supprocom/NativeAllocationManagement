@@ -12,9 +12,10 @@ public sealed class NativePreparedPoolOwnershipRepresentationTests
         Type owner = typeof(NativePreparedPool<int>);
         Assert.Null(owner.GetField("_kernel", BindingFlags.Instance | BindingFlags.NonPublic));
         Assert.Null(owner.Assembly.GetType("Supprocom.NativeAllocationManagement.NativePoolKernel`1"));
-        Assert.Equal(owner, owner.GetField("_leaseTokenCounter", BindingFlags.Instance | BindingFlags.NonPublic)!.DeclaringType);
-        Assert.Equal(owner, owner.GetField("_slabs", BindingFlags.Instance | BindingFlags.NonPublic)!.DeclaringType);
-        Assert.Equal(owner, owner.GetField("_budget", BindingFlags.Instance | BindingFlags.NonPublic)!.DeclaringType);
+        Assert.Equal(typeof(NativePreparedPoolBase), owner.BaseType);
+        Assert.Equal(typeof(NativePreparedPoolBase), owner.GetField("_leaseTokenCounter", BindingFlags.Instance | BindingFlags.NonPublic)!.DeclaringType);
+        Assert.Equal(typeof(NativePreparedPoolBase), owner.GetField("_slabs", BindingFlags.Instance | BindingFlags.NonPublic)!.DeclaringType);
+        Assert.Equal(typeof(NativePreparedPoolBase), owner.GetField("_budget", BindingFlags.Instance | BindingFlags.NonPublic)!.DeclaringType);
         Assert.Equal(owner, typeof(PreparedPooled<int>).GetField("_kernel", BindingFlags.Instance | BindingFlags.NonPublic)!.FieldType);
         Assert.Equal(owner, owner.GetMethod("Finalize", BindingFlags.Instance | BindingFlags.NonPublic)!.DeclaringType);
         Assert.True(owner.GetConstructors().Length is 1);

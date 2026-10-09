@@ -61,7 +61,7 @@
       "valueType": "System.Int64[]",
       "units": "physical acquisition identities",
       "definition": "Fresh detached numeric copy of currently retained physical page acquisition identities in acquisition order. Empty logical leases still pin actual pages. Reuse adds no native acquisition and trim removes freed identities; there is no implicit reacquisition.",
-      "implementation": "NativePreparedPool.cs#long[] result = new long[GetStorageCounts().Retained];",
+      "implementation": "NativePreparedPoolBase.cs#long[] result = new long[GetStorageCounts(elementSize).Retained];",
       "overflow": "Physical ordinal allocation is checked before publication; capture cannot invent an unavailable identity.",
       "allocation": "One numeric array per observation, including empty observation; not a no-allocation public capture API or hot-loop telemetry. Owner thread is checked before allocation.",
       "proof": "NativeFastPoolProbeContractTests.PreparedProbesDistinguishSlotBanksFromWholePageRetention"
