@@ -1,6 +1,8 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using Page = Supprocom.NativeAllocationManagement.NativePreparedPoolStorage.Page;
+using Slot = Supprocom.NativeAllocationManagement.NativePreparedPoolStorage.Slot;
 
 namespace Supprocom.NativeAllocationManagement;
 
@@ -69,87 +71,23 @@ public sealed unsafe class NativePreparedPool<T> : IDisposable
         nuint stride = slotBytes;
         nuint totalBytes = checked(stride * (nuint)preparation.SlotCount);
         _ = checked((long)totalBytes);
-        _budget?.Reserve(totalBytes, Id);
-        nuint remainingReservation = totalBytes;
         bool prepared = false;
-        int preparedSlotCount = 0;
         try
         {
-            NativeMemoryTestHooks.CheckManagedPublicationBoundary("NativePreparedPool.Preparation", 1, "metadata banks");
-            _slabs = new Slot[preparation.SlotCount];
-            _pages = new Page[1 + (preparation.SlotCount - 1) / preparation.SlotsPerPage];
-            _lifecycle = NativeOwnerLifecycle.Active;
-            foreach (ref Page page in _pages.AsSpan())
-            {
-                long ordinal = checked(++_nextAllocationOrdinal);
-                NativeMemoryTestHooks.CheckManagedPublicationBoundary("NativePreparedPool.Preparation",
-                    checked((int)ordinal + 1), "page acquisition");
-                int firstSlot = preparedSlotCount;
-                int slots = Math.Min(preparation.SlotsPerPage, preparation.SlotCount - firstSlot);
-                nuint bytes = checked(stride * (nuint)slots);
-                void* memory = null;
-                bool committed = false;
-                long epoch = 0;
-                try
-                {
-                    long prospectiveBytes = checked(_retainedBytes + checked((long)bytes));
-                    if (NativeMemoryTestHooks.ConsumeForcedFailure())
-                    {
-                        throw CreateAllocationFailure(bytes, "page preparation");
-                    }
-                    memory = NativeMemory.Alloc(bytes);
-                    if (memory == null)
-                    {
-                        throw CreateAllocationFailure(bytes, "page preparation");
-                    }
-                    _peakRetainedBytes = Math.Max(_peakRetainedBytes, prospectiveBytes);
-                    epoch = NativeMemoryAccounting.RecordAllocation(bytes, zeroed: false);
-                    _budget?.Commit(bytes, Id, NativeMemoryTraceKind.PageAcquired, ordinal);
-                    remainingReservation -= bytes;
-                    committed = true;
-                    page = new Page((IntPtr)memory, bytes, firstSlot, slots,
-                        epoch, ordinal);
-                    _retainedBytes = prospectiveBytes;
-                    IncrementHistory(ref _freshSegmentAllocationCount);
-                    for (int offset = 0; offset < slots; offset++)
-                    {
-                        int index = preparedSlotCount++;
-                        _slabs[index] = new Slot
-                        {
-                            Pointer = (IntPtr)((byte*)memory + checked(stride * (nuint)offset)),
-                            State = SlotState.Free,
-                            Next = index - 1
-                        };
-                        _freeHead = index;
-                    }
-                }
-                finally
-                {
-                    if (!committed && memory != null)
-                    {
-                        NativeMemory.Free(memory);
-                        NativeMemoryAccounting.RecordFree(bytes, detached: false, epoch);
-                    }
-                }
-            }
-            NativeMemoryTestHooks.CheckManagedPublicationBoundary("NativePreparedPool.Preparation", _pages.Length + 2, "prepared authority");
-            _budget?.RecordPreparation(totalBytes, Id);
+            NativePreparedPoolStorage.Acquire(preparation, stride, totalBytes,
+                budget, Id, out _slabs, out _pages, out _lifecycle);
+            _freeHead = preparation.SlotCount - 1;
+            _retainedBytes = checked((long)totalBytes);
+            _peakRetainedBytes = _retainedBytes;
+            _freshSegmentAllocationCount = _pages.Length;
+            _nextAllocationOrdinal = _pages.Length;
             prepared = true;
-        }
-        catch (OutOfMemoryException exception)
-        {
-            throw new NativeAllocationFailedException(totalBytes, OwnerKind, 0,
-                "page preparation", _lifecycle, exception);
         }
         finally
         {
-            if (remainingReservation != 0)
-            {
-                _budget?.Cancel(remainingReservation, Id);
-            }
             if (!prepared)
             {
-                FreeAll();
+                _budget = null;
             }
         }
     }
@@ -174,7 +112,7 @@ public sealed unsafe class NativePreparedPool<T> : IDisposable
             int count = 0;
             foreach (ref readonly Slot slab in _slabs.AsSpan())
             {
-                count = checked(count + slab.BorrowCount + (slab.State == SlotState.Initializing ? 1 : 0));
+                count = checked(count + slab.BorrowCount + (slab.Next == NativePreparedPoolStorage.Initializing ? 1 : 0));
             }
             return count;
         }
@@ -187,7 +125,7 @@ public sealed unsafe class NativePreparedPool<T> : IDisposable
             int count = 0;
             foreach (ref readonly Slot slab in _slabs.AsSpan())
             {
-                count += slab.State == SlotState.Initializing ? 1 : 0;
+                count += slab.Next == NativePreparedPoolStorage.Initializing ? 1 : 0;
             }
             return count;
         }
@@ -261,7 +199,7 @@ public sealed unsafe class NativePreparedPool<T> : IDisposable
         NativeLeaseInitializer<T> initializer)
     {
         ref Slot slot = ref _slabs[index];
-        slot.State = SlotState.Initializing;
+        slot.Next = NativePreparedPoolStorage.Initializing;
         slot.Token = token;
         _liveLeaseCount++;
         _peakOccupiedSlots = Math.Max(_peakOccupiedSlots, _liveLeaseCount);
@@ -276,14 +214,13 @@ public sealed unsafe class NativePreparedPool<T> : IDisposable
             }
             _requestedBytes += checked((long)CalculateByteLength(length));
             _peakInitializedPayloadBytes = Math.Max(_peakInitializedPayloadBytes, _requestedBytes);
-            slot.State = SlotState.Leased;
+            slot.Next = NativePreparedPoolStorage.Leased;
             IncrementHistory(ref _successfulPreparedRents);
             return new PreparedPooled<T>(this, index, token, length, _preparation.SlotCapacity);
         }
         catch
         {
             IncrementHistory(ref _preparedInitializerFailures);
-            slot.State = SlotState.Free;
             _liveLeaseCount--;
             slot.Next = _freeHead;
             _freeHead = index;
@@ -331,7 +268,6 @@ public sealed unsafe class NativePreparedPool<T> : IDisposable
         {
             ThrowActiveBorrow();
         }
-        slot.State = SlotState.Free;
         _liveLeaseCount--;
         _requestedBytes -= checked((long)CalculateByteLength(length));
         slot.Next = _freeHead;
@@ -447,12 +383,22 @@ public sealed unsafe class NativePreparedPool<T> : IDisposable
         }
         NativeOwnerHistory.Add(ref _trimmedBytes, checked((long)released), ref _historyOverflowed);
         _freeHead = -1;
-        for (int index = 0; index < _slabs.Length; index++)
+        // Cleared slots have Next = 0 but no backing authority. Only retained
+        // page ranges may contribute free links; preserve descending pop order.
+        foreach (ref readonly Page page in _pages.AsSpan())
         {
-            if (_slabs[index].State == SlotState.Free)
+            if (page.AllocationBytes == 0)
             {
-                _slabs[index].Next = _freeHead;
-                _freeHead = index;
+                continue;
+            }
+            int end = page.FirstSlot + page.SlotCount;
+            for (int index = page.FirstSlot; index < end; index++)
+            {
+                if (_slabs[index].Next >= -1)
+                {
+                    _slabs[index].Next = _freeHead;
+                    _freeHead = index;
+                }
             }
         }
         return released;
@@ -524,7 +470,7 @@ public sealed unsafe class NativePreparedPool<T> : IDisposable
         }
 
         ref Slot slab = ref _slabs[slabIndex];
-        if (slab.State != SlotState.Leased
+        if (slab.Next != NativePreparedPoolStorage.Leased
             || slab.Token != token)
         {
             ThrowStaleToken(
@@ -668,16 +614,6 @@ public sealed unsafe class NativePreparedPool<T> : IDisposable
         _budget = null;
     }
 
-    private NativeAllocationFailedException CreateAllocationFailure(
-        nuint bytes,
-        string operation) =>
-        new(
-            bytes,
-            OwnerKind,
-            generation: 0,
-            operation,
-            _lifecycle);
-
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static nuint CalculateByteLength(int length)
     {
@@ -736,42 +672,11 @@ public sealed unsafe class NativePreparedPool<T> : IDisposable
     }
 
 
-    [StructLayout(LayoutKind.Sequential)]
-    private struct Slot
-    {
-        internal IntPtr Pointer;
-        internal long Token;
-        internal int Next;
-        internal int BorrowCount;
-        internal SlotState State;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private readonly struct Page
-    {
-        internal Page(IntPtr pointer, nuint allocationBytes, int firstSlot,
-            int slotCount, long metricsEpoch, long ordinal)
-        {
-            Pointer = pointer;
-            AllocationBytes = allocationBytes;
-            FirstSlot = firstSlot;
-            SlotCount = slotCount;
-            MetricsEpoch = metricsEpoch;
-            Ordinal = ordinal;
-        }
-        internal readonly IntPtr Pointer;
-        internal readonly nuint AllocationBytes;
-        internal readonly int FirstSlot;
-        internal readonly int SlotCount;
-        internal readonly long MetricsEpoch;
-        internal readonly long Ordinal;
-    }
-
     private bool IsPageIdle(in Page page)
     {
         foreach (ref readonly Slot slab in _slabs.AsSpan(page.FirstSlot, page.SlotCount))
         {
-            if (slab.State != SlotState.Free || slab.BorrowCount != 0)
+            if (slab.Next < -1 || slab.BorrowCount != 0)
             {
                 return false;
             }
@@ -838,14 +743,6 @@ public sealed unsafe class NativePreparedPool<T> : IDisposable
         }
         GC.KeepAlive(this);
         return result;
-    }
-
-    private enum SlotState : byte
-    {
-        Unused,
-        Free,
-        Initializing,
-        Leased
     }
 
     [DoesNotReturn]

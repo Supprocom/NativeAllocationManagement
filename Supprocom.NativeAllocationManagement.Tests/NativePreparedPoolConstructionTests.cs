@@ -25,10 +25,10 @@ public sealed class NativePreparedPoolConstructionTests
             object slot = slots.GetValue(index)!;
             Assert.NotEqual(IntPtr.Zero, (IntPtr)Field(slot, "Pointer"));
             Assert.Equal(index - 1, (int)Field(slot, "Next"));
-            Assert.Equal("Free", Field(slot, "State").ToString());
+            Assert.Null(slot.GetType().GetField("State", BindingFlags.Instance | BindingFlags.NonPublic));
             Assert.Equal(0L, (long)Field(slot, "Token"));
             Assert.Equal(0, (int)Field(slot, "BorrowCount"));
-            Assert.Equal(5, slot.GetType().GetFields(BindingFlags.Instance | BindingFlags.NonPublic).Length);
+            Assert.Equal(4, slot.GetType().GetFields(BindingFlags.Instance | BindingFlags.NonPublic).Length);
         }
         HoldAll(pool, slotCount, capacity);
         Assert.Equal(slotCount, pool.CapturePreparedSnapshot().AvailableSlotCount);
@@ -60,6 +60,54 @@ public sealed class NativePreparedPoolConstructionTests
         Assert.Equal(0, snapshot.CommittedBytes);
         Assert.Equal(0, snapshot.ReservedBytes);
         Assert.Equal(0, snapshot.ActiveAllocationCount);
+    }
+
+    [Theory]
+    [InlineData(7, 1001, 3)]
+    [InlineData(17, 1, 4)]
+    [InlineData(64, 4096, 16)]
+    public void EveryTypedSlotAddressEqualsItsIndependentPageExtent(int slotCount, int capacity, int slotsPerPage)
+    {
+        CheckAddresses<byte>(slotCount, capacity, slotsPerPage);
+        CheckAddresses<ushort>(slotCount, capacity, slotsPerPage);
+        CheckAddresses<int>(slotCount, capacity, slotsPerPage);
+        CheckAddresses<long>(slotCount, capacity, slotsPerPage);
+        CheckAddresses<Guid>(slotCount, capacity, slotsPerPage);
+        CheckAddresses<System.Numerics.Vector3>(slotCount, capacity, slotsPerPage);
+    }
+
+    private static void CheckAddresses<T>(int slotCount, int capacity, int slotsPerPage)
+        where T : unmanaged
+    {
+        int elementSize = System.Runtime.CompilerServices.Unsafe.SizeOf<T>();
+        long stride = checked((long)capacity * elementSize);
+        NativeMemoryBudget budget = new(checked(stride * slotCount));
+        using NativePreparedPool<T> pool = new(new NativePoolPreparation(slotCount, capacity, slotsPerPage), budget);
+        Array slots = (Array)Field(pool, "_slabs");
+        Array pages = (Array)Field(pool, "_pages");
+        int observed = 0;
+        foreach (object page in pages)
+        {
+            long pageBase = ((IntPtr)Field(page, "Pointer")).ToInt64();
+            int first = (int)Field(page, "FirstSlot");
+            int count = (int)Field(page, "SlotCount");
+            Assert.Equal(observed, first);
+            Assert.Equal(checked((nuint)(stride * count)), (nuint)Field(page, "AllocationBytes"));
+            for (int offset = 0; offset < count; offset++)
+            {
+                object slot = slots.GetValue(first + offset)!;
+                Assert.Equal(checked(pageBase + stride * offset), ((IntPtr)Field(slot, "Pointer")).ToInt64());
+                Assert.Equal(first + offset - 1, (int)Field(slot, "Next"));
+                Assert.Equal(0L, (long)Field(slot, "Token"));
+                Assert.Equal(0, (int)Field(slot, "BorrowCount"));
+                observed++;
+            }
+        }
+        Assert.Equal(slotCount, observed);
+        Assert.Equal(checked(stride * slotCount), budget.CaptureStatistics().CommittedBytes);
+        pool.Dispose();
+        Assert.Equal(0, budget.CaptureStatistics().CommittedBytes);
+        Assert.Equal(budget.CaptureStatistics().AllocationCount, budget.CaptureStatistics().FreeCount);
     }
 
     private static object Field(object target, string name) =>

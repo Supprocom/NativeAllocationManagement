@@ -31,7 +31,7 @@
       "valueType": "System.Int32",
       "units": "entered initializers",
       "definition": "Scan of actual Initializing slab states within the allocated active prefix. Successful publication and exception rollback remove initialization state, not retained backing.",
-      "implementation": "NativePreparedPool.cs#count += slab.State == SlotState.Initializing ? 1 : 0;",
+      "implementation": "NativePreparedPool.cs#count += slab.Next == NativePreparedPoolStorage.Initializing ? 1 : 0;",
       "overflow": "Nonnegative subset of the bounded active slab prefix.",
       "allocation": "None; derived at observation, no extra per-initializer counter.",
       "proof": "NativePreparedInitializationFrameTests.NestedPublicationAndOuterFailureKeepDistinctOccupancyAndHistory"
@@ -41,7 +41,7 @@
       "valueType": "System.Int32",
       "units": "entered operations",
       "definition": "Actual sum of slab BorrowCount plus one per Initializing state. Nested borrows and an initializer plus a different live lease count separately. The legacy name does not imply this owner has generational storage.",
-      "implementation": "NativePreparedPool.cs#count = checked(count + slab.BorrowCount + (slab.State == SlotState.Initializing ? 1 : 0));",
+      "implementation": "NativePreparedPool.cs#count = checked(count + slab.BorrowCount + (slab.Next == NativePreparedPoolStorage.Initializing ? 1 : 0));",
       "overflow": "Checked observation sum; cannot wrap into a valid smaller count.",
       "allocation": "None; scan of existing state, not a new hot-path counter.",
       "proof": "NativePreparedInitializationFrameTests.NestedPublicationAndOuterFailureKeepDistinctOccupancyAndHistory"

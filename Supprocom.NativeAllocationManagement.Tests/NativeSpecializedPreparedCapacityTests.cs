@@ -23,7 +23,7 @@ public sealed class NativeSpecializedPreparedCapacityTests
             AvailableSlotCount = 2,
             RetainedBytes = 32,
             PeakRetainedBytes = 32,
-            ManagedBankBytes = 2 * 32 + 40,
+            ManagedBankBytes = 2 * 24 + 40,
             UnusedSlotBytes = 32
         };
         try

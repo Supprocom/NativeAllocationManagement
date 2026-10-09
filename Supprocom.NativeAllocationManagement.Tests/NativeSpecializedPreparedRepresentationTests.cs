@@ -29,24 +29,23 @@ public sealed class NativeSpecializedPreparedRepresentationTests
             object slot = slots.GetValue(index)!;
             Assert.NotEqual(IntPtr.Zero, (IntPtr)Field(slot, "Pointer"));
             Assert.Equal(index - 1, (int)Field(slot, "Next"));
-            Assert.Equal("Free", Field(slot, "State").ToString());
+            Assert.Null(slot.GetType().GetField("State", BindingFlags.Instance | BindingFlags.NonPublic));
             Assert.Equal(0L, (long)Field(slot, "Token"));
             Assert.Equal(0, (int)Field(slot, "BorrowCount"));
-            Assert.Equal(5, slot.GetType().GetFields(BindingFlags.Instance | BindingFlags.NonPublic).Length);
+            Assert.Equal(4, slot.GetType().GetFields(BindingFlags.Instance | BindingFlags.NonPublic).Length);
         }
         Type slotType = slots.GetType().GetElementType()!;
         Type pageType = ((Array)Field(pool, "_pages")).GetType().GetElementType()!;
         if (IntPtr.Size == 8)
         {
             MethodInfo size = typeof(NativeSpecializedPreparedRepresentationTests).GetMethod(nameof(ElementSize), BindingFlags.Static | BindingFlags.NonPublic)!;
-            Assert.Equal(32, (int)size.MakeGenericMethod(slotType).Invoke(null, null)!);
+            Assert.Equal(24, (int)size.MakeGenericMethod(slotType).Invoke(null, null)!);
             Assert.Equal(40, (int)size.MakeGenericMethod(pageType).Invoke(null, null)!);
             Assert.Equal((IntPtr)0, Marshal.OffsetOf(slotType, "Pointer"));
             Assert.Equal((IntPtr)8, Marshal.OffsetOf(slotType, "Token"));
             Assert.Equal((IntPtr)16, Marshal.OffsetOf(slotType, "Next"));
             Assert.Equal((IntPtr)20, Marshal.OffsetOf(slotType, "BorrowCount"));
-            Assert.Equal((IntPtr)24, Marshal.OffsetOf(slotType, "State"));
-            Assert.Equal(slotCount * 32L + (1 + (slotCount - 1) / slotsPerPage) * 40L, pool.CapturePreparedSnapshot().ManagedBankBytes);
+            Assert.Equal(slotCount * 24L + (1 + (slotCount - 1) / slotsPerPage) * 40L, pool.CapturePreparedSnapshot().ManagedBankBytes);
         }
         HoldAll(pool, slotCount, capacity);
         Assert.Equal(slotCount, pool.CapturePreparedSnapshot().AvailableSlotCount);

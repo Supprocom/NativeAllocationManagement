@@ -37,7 +37,7 @@ public sealed class NativeCapacityDiagnosticContractTests
             AvailableSlotCount = 1,
             RetainedBytes = 4,
             PeakRetainedBytes = 4,
-            ManagedBankBytes = 32 + 40,
+            ManagedBankBytes = 24 + 40,
             UnusedSlotBytes = 4
         };
         Assert.Throws<InvalidOperationException>(() => pool.Rent(1, _ =>
@@ -183,7 +183,7 @@ public sealed class NativeCapacityDiagnosticContractTests
                     PeakOccupiedSlotCount = 1,
                     RetainedBytes = 4,
                     PeakRetainedBytes = 4,
-                    ManagedBankBytes = 72,
+                    ManagedBankBytes = 64,
                     SuccessfulRentCount = long.MaxValue,
                     HistoryOverflowed = true
                 }, "saturated-pool-published");
@@ -197,7 +197,7 @@ public sealed class NativeCapacityDiagnosticContractTests
                 Preparation = new(1, 1, 1),
                 PeakOccupiedSlotCount = 1,
                 PeakRetainedBytes = 4,
-                ManagedBankBytes = 72,
+                ManagedBankBytes = 64,
                 SuccessfulRentCount = long.MaxValue,
                 HistoryOverflowed = true
             }, "saturated-pool-cleanup");
@@ -257,8 +257,10 @@ public sealed class NativeCapacityDiagnosticContractTests
     [Fact]
     public void IndependentBackingAndBankRepresentationMatchesActualStorage()
     {
-        Type slab = typeof(NativePreparedPool<int>).GetNestedType("Slot", BindingFlags.NonPublic)!.MakeGenericType(typeof(int));
-        Type page = typeof(NativePreparedPool<int>).GetNestedType("Page", BindingFlags.NonPublic)!.MakeGenericType(typeof(int));
+        Type slab = typeof(NativePreparedPool<int>).GetField("_slabs", BindingFlags.Instance | BindingFlags.NonPublic)!.FieldType.GetElementType()!;
+        Assert.False(slab.IsGenericType);
+        Type page = typeof(NativePreparedPool<int>).GetField("_pages", BindingFlags.Instance | BindingFlags.NonPublic)!.FieldType.GetElementType()!;
+        Assert.False(page.IsGenericType);
         MethodInfo size = typeof(NativeCapacityDiagnosticContractTests).GetMethod(nameof(ElementSize), BindingFlags.Static | BindingFlags.NonPublic)!;
         Assert.Equal(NativeCapacityDiagnosticOracle.PoolSlotBytes, (int)size.MakeGenericMethod(slab).Invoke(null, null)!);
         Assert.Equal(NativeCapacityDiagnosticOracle.PoolPageBytes, (int)size.MakeGenericMethod(page).Invoke(null, null)!);
@@ -280,7 +282,7 @@ public sealed class NativeCapacityDiagnosticContractTests
             AvailableSlotCount = 3,
             RetainedBytes = 204,
             PeakRetainedBytes = 204,
-            ManagedBankBytes = 3 * 32 + 2 * 40,
+            ManagedBankBytes = 3 * 24 + 2 * 40,
             UnusedSlotBytes = 3 * 17 * sizeof(int)
         }, "two-pages-short-final-page-packed-slots");
     }

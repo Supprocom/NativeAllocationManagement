@@ -7,7 +7,7 @@ namespace Supprocom.NativeAllocationManagement.Conformance;
 internal static class NativeCapacityDiagnosticOracle
 {
     internal const int ArenaHeaderBytes = 64;
-    internal const int PoolSlotBytes = 32;
+    internal const int PoolSlotBytes = 24;
     internal const int PoolPageBytes = 40;
 
     internal static long ArenaExtent(int capacity) => capacity == 0 ? 0
