@@ -25,10 +25,12 @@ Supprocom.NativeAllocationManagement.NativePreparedPool<T>.CapturePreparedSnapsh
 Supprocom.NativeAllocationManagement.NativePreparedPool<T>.CaptureDiagnosticSnapshot() -> Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot
 Supprocom.NativeAllocationManagement.NativePreparedPool<T>.Id.get -> long
 Supprocom.NativeAllocationManagement.NativePreparedPool<T>.TryRent(int length, Supprocom.NativeAllocationManagement.NativeLeaseInitializer<T>! initializer, out Supprocom.NativeAllocationManagement.PreparedPooled<T> lease, out Supprocom.NativeAllocationManagement.NativePoolExhaustionReason reason) -> bool
+Supprocom.NativeAllocationManagement.NativePreparedPool<T>.TryRent(int length, T value, out Supprocom.NativeAllocationManagement.PreparedPooled<T> lease, out Supprocom.NativeAllocationManagement.NativePoolExhaustionReason reason) -> bool
 Supprocom.NativeAllocationManagement.NativePreparedPool<T>.Dispose() -> void
 Supprocom.NativeAllocationManagement.NativePreparedPool<T>.GetStatistics() -> Supprocom.NativeAllocationManagement.NativeOwnerStatistics
 Supprocom.NativeAllocationManagement.NativePreparedPool<T>.ReleaseRetiredStorage() -> void
 Supprocom.NativeAllocationManagement.NativePreparedPool<T>.Rent(int length, Supprocom.NativeAllocationManagement.NativeLeaseInitializer<T>! initializer) -> Supprocom.NativeAllocationManagement.PreparedPooled<T>
+Supprocom.NativeAllocationManagement.NativePreparedPool<T>.Rent(int length, T value) -> Supprocom.NativeAllocationManagement.PreparedPooled<T>
 Supprocom.NativeAllocationManagement.NativePreparedPool<T>.Retire() -> void
 Supprocom.NativeAllocationManagement.NativePreparedPool<T>.TrimRetainedMemory() -> nuint
 Supprocom.NativeAllocationManagement.NativePreparedPool<T>.TrimRetainedMemoryByBytes(nuint bytesToRelease) -> nuint

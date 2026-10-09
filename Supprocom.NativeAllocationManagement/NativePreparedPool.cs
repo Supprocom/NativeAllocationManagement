@@ -152,6 +152,23 @@ public sealed unsafe class NativePreparedPool<T> : IDisposable
         return InitializeSlot(index, token, length, initializer);
     }
 
+    /// <summary>Fills and publishes one bounded slot without an initializer callback.</summary>
+    /// <param name="length">The complete initialized element count, at most the prepared capacity.</param>
+    /// <param name="value">The value written to every element before the lease is published.</param>
+    /// <returns>The owning token-bound slot capability.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public PreparedPooled<T> Rent(int length, T value)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(length);
+        ValidateOwner(nameof(Rent));
+        if (CheckCapacity(length) != NativePoolExhaustionReason.None)
+        {
+            ThrowCapacityExhausted();
+        }
+        long token = TakeLeaseToken();
+        return InitializeFilledSlot(_freeHead, token, length, value);
+    }
+
     /// <summary>Publishes a prepared slot, returning false only for expected shape or slot exhaustion.</summary>
     /// <param name="length">The required initialized element count.</param>
     /// <param name="initializer">The complete bounded initializer, not invoked on capacity refusal.</param>
@@ -176,6 +193,48 @@ public sealed unsafe class NativePreparedPool<T> : IDisposable
         _freeHead = _slabs[index].Next;
         lease = InitializeSlot(index, token, length, initializer);
         return true;
+    }
+
+    /// <summary>Fills a slot without a callback, returning false only for shape or slot exhaustion.</summary>
+    /// <param name="length">The required initialized element count.</param>
+    /// <param name="value">The value written to every element on successful admission.</param>
+    /// <param name="lease">The fully initialized owning capability on success, or default on refusal.</param>
+    /// <param name="reason">The exact expected capacity refusal, or None on success.</param>
+    /// <returns>True only after complete fill and publication.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public bool TryRent(int length, T value,
+        out PreparedPooled<T> lease, out NativePoolExhaustionReason reason)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(length);
+        ValidateOwner(nameof(TryRent));
+        reason = CheckCapacity(length);
+        if (reason != NativePoolExhaustionReason.None)
+        {
+            lease = default;
+            return false;
+        }
+        long token = TakeLeaseToken();
+        lease = InitializeFilledSlot(_freeHead, token, length, value);
+        return true;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private PreparedPooled<T> InitializeFilledSlot(int index, long token, int length, T value)
+    {
+        ref Slot slot = ref _slabs[index];
+        // T is unmanaged and this bounded fill cannot invoke user code. Leave
+        // the slot free until every value is written: no callback writer,
+        // initializing frame or incomplete-prefix rollback is needed.
+        new Span<T>((void*)slot.Pointer, length).Fill(value);
+        _freeHead = slot.Next;
+        slot.Token = token;
+        slot.Next = NativePreparedPoolStorage.Leased;
+        _liveLeaseCount++;
+        _peakOccupiedSlots = Math.Max(_peakOccupiedSlots, _liveLeaseCount);
+        _requestedBytes += checked((long)CalculateByteLength(length));
+        _peakInitializedPayloadBytes = Math.Max(_peakInitializedPayloadBytes, _requestedBytes);
+        IncrementHistory(ref _successfulPreparedRents);
+        return new PreparedPooled<T>(this, index, token, length, _preparation.SlotCapacity);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

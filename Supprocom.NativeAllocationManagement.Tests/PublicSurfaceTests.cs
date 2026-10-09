@@ -94,7 +94,13 @@ public sealed class PublicSurfaceTests
         Assert.Equal([typeof(NativePoolPreparation), typeof(NativeMemoryBudget)],
             preparedParameters.Select(static parameter => parameter.ParameterType));
         Assert.All(preparedParameters, static parameter => Assert.False(parameter.IsOptional));
-        Assert.NotNull(typeof(NativePreparedPool<int>).GetMethod("TryRent"));
+        Assert.NotNull(typeof(NativePreparedPool<int>).GetMethod("TryRent",
+            [typeof(int), typeof(NativeLeaseInitializer<int>), typeof(PreparedPooled<int>).MakeByRefType(),
+                typeof(NativePoolExhaustionReason).MakeByRefType()]));
+        Assert.NotNull(typeof(NativePreparedPool<int>).GetMethod("TryRent",
+            [typeof(int), typeof(int), typeof(PreparedPooled<int>).MakeByRefType(),
+                typeof(NativePoolExhaustionReason).MakeByRefType()]));
+        Assert.NotNull(typeof(NativePreparedPool<int>).GetMethod("Rent", [typeof(int), typeof(int)]));
         Assert.NotNull(typeof(NativePreparedPool<int>).GetMethod("CapturePreparedSnapshot"));
         ConstructorInfo budgetedPoolConstructor = SingleExpected(poolConstructors,
             static constructor => constructor.GetParameters().Length == 4);

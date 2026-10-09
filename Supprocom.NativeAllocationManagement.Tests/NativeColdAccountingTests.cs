@@ -177,6 +177,28 @@ public sealed class NativeColdAccountingTests
         finally { NativeMemoryTestHooks.Reset(); }
     }
 
+    [Fact]
+    public void FirstFilledRentAndTryRentNeedNoDelegateOrDeferredMetadata()
+    {
+        OnFreshThread(static () =>
+        {
+            using NativePreparedPool<int> pool = new(new NativePoolPreparation(1, 4, 1), null);
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            using (PreparedPooled<int> first = pool.Rent(4, 7)) { }
+            long afterRent = GC.GetAllocatedBytesForCurrentThread();
+            bool acquired = pool.TryRent(4, 11, out PreparedPooled<int> second, out NativePoolExhaustionReason reason);
+            second.Dispose();
+            long afterTryRent = GC.GetAllocatedBytesForCurrentThread();
+            Assert.True(acquired);
+            Assert.Equal(NativePoolExhaustionReason.None, reason);
+            Assert.Equal(before, afterRent);
+            Assert.Equal(before, afterTryRent);
+            Assert.Equal(2, pool.CapturePreparedSnapshot().SuccessfulRentCount);
+            Assert.Equal(0, pool.CapturePreparedSnapshot().InitializerFailureCount);
+            Assert.Equal(0, pool.CapturePreparedSnapshot().OccupiedSlotCount);
+        });
+    }
+
     private static object? ThreadAccounting() => typeof(NativeMemoryAccounting)
         .GetField("_threadHotMetrics", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null);
 
