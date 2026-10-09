@@ -131,6 +131,52 @@ public sealed class NativeColdAccountingTests
         finally { NativeMemoryTestHooks.Reset(); }
     }
 
+    [Fact]
+    public void PreparationPaysForTheFirstRealClearAndCopyWithoutDeferringMetadata()
+    {
+        NativeMemoryTestHooks.Reset();
+        try
+        {
+            OnFreshThread(static () =>
+            {
+                Assert.Null(ThreadAccounting());
+                NativeLeaseInitializer<int> initialize = static writer => writer.Fill(7);
+                using NativePreparedPool<int> pool = new(new NativePoolPreparation(1, 4, 1), null);
+                Assert.NotNull(ThreadAccounting());
+                ReadOnlySpan<int> input = Input;
+                Span<int> output = stackalloc int[4];
+                long before = GC.GetAllocatedBytesForCurrentThread();
+                long afterRent;
+                long afterClear;
+                long afterCopyFrom;
+                long afterCopyTo;
+                using (PreparedPooled<int> lease = pool.Rent(4, initialize))
+                {
+                    afterRent = GC.GetAllocatedBytesForCurrentThread();
+                    lease.Clear();
+                    afterClear = GC.GetAllocatedBytesForCurrentThread();
+                    lease.CopyFrom(input);
+                    afterCopyFrom = GC.GetAllocatedBytesForCurrentThread();
+                    lease.CopyTo(output);
+                    afterCopyTo = GC.GetAllocatedBytesForCurrentThread();
+                }
+                long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+                Assert.Equal(before, afterRent);
+                Assert.Equal(before, afterClear);
+                Assert.Equal(before, afterCopyFrom);
+                Assert.Equal(before, afterCopyTo);
+                Assert.Equal(0, allocated);
+                Assert.True(output.SequenceEqual(Input));
+                NativeMemoryStatistics actual = NativeMemoryDiagnostics.Snapshot();
+                Assert.Equal(1, actual.StorageClearCount);
+                Assert.Equal(16, actual.StorageClearBytes);
+                Assert.Equal(16, actual.WrittenClearBytes);
+                Assert.Equal(32, actual.CopiedBytes);
+            });
+        }
+        finally { NativeMemoryTestHooks.Reset(); }
+    }
+
     private static object? ThreadAccounting() => typeof(NativeMemoryAccounting)
         .GetField("_threadHotMetrics", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null);
 
