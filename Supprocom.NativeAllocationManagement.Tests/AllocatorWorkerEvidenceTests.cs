@@ -6,6 +6,10 @@ namespace Supprocom.NativeAllocationManagement.Tests;
 
 public sealed class AllocatorWorkerEvidenceTests
 {
+    // Normal completion includes cold PowerShell startup on a shared host.
+    // Deliberate timeout behavior has its own short, unchanged deadline below.
+    private const int NormalExitTimeoutMilliseconds = 60_000;
+
     [Theory]
     [InlineData(0)]
     [InlineData(3)]
@@ -17,7 +21,7 @@ public sealed class AllocatorWorkerEvidenceTests
         string? directory = null;
         AllocatorPerformanceRegressionTests.WorkerResult result =
             await AllocatorPerformanceRegressionTests.RunWorkerProcessAsync(start, script, "Fixture", retain: true,
-                10_000, value => directory = value);
+                NormalExitTimeoutMilliseconds, value => directory = value);
 
         Assert.Equal(exitCode, result.ExitCode);
         Assert.Equal(output + Environment.NewLine, result.StandardOutput);
@@ -28,7 +32,7 @@ public sealed class AllocatorWorkerEvidenceTests
         using JsonDocument command = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(directory, "command.json")));
         Assert.Equal(exitCode, command.RootElement.GetProperty("ExitCode").GetInt32());
         Assert.False(command.RootElement.GetProperty("TimedOut").GetBoolean());
-        Assert.Equal(10d, command.RootElement.GetProperty("DeadlineSeconds").GetDouble());
+        Assert.Equal(NormalExitTimeoutMilliseconds / 1000d, command.RootElement.GetProperty("DeadlineSeconds").GetDouble());
         Assert.Equal(start.FileName, command.RootElement.GetProperty("Executable").GetString());
         Assert.Equal(Environment.CurrentDirectory, command.RootElement.GetProperty("WorkingDirectory").GetString());
         Assert.True(command.RootElement.GetProperty("EndedAt").GetDateTimeOffset()
@@ -91,7 +95,7 @@ public sealed class AllocatorWorkerEvidenceTests
         bool created = false;
         AllocatorPerformanceRegressionTests.WorkerResult result =
             await AllocatorPerformanceRegressionTests.RunWorkerProcessAsync(Start(script), script, "DisabledFixture", retain: false,
-                10_000, _ => created = true);
+                NormalExitTimeoutMilliseconds, _ => created = true);
         Assert.Equal(0, result.ExitCode);
         Assert.False(created);
         Assert.Equal("not retained" + Environment.NewLine, result.StandardOutput);
