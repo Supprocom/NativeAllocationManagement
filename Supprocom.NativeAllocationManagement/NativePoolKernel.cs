@@ -239,7 +239,6 @@ public sealed unsafe partial class NativePool<T>
         }
     }
 
-    [MethodImpl(MethodImplOptions.NoInlining)]
     internal IntPtr EnterBorrow(
         int slabIndex,
         long token,
@@ -289,6 +288,9 @@ public sealed unsafe partial class NativePool<T>
     {
         ref Slab slab = ref _slabs[slabIndex];
         slab.BorrowCount--;
+        // Keep the finalizable owner, not just its metadata bank, alive through
+        // the borrow even when callers and their cleanup are inlined.
+        GC.KeepAlive(this);
     }
 
     internal long Move(int slabIndex, long token)
