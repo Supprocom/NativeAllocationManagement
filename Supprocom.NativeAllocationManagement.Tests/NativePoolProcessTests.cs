@@ -93,10 +93,14 @@ public sealed class NativePoolProcessTests
         using (Pooled<int> old = pool.Rent(2, 5)) { }
         Assert.Equal(14, pool.Process(2, 7, 0, (values, _) =>
         {
-            Assert.Throws<NativeAllocationReturnedException>(() => pool.EnterBorrow(0, 1, "stale"));
+            NativeAllocationReturnedException stale = Assert.Throws<NativeAllocationReturnedException>(() => pool.EnterBorrow(0, 1, "stale"));
+            Assert.Equal(1, stale.ActiveOperationCount);
             Assert.Throws<NativeAllocationReturnedException>(() => pool.Return(0, 1, 2));
-            Assert.Throws<InvalidOperationException>(() => pool.Return(0, 2, 2));
-            Assert.Throws<InvalidOperationException>(() => pool.Move(0, 2));
+            Assert.Throws<NativeAllocationReturnedException>(() => pool.Move(0, 1));
+            NativeAllocationReturnedException guessed = Assert.Throws<NativeAllocationReturnedException>(() => pool.EnterBorrow(0, 2, "guessed"));
+            Assert.Equal(1, guessed.ActiveOperationCount);
+            Assert.Throws<NativeAllocationReturnedException>(() => pool.Return(0, 2, 2));
+            Assert.Throws<NativeAllocationReturnedException>(() => pool.Move(0, 2));
             Assert.Equal(1, pool.CurrentGenerationActiveOperationsForTest);
             return values[0] + values[1];
         }));
@@ -116,11 +120,29 @@ public sealed class NativePoolProcessTests
             Assert.Throws<NativeMemoryBudgetExceededException>(() => pool.Process(2, 7, 0, CountCall));
             Assert.Equal(22, existing.Read(static view => view[0] + view[1]));
         }
-        typeof(NativePool<int>).GetField("_leaseTokenCounter", BindingFlags.NonPublic | BindingFlags.Instance)!.SetValue(pool, long.MaxValue);
-        NativeOwnerStatistics before = pool.GetStatistics();
-        Assert.Throws<InvalidOperationException>(() => pool.Process(2, 7, 0, CountCall));
-        Assert.Equal(before, pool.GetStatistics());
         Assert.Equal(0, calls);
+    }
+
+    [Fact]
+    public void PrivateScopesDoNotConsumeOrDependOnPublicLeaseTokens()
+    {
+        using NativePool<int> pool = new(2, NativeMemoryReturn.ToNativeMemory);
+        FieldInfo counter = typeof(NativePool<int>).GetField("_leaseTokenCounter", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        Assert.Equal(14, pool.Process(2, 7, 0, static (values, _) => values[0] + values[1]));
+        Assert.Throws<OperationCanceledException>(() => pool.Process<int, int>(2, 11, 0,
+            static (_, _) => throw new OperationCanceledException()));
+        Assert.Equal(0L, counter.GetValue(pool));
+        using (Pooled<int> lease = pool.Rent(2, 13))
+        {
+            Assert.Equal(1L, counter.GetValue(pool));
+            Assert.Equal(26, lease.Read(static view => view[0] + view[1]));
+        }
+        counter.SetValue(pool, long.MaxValue);
+        Assert.Equal(34, pool.Process(2, 17, 0, static (values, _) => values[0] + values[1]));
+        Assert.Equal(long.MaxValue, counter.GetValue(pool));
+        NativeOwnerStatistics before = pool.GetStatistics();
+        Assert.Throws<InvalidOperationException>(() => pool.Rent(2, 19));
+        Assert.Equal(before, pool.GetStatistics());
     }
 
     [Fact]

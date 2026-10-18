@@ -40,8 +40,7 @@ public readonly ref struct NativeLeaseWriter<T>
     {
         if (source.Length != Remaining) throw new ArgumentException("The copy must initialize the complete remaining range.", nameof(source));
         Span<T> destination = _directValues[_initializedLength..];
-        source.CopyTo(destination);
-        NativeMemoryAccounting.RecordCopiedRange(source, destination);
+        NativeMemoryAccounting.CopyRange(source, destination);
         _initializedLength = _length;
     }
 
@@ -234,8 +233,7 @@ public readonly ref struct NativeLeaseWriter<T>
         if (!RuntimeHelpers.IsReferenceOrContainsReferences<T>())
         {
             Span<T> copyTarget = _directValues[start..];
-            source.CopyTo(copyTarget);
-            NativeMemoryAccounting.RecordCopiedRange(source, copyTarget);
+            NativeMemoryAccounting.CopyRange(source, copyTarget);
             _initializedLength = Math.Max(
                 initializedLength,
                 end);
@@ -275,8 +273,7 @@ public readonly ref struct NativeLeaseWriter<T>
         if (!RuntimeHelpers.IsReferenceOrContainsReferences<T>())
         {
             Span<T> copyTarget = _directValues[start..];
-            source.CopyTo(copyTarget);
-            NativeMemoryAccounting.RecordCopiedRange(source, copyTarget);
+            NativeMemoryAccounting.CopyRange(source, copyTarget);
             _initializedLength = start + source.Length;
             return;
         }

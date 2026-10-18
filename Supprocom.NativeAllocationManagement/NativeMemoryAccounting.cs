@@ -430,6 +430,44 @@ internal static class NativeMemoryAccounting
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static void CopyRange<T>(scoped ReadOnlySpan<T> source, scoped Span<T> destination)
+    {
+        if (source.IsEmpty || Unsafe.AreSame(
+            ref System.Runtime.InteropServices.MemoryMarshal.GetReference(source),
+            ref System.Runtime.InteropServices.MemoryMarshal.GetReference(destination)))
+        {
+            source.CopyTo(destination);
+            return;
+        }
+
+        // Callers validate ranges first. Acquire first-use diagnostic storage
+        // before changing data, then credit only a completed copy. One lookup
+        // also covers the shared fallback when a local record cannot be claimed.
+        NativeHotMetrics metrics = CurrentHotMetrics();
+        source.CopyTo(destination);
+        long bytes = (long)source.Length * Unsafe.SizeOf<T>();
+        AddHotHistory(metrics, ref metrics.CopiedBytes, bytes);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static void ClearStorage<T>(scoped Span<T> values)
+    {
+        if (values.IsEmpty)
+        {
+            return;
+        }
+
+        NativeHotMetrics metrics = CurrentHotMetrics();
+        values.Clear();
+        // Int32-sized element count and stride fit Int64 without a fallible
+        // conversion after the actual write.
+        long bytes = (long)values.Length * Unsafe.SizeOf<T>();
+        AddHotHistory(metrics, ref metrics.StorageClearCount, 1);
+        AddHotHistory(metrics, ref metrics.StorageClearBytes, bytes);
+        AddHotHistory(metrics, ref metrics.WrittenClearBytes, bytes);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static void RecordReusedNativeSegment()
     {
         NativeHotMetrics metrics = CurrentHotMetrics();

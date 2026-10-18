@@ -84,8 +84,7 @@ public ref struct NativeSequentialLeaseWriter<T>
         if (!RuntimeHelpers.IsReferenceOrContainsReferences<T>())
         {
             Span<T> copyTarget = _directValues[destination..];
-            source.CopyTo(copyTarget);
-            NativeMemoryAccounting.RecordCopiedRange(source, copyTarget);
+            NativeMemoryAccounting.CopyRange(source, copyTarget);
             _position = position + source.Length;
             return;
         }

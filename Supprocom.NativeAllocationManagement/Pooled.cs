@@ -51,21 +51,10 @@ public readonly ref struct Pooled<T>
         return destination;
     }
 
-    /// <summary>Clears the logical range during one validated borrow.</summary>
-    public void Clear()
-    {
-        PooledBorrow<T> borrow = EnterBorrow(nameof(Clear));
-        try
-        {
-            borrow.View.Clear();
-        }
-        finally
-        {
-            borrow.Dispose();
-        }
-    }
+    /// <summary>Clears the logical range after validating this lease.</summary>
+    public void Clear() => GetKernel(nameof(Clear)).Clear(_slabIndex, _token, _length);
 
-    /// <summary>Copies one exact source during one validated borrow.</summary>
+    /// <summary>Copies one exact source after validating this lease.</summary>
     public void CopyFrom(scoped ReadOnlySpan<T> source)
     {
         if (source.Length != _length)
@@ -75,18 +64,10 @@ public readonly ref struct Pooled<T>
                 nameof(source));
         }
 
-        PooledBorrow<T> borrow = EnterBorrow(nameof(CopyFrom));
-        try
-        {
-            borrow.View.CopyFrom(source);
-        }
-        finally
-        {
-            borrow.Dispose();
-        }
+        GetKernel(nameof(CopyFrom)).CopyFrom(_slabIndex, _token, source);
     }
 
-    /// <summary>Copies the logical range during one validated borrow.</summary>
+    /// <summary>Copies the logical range after validating this lease.</summary>
     public void CopyTo(scoped Span<T> destination)
     {
         if (destination.Length < _length)
@@ -96,15 +77,7 @@ public readonly ref struct Pooled<T>
                 nameof(destination));
         }
 
-        PooledBorrow<T> borrow = EnterBorrow(nameof(CopyTo));
-        try
-        {
-            borrow.View.CopyTo(destination);
-        }
-        finally
-        {
-            borrow.Dispose();
-        }
+        GetKernel(nameof(CopyTo)).CopyTo(_slabIndex, _token, _length, destination);
     }
 
     /// <summary>Runs one bounded write callback after one token check.</summary>

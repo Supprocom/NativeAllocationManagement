@@ -2,6 +2,10 @@ namespace Supprocom.NativeAllocationManagement;
 
 /// <summary>Owns reusable native slabs for one unmanaged element type.</summary>
 /// <typeparam name="T">The unmanaged value type in each slab.</typeparam>
+/// <remarks>
+/// Growth and the first clear or copy may acquire managed metadata. Use
+/// <see cref="NativePreparedPool{T}"/> for fully prepared, fixed-shape operations.
+/// </remarks>
 public sealed partial class NativePool<T> : IDisposable
     where T : unmanaged
 {

@@ -82,8 +82,7 @@ public readonly ref struct NativeLeaseView<T>
     {
         if (_allocation is null)
         {
-            GetDirectSpan().Clear();
-            RecordDirectClear(_length);
+            NativeMemoryAccounting.ClearStorage(GetDirectSpan());
             return;
         }
 
@@ -95,23 +94,13 @@ public readonly ref struct NativeLeaseView<T>
 
         if (_allocation.ReferenceRoots is null)
         {
-            _allocation.AsSpan<T>()[.._length].Clear();
-            RecordDirectClear(_length);
+            NativeMemoryAccounting.ClearStorage(_allocation.AsSpan<T>()[.._length]);
             return;
         }
 
         if (_length != 0)
         {
             _allocation.ReferenceRoots.ClearRange(_allocation.Segment!, _allocation.OffsetBytes, _length);
-        }
-    }
-
-    private static void RecordDirectClear(int length)
-    {
-        if (length != 0)
-        {
-            nuint bytes = checked((nuint)length * (nuint)Unsafe.SizeOf<T>());
-            NativeMemoryAccounting.RecordStorageClear(bytes, bytes);
         }
     }
 
@@ -155,8 +144,7 @@ public readonly ref struct NativeLeaseView<T>
         if (_allocation is null)
         {
             Span<T> copyTarget = GetDirectSpan();
-            source.CopyTo(copyTarget);
-            NativeMemoryAccounting.RecordCopiedRange(source, copyTarget);
+            NativeMemoryAccounting.CopyRange(source, copyTarget);
             return;
         }
 
@@ -176,8 +164,7 @@ public readonly ref struct NativeLeaseView<T>
         if (_allocation is null)
         {
             ReadOnlySpan<T> copySource = GetDirectSpan();
-            copySource.CopyTo(destination);
-            NativeMemoryAccounting.RecordCopiedRange(copySource, destination);
+            NativeMemoryAccounting.CopyRange(copySource, destination);
             return;
         }
 
@@ -190,8 +177,7 @@ public readonly ref struct NativeLeaseView<T>
         if (_allocation.ReferenceRoots is null)
         {
             ReadOnlySpan<T> copySource = _allocation.AsSpan<T>()[.._length];
-            copySource.CopyTo(destination);
-            NativeMemoryAccounting.RecordCopiedRange(copySource, destination);
+            NativeMemoryAccounting.CopyRange(copySource, destination);
             return;
         }
 

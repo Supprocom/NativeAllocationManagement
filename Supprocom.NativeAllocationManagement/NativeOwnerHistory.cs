@@ -22,14 +22,17 @@ internal static class NativeOwnerHistory
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static void Add(ref long counter, long delta, ref bool overflowed)
     {
-        if (delta > long.MaxValue - counter)
+        // Completed histories and their deltas are nonnegative. Their sum
+        // crosses the sign bit exactly when it exceeds the signed maximum.
+        long next = unchecked(counter + delta);
+        if (next < 0)
         {
             counter = long.MaxValue;
             overflowed = true;
         }
         else
         {
-            counter += delta;
+            counter = next;
         }
     }
 }
