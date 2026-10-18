@@ -224,13 +224,15 @@ public sealed unsafe partial class NativePool<T>
 
             _requestedBytes += checked((long)CalculateByteLength(length));
             _peakInitializedPayloadBytes = Math.Max(_peakInitializedPayloadBytes, _requestedBytes);
-            slab.State = SlabState.Leased;
+            // Nested rentals can replace the bank while the initializer runs.
+            ref Slab published = ref _slabs[slabIndex];
+            published.State = SlabState.Leased;
             return new Pooled<T>(
                 this,
                 slabIndex,
                 token,
                 length,
-                slab.Capacity);
+                published.Capacity);
         }
         catch
         {
