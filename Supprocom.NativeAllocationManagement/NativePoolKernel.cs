@@ -15,7 +15,7 @@ public sealed unsafe partial class NativePool<T>
     private readonly NativeMemoryReturn _returnMemoryOnDispose;
     private NativeMemoryBudget? _budget;
     private readonly int _ownerThreadId;
-    private readonly int[] _freeHeads = [];
+    private int[] _freeHeads = [];
     private Slab[] _slabs = [];
     private uint _nonEmptyFreeClasses;
     private NativeOwnerLifecycle _lifecycle;
@@ -52,8 +52,6 @@ public sealed unsafe partial class NativePool<T>
         _returnMemoryOnDispose = returnMemoryOnDispose;
         _budget = budget;
         _ownerThreadId = Environment.CurrentManagedThreadId;
-        _freeHeads = new int[SizeClassCount];
-        Array.Fill(_freeHeads, -1);
         _slabs = new Slab[4];
         _lifecycle = NativeOwnerLifecycle.Active;
 
@@ -63,7 +61,7 @@ public sealed unsafe partial class NativePool<T>
             {
                 nuint bytes = CalculateByteLength(preLease);
                 int index = AddSlab(preLease, bytes, "typed reservation");
-                PushFreeList(index);
+                CacheReturnedSlab(index, preLease);
             }
 
             if (preAllocateBytes != 0)
@@ -77,7 +75,7 @@ public sealed unsafe partial class NativePool<T>
                     capacity,
                     preAllocateBytes,
                     "raw reservation");
-                PushFreeList(index);
+                CacheReturnedSlab(index, capacity);
             }
         }
         catch
@@ -545,9 +543,22 @@ public sealed unsafe partial class NativePool<T>
         if (_returnedSlabIndex >= 0)
         {
             int slabIndex = _returnedSlabIndex;
-            _returnedSlabIndex = -1;
-            _returnedLogicalLength = -1;
-            PushFreeList(slabIndex);
+            if (_nonEmptyFreeClasses == 0)
+            {
+                if (_slabs[slabIndex].Capacity >= length)
+                {
+                    _returnedSlabIndex = -1;
+                    _returnedLogicalLength = -1;
+                    return slabIndex;
+                }
+                // Keep the only available slab reachable if growth fails.
+            }
+            else
+            {
+                _returnedSlabIndex = -1;
+                _returnedLogicalLength = -1;
+                PushFreeList(slabIndex);
+            }
         }
 
         int selectedSlab = TakeFreeSlow(length);
@@ -711,6 +722,15 @@ public sealed unsafe partial class NativePool<T>
             int index = _unusedHead;
             _unusedHead = _slabs[index].Next;
             return index;
+        }
+
+        if (_slabCount != 0 && _freeHeads.Length == 0)
+        {
+            // A second record can displace a returned slab. Prepare its class
+            // table before publication, never during return or rollback.
+            int[] heads = new int[SizeClassCount];
+            Array.Fill(heads, -1);
+            _freeHeads = heads;
         }
 
         if (_slabCount == _slabs.Length)
@@ -917,7 +937,7 @@ public sealed unsafe partial class NativePool<T>
         {
             if (_slabs[index].State == SlabState.Free)
             {
-                PushFreeList(index);
+                CacheReturnedSlab(index, _slabs[index].Capacity);
             }
         }
     }
