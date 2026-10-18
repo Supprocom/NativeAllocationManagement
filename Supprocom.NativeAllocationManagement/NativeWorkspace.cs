@@ -4,6 +4,12 @@ namespace Supprocom.NativeAllocationManagement;
 
 /// <summary>Owns one thread-confined fixed native workspace.</summary>
 /// <typeparam name="T">The unmanaged element type in the workspace.</typeparam>
+/// <remarks>
+/// Checked initialization writes its complete range without a redundant clear.
+/// Direct processing clears newly exposed storage once, retaining initialized
+/// contents across subsequent calls and resets. Failed initialization publishes
+/// no range; its partially written contents are unspecified.
+/// </remarks>
 public sealed class NativeWorkspace<T> : IDisposable
     where T : unmanaged
 {
@@ -46,7 +52,6 @@ public sealed class NativeWorkspace<T> : IDisposable
             budget,
             ownerId: _id);
         _capacity = preLease;
-        ClearBlock();
     }
 
     /// <summary>Gets the stable process-local backing owner identity.</summary>
@@ -132,7 +137,7 @@ public sealed class NativeWorkspace<T> : IDisposable
         }
     }
 
-    /// <summary>Initializes and publishes one logical range.</summary>
+    /// <summary>Initializes and publishes one logical range without first clearing its backing.</summary>
     public void Initialize(
         int length,
         NativeLeaseInitializer<T> initializer,
@@ -223,7 +228,7 @@ public sealed class NativeWorkspace<T> : IDisposable
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
-            _peakInitializedLength = Math.Max(_peakInitializedLength, length);
+            EnsureInitializedPrefix(length);
             Span<T> values = CreateSpan(length);
             initializer(values);
             cancellationToken.ThrowIfCancellationRequested();
@@ -248,7 +253,7 @@ public sealed class NativeWorkspace<T> : IDisposable
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
-            _peakInitializedLength = Math.Max(_peakInitializedLength, length);
+            EnsureInitializedPrefix(length);
             TResult result = processor(CreateSpan(length), state);
             cancellationToken.ThrowIfCancellationRequested();
             return result;
@@ -404,13 +409,27 @@ public sealed class NativeWorkspace<T> : IDisposable
     private unsafe Span<T> CreateSpan(int length) =>
         new((void*)_block.Pointer, length);
 
-    private unsafe void ClearBlock()
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void EnsureInitializedPrefix(int length)
     {
-        new Span<T>((void*)_block.Pointer, _capacity).Clear();
-        if (_capacity != 0)
+        if (length > _peakInitializedLength)
         {
-            NativeMemoryAccounting.RecordStorageClear(_block.ByteLength, _block.ByteLength);
+            ClearUninitializedSuffix(length);
         }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private unsafe void ClearUninitializedSuffix(int length)
+    {
+        // A successful checked initializer establishes the same contiguous
+        // frontier as a direct-span borrow. Neither Reset nor failed writes
+        // invalidate already initialized bytes. Never expose the suffix until
+        // it has been cleared; no second preparation field is needed.
+        int count = length - _peakInitializedLength;
+        new Span<T>((T*)_block.Pointer + _peakInitializedLength, count).Clear();
+        nuint bytes = (nuint)(uint)count * (nuint)Unsafe.SizeOf<T>();
+        NativeMemoryAccounting.RecordStorageClear(bytes, bytes);
+        _peakInitializedLength = length;
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]

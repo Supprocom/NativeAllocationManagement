@@ -522,7 +522,7 @@ public sealed class NativeProductionAccountingTests
     }
 
     [Fact]
-    public void EmptyClearsDoNotInventRangeWorkAndWorkspaceBackingClearIsObserved()
+    public void EmptyClearsDoNotInventRangeWorkAndWorkspaceExposureClearIsObserved()
     {
         NativeMemoryTestHooks.Reset();
         try
@@ -535,6 +535,8 @@ public sealed class NativeProductionAccountingTests
             }
             Assert.Equal(0, NativeMemoryDiagnostics.Snapshot().StorageClearCount);
             using NativeWorkspace<int> workspace = new(preLease: 2);
+            Assert.Equal(0, NativeMemoryDiagnostics.Snapshot().StorageClearCount);
+            Assert.Equal(0, workspace.Process(2, 0, static (values, _) => values[0] + values[1]));
             NativeMemoryStatistics clear = NativeMemoryDiagnostics.Snapshot();
             Assert.Equal(1, clear.StorageClearCount);
             Assert.Equal(8, clear.StorageClearBytes);

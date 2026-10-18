@@ -16,21 +16,22 @@ internal static class NativeProcessDiagnosticOracle
         Verify(expected, "baseline");
         using (NativeWorkspace<int> workspace = new(preLease: 4))
         {
-            expected = expected.WithAcquisition(16) with
-            {
-                StorageClearCount = expected.StorageClearCount + 1,
-                StorageClearBytes = expected.StorageClearBytes + 16,
-                WrittenClearBytes = expected.WrittenClearBytes + 16
-            };
-            Verify(expected, "workspace:acquired-and-cleared");
+            expected = expected.WithAcquisition(16);
+            Verify(expected, "workspace:acquired-without-premature-clear");
             int initialSum = workspace.Process(2, static values =>
             {
                 if (values[0] != 0 || values[1] != 0)
-                    throw new InvalidOperationException("Workspace backing was not actually zero-initialized.");
+                    throw new InvalidOperationException("Newly exposed workspace storage was not zero-initialized.");
             }, static values => values[0] + values[1]);
             if (initialSum != 0)
                 throw new InvalidOperationException("Reading prepared workspace backing changed its contents.");
-            Verify(expected, "workspace:process-adds-no-storage-or-history");
+            expected = expected with
+            {
+                StorageClearCount = expected.StorageClearCount + 1,
+                StorageClearBytes = expected.StorageClearBytes + 8,
+                WrittenClearBytes = expected.WrittenClearBytes + 8
+            };
+            Verify(expected, "workspace:process-clears-only-the-newly-exposed-prefix");
             workspace.Initialize(2, static writer => writer.Fill(17));
             workspace.Access(static view =>
             {

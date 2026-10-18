@@ -88,7 +88,7 @@
       "definition": "Successful fresh backend acquisitions requested zeroed. Explicit workspace/view/root clears and reused backing are distinct operations, not invented zeroed acquisitions.",
       "implementation": ["NativeMemoryAccounting.cs#AddAtomicHistory(ref _zeroedAllocationCount, 1, ref _historyOverflowed);"],
       "overflow": "Saturates with HistoryOverflowed on a further completed zeroed acquisition.",
-      "additionalProofs": ["NativeProductionAccountingTests.ColdMetadataFailureFallsBackWithoutLosingPriorHistoryOrFailingWork", "NativeProductionAccountingTests.EmptyClearsDoNotInventRangeWorkAndWorkspaceBackingClearIsObserved"]
+      "additionalProofs": ["NativeProductionAccountingTests.ColdMetadataFailureFallsBackWithoutLosingPriorHistoryOrFailingWork", "NativeProductionAccountingTests.EmptyClearsDoNotInventRangeWorkAndWorkspaceExposureClearIsObserved"]
     },
     {
       "name": "DetachedGenerationCount", "units": "detached generations", "role": "history",
@@ -128,9 +128,9 @@
     {
       "name": "StorageClearCount", "units": "nonempty clear operations", "role": "history",
       "definition": "NAM-controlled nonempty clear ranges, including workspace preparation and bounded view Clear. Empty ranges and arbitrary consumer span clears add no observed operation.",
-      "implementation": ["NativeMemoryAccounting.cs#AddHotHistory(metrics, ref metrics.StorageClearCount, 1);", "NativeWorkspace.cs#NativeMemoryAccounting.RecordStorageClear(_block.ByteLength, _block.ByteLength);"],
+      "implementation": ["NativeMemoryAccounting.cs#AddHotHistory(metrics, ref metrics.StorageClearCount, 1);", "NativeWorkspace.cs#NativeMemoryAccounting.RecordStorageClear(bytes, bytes);"],
       "overflow": "Saturates with HistoryOverflowed; completed clearing and root cleanup cannot fail for history exhaustion.",
-      "additionalProofs": ["NativeProductionAccountingTests.EmptyClearsDoNotInventRangeWorkAndWorkspaceBackingClearIsObserved", "NativeProductionAccountingTests.DirectBoundedClearIsObservedButArbitraryConsumerSpanClearIsNotInvented"]
+      "additionalProofs": ["NativeProductionAccountingTests.EmptyClearsDoNotInventRangeWorkAndWorkspaceExposureClearIsObserved", "NativeProductionAccountingTests.DirectBoundedClearIsObservedButArbitraryConsumerSpanClearIsNotInvented"]
     },
     {
       "name": "StorageClearBytes", "units": "bytes visited", "role": "byte-history",
