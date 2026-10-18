@@ -127,6 +127,30 @@ public sealed unsafe partial class NativePool<T>
         return InitializeSlab(slabIndex, token, length, initializer);
     }
 
+    /// <summary>Fills and publishes one pooled slab without an initializer callback.</summary>
+    /// <param name="length">The complete initialized element count.</param>
+    /// <param name="value">The value written to every element before publication.</param>
+    /// <returns>The owning token-bound slab capability.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public Pooled<T> Rent(int length, T value)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(length);
+        ValidateOwner(nameof(Rent));
+        long token = TakeLeaseToken();
+        int slabIndex = TakeOrAddSlab(length);
+        ref Slab slab = ref _slabs[slabIndex];
+        // Admission proves the whole range fits. This unmanaged fill cannot
+        // invoke user code, so no callback writer or initializing frame is
+        // needed. Publish authority only after every element has been written.
+        new Span<T>((void*)slab.Pointer, length).Fill(value);
+        slab.Token = token;
+        slab.State = SlabState.Leased;
+        _liveLeaseCount++;
+        _requestedBytes += checked((long)CalculateByteLength(length));
+        _peakInitializedPayloadBytes = Math.Max(_peakInitializedPayloadBytes, _requestedBytes);
+        return new Pooled<T>(this, slabIndex, token, length, slab.Capacity);
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private Pooled<T> InitializeSlab(int slabIndex, long token, int length,
         NativeLeaseInitializer<T> initializer)
@@ -180,8 +204,8 @@ public sealed unsafe partial class NativePool<T>
             slabIndex,
             token,
             operation);
-        // Pooled carries the immutable fully initialized length supplied only by
-        // InitializeSlab. Process bounds a shorter prefix at its public boundary;
+        // Pooled carries the immutable length supplied only after complete
+        // initialization. Process bounds a shorter prefix at its public boundary;
         // ordinary bounded access needs no redundant physical-capacity comparison.
         slab.BorrowCount++;
         return slab.Pointer;

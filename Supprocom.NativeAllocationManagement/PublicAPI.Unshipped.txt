@@ -420,6 +420,7 @@ Supprocom.NativeAllocationManagement.NativePool<T>.CaptureDiagnosticSnapshot() -
 Supprocom.NativeAllocationManagement.NativeArena.CaptureDiagnosticSnapshot() -> Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot
 Supprocom.NativeAllocationManagement.NativeRegion.CaptureDiagnosticSnapshot() -> Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot
 Supprocom.NativeAllocationManagement.NativePool<T>.Id.get -> long
+Supprocom.NativeAllocationManagement.NativePool<T>.Rent(int length, T value) -> Supprocom.NativeAllocationManagement.Pooled<T>
 Supprocom.NativeAllocationManagement.NativeArena.Id.get -> long
 Supprocom.NativeAllocationManagement.NativeRegion.Id.get -> long
 Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>.Id.get -> long

@@ -359,6 +359,11 @@ performs element bounds checks inside the callback.
 The next rent must initialize all logical elements before NAM publishes the slab. A
 zero-length lease still has a slab token and exactly-once return authority.
 
+For a uniform initial value, use `pool.Rent(128, 0)`. This fills the complete logical
+range before publication without an initializer callback. Use the writer overload
+when initialization needs to produce different values. Both overloads retain the
+same owner, bounds, budget and stale-lease checks.
+
 ## Borrow a local pool in a helper
 
 A source-visible synchronous helper can borrow a `NativePool<T>` parameter by value. The
@@ -484,6 +489,12 @@ readonly record struct MapState(
 
 Construction allocates the block once. `Reset` removes only its logical publication.
 Disposal or emergency finalization frees the block exactly once.
+
+`Initialize` writes the requested prefix without clearing it first. Direct `Process`
+access clears previously uninitialized bytes before exposing them, only once per
+newly reached prefix. Later calls and `Reset` retain initialized contents; neither
+promises fresh zeros. A failed checked initializer publishes no range, and its
+partially written contents are unspecified.
 
 The workspace checks its owner thread before each operation. The callback cannot keep
 the scoped span after `Process` returns.
