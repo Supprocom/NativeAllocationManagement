@@ -421,6 +421,7 @@ Supprocom.NativeAllocationManagement.NativeArena.CaptureDiagnosticSnapshot() -> 
 Supprocom.NativeAllocationManagement.NativeRegion.CaptureDiagnosticSnapshot() -> Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot
 Supprocom.NativeAllocationManagement.NativePool<T>.Id.get -> long
 Supprocom.NativeAllocationManagement.NativePool<T>.Rent(int length, T value) -> Supprocom.NativeAllocationManagement.Pooled<T>
+Supprocom.NativeAllocationManagement.NativePool<T>.Process<TState, TResult>(int length, T value, TState state, Supprocom.NativeAllocationManagement.NativeSpanStateProcessor<T, TState, TResult>! processor) -> TResult
 Supprocom.NativeAllocationManagement.NativeArena.Id.get -> long
 Supprocom.NativeAllocationManagement.NativeRegion.Id.get -> long
 Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>.Id.get -> long

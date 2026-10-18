@@ -151,6 +151,52 @@ public sealed unsafe partial class NativePool<T>
         return new Pooled<T>(this, slabIndex, token, length, slab.Capacity);
     }
 
+    /// <summary>Fills a temporary rental, processes it, and returns it before this call completes.</summary>
+    /// <param name="length">The complete initialized element count exposed to the processor.</param>
+    /// <param name="value">The value written to every element before processing.</param>
+    /// <param name="state">Explicit state passed to the synchronous processor.</param>
+    /// <param name="processor">The bounded operation; its span cannot escape the callback.</param>
+    /// <typeparam name="TState">The caller state type.</typeparam>
+    /// <typeparam name="TResult">The result type, which cannot contain the borrowed span.</typeparam>
+    /// <returns>The processor result after the temporary slab has been returned.</returns>
+    /// <remarks>Processor failure also returns the slab. Other rentals may be nested inside the callback.</remarks>
+    public TResult Process<TState, TResult>(
+        int length,
+        T value,
+        TState state,
+        NativeSpanStateProcessor<T, TState, TResult> processor)
+    {
+        ArgumentNullException.ThrowIfNull(processor);
+        ArgumentOutOfRangeException.ThrowIfNegative(length);
+        ValidateOwner(nameof(Process));
+        long token = TakeLeaseToken();
+        int slabIndex = TakeOrAddSlab(length);
+        ref Slab slab = ref _slabs[slabIndex];
+        Span<T> values = new((void*)slab.Pointer, length);
+        values.Fill(value);
+        slab.Token = token;
+        slab.State = SlabState.Leased;
+        slab.BorrowCount = 1;
+        _liveLeaseCount++;
+        _requestedBytes += checked((long)CalculateByteLength(length));
+        _peakInitializedPayloadBytes = Math.Max(_peakInitializedPayloadBytes, _requestedBytes);
+        try
+        {
+            return processor(values, state);
+        }
+        finally
+        {
+            // Only this frame owns the rental. A callback cannot return it, but
+            // nested rents can resize the metadata bank: reacquire its live entry.
+            ref Slab returned = ref _slabs[slabIndex];
+            returned.BorrowCount = 0;
+            returned.State = SlabState.Free;
+            _liveLeaseCount--;
+            _requestedBytes -= checked((long)CalculateByteLength(length));
+            CacheReturnedSlab(slabIndex, length);
+        }
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private Pooled<T> InitializeSlab(int slabIndex, long token, int length,
         NativeLeaseInitializer<T> initializer)

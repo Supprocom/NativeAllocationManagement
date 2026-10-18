@@ -2398,6 +2398,10 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             if (owner is not null)
             {
                 ProcessOwnerLifecycle(owner, operation.TargetMethod.Name, operation.Syntax);
+                if (IsPoolProcess(operation))
+                {
+                    borrowedOwner = owner;
+                }
             }
 
             foreach (IArgumentOperation argument in operation.Arguments)
@@ -2434,10 +2438,11 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 RegisterPreparedHandle(operation);
             }
 
+            bool addedBorrowedOwner = false;
             if (borrowedOwner is not null)
             {
-                _borrowedOwners.Add(borrowedOwner);
-                _borrowScopes.Add((borrowedOwner.Symbol, handle!.DisplayName));
+                addedBorrowedOwner = _borrowedOwners.Add(borrowedOwner);
+                _borrowScopes.Add((borrowedOwner.Symbol, handle?.DisplayName ?? borrowedOwner.DisplayName));
                 ReportBorrowedCallbackLifecycle(operation, borrowedOwner);
             }
 
@@ -2483,7 +2488,10 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 if (borrowedOwner is not null)
                 {
                     _borrowScopes.RemoveAt(_borrowScopes.Count - 1);
-                    _borrowedOwners.Remove(borrowedOwner);
+                    if (addedBorrowedOwner)
+                    {
+                        _borrowedOwners.Remove(borrowedOwner);
+                    }
                 }
             }
         }
@@ -5824,7 +5832,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 }
                 return;
             }
-            if (name is "Rent" or "TryRent" or "TryScratch" or "TryScratchScoped" or "Lease" or "Scratch" or "LeaseScoped" or "ScratchScoped")
+            if (name is "Rent" or "TryRent" or "TryScratch" or "TryScratchScoped" or "Lease" or "Scratch" or "LeaseScoped" or "ScratchScoped"
+                || (string.Equals(name, "Process", StringComparison.Ordinal) && NativeSymbols.Is(owner.Type, _symbols.Pool)))
             {
                 CheckOwnerActive(owner, syntax, name);
                 return;
@@ -6107,6 +6116,24 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 }
             }
 
+            // A pool Process scope has no handle. Generation-based owners instead
+            // use the handle facts above, so retired callbacks cannot pin a new generation.
+            if (NativeSymbols.Is(owner.Type, _symbols.Pool))
+            {
+                for (int scopeIndex = 0; scopeIndex < _borrowScopes.Count; scopeIndex++)
+                {
+                    (ISymbol? ownerSymbol, string handleName) = _borrowScopes[scopeIndex];
+                    if (SymbolEqualityComparer.Default.Equals(ownerSymbol, owner.Symbol))
+                    {
+                        string path = handleName + " -> scoped callback";
+                        if (paths.Add(GenerationLivenessKind.ActiveBorrow + ":" + path))
+                        {
+                            findings.Add(new GenerationReturnLiveness(GenerationLivenessKind.ActiveBorrow, path, isScoped: false));
+                        }
+                    }
+                }
+            }
+
             return findings.ToArray();
         }
 
@@ -6203,7 +6230,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     string lifecycleName = member.Name.Identifier.ValueText;
                     if (lifecycleName is not ("ReturnMemoryToNativeMemory" or "ReturnMemoryToGarbageCollector"
                         or "ReleaseLeasesToNativeMemory" or "ReleaseLeasesToGarbageCollector" or "Dispose"
-                        or "Reset" or "RecycleScoped" or "MaintainRetention"))
+                        or "Reset" or "RecycleScoped" or "MaintainRetention" or "Retire"))
                     {
                         continue;
                     }
@@ -7300,7 +7327,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             string name = invocation.TargetMethod.Name;
             if (IsNativePool(invocation.TargetMethod.ContainingType))
             {
-                return name is "Rent" or "TryRent" or "GetStatistics"
+                return IsPoolProcess(invocation) || name is "Rent" or "TryRent" or "GetStatistics"
                     or "CaptureDiagnosticSnapshot" or "CapturePreparedSnapshot";
             }
 
@@ -7308,6 +7335,10 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 && name is "GetStatistics"
                     or "CaptureDiagnosticSnapshot" or "CapturePreparedSnapshot" or "CaptureRetentionSnapshot";
         }
+
+        private bool IsPoolProcess(IInvocationOperation invocation) =>
+            string.Equals(invocation.TargetMethod.Name, "Process", StringComparison.Ordinal)
+            && NativeSymbols.Is(invocation.TargetMethod.ContainingType, _symbols.Pool);
 
         private bool IsApprovedBorrowedOwnerFactoryArgument(
             IInvocationOperation invocation,

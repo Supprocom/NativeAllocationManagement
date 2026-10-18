@@ -364,6 +364,24 @@ range before publication without an initializer callback. Use the writer overloa
 when initialization needs to produce different values. Both overloads retain the
 same owner, bounds, budget and stale-lease checks.
 
+When a temporary rental is used entirely within one synchronous operation, use
+`Process`. It fills the requested range, passes a scoped span and explicit state
+to the processor, then returns the slab even if the processor throws:
+
+```csharp
+int result = pool.Process(128, 0, 42, static (values, input) =>
+{
+    values[0] = input;
+    return values[0] + values.Length;
+});
+```
+
+The operation owns its rental, so there is no separate lease to dispose or token
+to revalidate at callback entry and exit. Other rentals may be nested inside the
+callback. The pool cannot dispose or retire while the operation is active, and
+trimming cannot release its slab. Use `Rent` when the lease needs a wider lexical
+lifetime or multiple independent accesses.
+
 ## Borrow a local pool in a helper
 
 A source-visible synchronous helper can borrow a `NativePool<T>` parameter by value. The
@@ -380,22 +398,15 @@ static void RunBatch<T>(NativePool<T> pool, int count)
 {
     for (int index = 0; index < count; index++)
     {
-        NativeTransfer<T> transfer = pool.RentTransferable(
+        using Pooled<T> values = pool.Rent(
             128,
             static writer => writer.Fill(default));
-        try
-        {
-            transfer.Access(static values => values[0] = default);
-        }
-        finally
-        {
-            transfer.Dispose();
-        }
+        values.Access(static span => span[0] = default);
     }
 }
 ```
 
-The analyzer reads the helper source. It permits `Rent`, `RentTransferable`,
+The analyzer reads the helper source. It permits `Rent`, `Process`,
 `GetStatistics`, and a call to another verified helper.
 
 The produced lease, transfer, or builder must end on every path. The helper cannot store,
