@@ -9,6 +9,8 @@
 *.nupkg
 *.snupkg
 docs/internal/
+/docs/retained-results/
+/docs/version-status.md
 .codex-temp/
 **/[Aa][Gg][Ee][Nn][Tt].[Mm][Dd]
 **/[Aa][Gg][Ee][Nn][Tt][Ss].[Mm][Dd]

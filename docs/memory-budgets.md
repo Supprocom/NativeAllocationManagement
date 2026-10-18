@@ -1,6 +1,6 @@
 # Native backing budgets
 
-This page describes [unreleased 0.3.0 development](version-status.md).
+This page describes unreleased 0.3.0 development.
 
 `NativeMemoryBudget` is a shared admission domain for complete NAM-requested
 native backing extents. It does not claim to bound process RSS, CLR object

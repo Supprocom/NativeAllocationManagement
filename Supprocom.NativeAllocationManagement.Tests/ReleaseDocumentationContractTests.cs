@@ -7,68 +7,59 @@ public sealed class ReleaseDocumentationContractTests
     {
         string readme = Read("README.md");
         string guide = Read("docs", "getting-started.md");
-        string status = Read("docs", "version-status.md");
         Assert.Contains("unreleased 0.3.0 development", readme, StringComparison.Ordinal);
         Assert.Contains("unreleased 0.3.0 development", guide, StringComparison.Ordinal);
         Assert.Contains("released `0.2.3` package", readme, StringComparison.Ordinal);
         Assert.Contains("--version 0.2.3", guide, StringComparison.Ordinal);
         Assert.Contains("Version=\"0.2.3\"", guide, StringComparison.Ordinal);
-        Assert.Contains("`0.2.3` is the released package", status, StringComparison.Ordinal);
-        Assert.Contains("matching release-tag documentation", status, StringComparison.Ordinal);
-        Assert.Contains("docs/version-status.md", readme, StringComparison.Ordinal);
-        Assert.Contains("(version-status.md)", guide, StringComparison.Ordinal);
+        Assert.DoesNotContain("version-status.md", readme, StringComparison.Ordinal);
+        Assert.DoesNotContain("version-status.md", guide, StringComparison.Ordinal);
     }
 
     [Fact]
     public void MigrationMatchesTheCurrentReadonlyValueRepresentation()
     {
         string transfer = Read("Supprocom.NativeAllocationManagement", "NativeTransfer.cs");
-        string status = Read("docs", "version-status.md");
+        string guide = Read("docs", "getting-started.md");
         Assert.Contains("public readonly struct NativeTransfer<T>", transfer, StringComparison.Ordinal);
-        Assert.Contains("changes from a class in 0.2.3 to a readonly value capability", status, StringComparison.Ordinal);
-        Assert.Contains("Rebuild consumers", status, StringComparison.Ordinal);
-        Assert.Contains("not binary compatibility", status, StringComparison.Ordinal);
-        Assert.Contains("Nullable<NativeTransfer<T>>", status, StringComparison.Ordinal);
-        Assert.Contains("Presence is not proof of live ownership", status, StringComparison.Ordinal);
-        Assert.Contains("serialization, reflection and generic constraints", status, StringComparison.Ordinal);
+        Assert.Contains("not binary compatibility", guide, StringComparison.Ordinal);
+        Assert.Contains("Rebuild consumers", guide, StringComparison.Ordinal);
+        Assert.Contains("A nullable binding uses `binding.Value` after checking", guide, StringComparison.Ordinal);
+        Assert.Contains("Copies of the previous value cannot access or", guide, StringComparison.Ordinal);
     }
 
     [Fact]
     public void MigrationDoesNotTurnCopiesDefaultsOrFinalizersIntoOwnership()
     {
-        string status = Read("docs", "version-status.md");
-        Assert.Contains("failure also consumes", status, StringComparison.Ordinal);
-        Assert.Contains("Assignment does not acquire another owner", status, StringComparison.Ordinal);
-        Assert.Contains("even `Dispose` rejects a default value", status, StringComparison.Ordinal);
-        Assert.Contains("Emergency finalization is not timely", status, StringComparison.Ordinal);
-        Assert.Contains("Sharing is\nnot imposed on ordinary unique", status, StringComparison.Ordinal);
-        Assert.Contains("Weak observers do not own payload", status, StringComparison.Ordinal);
+        string guide = Read("docs", "getting-started.md");
+        Assert.Contains("A failed move consumes its source binding", guide, StringComparison.Ordinal);
+        Assert.Contains("they do not create another owner", guide, StringComparison.Ordinal);
+        Assert.Contains("uninitialized and reject use, including disposal", guide, StringComparison.Ordinal);
+        Assert.Contains("Never use finalization as timely budget", guide, StringComparison.Ordinal);
     }
 
     [Fact]
     public void PerformanceDocumentationExplainsWorkloadsAndRunnableComparisons()
     {
         string readme = Read("README.md");
-        string status = Read("docs", "version-status.md");
+        string benchmark = Read("docs", "builder-benchmark.md");
         Assert.Contains("Historical voxel runs", readme, StringComparison.Ordinal);
         Assert.Contains("Results depend on workload", readme, StringComparison.Ordinal);
         Assert.Contains("total managed/native allocation", readme, StringComparison.Ordinal);
         Assert.Contains("docs/builder-benchmark.md", readme, StringComparison.Ordinal);
-        Assert.Contains("same output, concurrency, memory cap", status, StringComparison.Ordinal);
-        Assert.Contains("managed\nmetadata, native backing and temporary growth overlap", status, StringComparison.Ordinal);
-        Assert.Contains("runnable comparisons", status, StringComparison.Ordinal);
+        Assert.Contains("ManagedExactArray", benchmark, StringComparison.Ordinal);
+        Assert.Contains("GC allocation\nplus successful requested backing bytes", benchmark, StringComparison.Ordinal);
     }
 
     [Fact]
     public void BudgetAndTraceDomainsDoNotPromiseTotalProcessMemory()
     {
-        string status = Read("docs", "version-status.md");
-        Assert.Contains("does not bound process RSS, managed metadata", status, StringComparison.Ordinal);
-        Assert.Contains("provider-owned external storage", status, StringComparison.Ordinal);
-        Assert.Contains("Disabled tracing does not disable required counters", status, StringComparison.Ordinal);
-        Assert.Contains("Unavailable\nobservations are not measured zero", status, StringComparison.Ordinal);
-        Assert.Contains("snapshot consistency and lifetime rules", status, StringComparison.Ordinal);
-        Assert.Contains("Both 0.2.3 and 0.3.0 target .NET 10", status, StringComparison.Ordinal);
+        string budget = Read("docs", "memory-budgets.md");
+        string accounting = Read("docs", "production-accounting-contract.md");
+        Assert.Contains("does not claim to bound process RSS", budget, StringComparison.Ordinal);
+        Assert.Contains("external storage owned by another provider", budget, StringComparison.Ordinal);
+        Assert.Contains("Borrowed storage and managed metadata require separate accounting", budget, StringComparison.Ordinal);
+        Assert.Contains("Accounting is active in ordinary runtime operation, without enabling tests or\ntracing", accounting, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -89,9 +80,18 @@ public sealed class ReleaseDocumentationContractTests
         Assert.True(File.Exists(Path.Combine(RepositoryTestPaths.Root, "docs", "typed-layouts.md")));
     }
 
+    [Fact]
+    public void InternalRunResultsAndVersionStatusAreNotPublicDocuments()
+    {
+        Assert.False(Directory.Exists(Path.Combine(RepositoryTestPaths.Root, "docs", "retained-results")));
+        Assert.False(File.Exists(Path.Combine(RepositoryTestPaths.Root, "docs", "version-status.md")));
+        string ignored = Read(".gitignore");
+        Assert.Contains("/docs/retained-results/", ignored, StringComparison.Ordinal);
+        Assert.Contains("/docs/version-status.md", ignored, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("README.md")]
-    [InlineData("docs/version-status.md")]
     [InlineData("docs/builder-benchmark.md")]
     [InlineData("docs/memory-budgets.md")]
     [InlineData("docs/demo-kernel-metrics.md")]

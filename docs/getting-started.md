@@ -3,9 +3,9 @@
 This guide follows **unreleased 0.3.0 development** on `main`. Install the
 released `0.2.3` package only for its own stable API boundary; the new budget,
 prepared, layout and smart-pointer APIs below do not all exist in that package.
-The [version and migration status](version-status.md) explains source/package
-separation and the required consumer rebuild. Use documentation at the matching
-release tag when consuming 0.2.3, not examples for the changed development tree.
+Use documentation at the matching release tag when consuming 0.2.3, not examples
+for the changed development tree. Transfer representation and rebuild requirements
+are described in the ownership section below.
 
 `Supprocom.NativeAllocationManagement` combines a native-memory runtime with a
 bundled Roslyn analyzer. Each allocator uses only the state checks that its contract
