@@ -6,6 +6,27 @@ namespace Supprocom.NativeAllocationManagement.Tests;
 public sealed class NativeFastPoolProbeContractTests
 {
     [Fact]
+    public void PrivateScopesAreRealOccupiedRecordsAndActiveOperations()
+    {
+        using NativePool<int> pool = new(preLease: 2, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        Assert.Equal(10, pool.Process(2, 5, 0, (values, _) =>
+        {
+            Verify(pool, new() { Records = 1, Operations = 1, Ordinals = [1] });
+            Assert.Equal(14, pool.Process(2, 7, 0, (nested, _) =>
+            {
+                Verify(pool, new() { Records = 2, Operations = 2, Ordinals = [1, 2] });
+                return nested[0] + nested[1];
+            }));
+            Verify(pool, new() { Records = 1, Operations = 1, Ordinals = [1, 2] });
+            return values[0] + values[1];
+        }));
+        Verify(pool, new() { Ordinals = [1, 2] });
+        Assert.Throws<OperationCanceledException>(() => pool.Process<int, int>(2, 9, 0,
+            static (_, _) => throw new OperationCanceledException()));
+        Verify(pool, new() { Ordinals = [1, 2] });
+    }
+
+    [Fact]
     public void CompleteOrdinaryProbeStateTracksInitializationAndNestedBorrows()
     {
         using NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
