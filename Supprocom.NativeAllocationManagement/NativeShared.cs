@@ -84,7 +84,7 @@ public readonly struct NativeShared<T> : IDisposable where T : unmanaged
     {
         ArgumentNullException.ThrowIfNull(action);
         NativeTransferControl<T> payload = Payload;
-        payload.Control.EnterRead(_slot, _version);
+        payload.Control.EnterRead(payload, _slot, _version);
         Exception? callbackFailure = null;
         try { action(payload.GetView(_offset, _length)); }
         catch (Exception failure) { callbackFailure = failure; throw; }
@@ -96,7 +96,7 @@ public readonly struct NativeShared<T> : IDisposable where T : unmanaged
     {
         ArgumentNullException.ThrowIfNull(action);
         NativeTransferControl<T> payload = Payload;
-        payload.Control.EnterRead(_slot, _version);
+        payload.Control.EnterRead(payload, _slot, _version);
         Exception? callbackFailure = null;
         try { return action(payload.GetView(_offset, _length)); }
         catch (Exception failure) { callbackFailure = failure; throw; }
@@ -112,7 +112,7 @@ public readonly struct NativeShared<T> : IDisposable where T : unmanaged
         where TProcessor : struct, INativeReadOnlySpanProcessor<T, TState, TResult>
     {
         NativeTransferControl<T> payload = Payload;
-        payload.Control.EnterRead(_slot, _version);
+        payload.Control.EnterRead(payload, _slot, _version);
         Exception? callbackFailure = null;
         try { return TProcessor.Invoke(payload.GetView(_offset, _length).AsSpan(), in state); }
         catch (Exception failure) { callbackFailure = failure; throw; }
@@ -136,7 +136,7 @@ public readonly struct NativeShared<T> : IDisposable where T : unmanaged
         ArgumentNullException.ThrowIfNull(budget);
         detached = default;
         NativeTransferControl<T> payload = Payload;
-        payload.Control.EnterRead(_slot, _version);
+        payload.Control.EnterRead(payload, _slot, _version);
         try
         {
             long ownerId = NativeOwnerIdentity.Next();

@@ -709,6 +709,61 @@ public sealed class NativeSharingTests
         weak.Dispose();
     }
 
+    [Fact]
+    public void LockFreeReadersRacingTheLastReleaseReturnThePayloadOnce()
+    {
+        for (int round = 0; round < 200; round++)
+        {
+            NativeMemoryBudget budget = new(256);
+            NativeShared<int> owner = Create(budget, 64, 1, 1);
+            Assert.True(owner.TryDowngrade(out NativeWeak<int> weak, out _));
+            // Readers use a copy of the same binding, so the release can win at
+            // any point: a read either completes over live storage or is refused.
+            NativeShared<int> alias = owner;
+            using Barrier start = new(3);
+            void ReadUntilRefused()
+            {
+                start.SignalAndWait();
+                for (int read = 0; read < 500; read++)
+                {
+                    try
+                    {
+                        Assert.Equal(42, alias.Process<int, int, FirstPlus>(0));
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        break;
+                    }
+                }
+            }
+
+            Thread[] readers = [new(ReadUntilRefused), new(ReadUntilRefused)];
+            foreach (Thread reader in readers)
+            {
+                reader.Start();
+            }
+
+            start.SignalAndWait();
+            owner.Dispose();
+            foreach (Thread reader in readers)
+            {
+                reader.Join();
+            }
+
+            NativeSharingStatistics snapshot = weak.CaptureSnapshot();
+            Assert.True(snapshot.PayloadReleased);
+            Assert.Equal(1, snapshot.PayloadReturnCount);
+            Assert.Equal(0, snapshot.ActiveReadCount);
+            Assert.Equal(0, budget.CaptureStatistics().CommittedBytes);
+            weak.Dispose();
+        }
+    }
+
+    private readonly struct FirstPlus : INativeReadOnlySpanProcessor<int, int, int>
+    {
+        public static int Invoke(scoped ReadOnlySpan<int> values, scoped in int state) => values[0] + state;
+    }
+
     private static NativeShared<int> Create(NativeMemoryBudget budget, int capacity, int strongSlots, int weakSlots)
     {
         using NativeBuilder<int> builder = new(budget, capacity);

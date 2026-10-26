@@ -44,15 +44,20 @@ internal sealed class NativeSharingBindingBank
         // Reserve a non-reusable identity before changing the free list or count.
         version = checked(slot.Version + 1);
         _firstAvailable = slot.Next;
-        slot.Version = version;
+        Volatile.Write(ref slot.Version, version);
         slot.Next = -1;
-        slot.Live = true;
+        Volatile.Write(ref slot.Live, true);
         Occupied++;
         return true;
     }
 
     internal bool IsActive(int index, long version) => (uint)index < (uint)_slots.Length
         && version > 0 && _slots[index].Live && _slots[index].Version == version;
+
+    // For readers outside the owner's lock: a 64-bit version read stays atomic
+    // on 32-bit platforms, and a slot reused since is rejected by its version.
+    internal bool IsActiveConcurrent(int index, long version) => (uint)index < (uint)_slots.Length
+        && version > 0 && Volatile.Read(ref _slots[index].Live) && Volatile.Read(ref _slots[index].Version) == version;
 
     internal void Release(int index, long version)
     {

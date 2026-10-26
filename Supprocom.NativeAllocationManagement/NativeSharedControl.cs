@@ -160,25 +160,45 @@ internal sealed class NativeSharedControl<T> where T : unmanaged
         }
     }
 
-    internal void EnterRead(int slot, long version)
+    // Reads take no lock, so readers of one payload never serialize. A reader
+    // publishes itself with a full fence before checking its binding; release
+    // marks expiry and fences before counting readers (BeginReleaseIfReady).
+    // Each side therefore sees the other: the reader backs out, or release
+    // waits for the last reader, whose exit then completes it.
+    internal void EnterRead(NativeTransferControl<T> payload, int slot, long version)
     {
-        lock (_gate)
+        Interlocked.Increment(ref _activeReads);
+        if (Volatile.Read(ref _expired) || !Volatile.Read(ref _strong).IsActiveConcurrent(slot, version))
         {
-            ValidateStrong(slot, version);
-            _activeReads = checked(_activeReads + 1);
+            // A release that saw this refused reader is completed here.
+            LeaveRead(payload);
+            throw new InvalidOperationException("This strong binding is stale, released or expired.");
         }
     }
 
     internal void ExitRead(NativeTransferControl<T> payload)
     {
+        if (Volatile.Read(ref _activeReads) == 0) throw new InvalidOperationException("The shared payload has no entered read.");
+        LeaveRead(payload);
+    }
+
+    private void LeaveRead(NativeTransferControl<T> payload)
+    {
+        if (Interlocked.Decrement(ref _activeReads) != 0 || !Volatile.Read(ref _expired))
+        {
+            return;
+        }
+
         bool release;
         lock (_gate)
         {
-            if (_activeReads == 0) throw new InvalidOperationException("The shared payload has no entered read.");
-            _activeReads--;
             release = BeginReleaseIfReady();
         }
-        if (release) payload.ReturnSharedPayload();
+
+        if (release)
+        {
+            payload.ReturnSharedPayload();
+        }
     }
 
     internal void ReleaseStrong(NativeTransferControl<T> payload, int slot, long version)
@@ -220,7 +240,10 @@ internal sealed class NativeSharedControl<T> where T : unmanaged
 
     private bool BeginReleaseIfReady()
     {
-        if (!_expired || _activeReads != 0 || _released || _releaseStarted) return false;
+        // Order the expiry written before this call ahead of the reader count
+        // (see EnterRead).
+        Interlocked.MemoryBarrier();
+        if (!_expired || Volatile.Read(ref _activeReads) != 0 || _released || _releaseStarted) return false;
         _releaseStarted = true;
         return true;
     }
@@ -292,7 +315,7 @@ internal sealed class NativeSharedControl<T> where T : unmanaged
         lock (_gate)
         {
             return new(Id, OwnerId, _preparation, _strong.Occupied, _weak.Occupied,
-                _activeReads, _peakStrong, _peakWeak, _expired, _released, _ownedBytes,
+                Volatile.Read(ref _activeReads), _peakStrong, _peakWeak, _expired, _released, _ownedBytes,
                 _borrowedBytes, _released ? 0 : _initializedBytes,
                 checked(_strong.ElementBytes + _weak.ElementBytes), _shares, _weakCreations,
                 _upgrades, _strongRefusals, _weakRefusals, _expiredUpgrades, _payloadReturns,
