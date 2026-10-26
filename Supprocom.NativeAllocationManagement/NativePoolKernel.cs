@@ -152,6 +152,29 @@ public sealed unsafe partial class NativePool<T>
         return new Pooled<T>(this, slab, token, length, slab.Capacity);
     }
 
+    /// <summary>Rents one slab without writing its elements.</summary>
+    /// <param name="length">The element count.</param>
+    /// <returns>The owning token-bound slab capability.</returns>
+    /// <remarks>
+    /// The contents are unspecified: they may hold values an earlier lease in this process wrote. Write every element before reading it, or use
+    /// <see cref="Rent(int, T)"/> for a filled range. This skips the fill for callers that overwrite the range anyway.
+    /// </remarks>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public Pooled<T> RentUninitialized(int length)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(length);
+        ValidateOwner(nameof(RentUninitialized));
+        long token = TakeLeaseToken();
+        int slabIndex = TakeOrAddSlab(length);
+        Slab slab = _slabs[slabIndex];
+        slab.Token = token;
+        slab.State = SlabState.Leased;
+        _liveLeaseCount++;
+        _requestedBytes += checked((long)CalculateByteLength(length));
+        _peakInitializedPayloadBytes = Math.Max(_peakInitializedPayloadBytes, _requestedBytes);
+        return new Pooled<T>(this, slab, token, length, slab.Capacity);
+    }
+
     /// <summary>Fills a temporary rental, processes it, and returns it before this call completes.</summary>
     /// <param name="length">The complete initialized element count exposed to the processor.</param>
     /// <param name="value">The value written to every element before processing.</param>

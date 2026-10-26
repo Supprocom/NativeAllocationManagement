@@ -96,6 +96,16 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
         return control.Publish(block, length, Capacity(block));
     }
 
+    internal static NativeTransfer<T> CreateUninitializedTransfer(int length)
+    {
+        NativeBuilderControl<T> control = Acquire(
+            checked((nuint)length * (nuint)Unsafe.SizeOf<T>()),
+            budget: null,
+            NativeOwnerIdentity.Next(),
+            out NativeBlock block);
+        return control.Publish(block, length, Capacity(block));
+    }
+
     private static int Capacity(NativeBlock block) =>
         (int)Math.Min(int.MaxValue, block.ByteLength / (nuint)Unsafe.SizeOf<T>());
 

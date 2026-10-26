@@ -518,6 +518,7 @@ public sealed class NativeSpanLifetimeAnalyzer : DiagnosticAnalyzer
 
         internal bool IsAcquisition(IMethodSymbol method) =>
             method.Name is "Rent" or "TryRent" or "Scratch" or "ScratchScoped" or "TryScratch" or "TryScratchScoped" or "Lease"
+                or "RentUninitialized" or "LeaseUninitialized" or "ScratchUninitialized" or "ScratchScopedUninitialized"
             && IsLease(method.ReturnType is INamedTypeSymbol { SpecialType: SpecialType.System_Boolean }
                 ? method.Parameters.LastOrDefault(parameter => parameter.RefKind == RefKind.Out && IsLease(parameter.Type))?.Type
                 : method.ReturnType);

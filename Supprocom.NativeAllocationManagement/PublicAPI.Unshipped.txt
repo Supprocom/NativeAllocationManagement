@@ -762,3 +762,8 @@ Supprocom.NativeAllocationManagement.ConcurrentPooled<T>.Process<TState, TResult
 static Supprocom.NativeAllocationManagement.NativePool<T>.Shared.get -> Supprocom.NativeAllocationManagement.NativePool<T>!
 static Supprocom.NativeAllocationManagement.NativeTransfer<T>.Create(int length, T value) -> Supprocom.NativeAllocationManagement.NativeTransfer<T>
 static Supprocom.NativeAllocationManagement.NativeTransfer<T>.Create(scoped System.ReadOnlySpan<T> values) -> Supprocom.NativeAllocationManagement.NativeTransfer<T>
+Supprocom.NativeAllocationManagement.NativeArena.ScratchScopedUninitialized<T>(int length) -> Supprocom.NativeAllocationManagement.ArenaLease<T>
+Supprocom.NativeAllocationManagement.NativeArena.ScratchUninitialized<T>(int length) -> Supprocom.NativeAllocationManagement.ArenaLease<T>
+Supprocom.NativeAllocationManagement.NativePool<T>.RentUninitialized(int length) -> Supprocom.NativeAllocationManagement.Pooled<T>
+Supprocom.NativeAllocationManagement.NativeRegion.LeaseUninitialized<T>(int length) -> Supprocom.NativeAllocationManagement.Local<T>
+static Supprocom.NativeAllocationManagement.NativeTransfer<T>.CreateUninitialized(int length) -> Supprocom.NativeAllocationManagement.NativeTransfer<T>

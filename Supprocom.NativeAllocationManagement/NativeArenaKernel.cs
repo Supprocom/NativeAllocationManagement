@@ -115,6 +115,20 @@ public sealed unsafe partial class NativeArena
         int length,
         bool scoped,
         T value)
+        where T : unmanaged =>
+        ScratchDirect(length, scoped, value, fill: true);
+
+    internal ArenaLease<T> ScratchUninitialized<T>(
+        int length,
+        bool scoped)
+        where T : unmanaged =>
+        ScratchDirect(length, scoped, default(T), fill: false);
+
+    private ArenaLease<T> ScratchDirect<T>(
+        int length,
+        bool scoped,
+        T value,
+        bool fill)
         where T : unmanaged
     {
         ArgumentOutOfRangeException.ThrowIfNegative(length);
@@ -148,7 +162,11 @@ public sealed unsafe partial class NativeArena
 
         // An unmanaged fill runs no user code, so it needs no initializer frame,
         // writer or rollback; publication follows the complete write.
-        new Span<T>((void*)reservation.Pointer, length).Fill(value);
+        if (fill)
+        {
+            new Span<T>((void*)reservation.Pointer, length).Fill(value);
+        }
+
         RecordInitialization(payloadBytes, scoped);
         if (_prepared)
         {

@@ -193,6 +193,24 @@ internal sealed unsafe class NativeRegionKernel
         return new Local<T>(this, reservation.Pointer, length, _generation);
     }
 
+    internal Local<T> LeaseUninitialized<T>(int length)
+        where T : unmanaged
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(length);
+        ValidateLeaseActive(nameof(NativeRegion.LeaseUninitialized));
+        if (_activeBorrowCount < 0)
+        {
+            ThrowActiveOperation(nameof(NativeRegion.LeaseUninitialized));
+        }
+
+        nuint byteLength = CalculateByteLength<T>(length);
+        long requestedBytes = checked(
+            _requestedBytes + checked((long)byteLength));
+        RegionReservation reservation = Reserve(byteLength, CalculateAlignment<T>());
+        _requestedBytes = requestedBytes;
+        return new Local<T>(this, reservation.Pointer, length, _generation);
+    }
+
     [MethodImpl(MethodImplOptions.NoInlining)]
     private void Initialize<T>(
         RegionReservation reservation,

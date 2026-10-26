@@ -86,6 +86,13 @@ public readonly ref struct NativeRegion
         where T : unmanaged =>
         GetKernel(nameof(Lease)).LeaseFilled(length, value);
 
+    /// <summary>Publishes one unmanaged bump range without writing its elements.</summary>
+    /// <param name="length">The element count.</param>
+    /// <remarks>The contents are unspecified: they may hold values an earlier lease in this process wrote. Write every element before reading it, or use <see cref="Lease{T}(int, T)"/> for a filled range.</remarks>
+    public Local<T> LeaseUninitialized<T>(int length)
+        where T : unmanaged =>
+        GetKernel(nameof(LeaseUninitialized)).LeaseUninitialized<T>(length);
+
     /// <summary>Invalidates all Local handles and ends the Region lifetime.</summary>
     public void Dispose()
     {

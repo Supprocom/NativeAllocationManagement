@@ -73,6 +73,17 @@ public readonly struct NativeTransfer<T> : IDisposable
         return NativeBuilderControl<T>.CreateTransfer(length, value);
     }
 
+    /// <summary>Creates a transfer of <paramref name="length"/> elements without writing them.</summary>
+    /// <param name="length">The element count.</param>
+    /// <returns>The unique owning binding; dispose it or move it to the next owner.</returns>
+    /// <remarks>The contents are unspecified: they may hold values an earlier lease in this process wrote. Write every element before reading it (for example through <see cref="Process{TState, TResult, TProcessor}(in TState)"/>), or use <see cref="Create(int, T)"/>.</remarks>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1000", Justification = "The factory creates the exact element type, like Move.")]
+    public static NativeTransfer<T> CreateUninitialized(int length)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(length);
+        return NativeBuilderControl<T>.CreateUninitializedTransfer(length);
+    }
+
     /// <summary>Moves unique authority without allocating and clears the source binding.</summary>
     /// <remarks>
     /// Copies of the previous capability become stale. The binding is consumed even

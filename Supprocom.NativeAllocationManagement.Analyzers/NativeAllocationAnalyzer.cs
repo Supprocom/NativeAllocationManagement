@@ -5590,7 +5590,17 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             }
 
             Target target = FindTarget(operation);
-            bool scopedAcquisition = operation.TargetMethod.Name is "LeaseScoped" or "ScratchScoped";
+            bool scopedAcquisition = AcquisitionName(operation.TargetMethod.Name) is "LeaseScoped" or "ScratchScoped";
+            if (target.Symbol is null
+                && !scopedAcquisition
+                && (owner.IsArena || owner.IsRegion)
+                && IsImmediateBoundedLeaseUse(operation))
+            {
+                // An arena or region generation ends the lease; using the
+                // temporary at once (for example AsSpan) retains nothing.
+                return;
+            }
+
             if (target.Symbol is not ILocalSymbol)
             {
                 Report(
@@ -5645,7 +5655,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             }
             else if (owner.ScopedOwnerEligible
                 && IsDirectScopedLocalInitialization(operation.Syntax, target.Symbol)
-                && operation.TargetMethod.Name is "Rent" or "Lease" or "Scratch")
+                && AcquisitionName(operation.TargetMethod.Name) is "Rent" or "Lease" or "Scratch")
             {
                 Report(
                     NativeAllocationDiagnosticDescriptors.OrdinaryAcquisitionScopedWarning,
@@ -5841,7 +5851,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 }
                 return;
             }
-            if (name is "Rent" or "TryRent" or "TryScratch" or "TryScratchScoped" or "Lease" or "Scratch" or "LeaseScoped" or "ScratchScoped"
+            if (AcquisitionName(name) is "Rent" or "TryRent" or "TryScratch" or "TryScratchScoped" or "Lease" or "Scratch" or "LeaseScoped" or "ScratchScoped"
                 || (string.Equals(name, "Process", StringComparison.Ordinal) && NativeSymbols.Is(owner.Type, _symbols.Pool)))
             {
                 CheckOwnerActive(owner, syntax, name);
@@ -7363,7 +7373,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             string name = invocation.TargetMethod.Name;
             if (IsNativePool(invocation.TargetMethod.ContainingType))
             {
-                return IsPoolProcess(invocation) || name is "Rent" or "TryRent" or "GetStatistics"
+                return IsPoolProcess(invocation) || AcquisitionName(name) is "Rent" or "TryRent" or "GetStatistics"
                     or "CaptureDiagnosticSnapshot" or "CapturePreparedSnapshot";
             }
 
@@ -7847,10 +7857,31 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         private bool IsHandleCreatingInvocation(IOperation operation)
         {
             return operation is IInvocationOperation invocation
-                && (((invocation.TargetMethod.Name is "Rent" or "LeaseScoped") && IsNativePool(invocation.TargetMethod.ContainingType))
-                    || ((invocation.TargetMethod.Name is "Lease" or "LeaseScoped") && IsNativeRegion(invocation.TargetMethod.ContainingType))
-                    || ((invocation.TargetMethod.Name is "Scratch" or "ScratchScoped") && IsNativeArena(invocation.TargetMethod.ContainingType)));
+                && AcquisitionName(invocation.TargetMethod.Name) is var name
+                && (((name is "Rent" or "LeaseScoped") && IsNativePool(invocation.TargetMethod.ContainingType))
+                    || ((name is "Lease" or "LeaseScoped") && IsNativeRegion(invocation.TargetMethod.ContainingType))
+                    || ((name is "Scratch" or "ScratchScoped") && IsNativeArena(invocation.TargetMethod.ContainingType)));
         }
+
+        private static bool IsImmediateBoundedLeaseUse(IInvocationOperation acquisition) =>
+            acquisition.Parent switch
+            {
+                IInvocationOperation use => ReferenceEquals(use.Instance, acquisition)
+                    && use.TargetMethod.Name is "AsSpan" or "Access" or "Read" or "Process" or "Clear" or "CopyFrom" or "CopyTo",
+                IPropertyReferenceOperation property => ReferenceEquals(property.Instance, acquisition)
+                    && property.Property.Name is "Length" or "Capacity",
+                _ => false
+            };
+
+        // An uninitialized acquisition follows its filled counterpart's ownership rules.
+        private static string AcquisitionName(string name) => name switch
+        {
+            "RentUninitialized" => "Rent",
+            "LeaseUninitialized" => "Lease",
+            "ScratchUninitialized" => "Scratch",
+            "ScratchScopedUninitialized" => "ScratchScoped",
+            _ => name
+        };
 
         private bool IsNonRetainingCompositeLeaseOperation(IInvocationOperation operation) =>
             (operation.TargetMethod.Name is "Access" or "InitializeScoped" or "TryInitializeScoped")
