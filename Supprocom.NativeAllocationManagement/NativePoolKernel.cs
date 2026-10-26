@@ -195,6 +195,47 @@ public sealed unsafe partial class NativePool<T>
         }
     }
 
+    /// <summary>Fills a temporary rental, runs a compile-time processor, and returns it before this call completes.</summary>
+    /// <param name="length">The complete initialized element count exposed to the processor.</param>
+    /// <param name="value">The value written to every element before processing.</param>
+    /// <param name="state">Explicit state passed to the processor.</param>
+    /// <typeparam name="TState">The caller state type.</typeparam>
+    /// <typeparam name="TResult">The result type, which cannot contain the borrowed span.</typeparam>
+    /// <typeparam name="TProcessor">The processor; its static member is called without a delegate.</typeparam>
+    /// <returns>The processor result after the temporary slab has been returned.</returns>
+    /// <remarks>Processor failure also returns the slab. Other rentals may be nested inside the processor.</remarks>
+    public TResult Process<TState, TResult, TProcessor>(
+        int length,
+        T value,
+        scoped in TState state)
+        where TState : allows ref struct
+        where TProcessor : struct, INativeSpanProcessor<T, TState, TResult>
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(length);
+        ValidateOwner(nameof(Process));
+        int slabIndex = TakeOrAddSlab(length);
+        ref Slab slab = ref _slabs[slabIndex];
+        Span<T> values = new((void*)slab.Pointer, length);
+        values.Fill(value);
+        slab.State = SlabState.Processing;
+        _liveLeaseCount++;
+        _requestedBytes += checked((long)CalculateByteLength(length));
+        _peakInitializedPayloadBytes = Math.Max(_peakInitializedPayloadBytes, _requestedBytes);
+        try
+        {
+            return TProcessor.Invoke(values, in state);
+        }
+        finally
+        {
+            // Nested rents can resize the metadata bank: reacquire the live entry.
+            ref Slab returned = ref _slabs[slabIndex];
+            returned.State = SlabState.Free;
+            _liveLeaseCount--;
+            _requestedBytes -= checked((long)CalculateByteLength(length));
+            CacheReturnedSlab(slabIndex, length);
+        }
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private Pooled<T> InitializeSlab(int slabIndex, long token, int length,
         NativeLeaseInitializer<T> initializer)

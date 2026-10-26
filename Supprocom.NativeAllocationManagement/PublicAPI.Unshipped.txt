@@ -741,3 +741,11 @@ Supprocom.NativeAllocationManagement.NativeOwnerModel.ThreadConfinedWorkspace = 
 Supprocom.NativeAllocationManagement.NativeArena.Scratch<T>(int length, T value) -> Supprocom.NativeAllocationManagement.ArenaLease<T>
 Supprocom.NativeAllocationManagement.NativeArena.ScratchScoped<T>(int length, T value) -> Supprocom.NativeAllocationManagement.ArenaLease<T>
 Supprocom.NativeAllocationManagement.NativeRegion.Lease<T>(int length, T value) -> Supprocom.NativeAllocationManagement.Local<T>
+Supprocom.NativeAllocationManagement.INativeSpanProcessor<T, TState, TResult>
+Supprocom.NativeAllocationManagement.INativeSpanProcessor<T, TState, TResult>.Invoke(scoped System.Span<T> values, scoped in TState state) -> TResult
+Supprocom.NativeAllocationManagement.NativePool<T>.Process<TState, TResult, TProcessor>(int length, T value, scoped in TState state) -> TResult
+Supprocom.NativeAllocationManagement.Pooled<T>.Process<TState, TResult, TProcessor>(int logicalLength, scoped in TState state) -> TResult
+Supprocom.NativeAllocationManagement.Local<T>.Process<TState, TResult, TProcessor>(scoped in TState state) -> TResult
+Supprocom.NativeAllocationManagement.ArenaLease<T>.Process<TState, TResult, TProcessor>(scoped in TState state) -> TResult
+Supprocom.NativeAllocationManagement.NativeWorkspace<T>.Process<TState, TResult, TProcessor>(int length, scoped in TState state) -> TResult
+Supprocom.NativeAllocationManagement.NativeWorkspace<T>.Process<TState, TResult, TProcessor>(int length, scoped in TState state, System.Threading.CancellationToken cancellationToken) -> TResult

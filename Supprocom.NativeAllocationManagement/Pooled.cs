@@ -138,6 +138,37 @@ public readonly ref struct Pooled<T>
         }
     }
 
+    /// <summary>Processes one logical prefix with a compile-time processor during one validated borrow.</summary>
+    /// <typeparam name="TState">The caller state type.</typeparam>
+    /// <typeparam name="TResult">The result type, which cannot contain the borrowed span.</typeparam>
+    /// <typeparam name="TProcessor">The processor; its static member is called without a delegate.</typeparam>
+    public TResult Process<TState, TResult, TProcessor>(
+        int logicalLength,
+        scoped in TState state)
+        where TState : allows ref struct
+        where TProcessor : struct, INativeSpanProcessor<T, TState, TResult>
+    {
+        ArgumentOutOfRangeException.ThrowIfGreaterThan((uint)logicalLength, (uint)_length, nameof(logicalLength));
+        NativePool<T> kernel = GetKernel(nameof(Process));
+        IntPtr pointer = kernel.EnterBorrow(
+            _slabIndex,
+            _token,
+            nameof(Process));
+        try
+        {
+            unsafe
+            {
+                return TProcessor.Invoke(
+                    new Span<T>((void*)pointer, logicalLength),
+                    in state);
+            }
+        }
+        finally
+        {
+            kernel.ExitBorrow(_slabIndex);
+        }
+    }
+
     /// <summary>Returns this slab exactly once.</summary>
     public void Dispose() => GetKernel(nameof(Dispose)).Return(
         _slabIndex,

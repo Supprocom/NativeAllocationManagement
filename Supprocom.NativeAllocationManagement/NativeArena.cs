@@ -209,6 +209,31 @@ public readonly ref struct ArenaLease<T>
         }
     }
 
+    /// <summary>Processes the logical range with a compile-time processor and explicit caller state.</summary>
+    /// <typeparam name="TState">The caller state type.</typeparam>
+    /// <typeparam name="TResult">The result type, which cannot contain the borrowed span.</typeparam>
+    /// <typeparam name="TProcessor">The processor; its static member is called without a delegate.</typeparam>
+    public TResult Process<TState, TResult, TProcessor>(
+        scoped in TState state)
+        where TState : allows ref struct
+        where TProcessor : struct, INativeSpanProcessor<T, TState, TResult>
+    {
+        ArenaBorrow<T> borrow = EnterBorrow(nameof(Process));
+        try
+        {
+            unsafe
+            {
+                return TProcessor.Invoke(
+                    new Span<T>((void*)_pointer, _length),
+                    in state);
+            }
+        }
+        finally
+        {
+            borrow.Dispose();
+        }
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ArenaBorrow<T> EnterBorrow(string operation)
     {
