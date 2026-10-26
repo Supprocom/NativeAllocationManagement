@@ -196,7 +196,14 @@ public sealed class NativeTransferDiagnosticsTests
     {
         using NativeTransfer<int> owner = CreateDirect(new(16));
         long representedBytes = 0;
-        foreach (FieldInfo field in typeof(NativeTransferControl<int>).GetFields(BindingFlags.Instance | BindingFlags.NonPublic))
+        // The concrete control may add its own fields to the shared base layout.
+        IEnumerable<FieldInfo> fields = [];
+        for (Type? type = owner.ControlForTest!.GetType(); type is not null && type != typeof(object); type = type.BaseType)
+        {
+            fields = fields.Concat(type.GetFields(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly));
+        }
+
+        foreach (FieldInfo field in fields)
         {
             Type type = field.FieldType;
             representedBytes += !type.IsValueType ? IntPtr.Size : type == typeof(long) ? sizeof(long)

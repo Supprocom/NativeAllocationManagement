@@ -696,6 +696,14 @@ internal static class NativeMemoryTestHooks
 
     internal static bool HasForcedCommitBoundary => Volatile.Read(ref _forcedCommitBoundary) != 0;
 
+    // Storage reuse caches skip physical allocation and return; they stand down
+    // while a test injects a failure into either path.
+    internal static bool FaultInjectionPending =>
+        Volatile.Read(ref _forcedFailures) != 0
+        || Volatile.Read(ref _forcedManagedPublicationBoundary) != 0
+        || HasForcedCommitBoundary
+        || OperationHooksEnabled;
+
     internal static bool OperationHooksEnabled =>
         Volatile.Read(ref _operationHooksEnabled) != 0;
 

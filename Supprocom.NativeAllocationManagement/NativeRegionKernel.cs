@@ -39,6 +39,7 @@ internal sealed unsafe class NativeRegionKernel
     // Region and Local handles carry the lifetime they were issued for; a reused
     // kernel starts the next lifetime, so earlier handles stay disposed.
     private int _generation;
+    private int _retainEpoch;
     private bool _retainedForReuse;
 
     internal NativeRegionKernel(
@@ -94,6 +95,7 @@ internal sealed unsafe class NativeRegionKernel
         // A new measurement epoch observes fresh acquisition, and a short
         // segment cannot satisfy the requested reservation.
         if (segment == null
+            || _retainEpoch != NativeStorageReuse.CurrentEpoch
             || segment->MetricsEpoch != NativeMemoryAccounting.CurrentMetricsEpoch
             || segment->Capacity < preAllocateBytes
             || _generation == int.MaxValue)
@@ -130,6 +132,7 @@ internal sealed unsafe class NativeRegionKernel
         }
 
         _retainedForReuse = true;
+        _retainEpoch = NativeStorageReuse.CurrentEpoch;
         t_reusable = this;
         return true;
     }

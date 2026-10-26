@@ -178,7 +178,7 @@ public sealed class NativeAdmissionDiagnosticContractTests
         using NativeBuilder<int> builder = new(budget, 4);
         builder.Append(42);
         NativeTransfer<int> owner = builder.Complete();
-        NativeAdmissionDiagnosticOracle.Unique expected = NativeAdmissionDiagnosticOracle.Unique.Initial(builder.Id, 16, 4);
+        NativeAdmissionDiagnosticOracle.Unique expected = NativeAdmissionDiagnosticOracle.Unique.InitialFromBuilder(builder.Id, 16, 4);
         try
         {
             owner.Access(view =>

@@ -122,7 +122,7 @@ internal partial class NativeTransferControl<T>
     private NativeOwnerKernel? _kernel;
     private NativeSharedControl<T>? _sharingControl;
     private NativeAllocation? _allocationState;
-    private readonly long _ownerId;
+    private long _ownerId;
     private readonly bool _borrowedBacking;
     // Direct custody uses the descriptor's epoch/owner as allocation metadata.
     // Kernel custody has no direct block: the same two scalar slots hold its
@@ -358,7 +358,10 @@ internal partial class NativeTransferControl<T>
         {
             ReturnStorage("NativeTransfer.Dispose");
             Volatile.Write(ref _state, Disposed);
-            GC.SuppressFinalize(this);
+            if (!RetainsFinalizerAfterReturn)
+            {
+                GC.SuppressFinalize(this);
+            }
         }
         catch
         {
@@ -710,6 +713,33 @@ internal partial class NativeTransferControl<T>
 
     private protected void PublishControlState(int state) => Volatile.Write(ref _state, state);
     private protected void PublishAuthorityVersion(long version) => Volatile.Write(ref _authorityVersion, version);
+
+    // A control parked for reuse keeps its finalizer registration, so the next
+    // lifetime needs no re-registration and thread exit still frees its storage.
+    private protected virtual bool RetainsFinalizerAfterReturn => false;
+
+    private protected bool IsSharing => _sharingControl is not null;
+
+    // Starts a later lifetime on a returned control. Versions only increase, so
+    // values from earlier lifetimes never match the new authority.
+    private protected void BeginReusedLifetime(NativeBlock block, long ownerId, long firstVersion)
+    {
+        _kernel = null;
+        _sharingControl = null;
+        _allocationState = null;
+        _block = block;
+        _ownerId = ownerId;
+        _length = 0;
+        _capacity = 0;
+        NativeOperationAdmission.Reset(ref _operationAdmission);
+        _peakBorrows = 0;
+        _returnFailures = 0;
+        _historyOverflowed = false;
+        _sharingAllocationEntered = false;
+        _sharingGenerationEntered = false;
+        Volatile.Write(ref _payloadReturned, 0);
+        Volatile.Write(ref _authorityVersion, firstVersion);
+    }
 
     // An unpublished control learns its final shape before publishing Active.
     private protected void PublishShape(int length, int capacity)

@@ -46,27 +46,20 @@ public sealed class NativeBuilder<T> : IDisposable
     private NativeBuilder(int preLease, NativeMemoryBudget? budget)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(preLease);
-        _block = NativeBlockAllocator.Allocate(
+        // The future transfer control is the builder's emergency cleanup; an
+        // unbudgeted builder may reuse a returned control and its block.
+        _control = NativeBuilderControl<T>.Acquire(
             checked((nuint)preLease * (nuint)Unsafe.SizeOf<T>()),
-            nameof(NativeBuilder<T>),
-            "NativeBuilder.Constructor",
             budget,
-            ownerId: _id);
-        _capacity = preLease;
-        try
-        {
-            // The future transfer control is the builder's emergency cleanup.
-            _control = new NativeBuilderControl<T>(_block);
-        }
-        catch
-        {
-            NativeBlockAllocator.Free(_block);
-            throw;
-        }
+            _id,
+            out _block);
+        _capacity = (int)Math.Min(int.MaxValue, _block.ByteLength / (nuint)Unsafe.SizeOf<T>());
     }
 
     /// <summary>Gets the stable backing-ownership lineage, retained through completion and move.</summary>
     public long Id => _id;
+
+    internal object ControlForTest => _control;
 
     /// <summary>Captures real direct-block ownership and initialized-prefix history, including after completion or disposal.</summary>
     /// <remarks>Capture rejects an entered builder operation, grants no payload authority and does not change the lifetime. The growable block is one storage segment: its initial acquisition counts once; subsequent reallocation is not another segment acquisition. Peaks cover known acquired extents, not opaque backend old/new coexistence or RSS.</remarks>
@@ -1014,13 +1007,6 @@ public sealed class NativeBuilder<T> : IDisposable
     {
         NativeBlock block = _block;
         _block = default;
-        try
-        {
-            NativeBlockAllocator.Free(block);
-        }
-        finally
-        {
-            _control.CompleteUnpublishedReturn();
-        }
+        _control.ReturnUnpublished(block);
     }
 }

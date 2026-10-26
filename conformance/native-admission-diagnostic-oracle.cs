@@ -12,6 +12,10 @@ internal static class NativeAdmissionDiagnosticOracle
     // The descriptor retains the complete acquired extent for terminal history;
     // the control no longer keeps a second copy of that same scalar.
     internal static long UniqueControlFieldBytes => 6L * IntPtr.Size + 5L * sizeof(long) + 6L * sizeof(int) + 4L * sizeof(bool);
+    // A builder-produced unique control adds its reuse fields: lifetime start version,
+    // parked block descriptor, park epoch and parked flag.
+    internal static long BuilderUniqueControlFieldBytes => UniqueControlFieldBytes
+        + sizeof(long) + (3L * IntPtr.Size + 2L * sizeof(long)) + sizeof(int) + sizeof(bool);
     internal static long ReservationControlFieldBytes => UniqueControlFieldBytes + 3L * sizeof(long) + sizeof(int) + sizeof(bool);
 
     internal static void Run(int traceCapacity)
@@ -120,7 +124,7 @@ internal static class NativeAdmissionDiagnosticOracle
         using NativeBuilder<int> builder = new(budget, 4);
         builder.Append(42);
         NativeTransfer<int>? source = builder.Complete();
-        Unique expected = Unique.Initial(builder.Id, 16, 4);
+        Unique expected = Unique.InitialFromBuilder(builder.Id, 16, 4);
         Verify(source.Value.CaptureSnapshot(), expected, "ordinary-initial");
         try
         {
@@ -257,6 +261,9 @@ internal static class NativeAdmissionDiagnosticOracle
             PeakOwnedBackingBytes = backingBytes,
             ControlFieldBytes = UniqueControlFieldBytes
         };
+        internal static Unique InitialFromBuilder(long ownerId, long backingBytes, long initializedBytes) =>
+            Initial(ownerId, backingBytes, initializedBytes) with { ControlFieldBytes = BuilderUniqueControlFieldBytes };
+
         internal Unique Returned() => this with
         {
             BindingIsActive = false,
