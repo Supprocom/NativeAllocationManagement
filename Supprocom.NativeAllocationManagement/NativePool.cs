@@ -9,6 +9,29 @@ namespace Supprocom.NativeAllocationManagement;
 public sealed partial class NativePool<T> : IDisposable
     where T : unmanaged
 {
+    [ThreadStatic]
+    private static NativePool<T>? t_shared;
+
+    /// <summary>Gets this thread's shared pool, created on first use.</summary>
+    /// <remarks>
+    /// Each thread has its own instance, so rentals never synchronize, and its
+    /// leases cannot leave the thread. Rent from it instead of a thread-safe
+    /// pool for temporary buffers. Do not dispose it: a disposed or retired
+    /// instance is replaced on the next access. Its retained slabs return to
+    /// native memory when the thread ends.
+    /// </remarks>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1000", Justification = "Like ArrayPool<T>.Shared, the per-thread instance is selected by the element type.")]
+    public static NativePool<T> Shared
+    {
+        get
+        {
+            NativePool<T>? pool = t_shared;
+            return pool is not null && pool._lifecycle == NativeOwnerLifecycle.Active
+                ? pool
+                : t_shared = new NativePool<T>();
+        }
+    }
+
     /// <summary>Gets the stable process-local allocator identity.</summary>
     public long Id { get; }
 

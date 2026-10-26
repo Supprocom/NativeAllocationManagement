@@ -2840,6 +2840,9 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 {
                     ReportHandleTransfer(handle, target);
                 }
+                else if (TryRegisterSharedPoolLocal(target, value))
+                {
+                }
                 else if (IsOwnerType(value.Type)
                     && GetOwner(value) is OwnerState owner
                     && !SymbolEqualityComparer.Default.Equals(owner.Symbol, target.Symbol))
@@ -2888,6 +2891,9 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 if (IsHandleType(value.Type) && GetHandle(value) is HandleState handle)
                 {
                     ReportHandleTransfer(handle, target);
+                }
+                else if (TryRegisterSharedPoolLocal(target, value))
+                {
                 }
                 else if (IsOwnerType(value.Type)
                     && GetOwner(value) is OwnerState owner
@@ -6507,6 +6513,33 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             }
 
             return owner;
+        }
+
+        // NativePool<T>.Shared is the calling thread's pool: a local copy borrows it
+        // like a pool parameter, with no disposal obligation of its own.
+        private bool TryRegisterSharedPoolLocal(Target target, IOperation value)
+        {
+            if (target.Symbol is not ILocalSymbol local
+                || Unwrap(value) is not IPropertyReferenceOperation { Property: { IsStatic: true, Name: "Shared" } property }
+                || !IsNativePool(property.ContainingType))
+            {
+                return false;
+            }
+
+            _owners[local] = new OwnerState(
+                local,
+                local.Type,
+                isRegion: false,
+                isArena: false,
+                isUsing: false,
+                isField: false,
+                requiresDeterministicReturn: false,
+                target.Syntax)
+            {
+                CanAssumeActiveWhenAbsent = true,
+                IsExternalReceiver = true
+            };
+            return true;
         }
 
         private bool IsStableFieldOwner(IFieldSymbol field) =>
