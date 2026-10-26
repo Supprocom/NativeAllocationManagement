@@ -71,6 +71,35 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
         }
     }
 
+    // A direct transfer runs no user code before publication: the copy or fill
+    // cannot fail, so the acquired control publishes without a builder.
+    internal static unsafe NativeTransfer<T> CreateTransfer(scoped ReadOnlySpan<T> values)
+    {
+        NativeBuilderControl<T> control = Acquire(
+            (nuint)values.Length * (nuint)Unsafe.SizeOf<T>(),
+            budget: null,
+            NativeOwnerIdentity.Next(),
+            out NativeBlock block);
+        Span<T> destination = new((void*)block.Pointer, values.Length);
+        values.CopyTo(destination);
+        NativeMemoryAccounting.RecordCopiedRange(values, destination);
+        return control.Publish(block, values.Length, Capacity(block));
+    }
+
+    internal static unsafe NativeTransfer<T> CreateTransfer(int length, T value)
+    {
+        NativeBuilderControl<T> control = Acquire(
+            checked((nuint)length * (nuint)Unsafe.SizeOf<T>()),
+            budget: null,
+            NativeOwnerIdentity.Next(),
+            out NativeBlock block);
+        new Span<T>((void*)block.Pointer, length).Fill(value);
+        return control.Publish(block, length, Capacity(block));
+    }
+
+    private static int Capacity(NativeBlock block) =>
+        (int)Math.Min(int.MaxValue, block.ByteLength / (nuint)Unsafe.SizeOf<T>());
+
     internal void InstallBlock(NativeBlock block) => InstallOwnedBlock(block);
 
     internal NativeTransfer<T> Publish(NativeBlock block, int length, int capacity)

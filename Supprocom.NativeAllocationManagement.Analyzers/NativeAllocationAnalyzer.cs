@@ -5168,7 +5168,10 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             && (string.Equals(invocation.TargetMethod.Name, "DetachField", StringComparison.Ordinal)
                 && NativeSymbols.Is(invocation.TargetMethod.ContainingType, _symbols.LayoutOwner)
                 || string.Equals(invocation.TargetMethod.Name, "RentTransferable", StringComparison.Ordinal) && string.Equals(invocation.TargetMethod.ContainingType.ToDisplayString()
-, "Supprocom.NativeAllocationManagement.NativeTransferPoolExtensions", StringComparison.Ordinal));
+, "Supprocom.NativeAllocationManagement.NativeTransferPoolExtensions", StringComparison.Ordinal)
+                || invocation.TargetMethod.IsStatic
+                    && string.Equals(invocation.TargetMethod.Name, "Create", StringComparison.Ordinal)
+                    && IsNativeTransfer(invocation.TargetMethod.ContainingType));
 
         private bool IsBuilderFactoryOperation(IOperation operation) =>
             operation is IObjectCreationOperation creation

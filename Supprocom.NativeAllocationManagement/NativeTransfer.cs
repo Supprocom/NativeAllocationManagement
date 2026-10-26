@@ -50,6 +50,29 @@ public readonly struct NativeTransfer<T> : IDisposable
     /// <summary>Gets the physical element capacity.</summary>
     public int Capacity => GetControl(nameof(Capacity)).GetCapacity(_authorityVersion);
 
+    /// <summary>Creates a transfer that owns a native copy of the values.</summary>
+    /// <param name="values">The values copied into the new native range.</param>
+    /// <returns>The unique owning binding; dispose it or move it to the next owner.</returns>
+    /// <remarks>
+    /// No pool or builder is involved: the storage and its control come from the
+    /// calling thread's reuse slot when one fits, otherwise from native memory.
+    /// </remarks>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1000", Justification = "The factory creates the exact element type, like Move.")]
+    public static NativeTransfer<T> Create(scoped ReadOnlySpan<T> values) =>
+        NativeBuilderControl<T>.CreateTransfer(values);
+
+    /// <summary>Creates a transfer of <paramref name="length"/> elements, each set to <paramref name="value"/>.</summary>
+    /// <param name="length">The element count.</param>
+    /// <param name="value">The value written to every element before publication.</param>
+    /// <returns>The unique owning binding; dispose it or move it to the next owner.</returns>
+    /// <remarks>Storage comes from the calling thread's reuse slot when one fits, otherwise from native memory.</remarks>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1000", Justification = "The factory creates the exact element type, like Move.")]
+    public static NativeTransfer<T> Create(int length, T value)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(length);
+        return NativeBuilderControl<T>.CreateTransfer(length, value);
+    }
+
     /// <summary>Moves unique authority without allocating and clears the source binding.</summary>
     /// <remarks>
     /// Copies of the previous capability become stale. The binding is consumed even

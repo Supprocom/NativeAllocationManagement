@@ -760,3 +760,5 @@ Supprocom.NativeAllocationManagement.NativeTransfer<T>.Process<TState, TResult, 
 Supprocom.NativeAllocationManagement.NativeShared<T>.Process<TState, TResult, TProcessor>(scoped in TState state) -> TResult
 Supprocom.NativeAllocationManagement.ConcurrentPooled<T>.Process<TState, TResult, TProcessor>(int length, scoped in TState state) -> TResult
 static Supprocom.NativeAllocationManagement.NativePool<T>.Shared.get -> Supprocom.NativeAllocationManagement.NativePool<T>!
+static Supprocom.NativeAllocationManagement.NativeTransfer<T>.Create(int length, T value) -> Supprocom.NativeAllocationManagement.NativeTransfer<T>
+static Supprocom.NativeAllocationManagement.NativeTransfer<T>.Create(scoped System.ReadOnlySpan<T> values) -> Supprocom.NativeAllocationManagement.NativeTransfer<T>
