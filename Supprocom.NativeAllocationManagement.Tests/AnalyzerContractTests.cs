@@ -2362,7 +2362,8 @@ public sealed class AnalyzerContractTests
             ImmutableArray.Create<DiagnosticAnalyzer>(
                 new NativeAllocationAnalyzer(),
                 new NativeBuilderWriteAnalyzer(),
-                new NativeLeaseStateAnalyzer()));
+                new NativeLeaseStateAnalyzer(),
+                new NativeSpanLifetimeAnalyzer()));
         return treatWarningsAsErrors
             ? await analyzed.GetAllDiagnosticsAsync().ConfigureAwait(true)
             : await analyzed.GetAnalyzerDiagnosticsAsync().ConfigureAwait(true);

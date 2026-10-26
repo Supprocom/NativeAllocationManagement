@@ -749,3 +749,7 @@ Supprocom.NativeAllocationManagement.Local<T>.Process<TState, TResult, TProcesso
 Supprocom.NativeAllocationManagement.ArenaLease<T>.Process<TState, TResult, TProcessor>(scoped in TState state) -> TResult
 Supprocom.NativeAllocationManagement.NativeWorkspace<T>.Process<TState, TResult, TProcessor>(int length, scoped in TState state) -> TResult
 Supprocom.NativeAllocationManagement.NativeWorkspace<T>.Process<TState, TResult, TProcessor>(int length, scoped in TState state, System.Threading.CancellationToken cancellationToken) -> TResult
+Supprocom.NativeAllocationManagement.Pooled<T>.AsSpan() -> System.Span<T>
+Supprocom.NativeAllocationManagement.PreparedPooled<T>.AsSpan() -> System.Span<T>
+Supprocom.NativeAllocationManagement.ArenaLease<T>.AsSpan() -> System.Span<T>
+Supprocom.NativeAllocationManagement.Local<T>.AsSpan() -> System.Span<T>

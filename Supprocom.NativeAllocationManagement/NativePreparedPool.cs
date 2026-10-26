@@ -226,6 +226,15 @@ public sealed unsafe class NativePreparedPool<T> : NativePreparedPoolBase, IDisp
         }
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal IntPtr GetLeasePointer(int index, long token, string operation)
+    {
+        ValidateLeaseOwner(operation);
+        IntPtr pointer = ValidateLease(index, token, operation).Pointer;
+        GC.KeepAlive(this);
+        return pointer;
+    }
+
     [MethodImpl(MethodImplOptions.NoInlining)]
     internal IntPtr EnterBorrow(int index, long token, string operation)
     {

@@ -30,6 +30,18 @@ public readonly ref struct Local<T>
     /// <summary>Gets the immutable physical capacity in elements.</summary>
     public int Capacity => _length;
 
+    /// <summary>Returns the logical range for direct use after one owner and lease check.</summary>
+    /// <remarks>
+    /// The span is confined to this lease's scope and carries no ownership. Use it only
+    /// while the lease is current: not after its region ends. The bundled analyzer reports later use.
+    /// </remarks>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public unsafe Span<T> AsSpan()
+    {
+        GetKernel(nameof(AsSpan)).ValidateLease(nameof(AsSpan), _generation);
+        return new Span<T>((void*)_pointer, _length);
+    }
+
     /// <summary>Clears the logical range after one Region state check.</summary>
     public void Clear()
     {

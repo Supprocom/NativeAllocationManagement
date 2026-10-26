@@ -297,6 +297,17 @@ public sealed unsafe partial class NativePool<T>
         return slab.Pointer;
     }
 
+    // Direct span access validates once and enters no borrow: the span has no
+    // ownership, and its scope is the lease's own lexical scope.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal IntPtr GetLeasePointer(int slabIndex, long token, string operation)
+    {
+        ValidateLeaseOwner(operation);
+        IntPtr pointer = ValidateLease(slabIndex, token, operation).Pointer;
+        GC.KeepAlive(this);
+        return pointer;
+    }
+
     // Unmanaged bulk operations invoke no user code and cannot reenter this
     // thread-confined owner. Validate authority without a callback borrow frame;
     // keep the actual finalizable owner alive through the last native access.

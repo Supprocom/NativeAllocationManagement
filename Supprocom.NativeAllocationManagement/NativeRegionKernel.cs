@@ -247,6 +247,17 @@ internal sealed unsafe class NativeRegionKernel
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void ValidateLease(string operation, int generation)
+    {
+        if (generation != _generation)
+        {
+            throw CreateDisposed(operation);
+        }
+
+        ValidateLeaseActive(operation);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void EnterBorrow(string operation, int generation)
     {
         if (generation != _generation)

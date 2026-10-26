@@ -51,6 +51,15 @@ public readonly ref struct Pooled<T>
         return destination;
     }
 
+    /// <summary>Returns the logical range for direct use after one owner and lease check.</summary>
+    /// <remarks>
+    /// The span is confined to this lease's scope and carries no ownership. Use it only
+    /// while the lease is current: not after Dispose or Move. The bundled analyzer reports later use.
+    /// </remarks>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public unsafe Span<T> AsSpan() =>
+        new((void*)GetKernel(nameof(AsSpan)).GetLeasePointer(_slabIndex, _token, nameof(AsSpan)), _length);
+
     /// <summary>Clears the logical range after validating this lease.</summary>
     public void Clear() => GetKernel(nameof(Clear)).Clear(_slabIndex, _token, _length);
 
