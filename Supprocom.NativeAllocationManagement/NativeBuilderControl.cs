@@ -12,9 +12,9 @@ namespace Supprocom.NativeAllocationManagement;
 // stack, and the next unbudgeted builder or transfer of the same element type
 // on that thread takes both. A full stack overflows into a few locked shared
 // partitions, from which threads with an empty stack take, so values created
-// on one thread and returned on another are reused too. Diagnostics count a parked block as returned and
-// a reused one as a new allocation, the way malloc's own free lists are
-// invisible to its callers.
+// on one thread and returned on another are reused too. Diagnostics count a
+// parked block as returned and a reused one as a new allocation, the way
+// malloc's own free lists are invisible to its callers.
 internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
     where T : unmanaged
 {
