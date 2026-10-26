@@ -102,7 +102,7 @@ public sealed class NativeTransferValueTests
         builder.Append(42);
         NativeTransfer<int> value = builder.Complete();
         object control = value.ControlForTest!;
-        control.GetType().GetField("_authorityVersion", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(control, long.MaxValue);
+        typeof(NativeTransferControl<int>).GetField("_authorityVersion", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(control, long.MaxValue);
         object boxed = value;
         typeof(NativeTransfer<int>).GetField("_authorityVersion", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(boxed, long.MaxValue);
         NativeTransfer<int>? source = (NativeTransfer<int>)boxed;

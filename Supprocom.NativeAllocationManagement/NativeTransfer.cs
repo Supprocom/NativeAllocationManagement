@@ -128,8 +128,8 @@ internal partial class NativeTransferControl<T>
     // Kernel custody has no direct block: the same two scalar slots hold its
     // captured generation/allocation identity instead of duplicate fields.
     private NativeBlock _block;
-    private readonly int _length;
-    private readonly int _capacity;
+    private int _length;
+    private int _capacity;
     private int _state;
     private int _operationAdmission;
     private long _authorityVersion = 1;
@@ -710,6 +710,13 @@ internal partial class NativeTransferControl<T>
 
     private protected void PublishControlState(int state) => Volatile.Write(ref _state, state);
     private protected void PublishAuthorityVersion(long version) => Volatile.Write(ref _authorityVersion, version);
+
+    // An unpublished control learns its final shape before publishing Active.
+    private protected void PublishShape(int length, int capacity)
+    {
+        _length = length;
+        _capacity = capacity;
+    }
 
     private protected void InstallOwnedBlock(NativeBlock block)
     {

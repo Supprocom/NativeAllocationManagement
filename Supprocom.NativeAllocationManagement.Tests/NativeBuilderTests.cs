@@ -949,6 +949,42 @@ public sealed class NativeBuilderTests
     }
 
     [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1861", Justification = "This one-shot assertion keeps its expected array local to the test case.")]
+    public void UngatedAppendFallsBackForGrowthCancellationReentryAndTerminalStates()
+    {
+        NativeBuilder<int> builder = new(preLease: 2);
+        builder.Append(1);
+        builder.Append(2);
+        builder.Append(3);
+        using CancellationTokenSource cancellation = new();
+        builder.Append(4, cancellation.Token);
+        builder.Append([5, 6]);
+        builder.Borrow((scoped ref NativeBuilderBorrow<int> borrow) =>
+        {
+            // The entered borrow holds the gate: a direct append cannot bypass it.
+            Assert.Throws<InvalidOperationException>(() => builder.Append(99));
+            Assert.Throws<InvalidOperationException>(() => builder.Append([98, 97]));
+            borrow.Append(7);
+        });
+
+        NativeTransfer<int> transfer = builder.Complete();
+        Assert.Throws<InvalidOperationException>(() => builder.Append(8));
+        Assert.Throws<InvalidOperationException>(() => builder.Append([8]));
+        Assert.Equal(
+            new[] { 1, 2, 3, 4, 5, 6, 7 },
+            transfer.Read(static view => view.AsSpan().ToArray()));
+        transfer.Dispose();
+
+        NativeBuilder<int> cancelled = new(preLease: 4);
+        cancellation.Cancel();
+        Assert.Throws<OperationCanceledException>(() => cancelled.Append(1, cancellation.Token));
+        Assert.Throws<ObjectDisposedException>(() => cancelled.Append(2));
+        Assert.Throws<ObjectDisposedException>(() => cancelled.Append([3]));
+        cancelled.Dispose();
+        builder.Dispose();
+    }
+
+    [Fact]
     public void AbandonedBuilderFinalizerReturnsItsAllocation()
     {
         NativeMemoryTestHooks.Reset();

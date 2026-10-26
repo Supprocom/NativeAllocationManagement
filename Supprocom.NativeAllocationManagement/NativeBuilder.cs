@@ -20,6 +20,7 @@ public sealed class NativeBuilder<T> : IDisposable
     private int _capacity;
     private NativeBlock _block;
     private readonly long _id = NativeOwnerIdentity.Next();
+    private readonly NativeBuilderControl<T> _control;
 
     /// <summary>Creates an empty direct native builder.</summary>
     public NativeBuilder()
@@ -52,6 +53,16 @@ public sealed class NativeBuilder<T> : IDisposable
             budget,
             ownerId: _id);
         _capacity = preLease;
+        try
+        {
+            // The future transfer control is the builder's emergency cleanup.
+            _control = new NativeBuilderControl<T>(_block);
+        }
+        catch
+        {
+            NativeBlockAllocator.Free(_block);
+            throw;
+        }
     }
 
     /// <summary>Gets the stable backing-ownership lineage, retained through completion and move.</summary>
@@ -170,9 +181,34 @@ public sealed class NativeBuilder<T> : IDisposable
     }
 
     /// <summary>Appends one value directly to native storage.</summary>
-    public void Append(
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public unsafe void Append(
         T value,
         CancellationToken cancellationToken = default)
+    {
+        // An idle active builder with spare capacity cannot fail, grow, cancel or
+        // run user code, so the append needs no gate, exception frame or rollback.
+        // The analyzer confines a builder to one local owner; an entered borrow,
+        // terminal transition or test hook keeps the gate visible and falls back.
+        int count = _count;
+        if ((uint)count < (uint)_capacity
+            && _writerGate == 0
+            && _state == Active
+            && !cancellationToken.CanBeCanceled
+            && !NativeMemoryTestHooks.OperationHooksEnabled)
+        {
+            ((T*)_block.Pointer)[count] = value;
+            _count = count + 1;
+            GC.KeepAlive(this);
+            return;
+        }
+
+        AppendChecked(value, cancellationToken);
+    }
+
+    private void AppendChecked(
+        T value,
+        CancellationToken cancellationToken)
     {
         EnterOperation(nameof(Append));
         try
@@ -195,9 +231,31 @@ public sealed class NativeBuilder<T> : IDisposable
     }
 
     /// <summary>Appends one range directly to native storage.</summary>
-    public void Append(
+    public unsafe void Append(
         scoped ReadOnlySpan<T> source,
         CancellationToken cancellationToken = default)
+    {
+        int count = _count;
+        if ((uint)source.Length <= (uint)(_capacity - count)
+            && _writerGate == 0
+            && _state == Active
+            && !cancellationToken.CanBeCanceled
+            && !NativeMemoryTestHooks.OperationHooksEnabled)
+        {
+            Span<T> destination = new((T*)_block.Pointer + count, source.Length);
+            source.CopyTo(destination);
+            NativeMemoryAccounting.RecordCopiedRange(source, destination);
+            _count = count + source.Length;
+            GC.KeepAlive(this);
+            return;
+        }
+
+        AppendChecked(source, cancellationToken);
+    }
+
+    private void AppendChecked(
+        scoped ReadOnlySpan<T> source,
+        CancellationToken cancellationToken)
     {
         EnterOperation(nameof(Append));
         try
@@ -542,7 +600,6 @@ public sealed class NativeBuilder<T> : IDisposable
     }
 
     /// <summary>Publishes one exact logical range and invalidates this builder.</summary>
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA1816", Justification = "Completion transfers native ownership and disarms the builder finalizer.")]
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "This boundary captures any failure to preserve cleanup and report the original error.")]
     public NativeTransfer<T> Complete(
         CancellationToken cancellationToken = default)
@@ -556,7 +613,6 @@ public sealed class NativeBuilder<T> : IDisposable
             NativeTransfer<T> transfer =
                 CompleteDirect(_count);
             Volatile.Write(ref _state, Completed);
-            GC.SuppressFinalize(this);
             return transfer;
         }
         catch (Exception failure)
@@ -572,7 +628,6 @@ public sealed class NativeBuilder<T> : IDisposable
             }
 
             Volatile.Write(ref _state, Disposed);
-            GC.SuppressFinalize(this);
             if (cleanupFailure is not null)
             {
                 throw new AggregateException(
@@ -606,12 +661,10 @@ public sealed class NativeBuilder<T> : IDisposable
         {
             ReleaseBlock();
             Volatile.Write(ref _state, Disposed);
-            GC.SuppressFinalize(this);
         }
         catch
         {
             Volatile.Write(ref _state, Disposed);
-            GC.SuppressFinalize(this);
             throw;
         }
         finally
@@ -778,7 +831,6 @@ public sealed class NativeBuilder<T> : IDisposable
 
     }
 
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA1816", Justification = "Failure cleanup releases native storage and disarms the builder finalizer.")]
     private void FailOperation(Exception failure)
     {
         if (Interlocked.CompareExchange(
@@ -793,12 +845,10 @@ public sealed class NativeBuilder<T> : IDisposable
         {
             ReleaseBlock();
             Volatile.Write(ref _state, Disposed);
-            GC.SuppressFinalize(this);
         }
         catch (Exception cleanupFailure)
         {
             Volatile.Write(ref _state, Disposed);
-            GC.SuppressFinalize(this);
             throw new AggregateException(
                 "A native builder operation failed and cleanup also failed.",
                 failure,
@@ -875,19 +925,6 @@ public sealed class NativeBuilder<T> : IDisposable
             $"NativeBuilder.{operation} cannot run during a lifetime transition.");
     }
 
-    private void FinalizeBuilder()
-    {
-        if (Interlocked.CompareExchange(
-            ref _state,
-            Finalized,
-            Active) != Active)
-        {
-            return;
-        }
-
-        ReleaseBlock();
-    }
-
     private unsafe void AppendDirect(T value, int index)
     {
         int required = checked(index + 1);
@@ -919,12 +956,10 @@ public sealed class NativeBuilder<T> : IDisposable
 
     private NativeTransfer<T> CompleteDirect(int length)
     {
-        NativeBlock block = _block;
-        NativeTransfer<T> transfer =
-            NativeTransfer<T>.CreateOwnedBlock(
-                block,
-                length,
-                _capacity);
+        NativeTransfer<T> transfer = _control.Publish(
+            _block,
+            length,
+            _capacity);
         _block = default;
         return transfer;
     }
@@ -942,7 +977,11 @@ public sealed class NativeBuilder<T> : IDisposable
     [MethodImpl(MethodImplOptions.NoInlining)]
     private bool Grow(int required, bool throwOnBudgetFailure)
     {
-        int next = _capacity == 0 ? 4 : _capacity;
+        // An empty unbudgeted builder starts at one cache line: smaller native
+        // blocks only add reallocations, and malloc rounds tiny requests up.
+        // A budgeted builder keeps exact small steps for admission arithmetic.
+        int next = _capacity != 0 ? _capacity
+            : _block.Budget is null ? Math.Max(4, 64 / Unsafe.SizeOf<T>()) : 4;
         while (next < required)
         {
             next = next > int.MaxValue / 2
@@ -967,6 +1006,7 @@ public sealed class NativeBuilder<T> : IDisposable
 
         _block = replacement;
         _capacity = capacity;
+        _control.InstallBlock(replacement);
         return true;
     }
 
@@ -974,20 +1014,13 @@ public sealed class NativeBuilder<T> : IDisposable
     {
         NativeBlock block = _block;
         _block = default;
-        NativeBlockAllocator.Free(block);
-    }
-
-    /// <summary>Returns storage when an application abandons an active builder.</summary>
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "MA0055", Justification = "Emergency native-memory cleanup supplements mandatory deterministic disposal.")]
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "An emergency finalizer must never let cleanup exceptions terminate the process.")]
-    ~NativeBuilder()
-    {
         try
         {
-            FinalizeBuilder();
+            NativeBlockAllocator.Free(block);
         }
-        catch
+        finally
         {
+            _control.CompleteUnpublishedReturn();
         }
     }
 }
