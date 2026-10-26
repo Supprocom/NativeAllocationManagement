@@ -223,7 +223,7 @@ public sealed class NativeRegionInitializerSafetyTests
         NativeRegionKernel region = new(32, NativeMemoryReturn.ToNativeMemory);
         Local<int> value = region.LeaseInitialized<int>(1, writer =>
         {
-            region.EnterBorrow("initializer bounded borrow test");
+            region.EnterBorrow("initializer bounded borrow test", region.Generation);
             try
             {
                 NativeAllocationInUseException failure = Assert.Throws<NativeAllocationInUseException>(region.Dispose);

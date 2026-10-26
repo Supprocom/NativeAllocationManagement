@@ -4,6 +4,7 @@ namespace Supprocom.NativeAllocationManagement;
 public readonly ref struct NativeRegion
 {
     private readonly NativeRegionKernel? _kernel;
+    private readonly int _generation;
 
     /// <summary>Gets the stable process-local allocator identity.</summary>
     public long Id => GetKernel(nameof(Id)).Id;
@@ -15,9 +16,10 @@ public readonly ref struct NativeRegion
     /// <summary>Creates one active Region with finalizable emergency cleanup.</summary>
     public NativeRegion()
     {
-        _kernel = new NativeRegionKernel(
+        _kernel = NativeRegionKernel.Acquire(
             preAllocateBytes: 0,
             NativeMemoryReturn.ToGarbageCollector);
+        _generation = _kernel.Generation;
     }
 
     /// <summary>Creates one active Region with the specified native reservation.</summary>
@@ -31,9 +33,10 @@ public readonly ref struct NativeRegion
         NativeMemoryReturnValidation.Validate(
             returnMemoryOnDispose,
             nameof(returnMemoryOnDispose));
-        _kernel = new NativeRegionKernel(
+        _kernel = NativeRegionKernel.Acquire(
             preAllocateBytes,
             returnMemoryOnDispose);
+        _generation = _kernel.Generation;
     }
 
     /// <summary>Creates a lexical owner with complete backing admitted by a shared ceiling.</summary>
@@ -45,11 +48,15 @@ public readonly ref struct NativeRegion
         ArgumentNullException.ThrowIfNull(budget);
         NativeMemoryReturnValidation.Validate(returnMemoryOnDispose, nameof(returnMemoryOnDispose));
         _kernel = new NativeRegionKernel(preAllocateBytes, returnMemoryOnDispose, budget);
+        _generation = _kernel.Generation;
     }
 
     internal NativeOwnerLifecycle CurrentLifecycle =>
-        _kernel?.Lifecycle
-        ?? NativeOwnerLifecycle.Uninitialized;
+        _kernel is null
+            ? NativeOwnerLifecycle.Uninitialized
+            : _kernel.Generation != _generation
+                ? NativeOwnerLifecycle.Disposed
+                : _kernel.Lifecycle;
 
     // Compatibility probe retains the per-owner instance shape.
 #pragma warning disable CA1822
@@ -71,11 +78,31 @@ public readonly ref struct NativeRegion
     }
 
     /// <summary>Invalidates all Local handles and ends the Region lifetime.</summary>
-    public void Dispose() => GetKernel(nameof(Dispose)).Dispose();
+    public void Dispose()
+    {
+        NativeRegionKernel kernel = _kernel
+            ?? throw new NativeAllocationUninitializedException(
+                nameof(NativeRegion),
+                nameof(Dispose));
+        // A later region may reuse this kernel; disposal of an earlier lifetime
+        // is already complete.
+        if (kernel.Generation == _generation)
+        {
+            kernel.Dispose();
+        }
+    }
 
-    private NativeRegionKernel GetKernel(string operation) =>
-        _kernel
-        ?? throw new NativeAllocationUninitializedException(
-            nameof(NativeRegion),
-            operation);
+    private NativeRegionKernel GetKernel(string operation)
+    {
+        NativeRegionKernel kernel = _kernel
+            ?? throw new NativeAllocationUninitializedException(
+                nameof(NativeRegion),
+                operation);
+        if (kernel.Generation != _generation)
+        {
+            throw NativeRegionKernel.CreateEndedLifetime(operation);
+        }
+
+        return kernel;
+    }
 }

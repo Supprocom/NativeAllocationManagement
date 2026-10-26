@@ -10,15 +10,18 @@ public readonly ref struct Local<T>
     private readonly NativeRegionKernel? _kernel;
     private readonly IntPtr _pointer;
     private readonly int _length;
+    private readonly int _generation;
 
     internal Local(
         NativeRegionKernel kernel,
         IntPtr pointer,
-        int length)
+        int length,
+        int generation)
     {
         _kernel = kernel;
         _pointer = pointer;
         _length = length;
+        _generation = generation;
     }
 
     /// <summary>Gets the immutable logical element count.</summary>
@@ -139,7 +142,7 @@ public readonly ref struct Local<T>
     private NativeRegionKernel EnterBorrow(string operation)
     {
         NativeRegionKernel kernel = GetKernel(operation);
-        kernel.EnterBorrow(operation);
+        kernel.EnterBorrow(operation, _generation);
         return kernel;
     }
 

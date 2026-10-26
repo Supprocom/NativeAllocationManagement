@@ -11,9 +11,16 @@ internal sealed unsafe class NativeRegionKernel
         (nuint)sizeof(RegionSegmentHeader),
         NativeSegment.Alignment);
 
+    // One disposed garbage-collector-policy region per thread keeps its single
+    // segment for the next region instead of detaching it for finalization.
+    private const long ReuseLimitBytes = 64 * 1024;
+
+    [ThreadStatic]
+    private static NativeRegionKernel? t_reusable;
+
     private readonly NativeMemoryReturn _returnMemoryOnDispose;
     private NativeMemoryBudget? _budget;
-    internal long Id { get; } = NativeOwnerIdentity.Next();
+    internal long Id { get; private set; } = NativeOwnerIdentity.Next();
     private readonly int _ownerThreadId;
     private NativeOwnerLifecycle _lifecycle;
     private RegionSegmentHeader* _firstSegment;
@@ -26,7 +33,13 @@ internal sealed unsafe class NativeRegionKernel
     // Append-only lifetime count is also the non-reusing backing ordinal.
     // Terminal cleanup clears the head, not this completed acquisition history.
     private int _segmentCount;
+    // Backing count when the current lifetime began; nonzero only after reuse.
+    private int _activationSegmentCount;
     private int _activeBorrowCount;
+    // Region and Local handles carry the lifetime they were issued for; a reused
+    // kernel starts the next lifetime, so earlier handles stay disposed.
+    private int _generation;
+    private bool _retainedForReuse;
 
     internal NativeRegionKernel(
         nuint preAllocateBytes,
@@ -47,6 +60,79 @@ internal sealed unsafe class NativeRegionKernel
     }
 
     internal NativeOwnerLifecycle Lifecycle => _lifecycle;
+
+    internal int Generation => _generation;
+
+    internal static bool HasReusableKernelForTest => t_reusable is not null;
+
+    internal static NativeRegionKernel Acquire(
+        nuint preAllocateBytes,
+        NativeMemoryReturn returnMemoryOnDispose)
+    {
+        if (returnMemoryOnDispose == NativeMemoryReturn.ToGarbageCollector)
+        {
+            NativeRegionKernel? reusable = t_reusable;
+            if (reusable is not null)
+            {
+                t_reusable = null;
+                if (reusable.TryReactivate(preAllocateBytes))
+                {
+                    return reusable;
+                }
+            }
+        }
+
+        return new NativeRegionKernel(
+            preAllocateBytes,
+            returnMemoryOnDispose);
+    }
+
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA1816", Justification = "A discarded reuse candidate frees its storage and disarms its emergency finalizer.")]
+    private bool TryReactivate(nuint preAllocateBytes)
+    {
+        RegionSegmentHeader* segment = _firstSegment;
+        // A new measurement epoch observes fresh acquisition, and a short
+        // segment cannot satisfy the requested reservation.
+        if (segment == null
+            || segment->MetricsEpoch != NativeMemoryAccounting.CurrentMetricsEpoch
+            || segment->Capacity < preAllocateBytes
+            || _generation == int.MaxValue)
+        {
+            FreeSegments();
+            GC.SuppressFinalize(this);
+            return false;
+        }
+
+        Id = NativeOwnerIdentity.Next();
+        _generation++;
+        _retainedForReuse = false;
+        _lifecycle = NativeOwnerLifecycle.Active;
+        _currentSegment = segment;
+        _currentCursor = (byte*)segment + HeaderBytes;
+        _currentEnd = _currentCursor + segment->Capacity;
+        _requestedBytes = 0;
+        _peakRetainedBytes = _retainedBytes;
+        _activationSegmentCount = _segmentCount;
+        return true;
+    }
+
+    private bool TryRetainForReuse()
+    {
+        // Disposal already proved no initializer or borrow is entered, and no
+        // other thread can reach this storage, so detaching it buys no safety.
+        if (_budget is not null
+            || t_reusable is not null
+            || _firstSegment == null
+            || _firstSegment->Next != null
+            || _retainedBytes > ReuseLimitBytes)
+        {
+            return false;
+        }
+
+        _retainedForReuse = true;
+        t_reusable = this;
+        return true;
+    }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal Local<T> LeaseInitialized<T>(
@@ -74,7 +160,7 @@ internal sealed unsafe class NativeRegionKernel
             RegionReservation reservation = Reserve(byteLength, alignment);
             Initialize(reservation, length, initializer);
             _requestedBytes = requestedBytes;
-            return new Local<T>(this, reservation.Pointer, length);
+            return new Local<T>(this, reservation.Pointer, length, _generation);
         }
         finally
         {
@@ -139,8 +225,13 @@ internal sealed unsafe class NativeRegionKernel
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal void EnterBorrow(string operation)
+    internal void EnterBorrow(string operation, int generation)
     {
+        if (generation != _generation)
+        {
+            throw CreateDisposed(operation);
+        }
+
         ValidateLeaseActive(operation);
         _activeBorrowCount++;
     }
@@ -167,7 +258,7 @@ internal sealed unsafe class NativeRegionKernel
             RetiredSegmentCount: 0,
             TrimmedBytes: 0,
             TrimCallCount: 0,
-            FreshSegmentAllocationCount: _segmentCount)
+            FreshSegmentAllocationCount: _segmentCount - _activationSegmentCount)
         {
             OwnerId = Id,
             Model = NativeOwnerModel.ThreadConfinedRegion,
@@ -211,7 +302,8 @@ internal sealed unsafe class NativeRegionKernel
             HistoryOverflowed = false,
             OutstandingNativeBytes = _retainedBytes,
             DetachedNativeBytes = _lifecycle == NativeOwnerLifecycle.Disposed
-                && _returnMemoryOnDispose == NativeMemoryReturn.ToGarbageCollector ? _retainedBytes : 0,
+                && _returnMemoryOnDispose == NativeMemoryReturn.ToGarbageCollector
+                && !_retainedForReuse ? _retainedBytes : 0,
             PeakOutstandingNativeBytes = _peakRetainedBytes,
             InitializedPayloadBytes = _lifecycle == NativeOwnerLifecycle.Active ? _requestedBytes : 0,
             PeakInitializedPayloadBytes = _requestedBytes
@@ -248,6 +340,11 @@ internal sealed unsafe class NativeRegionKernel
         {
             FreeSegments();
             GC.SuppressFinalize(this);
+            return;
+        }
+
+        if (TryRetainForReuse())
+        {
             return;
         }
 
@@ -487,6 +584,18 @@ internal sealed unsafe class NativeRegionKernel
             activeOperationCount: ActiveOperationCount,
             allocationId: 0,
             _lifecycle);
+
+    internal static NativeAllocationDisposedException CreateEndedLifetime(
+        string operation) =>
+        new(
+            "The native region is disposed.",
+            OwnerKind,
+            generation: 0,
+            currentGeneration: 0,
+            operation,
+            activeOperationCount: 0,
+            allocationId: 0,
+            NativeOwnerLifecycle.Disposed);
 
     private NativeAllocationDisposedException CreateDisposed(
         string operation) =>

@@ -1056,20 +1056,25 @@ public sealed class RuntimeLifecycleTests
                 }
 
                 NativeMemoryTestMetrics regionBefore = NativeMemoryTestHooks.Snapshot();
+                bool reusesKernel = policy == NativeMemoryReturn.ToGarbageCollector
+                    && NativeRegionKernel.HasReusableKernelForTest;
                 NativeRegion region = new((nuint)(reservationUnits * sizeof(long)), policy);
                 Local<long> local = region.Lease<long>(2, static writer => writer.Fill(default!));
                 local.Access(static span => span[0] = 8);
 
                 region.Dispose();
                 NativeMemoryTestMetrics regionAfter = NativeMemoryTestHooks.Snapshot();
-                Assert.True(regionAfter.AllocationCount > regionBefore.AllocationCount);
+                Assert.True(reusesKernel || regionAfter.AllocationCount > regionBefore.AllocationCount);
                 if (policy == NativeMemoryReturn.ToNativeMemory)
                 {
                     Assert.True(regionAfter.FreeCount > regionBefore.FreeCount);
                 }
                 else
                 {
-                    Assert.True(regionAfter.DetachedGenerationCount > regionBefore.DetachedGenerationCount);
+                    // A one-segment region is kept for the thread's next region
+                    // instead of being detached for finalization.
+                    Assert.True(regionAfter.DetachedGenerationCount > regionBefore.DetachedGenerationCount
+                        || NativeRegionKernel.HasReusableKernelForTest);
                 }
             }
         }

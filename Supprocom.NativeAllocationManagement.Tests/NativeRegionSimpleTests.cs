@@ -437,6 +437,102 @@ public sealed class NativeRegionSimpleTests
             "The disposed Local remained active.");
     }
 
+    [Fact]
+    public void DisposedDefaultRegionKernelServesTheNextRegionWithoutReopeningOldHandles()
+    {
+        RunOnFreshThread(static () =>
+        {
+            NativeRegion first = new(preAllocateBytes: 256);
+            Local<int> stale = first.Lease<int>(2, FillIntegers);
+            long firstId = first.Id;
+            first.Dispose();
+            Assert.True(NativeRegionKernel.HasReusableKernelForTest);
+            Assert.Equal(NativeOwnerLifecycle.Disposed, first.CurrentLifecycle);
+
+            NativeRegion second = new(preAllocateBytes: 128);
+            Assert.False(NativeRegionKernel.HasReusableKernelForTest);
+            Assert.NotEqual(firstId, second.Id);
+            Assert.Equal(0, second.GetStatistics().FreshSegmentAllocationCount);
+            Assert.Equal(1, second.GetStatistics().SegmentCount);
+            Assert.Equal(0, second.GetStatistics().RequestedBytes);
+            Local<int> current = second.Lease<int>(2, FillIntegers);
+
+            // Copies of the earlier lifetime stay disposed after the kernel is reused.
+            Assert.IsType<NativeAllocationDisposedException>(ReadAfterDispose(stale));
+            Assert.Equal(NativeOwnerLifecycle.Disposed, first.CurrentLifecycle);
+            Assert.IsType<NativeAllocationDisposedException>(StatisticsAfterDispose(first));
+            first.Dispose();
+            Assert.Equal(NativeOwnerLifecycle.Active, second.CurrentLifecycle);
+            Assert.Equal(30, current.Read(static view => view[0] + view[1]));
+            second.Dispose();
+            Assert.True(NativeRegionKernel.HasReusableKernelForTest);
+        });
+    }
+
+    [Fact]
+    public void NativeReturnBudgetedAndLargeRegionsAreNotRetainedForReuse()
+    {
+        RunOnFreshThread(static () =>
+        {
+            NativeRegion freed = new(256, NativeMemoryReturn.ToNativeMemory);
+            freed.Dispose();
+            Assert.False(NativeRegionKernel.HasReusableKernelForTest);
+
+            NativeRegion budgeted = new(new NativeMemoryBudget(65_536), 256, NativeMemoryReturn.ToGarbageCollector);
+            budgeted.Dispose();
+            Assert.False(NativeRegionKernel.HasReusableKernelForTest);
+
+            NativeRegion large = new(preAllocateBytes: 128 * 1024);
+            large.Dispose();
+            Assert.False(NativeRegionKernel.HasReusableKernelForTest);
+
+            NativeRegion grown = new(preAllocateBytes: 64);
+            _ = grown.Lease<long>(64, static writer => writer.Fill(1));
+            grown.Dispose();
+            Assert.False(NativeRegionKernel.HasReusableKernelForTest);
+        });
+    }
+
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The worker failure is rethrown on the test thread.")]
+    private static void RunOnFreshThread(Action action)
+    {
+        // A new thread starts with an empty region reuse slot.
+        Exception? failure = null;
+        Thread worker = new(() =>
+        {
+            try
+            {
+                action();
+            }
+            catch (Exception exception)
+            {
+                failure = exception;
+            }
+        });
+        worker.Start();
+        Assert.True(worker.Join(TimeSpan.FromSeconds(10)));
+        if (failure is not null)
+        {
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
+        }
+    }
+
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The test intentionally captures the stale region failure for assertions.")]
+    private static Exception StatisticsAfterDispose(NativeRegion region)
+    {
+        try
+        {
+            _ = region.GetStatistics();
+        }
+        catch (Exception exception)
+        {
+            return exception;
+        }
+
+        throw new Xunit.Sdk.XunitException(
+            "The disposed region remained observable.");
+    }
+
     private static string FindRepositoryRoot()
         => RepositoryTestPaths.Root;
 
