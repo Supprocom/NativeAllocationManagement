@@ -314,15 +314,16 @@ public sealed class NativeRegionSimpleTests
     {
         MethodInfo[] methods = typeof(NativeRegion).GetMethods(
             BindingFlags.Public | BindingFlags.Instance);
-        MethodInfo lease = SingleExpected(
-            methods,
-            method => string.Equals(method.Name, nameof(NativeRegion.Lease), StringComparison.Ordinal));
-        Type element = lease.GetGenericArguments()[0];
+        MethodInfo[] leases = methods
+            .Where(method => string.Equals(method.Name, nameof(NativeRegion.Lease), StringComparison.Ordinal))
+            .ToArray();
 
-        Assert.Contains(
-            element.GetCustomAttributesData(),
+        // The initializer and value-filled acquisitions are the only Lease forms.
+        Assert.Equal(2, leases.Length);
+        Assert.All(leases, static lease => Assert.Contains(
+            lease.GetGenericArguments()[0].GetCustomAttributesData(),
             attribute => string.Equals(attribute.AttributeType.Name
-, "IsUnmanagedAttribute", StringComparison.Ordinal));
+, "IsUnmanagedAttribute", StringComparison.Ordinal)));
         Assert.DoesNotContain(
             methods,
             method => method.Name is

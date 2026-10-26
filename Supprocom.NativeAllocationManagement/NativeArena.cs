@@ -70,6 +70,20 @@ public sealed partial class NativeArena : IDisposable
         where T : unmanaged =>
         Scratch(length, scoped: true, initializer);
 
+    /// <summary>Fills one generation-bound bump range with a value, without an initializer callback.</summary>
+    /// <param name="length">The complete initialized element count.</param>
+    /// <param name="value">The value written to every element before publication.</param>
+    public ArenaLease<T> Scratch<T>(int length, T value)
+        where T : unmanaged =>
+        ScratchFilled(length, scoped: false, value);
+
+    /// <summary>Fills one scoped bump range with a value, without an initializer callback.</summary>
+    /// <param name="length">The complete initialized element count.</param>
+    /// <param name="value">The value written to every element before publication.</param>
+    public ArenaLease<T> ScratchScoped<T>(int length, T value)
+        where T : unmanaged =>
+        ScratchFilled(length, scoped: true, value);
+
     /// <summary>Frees every idle tail segment.</summary>
     public nuint TrimRetainedMemory() =>
         TrimRetainedMemory(nuint.MaxValue);

@@ -168,6 +168,28 @@ internal sealed unsafe class NativeRegionKernel
         }
     }
 
+    internal Local<T> LeaseFilled<T>(
+        int length,
+        T value)
+        where T : unmanaged
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(length);
+        ValidateLeaseActive(nameof(NativeRegion.Lease));
+        if (_activeBorrowCount < 0)
+        {
+            ThrowActiveOperation(nameof(NativeRegion.Lease));
+        }
+
+        nuint byteLength = CalculateByteLength<T>(length);
+        long requestedBytes = checked(
+            _requestedBytes + checked((long)byteLength));
+        RegionReservation reservation = Reserve(byteLength, CalculateAlignment<T>());
+        // An unmanaged fill runs no user code: no initializer admission or rollback.
+        new Span<T>((void*)reservation.Pointer, length).Fill(value);
+        _requestedBytes = requestedBytes;
+        return new Local<T>(this, reservation.Pointer, length, _generation);
+    }
+
     [MethodImpl(MethodImplOptions.NoInlining)]
     private void Initialize<T>(
         RegionReservation reservation,

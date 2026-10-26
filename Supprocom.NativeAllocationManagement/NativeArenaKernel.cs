@@ -111,6 +111,59 @@ public sealed unsafe partial class NativeArena
             scoped);
     }
 
+    internal ArenaLease<T> ScratchFilled<T>(
+        int length,
+        bool scoped,
+        T value)
+        where T : unmanaged
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(length);
+        ValidateActive(scoped
+            ? nameof(NativeArena.ScratchScoped)
+            : nameof(NativeArena.Scratch));
+        if (_initializerActive != 0)
+        {
+            ThrowNestedInitializer();
+        }
+
+        nuint byteLength = CalculateByteLength<T>(length);
+        long payloadBytes = checked((long)byteLength);
+        _ = checked(_initializedPayloadBytes + payloadBytes);
+        ArenaReservation reservation;
+        if (_prepared)
+        {
+            if (!TryReservePreparedScratch<T>(length, scoped, out reservation))
+            {
+                throw new InvalidOperationException("The prepared arena byte capacity is exhausted. Use TryScratch or TryScratchScoped for non-allocating refusal.");
+            }
+        }
+        else
+        {
+            reservation = Reserve(
+                ref scoped ? ref _scoped : ref _ordinary,
+                byteLength,
+                CalculateAlignment<T>(),
+                scoped);
+        }
+
+        // An unmanaged fill runs no user code, so it needs no initializer frame,
+        // writer or rollback; publication follows the complete write.
+        new Span<T>((void*)reservation.Pointer, length).Fill(value);
+        RecordInitialization(payloadBytes, scoped);
+        if (_prepared)
+        {
+            IncrementPreparedHistory(ref _preparedSuccessCount);
+        }
+
+        return new ArenaLease<T>(
+            this,
+            reservation.Pointer,
+            length,
+            _generation,
+            scoped ? _scopeEpoch : 0,
+            scoped);
+    }
+
     [MethodImpl(MethodImplOptions.NoInlining)]
     private void Initialize<T>(
         ArenaReservation reservation,

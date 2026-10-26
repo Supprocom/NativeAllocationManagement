@@ -98,22 +98,10 @@ public sealed unsafe partial class NativeArena
             ThrowNestedInitializer();
         }
 
-        ref ArenaLane lane = ref (scoped ? ref _scoped : ref _ordinary);
-        if (!TryReservePrepared(ref lane, CalculateByteLength<T>(length),
-            CalculateAlignment<T>(), scoped, out ArenaReservation reservation))
+        if (!TryReservePreparedScratch<T>(length, scoped, out ArenaReservation reservation))
         {
-            IncrementPreparedHistory(ref _preparedRefusalCount);
             lease = default;
             return false;
-        }
-
-        if (scoped)
-        {
-            _preparedPeakScopedUsedBytes = Math.Max(_preparedPeakScopedUsedBytes, checked((long)lane.UsedBytes));
-        }
-        else
-        {
-            _preparedPeakOrdinaryUsedBytes = Math.Max(_preparedPeakOrdinaryUsedBytes, checked((long)lane.UsedBytes));
         }
 
         _initializerActive = 1;
@@ -133,6 +121,30 @@ public sealed unsafe partial class NativeArena
         IncrementPreparedHistory(ref _preparedSuccessCount);
         lease = new ArenaLease<T>(this, reservation.Pointer, length,
             _generation, scoped ? _scopeEpoch : 0, scoped);
+        return true;
+    }
+
+    // Refusal is recorded here; success history follows complete initialization.
+    private bool TryReservePreparedScratch<T>(int length, bool scoped, out ArenaReservation reservation)
+        where T : unmanaged
+    {
+        ref ArenaLane lane = ref (scoped ? ref _scoped : ref _ordinary);
+        if (!TryReservePrepared(ref lane, CalculateByteLength<T>(length),
+            CalculateAlignment<T>(), scoped, out reservation))
+        {
+            IncrementPreparedHistory(ref _preparedRefusalCount);
+            return false;
+        }
+
+        if (scoped)
+        {
+            _preparedPeakScopedUsedBytes = Math.Max(_preparedPeakScopedUsedBytes, checked((long)lane.UsedBytes));
+        }
+        else
+        {
+            _preparedPeakOrdinaryUsedBytes = Math.Max(_preparedPeakOrdinaryUsedBytes, checked((long)lane.UsedBytes));
+        }
+
         return true;
     }
 

@@ -25,8 +25,8 @@ public sealed class PublicSurfaceTests
         Assert.NotNull(typeof(NativeConcurrentPool<int>).GetMethod("ReturnMemoryToGarbageCollector"));
         Assert.NotNull(typeof(NativeConcurrentPool<int>).GetMethod("ReleaseLeasesToNativeMemory"));
         Assert.NotNull(typeof(NativeConcurrentPool<int>).GetMethod("ReleaseLeasesToGarbageCollector"));
-        Assert.NotNull(typeof(NativeArena).GetMethod("Scratch"));
-        Assert.NotNull(typeof(NativeArena).GetMethod("ScratchScoped"));
+        Assert.Contains(typeof(NativeArena).GetMethods(), static method => string.Equals(method.Name, "Scratch", StringComparison.Ordinal));
+        Assert.Contains(typeof(NativeArena).GetMethods(), static method => string.Equals(method.Name, "ScratchScoped", StringComparison.Ordinal));
         Assert.Null(typeof(NativeConcurrentArena).GetMethod(
             "ScratchTransferable"));
         Assert.Null(typeof(ConcurrentPooled<int>).GetProperty("Item"));
@@ -38,7 +38,7 @@ public sealed class PublicSurfaceTests
             assembly.GetTypes(),
             type => string.Equals(type.Name, "NativeLeaseStateFunc`3", StringComparison.Ordinal));
         Assert.Null(typeof(ConcurrentArenaLease<int>).GetProperty("Item"));
-        Assert.NotNull(typeof(NativeRegion).GetMethod("Lease"));
+        Assert.Contains(typeof(NativeRegion).GetMethods(), static method => string.Equals(method.Name, "Lease", StringComparison.Ordinal));
         Assert.NotNull(typeof(NativePool<int>).GetMethod("GetStatistics"));
         Assert.NotNull(typeof(NativeArena).GetMethod("GetStatistics"));
         Assert.NotNull(typeof(NativeRegion).GetMethod("GetStatistics"));

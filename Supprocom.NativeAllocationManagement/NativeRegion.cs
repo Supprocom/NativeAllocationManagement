@@ -77,6 +77,15 @@ public readonly ref struct NativeRegion
         return kernel.LeaseInitialized(length, initializer);
     }
 
+    /// <summary>Fills and publishes one unmanaged bump range without an initializer callback.</summary>
+    /// <param name="length">The complete initialized element count.</param>
+    /// <param name="value">The value written to every element before publication.</param>
+    public Local<T> Lease<T>(
+        int length,
+        T value)
+        where T : unmanaged =>
+        GetKernel(nameof(Lease)).LeaseFilled(length, value);
+
     /// <summary>Invalidates all Local handles and ends the Region lifetime.</summary>
     public void Dispose()
     {

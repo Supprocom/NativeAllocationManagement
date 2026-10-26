@@ -738,3 +738,6 @@ Supprocom.NativeAllocationManagement.NativeWorkspace<T>.CaptureDiagnosticSnapsho
 Supprocom.NativeAllocationManagement.NativeWorkspace<T>.GetStatistics() -> Supprocom.NativeAllocationManagement.NativeOwnerStatistics
 Supprocom.NativeAllocationManagement.NativeOwnerModel.SingleWriterBuilder = 7 -> Supprocom.NativeAllocationManagement.NativeOwnerModel
 Supprocom.NativeAllocationManagement.NativeOwnerModel.ThreadConfinedWorkspace = 8 -> Supprocom.NativeAllocationManagement.NativeOwnerModel
+Supprocom.NativeAllocationManagement.NativeArena.Scratch<T>(int length, T value) -> Supprocom.NativeAllocationManagement.ArenaLease<T>
+Supprocom.NativeAllocationManagement.NativeArena.ScratchScoped<T>(int length, T value) -> Supprocom.NativeAllocationManagement.ArenaLease<T>
+Supprocom.NativeAllocationManagement.NativeRegion.Lease<T>(int length, T value) -> Supprocom.NativeAllocationManagement.Local<T>
