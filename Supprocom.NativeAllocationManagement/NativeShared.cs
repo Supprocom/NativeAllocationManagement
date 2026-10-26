@@ -103,6 +103,22 @@ public readonly struct NativeShared<T> : IDisposable where T : unmanaged
         finally { EndRead(payload, callbackFailure); }
     }
 
+    /// <summary>Runs one compile-time read-only processor in one entered synchronous read.</summary>
+    /// <typeparam name="TState">The caller state type.</typeparam>
+    /// <typeparam name="TResult">The result type, which cannot contain the borrowed span.</typeparam>
+    /// <typeparam name="TProcessor">The processor; its static member is called without a delegate.</typeparam>
+    public TResult Process<TState, TResult, TProcessor>(scoped in TState state)
+        where TState : allows ref struct
+        where TProcessor : struct, INativeReadOnlySpanProcessor<T, TState, TResult>
+    {
+        NativeTransferControl<T> payload = Payload;
+        payload.Control.EnterRead(_slot, _version);
+        Exception? callbackFailure = null;
+        try { return TProcessor.Invoke(payload.GetView(_offset, _length).AsSpan(), in state); }
+        catch (Exception failure) { callbackFailure = failure; throw; }
+        finally { EndRead(payload, callbackFailure); }
+    }
+
     private static void EndRead(NativeTransferControl<T> payload, Exception? callbackFailure)
     {
         try { payload.Control.ExitRead(payload); }

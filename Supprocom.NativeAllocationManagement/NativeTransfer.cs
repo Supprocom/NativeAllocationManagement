@@ -75,6 +75,15 @@ public readonly struct NativeTransfer<T> : IDisposable
     public TResult Read<TResult>(NativeLeaseFunc<T, TResult> action) =>
         GetControl(nameof(Read)).Read(_authorityVersion, action);
 
+    /// <summary>Runs one compile-time processor over the initialized native span.</summary>
+    /// <typeparam name="TState">The caller state type.</typeparam>
+    /// <typeparam name="TResult">The result type, which cannot contain the borrowed span.</typeparam>
+    /// <typeparam name="TProcessor">The processor; its static member is called without a delegate.</typeparam>
+    public TResult Process<TState, TResult, TProcessor>(scoped in TState state)
+        where TState : allows ref struct
+        where TProcessor : struct, INativeSpanProcessor<T, TState, TResult> =>
+        GetControl(nameof(Process)).Process<TState, TResult, TProcessor>(_authorityVersion, in state);
+
     /// <summary>Releases this unique binding exactly once.</summary>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1065", Justification = "Disposal rejects stale authority and active bounded use before freeing native memory.")]
     public void Dispose() => GetControl(nameof(Dispose)).Dispose(_authorityVersion);
@@ -311,6 +320,38 @@ internal partial class NativeTransferControl<T>
             try
             {
                 return action(token.GetView<T>());
+            }
+            finally
+            {
+                token.Dispose();
+            }
+        }
+        finally
+        {
+            ExitTransferOperation();
+            GC.KeepAlive(this);
+        }
+    }
+
+    internal TResult Process<TState, TResult, TProcessor>(long authorityVersion, scoped in TState state)
+        where TState : allows ref struct
+        where TProcessor : struct, INativeSpanProcessor<T, TState, TResult>
+    {
+        EnterTransferOperation(authorityVersion, nameof(NativeTransfer<T>.Process));
+        try
+        {
+            if (_kernel is null)
+            {
+                unsafe
+                {
+                    return TProcessor.Invoke(new Span<T>((void*)_block.Pointer, _length), in state);
+                }
+            }
+
+            NativeOperationToken token = EnterKernelOperation(nameof(NativeTransfer<T>.Process));
+            try
+            {
+                return TProcessor.Invoke(token.GetView<T>().AsSpan(), in state);
             }
             finally
             {

@@ -754,3 +754,8 @@ Supprocom.NativeAllocationManagement.PreparedPooled<T>.AsSpan() -> System.Span<T
 Supprocom.NativeAllocationManagement.ArenaLease<T>.AsSpan() -> System.Span<T>
 Supprocom.NativeAllocationManagement.Local<T>.AsSpan() -> System.Span<T>
 static Supprocom.NativeAllocationManagement.NativeMemoryDiagnostics.DetailedCountersEnabled.get -> bool
+Supprocom.NativeAllocationManagement.INativeReadOnlySpanProcessor<T, TState, TResult>
+Supprocom.NativeAllocationManagement.INativeReadOnlySpanProcessor<T, TState, TResult>.Invoke(scoped System.ReadOnlySpan<T> values, scoped in TState state) -> TResult
+Supprocom.NativeAllocationManagement.NativeTransfer<T>.Process<TState, TResult, TProcessor>(scoped in TState state) -> TResult
+Supprocom.NativeAllocationManagement.NativeShared<T>.Process<TState, TResult, TProcessor>(scoped in TState state) -> TResult
+Supprocom.NativeAllocationManagement.ConcurrentPooled<T>.Process<TState, TResult, TProcessor>(int length, scoped in TState state) -> TResult

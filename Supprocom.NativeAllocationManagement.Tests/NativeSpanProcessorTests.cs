@@ -77,7 +77,30 @@ public sealed class NativeSpanProcessorTests
         }
     }
 
+    [Fact]
+    public void SmartPointerAndConcurrentProcessorsReadTheirOwnedRanges()
+    {
+        int state = 1;
+        NativeTransfer<int> direct = BuildTransfer([3, 4, 5]);
+        Assert.Equal(12, direct.Process<int, int, SumValues>(in state));
+        Assert.Equal(2 + 1, direct.Process<int, int, WriteIndexPlusState>(in state));
+        NativeTransfer<int>? source = direct;
+        NativeShared<int> shared = NativeShared<int>.Create(ref source, new NativeSharingPreparation(2, 0));
+        Assert.Equal(1 + 2 + 3, shared.Process<int, int, SumReadOnly>(in state));
+        shared.Dispose();
+
+        using NativeConcurrentPool<int> pool = new(preLease: 8);
+        NativeTransfer<int> pooled = pool.RentTransferable(3, static writer => writer.Fill(2));
+        Assert.Equal(6, pooled.Process<int, int, SumValues>(in state));
+        pooled.Dispose();
+        Assert.Throws<ObjectDisposedException>(() => pooled.Process<int, int, SumValues>(in state));
+        using ConcurrentPooled<int> lease = pool.Rent(4, static writer => writer.Fill(5));
+        Assert.Equal(10, lease.Process<int, int, SumValues>(2, in state));
+    }
+
     [Theory]
+    [InlineData("int s = 1; using NativeBuilder<int> builder = new(4); builder.Append(1); NativeTransfer<int> t = builder.Complete(); try { _ = t.Process<int, int, P>(in s); } finally { t.Dispose(); }")]
+    [InlineData("int s = 1; using NativeConcurrentPool<int> pool = new(4); using ConcurrentPooled<int> lease = pool.Rent(4, static w => w.Fill(0)); _ = lease.Process<int, int, P>(4, in s);")]
     [InlineData("int s = 1; using NativePool<int> pool = new(4); _ = pool.Process<int, int, P>(4, 0, in s);")]
     [InlineData("int s = 1; using NativePool<int> pool = new(4); using Pooled<int> lease = pool.Rent(4, 0); _ = lease.Process<int, int, P>(4, in s);")]
     [InlineData("int s = 1; using NativeArena arena = new(); { ArenaLease<int> lease = arena.Scratch<int>(4, 0); _ = lease.Process<int, int, P>(in s); } arena.Reset();")]
@@ -178,6 +201,27 @@ public sealed class NativeSpanProcessorTests
 
             return sum;
         }
+    }
+
+    private readonly struct SumReadOnly : INativeReadOnlySpanProcessor<int, int, int>
+    {
+        public static int Invoke(scoped ReadOnlySpan<int> values, scoped in int state)
+        {
+            int sum = 0;
+            foreach (ref readonly int value in values)
+            {
+                sum += value;
+            }
+
+            return sum;
+        }
+    }
+
+    private static NativeTransfer<int> BuildTransfer(int[] values)
+    {
+        using NativeBuilder<int> builder = new(values.Length);
+        builder.Append(values);
+        return builder.Complete();
     }
 
     private readonly struct Throwing : INativeSpanProcessor<int, int, int>

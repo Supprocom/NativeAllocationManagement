@@ -136,6 +136,28 @@ public readonly ref struct ConcurrentPooled<T>
         }
     }
 
+    /// <summary>Processes one logical prefix with a compile-time processor during one admitted operation.</summary>
+    /// <typeparam name="TState">The caller state type.</typeparam>
+    /// <typeparam name="TResult">The result type, which cannot contain the borrowed span.</typeparam>
+    /// <typeparam name="TProcessor">The processor; its static member is called without a delegate.</typeparam>
+    /// <remarks>Requires storage without managed references.</remarks>
+    public TResult Process<TState, TResult, TProcessor>(
+        int length,
+        scoped in TState state)
+        where TState : allows ref struct
+        where TProcessor : struct, INativeSpanProcessor<T, TState, TResult>
+    {
+        NativeOperationToken token = EnterOperation(nameof(Process));
+        try
+        {
+            return TProcessor.Invoke(token.GetView<T>(length).AsSpan(), in state);
+        }
+        finally
+        {
+            token.Dispose();
+        }
+    }
+
     /// <summary>Returns this synchronized lease exactly once.</summary>
     public void Dispose() =>
         GetKernel(nameof(Dispose)).ReturnLease(
