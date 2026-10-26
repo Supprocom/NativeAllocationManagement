@@ -51,7 +51,7 @@ public sealed unsafe partial class NativePool<T>
         ArgumentOutOfRangeException.ThrowIfNegative(preLease);
         _returnMemoryOnDispose = returnMemoryOnDispose;
         _budget = budget;
-        _ownerThreadId = Environment.CurrentManagedThreadId;
+        _ownerThreadId = NativeThreadIdentity.Current;
         _slabs = new Slab[4];
         _lifecycle = NativeOwnerLifecycle.Active;
 
@@ -244,7 +244,7 @@ public sealed unsafe partial class NativePool<T>
         long token,
         string operation)
     {
-        ValidateOwner(operation);
+        ValidateLeaseOwner(operation);
         ref Slab slab = ref ValidateLease(
             slabIndex,
             token,
@@ -261,7 +261,7 @@ public sealed unsafe partial class NativePool<T>
     // keep the actual finalizable owner alive through the last native access.
     internal void Clear(int slabIndex, long token, int length)
     {
-        ValidateOwner(nameof(Pooled<T>.Clear));
+        ValidateLeaseOwner(nameof(Pooled<T>.Clear));
         ref Slab slab = ref ValidateLease(slabIndex, token, nameof(Pooled<T>.Clear));
         NativeMemoryAccounting.ClearStorage(new Span<T>((void*)slab.Pointer, length));
         GC.KeepAlive(this);
@@ -269,7 +269,7 @@ public sealed unsafe partial class NativePool<T>
 
     internal void CopyFrom(int slabIndex, long token, scoped ReadOnlySpan<T> source)
     {
-        ValidateOwner(nameof(Pooled<T>.CopyFrom));
+        ValidateLeaseOwner(nameof(Pooled<T>.CopyFrom));
         ref Slab slab = ref ValidateLease(slabIndex, token, nameof(Pooled<T>.CopyFrom));
         NativeMemoryAccounting.CopyRange(source, new Span<T>((void*)slab.Pointer, source.Length));
         GC.KeepAlive(this);
@@ -277,7 +277,7 @@ public sealed unsafe partial class NativePool<T>
 
     internal void CopyTo(int slabIndex, long token, int length, scoped Span<T> destination)
     {
-        ValidateOwner(nameof(Pooled<T>.CopyTo));
+        ValidateLeaseOwner(nameof(Pooled<T>.CopyTo));
         ref Slab slab = ref ValidateLease(slabIndex, token, nameof(Pooled<T>.CopyTo));
         NativeMemoryAccounting.CopyRange(new ReadOnlySpan<T>((void*)slab.Pointer, length), destination);
         GC.KeepAlive(this);
@@ -295,7 +295,7 @@ public sealed unsafe partial class NativePool<T>
 
     internal long Move(int slabIndex, long token)
     {
-        ValidateOwner(nameof(Pooled<T>.Move));
+        ValidateLeaseOwner(nameof(Pooled<T>.Move));
         ref Slab slab = ref ValidateLease(slabIndex, token, nameof(Pooled<T>.Move));
         if (slab.BorrowCount != 0)
         {
@@ -320,7 +320,7 @@ public sealed unsafe partial class NativePool<T>
         long token,
         int length)
     {
-        ValidateOwner(nameof(Pooled<T>.Dispose));
+        ValidateLeaseOwner(nameof(Pooled<T>.Dispose));
         ref Slab slab = ref ValidateLease(
             slabIndex,
             token,
@@ -792,6 +792,18 @@ public sealed unsafe partial class NativePool<T>
         return ref slab;
     }
 
+    // Pooled<T> is a ref struct: safe code cannot store it on the heap, capture
+    // it or carry it across an await, so every lease operation runs on the thread
+    // whose Rent passed ValidateOwner. Only the lifecycle can change since then.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void ValidateLeaseOwner(string operation)
+    {
+        if (_lifecycle != NativeOwnerLifecycle.Active)
+        {
+            ThrowDisposed(operation);
+        }
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void ValidateOwner(string operation)
     {
@@ -805,7 +817,7 @@ public sealed unsafe partial class NativePool<T>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void ValidateThread(string operation)
     {
-        if (Environment.CurrentManagedThreadId == _ownerThreadId)
+        if (NativeThreadIdentity.Current == _ownerThreadId)
         {
             return;
         }

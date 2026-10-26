@@ -108,32 +108,29 @@ public sealed class NativePooledMoveTests
 
     [Fact]
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "Capture all foreign-thread failures for assertions on the actual pool construction thread; an unhandled worker exception would terminate the test process.")]
-    public void WrongThreadCannotPublishAnotherTokenOrChangeTheOriginalLease()
+    public void WrongThreadCannotRentOrChangeTheOriginalLease()
     {
         using NativePool<int> pool = CreatePool(budget: null);
         Pooled<int> source = pool.Rent(2, static writer => writer.Fill(42));
         NativePool<int> kernel = pool;
-        // Exercise the public value operation on another thread, not a captured
-        // ref structure. Construction uses internal test authority over slot zero.
+        // A lease is a ref struct and cannot reach another thread through safe
+        // code; the pool itself rejects foreign-thread acquisition.
         Exception? failure = null;
-        int remainingLength = 0;
         Thread worker = new(() =>
         {
-            Pooled<int> foreign = new(kernel, 0, 1, 2, 2);
             try
             {
-                _ = Pooled<int>.Move(ref foreign);
+                Pooled<int> foreign = kernel.Rent(2, static writer => writer.Fill(7));
+                foreign.Dispose();
             }
             catch (Exception exception)
             {
                 failure = exception;
             }
-            remainingLength = foreign.Length;
         });
         worker.Start();
         Assert.True(worker.Join(TimeSpan.FromSeconds(5)));
-        Assert.Equal(nameof(Pooled<int>.Move), Assert.IsType<NativeAllocationStateException>(failure).Operation);
-        Assert.Equal(2, remainingLength);
+        Assert.Equal("Rent", Assert.IsType<NativeAllocationStateException>(failure).Operation);
         Pooled<int> destination = Pooled<int>.Move(ref source);
         Assert.Equal(84, destination.Read(static view => view[0] + view[1]));
         destination.Dispose();

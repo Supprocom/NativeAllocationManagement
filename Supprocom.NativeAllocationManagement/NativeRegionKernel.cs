@@ -35,7 +35,7 @@ internal sealed unsafe class NativeRegionKernel
     {
         _returnMemoryOnDispose = returnMemoryOnDispose;
         _budget = budget;
-        _ownerThreadId = Environment.CurrentManagedThreadId;
+        _ownerThreadId = NativeThreadIdentity.Current;
         _lifecycle = NativeOwnerLifecycle.Active;
 
         if (preAllocateBytes != 0)
@@ -56,7 +56,7 @@ internal sealed unsafe class NativeRegionKernel
     {
         ArgumentNullException.ThrowIfNull(initializer);
         ArgumentOutOfRangeException.ThrowIfNegative(length);
-        ValidateActive(nameof(NativeRegion.Lease));
+        ValidateLeaseActive(nameof(NativeRegion.Lease));
         if (_activeBorrowCount < 0)
         {
             ThrowActiveOperation(nameof(NativeRegion.Lease));
@@ -119,7 +119,7 @@ internal sealed unsafe class NativeRegionKernel
             throw CreateDisposed(operation);
         }
 
-        if (Environment.CurrentManagedThreadId != _ownerThreadId)
+        if (NativeThreadIdentity.Current != _ownerThreadId)
         {
             throw CreateState(
                 operation,
@@ -127,10 +127,21 @@ internal sealed unsafe class NativeRegionKernel
         }
     }
 
+    // NativeRegion and Local<T> are ref structs: safe code cannot move them off
+    // the construction thread, so per-lease paths only check the lifecycle.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void ValidateLeaseActive(string operation)
+    {
+        if (_lifecycle != NativeOwnerLifecycle.Active)
+        {
+            throw CreateDisposed(operation);
+        }
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void EnterBorrow(string operation)
     {
-        ValidateActive(operation);
+        ValidateLeaseActive(operation);
         _activeBorrowCount++;
     }
 
@@ -173,7 +184,7 @@ internal sealed unsafe class NativeRegionKernel
 
     internal NativeOwnerDiagnosticSnapshot GetDiagnosticSnapshot()
     {
-        if (Environment.CurrentManagedThreadId != _ownerThreadId)
+        if (NativeThreadIdentity.Current != _ownerThreadId)
         {
             throw CreateState(nameof(NativeRegion.CaptureDiagnosticSnapshot),
                 "NativeRegion is confined to its construction thread.");
@@ -215,7 +226,7 @@ internal sealed unsafe class NativeRegionKernel
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA1816", Justification = "Internal region-kernel disposal disarms its emergency finalizer; the outer owner exposes disposal.")]
     internal void Dispose()
     {
-        if (Environment.CurrentManagedThreadId != _ownerThreadId)
+        if (NativeThreadIdentity.Current != _ownerThreadId)
         {
             throw CreateState(
                 nameof(Dispose),

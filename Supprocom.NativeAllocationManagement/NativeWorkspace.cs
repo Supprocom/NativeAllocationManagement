@@ -44,7 +44,7 @@ public sealed class NativeWorkspace<T> : IDisposable
     private NativeWorkspace(int preLease, NativeMemoryBudget? budget)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(preLease);
-        _ownerThreadId = Environment.CurrentManagedThreadId;
+        _ownerThreadId = NativeThreadIdentity.Current;
         _block = NativeBlockAllocator.Allocate(
             checked((nuint)preLease * (nuint)Unsafe.SizeOf<T>()),
             nameof(NativeWorkspace<T>),
@@ -384,7 +384,7 @@ public sealed class NativeWorkspace<T> : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void ValidateOwnerThread(string operation)
     {
-        if (Environment.CurrentManagedThreadId != _ownerThreadId)
+        if (NativeThreadIdentity.Current != _ownerThreadId)
         {
             throw new InvalidOperationException(
                 $"NativeWorkspace.{operation} requires its owning thread.");

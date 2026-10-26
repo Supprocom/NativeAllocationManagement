@@ -46,7 +46,7 @@ public sealed unsafe partial class NativeArena
         Id = NativeOwnerIdentity.Next();
         _returnMemoryOnDispose = returnMemoryOnDispose;
         _budget = budget;
-        _ownerThreadId = Environment.CurrentManagedThreadId;
+        _ownerThreadId = NativeThreadIdentity.Current;
         _lifecycle = NativeOwnerLifecycle.Active;
         if (preAllocateBytes != 0)
         {
@@ -153,7 +153,7 @@ public sealed unsafe partial class NativeArena
         _peakInitializedPayloadBytes = Math.Max(_peakInitializedPayloadBytes, _initializedPayloadBytes);
     }
 
-    [MethodImpl(MethodImplOptions.NoInlining)]
+    // Only lifecycle and epoch checks remain; let the JIT inline the entry.
     internal IntPtr EnterBorrow(
         IntPtr pointer,
         int length,
@@ -177,6 +177,8 @@ public sealed unsafe partial class NativeArena
         _activeBorrowCount--;
     }
 
+    // ArenaLease<T> is a ref struct: safe code cannot move it to another thread,
+    // so its operations run where Scratch already validated the owner thread.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void ValidateHandle(
         ulong generation,
@@ -184,7 +186,11 @@ public sealed unsafe partial class NativeArena
         bool scoped,
         string operation)
     {
-        ValidateActive(operation);
+        if (_lifecycle != NativeOwnerLifecycle.Active)
+        {
+            ThrowDisposed(operation);
+        }
+
         if (generation != _generation
             || (scoped && scopeEpoch != _scopeEpoch))
         {
@@ -759,7 +765,7 @@ public sealed unsafe partial class NativeArena
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void ValidateThread(string operation)
     {
-        if (Environment.CurrentManagedThreadId != _ownerThreadId)
+        if (NativeThreadIdentity.Current != _ownerThreadId)
         {
             ThrowWrongThread(operation);
         }

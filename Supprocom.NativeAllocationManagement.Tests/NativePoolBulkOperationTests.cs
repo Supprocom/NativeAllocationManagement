@@ -34,17 +34,14 @@ public sealed class NativePoolBulkOperationTests
     [InlineData("Clear")]
     [InlineData("CopyFrom")]
     [InlineData("CopyTo")]
-    public void DefaultStaleForeignAndDisposedAuthorityCannotReachPayload(string operation)
+    public void DefaultStaleAndDisposedAuthorityCannotReachPayload(string operation)
     {
+        // A Pooled<T> is a ref struct, so safe code cannot carry one to another
+        // thread; lease operations rely on Rent's owner-thread check instead.
         Assert.Throws<NativeAllocationUninitializedException>(() => Execute(default, operation));
         using NativePool<int> pool = new(4, NativeMemoryReturn.ToNativeMemory);
         using (Pooled<int> original = pool.Rent(4, 42))
         {
-            Exception? failure = null;
-            Thread worker = new(() => failure = Record.Exception(() => ExecuteAlias(pool, 1, operation)));
-            worker.Start();
-            Assert.True(worker.Join(TimeSpan.FromSeconds(10)));
-            Assert.Equal(operation, Assert.IsType<NativeAllocationStateException>(failure).Operation);
             Assert.Equal(-1, original.Read(static view => view.AsSpan().IndexOfAnyExcept(42)));
         }
         using (Pooled<int> current = pool.Rent(4, 17))
@@ -102,7 +99,7 @@ public sealed class NativePoolBulkOperationTests
         Assert.Equal(0, pool.CurrentGenerationActiveOperationsForTest);
     }
 
-    [SuppressMessage("Reliability", "CA2000", Justification = "This adversarial fixture forges a non-owning stale or foreign-thread alias. The test retains and disposes the actual owning lease; disposing the forged authority would obscure the tested rejection or return another lease.")]
+    [SuppressMessage("Reliability", "CA2000", Justification = "This adversarial fixture forges a non-owning stale alias. The test retains and disposes the actual owning lease; disposing the forged authority would obscure the tested rejection or return another lease.")]
     private static void ExecuteAlias(NativePool<int> pool, long token, string operation)
     {
         Pooled<int> alias = new(pool, 0, token, 4, 4);

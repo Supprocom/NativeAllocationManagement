@@ -24,7 +24,7 @@ public sealed unsafe partial class NativeArena
         Id = NativeOwnerIdentity.Next();
         _returnMemoryOnDispose = NativeMemoryReturn.ToNativeMemory;
         _budget = budget;
-        _ownerThreadId = Environment.CurrentManagedThreadId;
+        _ownerThreadId = NativeThreadIdentity.Current;
         _lifecycle = NativeOwnerLifecycle.Active;
         _prepared = true;
         _preparation = preparation;

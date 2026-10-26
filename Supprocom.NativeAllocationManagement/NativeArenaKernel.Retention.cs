@@ -24,7 +24,7 @@ public sealed unsafe partial class NativeArena
         ArgumentOutOfRangeException.ThrowIfLessThan(retentionPolicy.OrdinarySegmentCeilingBytes, SegmentAlignment, nameof(retentionPolicy));
         _returnMemoryOnDispose = returnMemoryOnDispose;
         _budget = budget;
-        _ownerThreadId = Environment.CurrentManagedThreadId;
+        _ownerThreadId = NativeThreadIdentity.Current;
         _lifecycle = NativeOwnerLifecycle.Active;
         _retentionEnabled = true;
         _retentionPolicy = retentionPolicy;

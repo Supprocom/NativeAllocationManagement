@@ -47,7 +47,7 @@ public abstract unsafe class NativePreparedPoolBase
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(preparation.SlotCapacity, nameof(preparation));
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(preparation.SlotsPerPage, nameof(preparation));
         _budget = budget;
-        _ownerThreadId = Environment.CurrentManagedThreadId;
+        _ownerThreadId = NativeThreadIdentity.Current;
         _preparation = preparation;
         nuint slotBytes = CalculateByteLength(preparation.SlotCapacity, elementSize);
         // This owner is thread-confined and exposes ordinary typed spans, not
@@ -247,7 +247,7 @@ public abstract unsafe class NativePreparedPoolBase
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void ValidateColdThread(string operation)
     {
-        if (Environment.CurrentManagedThreadId == _ownerThreadId)
+        if (NativeThreadIdentity.Current == _ownerThreadId)
         {
             return;
         }

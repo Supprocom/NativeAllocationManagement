@@ -229,7 +229,7 @@ public sealed unsafe class NativePreparedPool<T> : NativePreparedPoolBase, IDisp
     [MethodImpl(MethodImplOptions.NoInlining)]
     internal IntPtr EnterBorrow(int index, long token, string operation)
     {
-        ValidateOwner(operation);
+        ValidateLeaseOwner(operation);
         ref Slot slot = ref ValidateLease(index, token, operation);
         slot.BorrowCount++;
         return slot.Pointer;
@@ -240,7 +240,7 @@ public sealed unsafe class NativePreparedPool<T> : NativePreparedPoolBase, IDisp
 
     internal long Move(int index, long token)
     {
-        ValidateOwner(nameof(PreparedPooled<T>.Move));
+        ValidateLeaseOwner(nameof(PreparedPooled<T>.Move));
         ref Slot slot = ref ValidateLease(index, token, nameof(PreparedPooled<T>.Move));
         if (slot.BorrowCount != 0)
         {
@@ -260,7 +260,7 @@ public sealed unsafe class NativePreparedPool<T> : NativePreparedPoolBase, IDisp
     [MethodImpl(MethodImplOptions.NoInlining)]
     internal void Return(int index, long token, int length)
     {
-        ValidateOwner(nameof(PreparedPooled<T>.Dispose));
+        ValidateLeaseOwner(nameof(PreparedPooled<T>.Dispose));
         ref Slot slot = ref ValidateLease(index, token, nameof(PreparedPooled<T>.Dispose));
         if (slot.BorrowCount != 0)
         {
@@ -323,6 +323,17 @@ public sealed unsafe class NativePreparedPool<T> : NativePreparedPoolBase, IDisp
         if (DisposeCore())
         {
             GC.SuppressFinalize(this);
+        }
+    }
+
+    // PreparedPooled<T> is a ref struct: safe code cannot move it to another
+    // thread, so lease operations run where Rent already validated the owner.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void ValidateLeaseOwner(string operation)
+    {
+        if (_lifecycle != NativeOwnerLifecycle.Active)
+        {
+            ThrowDisposed(operation);
         }
     }
 
@@ -438,7 +449,7 @@ public sealed unsafe class NativePreparedPool<T> : NativePreparedPoolBase, IDisp
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void ValidateThread(string operation)
     {
-        if (Environment.CurrentManagedThreadId == _ownerThreadId)
+        if (NativeThreadIdentity.Current == _ownerThreadId)
         {
             return;
         }
