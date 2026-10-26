@@ -459,16 +459,22 @@ public readonly record struct NativeOwnerDiagnosticSnapshot(
 
 /// <summary>Provides process-local physical storage counters for measurement and diagnostics.</summary>
 /// <remarks>
-/// Counters are always active. Owned extents include native headers and known
-/// backend alignment, but exclude provider-owned buffers and opaque allocator
-/// overhead. Detached and retired categories overlap outstanding storage and
-/// must not be added to it. Snapshots allocate no managed storage; capture at a
-/// quiescent boundary to reconcile fields while concurrent producers advance.
-/// Hot history uses a fixed thread-local bank with atomic fallback, never an
-/// unbounded registry of owners or historical threads.
+/// Byte gauges (outstanding, peak, detached and retired bytes) are always active.
+/// Per-event counters (allocations, reallocations, frees, detached generations,
+/// clears, copies, reuse and bump traversal) cost cycles on hot paths and run only
+/// when the <c>Supprocom.NativeAllocationManagement.DetailedCounters</c> AppContext
+/// switch, or the <c>NAM_DETAILED_COUNTERS</c> environment variable, is set when the
+/// process starts; otherwise they stay zero. Owned extents include native headers and
+/// known backend alignment, but exclude provider-owned buffers and opaque allocator
+/// overhead. Detached and retired categories overlap outstanding storage and must not
+/// be added to it. Snapshots allocate no managed storage; capture at a quiescent
+/// boundary to reconcile fields while concurrent producers advance.
 /// </remarks>
 public static class NativeMemoryDiagnostics
 {
+    /// <summary>Gets whether per-event counters were enabled for this process at startup.</summary>
+    public static bool DetailedCountersEnabled => NativeMemoryAccounting.DetailedCounters;
+
     /// <summary>Reads the current physical native storage counters.</summary>
     public static NativeMemoryStatistics Snapshot() => NativeMemoryAccounting.SnapshotPublic();
 }

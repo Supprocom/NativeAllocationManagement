@@ -753,3 +753,4 @@ Supprocom.NativeAllocationManagement.Pooled<T>.AsSpan() -> System.Span<T>
 Supprocom.NativeAllocationManagement.PreparedPooled<T>.AsSpan() -> System.Span<T>
 Supprocom.NativeAllocationManagement.ArenaLease<T>.AsSpan() -> System.Span<T>
 Supprocom.NativeAllocationManagement.Local<T>.AsSpan() -> System.Span<T>
+static Supprocom.NativeAllocationManagement.NativeMemoryDiagnostics.DetailedCountersEnabled.get -> bool

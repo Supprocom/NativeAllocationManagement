@@ -2,9 +2,38 @@ using System.Runtime.CompilerServices;
 
 namespace Supprocom.NativeAllocationManagement;
 
-// Always-on production accounting. Native fault injection is a separate concern.
+// Byte gauges (outstanding, peak, detached, retired) are always on. Per-event
+// counters (allocations, frees, clears, copies, reuse, traversal) cost cycles on
+// hot paths, so they run only when the DetailedCounters switch is set at startup;
+// the static readonly flag lets the JIT remove them otherwise. Native fault
+// injection is a separate concern.
 internal static class NativeMemoryAccounting
 {
+    internal const string DetailedCountersSwitch = "Supprocom.NativeAllocationManagement.DetailedCounters";
+
+    internal static bool DetailedCounters
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => DetailedSwitch.Enabled;
+    }
+
+    // A separate holder keeps this class free of a type initializer.
+    private static class DetailedSwitch
+    {
+        internal static readonly bool Enabled = Read();
+
+        private static bool Read()
+        {
+            string? environment = Environment.GetEnvironmentVariable("NAM_DETAILED_COUNTERS");
+            if (environment is not null)
+            {
+                return environment is "1" || string.Equals(environment, "true", StringComparison.OrdinalIgnoreCase);
+            }
+
+            return AppContext.TryGetSwitch(DetailedCountersSwitch, out bool enabled) && enabled;
+        }
+    }
+
     private sealed class NativeHotMetrics
     {
         internal long Epoch = long.MinValue;
@@ -89,7 +118,13 @@ internal static class NativeMemoryAccounting
 
     internal static long CurrentMetricsEpoch => Volatile.Read(ref _metricsEpoch);
 
-    internal static void PrepareThread() => _ = CurrentHotMetrics();
+    internal static void PrepareThread()
+    {
+        if (DetailedCounters)
+        {
+            _ = CurrentHotMetrics();
+        }
+    }
 
     // Measurement reset is internal and requires quiescent producers.
     // Fault-injection state lives elsewhere and cannot disable these counters.
@@ -269,13 +304,17 @@ internal static class NativeMemoryAccounting
     internal static long RecordAllocation(nuint byteLength, bool zeroed)
     {
         long metricsEpoch = CurrentMetricsEpoch;
-        AddAtomicHistory(ref _allocationCount, 1, ref _historyOverflowed);
+        if (DetailedCounters)
+        {
+            AddAtomicHistory(ref _allocationCount, 1, ref _historyOverflowed);
+            if (zeroed)
+            {
+                AddAtomicHistory(ref _zeroedAllocationCount, 1, ref _historyOverflowed);
+            }
+        }
+
         long current = Interlocked.Add(ref _outstandingNativeBytes, checked((long)byteLength));
         RecordPeak(current);
-        if (zeroed)
-        {
-            AddAtomicHistory(ref _zeroedAllocationCount, 1, ref _historyOverflowed);
-        }
 
         return metricsEpoch;
     }
@@ -285,7 +324,11 @@ internal static class NativeMemoryAccounting
         nuint byteLength,
         long previousMetricsEpoch)
     {
-        AddAtomicHistory(ref _reallocationCount, 1, ref _historyOverflowed);
+        if (DetailedCounters)
+        {
+            AddAtomicHistory(ref _reallocationCount, 1, ref _historyOverflowed);
+        }
+
         if (previousByteLength == 0 || previousMetricsEpoch != CurrentMetricsEpoch)
         {
             // A pre-measurement block enters this epoch on successful resizing.
@@ -317,7 +360,11 @@ internal static class NativeMemoryAccounting
             return;
         }
 
-        AddAtomicHistory(ref _freeCount, 1, ref _historyOverflowed);
+        if (DetailedCounters)
+        {
+            AddAtomicHistory(ref _freeCount, 1, ref _historyOverflowed);
+        }
+
         long bytes = checked((long)byteLength);
         Interlocked.Add(ref _outstandingNativeBytes, -bytes);
         if (detached)
@@ -328,7 +375,7 @@ internal static class NativeMemoryAccounting
 
     internal static void RecordDetachedGeneration(long metricsEpoch)
     {
-        if (metricsEpoch == CurrentMetricsEpoch)
+        if (DetailedCounters && metricsEpoch == CurrentMetricsEpoch)
         {
             AddAtomicHistory(ref _detachedGenerationCount, 1, ref _historyOverflowed);
         }
@@ -409,6 +456,11 @@ internal static class NativeMemoryAccounting
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static void RecordBumpTraversalVisit()
     {
+        if (!DetailedCounters)
+        {
+            return;
+        }
+
         NativeHotMetrics metrics = CurrentHotMetrics();
         AddHotHistory(metrics, ref metrics.BumpTraversalVisitCount, 1);
     }
@@ -416,7 +468,8 @@ internal static class NativeMemoryAccounting
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static void RecordCopiedRange<T>(scoped ReadOnlySpan<T> source, scoped Span<T> destination)
     {
-        if (source.IsEmpty || Unsafe.AreSame(
+        if (!DetailedCounters
+            || source.IsEmpty || Unsafe.AreSame(
             ref System.Runtime.InteropServices.MemoryMarshal.GetReference(source),
             ref System.Runtime.InteropServices.MemoryMarshal.GetReference(destination)))
         {
@@ -432,7 +485,8 @@ internal static class NativeMemoryAccounting
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static void CopyRange<T>(scoped ReadOnlySpan<T> source, scoped Span<T> destination)
     {
-        if (source.IsEmpty || Unsafe.AreSame(
+        if (!DetailedCounters
+            || source.IsEmpty || Unsafe.AreSame(
             ref System.Runtime.InteropServices.MemoryMarshal.GetReference(source),
             ref System.Runtime.InteropServices.MemoryMarshal.GetReference(destination)))
         {
@@ -452,6 +506,12 @@ internal static class NativeMemoryAccounting
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static void ClearStorage<T>(scoped Span<T> values)
     {
+        if (!DetailedCounters)
+        {
+            values.Clear();
+            return;
+        }
+
         if (values.IsEmpty)
         {
             return;
@@ -470,6 +530,11 @@ internal static class NativeMemoryAccounting
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static void RecordReusedNativeSegment()
     {
+        if (!DetailedCounters)
+        {
+            return;
+        }
+
         NativeHotMetrics metrics = CurrentHotMetrics();
         AddHotHistory(metrics, ref metrics.ReusedNativeSegmentCount, 1);
     }
@@ -485,6 +550,11 @@ internal static class NativeMemoryAccounting
         int rangeCount,
         nuint byteLength)
     {
+        if (!DetailedCounters)
+        {
+            return;
+        }
+
         NativeHotMetrics metrics = CurrentHotMetrics();
         AddHotHistory(metrics, ref metrics.ReclaimedRangeReuseCount, rangeCount);
         AddHotHistory(metrics, ref metrics.ReclaimedRangeReuseBytes, checked((long)byteLength));
@@ -495,6 +565,11 @@ internal static class NativeMemoryAccounting
         nuint byteLength,
         nuint writtenBytes)
     {
+        if (!DetailedCounters)
+        {
+            return;
+        }
+
         NativeHotMetrics metrics = CurrentHotMetrics();
         AddHotHistory(metrics, ref metrics.StorageClearCount, 1);
         AddHotHistory(metrics, ref metrics.StorageClearBytes, checked((long)byteLength));

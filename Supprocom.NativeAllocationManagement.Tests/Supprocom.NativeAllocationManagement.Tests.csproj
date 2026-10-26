@@ -10,6 +10,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Diagnostic contracts and measurement workers read per-event counters. -->
+    <RuntimeHostConfigurationOption Include="Supprocom.NativeAllocationManagement.DetailedCounters" Value="true" />
+  </ItemGroup>
+
+  <ItemGroup>
     <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
       <_Parameter1>NAM.RepositoryRoot</_Parameter1>
       <_Parameter2>$(MSBuildProjectDirectory)/..</_Parameter2>
