@@ -85,7 +85,8 @@ internal static class NativeOwnerDiagnosticOracle
         Statistics expected = Statistics.Active(pool.Id, NativeOwnerModel.ThreadConfinedPool, extent, 16, 1);
         try
         {
-            VerifyBoth(pool.GetStatistics(), pool.CaptureDiagnosticSnapshot(), expected, Structural.From(expected, epoch));
+            // The reserved slab starts in the returned-slab cache.
+            VerifyBoth(pool.GetStatistics(), pool.CaptureDiagnosticSnapshot(), expected, Structural.From(expected, epoch) with { OrdinaryTraversalIndex = 0 });
             using (Pooled<int> value = pool.Rent(2, static writer => writer.Fill(7)))
             {
                 expected = expected with { RequestedBytes = 8, InitializedPayloadBytes = 8, PeakInitializedPayloadBytes = 8, AvailableSegmentCount = 0 };

@@ -986,13 +986,13 @@ public sealed class PackageSmokeTests
                             || afterClear.AllocationCount != beforeClear.AllocationCount + 1
                             || afterClear.FreeCount != beforeClear.FreeCount + 1
                             || afterClear.OutstandingNativeBytes != beforeClear.OutstandingNativeBytes
-                            || afterClear.StorageClearCount != beforeClear.StorageClearCount + 2
-                            || afterClear.StorageClearBytes != beforeClear.StorageClearBytes + 16
-                            || afterClear.WrittenClearBytes != beforeClear.WrittenClearBytes + 16
+                            || afterClear.StorageClearCount != beforeClear.StorageClearCount + 1
+                            || afterClear.StorageClearBytes != beforeClear.StorageClearBytes + 8
+                            || afterClear.WrittenClearBytes != beforeClear.WrittenClearBytes + 8
                             || afterClear.ZeroedAllocationCount < beforeClear.ZeroedAllocationCount
                             || afterClear.DetachedGenerationCount < beforeClear.DetachedGenerationCount
                             || afterClear.BumpTraversalVisitCount < beforeClear.BumpTraversalVisitCount) return 18;
-                        System.Console.WriteLine("accounted-clears=2; cleared-bytes=16; final-backing=unchanged");
+                        System.Console.WriteLine("accounted-clears=1; cleared-bytes=8; final-backing=unchanged");
                         NativeMemoryStatistics beforeCopy = NativeMemoryDiagnostics.Snapshot();
                         using (NativeBuilder<int> builder = new(preLease: 2))
                         {
@@ -2655,6 +2655,8 @@ public sealed class PackageSmokeTests
               </PropertyGroup>
               <ItemGroup>
                 <PackageReference Include="Supprocom.NativeAllocationManagement" Version="{package.Version}"{analyzerAssets} />
+                <!-- Consumers verify per-event process counters, which are opt-in. -->
+                <RuntimeHostConfigurationOption Include="Supprocom.NativeAllocationManagement.DetailedCounters" Value="true" />
               </ItemGroup>
               {analyzerRemovalTarget}
             </Project>
