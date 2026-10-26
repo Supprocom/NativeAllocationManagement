@@ -64,12 +64,12 @@ public sealed class NativePoolBulkOperationTests
         lease.Access(view =>
         {
             // Internal fixture authority reproduces an alias without capturing a ref struct.
-            Pooled<int> alias = new(pool, 0, 1, 4, 4);
+            Pooled<int> alias = new(pool, pool.SlabForTest(0), 1, 4, 4);
             alias.CopyFrom(view.AsSpan());
             alias.CopyTo(view.AsSpan());
             Assert.Equal(-1, view.AsSpan().IndexOfAnyExcept(42));
             Assert.Equal(1, pool.CurrentGenerationActiveOperationsForTest);
-            Assert.Throws<InvalidOperationException>(() => pool.Return(0, 1, 4));
+            Assert.Throws<InvalidOperationException>(() => pool.Return(pool.SlabForTest(0), 1, 4));
         });
         Assert.Equal(before, NativeMemoryDiagnostics.Snapshot().CopiedBytes);
         Assert.Equal(0, pool.CurrentGenerationActiveOperationsForTest);
@@ -87,12 +87,12 @@ public sealed class NativePoolBulkOperationTests
         using Pooled<int> current = pool.Rent(4, 42);
         Assert.Throws<ArgumentException>(() =>
         {
-            Pooled<int> alias = new(pool, 0, 1, 4, 4);
+            Pooled<int> alias = new(pool, pool.SlabForTest(0), 1, 4, 4);
             alias.CopyFrom([]);
         });
         Assert.Throws<ArgumentException>(() =>
         {
-            Pooled<int> alias = new(pool, 0, 1, 4, 4);
+            Pooled<int> alias = new(pool, pool.SlabForTest(0), 1, 4, 4);
             alias.CopyTo([]);
         });
         Assert.Equal(-1, current.Read(static view => view.AsSpan().IndexOfAnyExcept(42)));
@@ -102,7 +102,7 @@ public sealed class NativePoolBulkOperationTests
     [SuppressMessage("Reliability", "CA2000", Justification = "This adversarial fixture forges a non-owning stale alias. The test retains and disposes the actual owning lease; disposing the forged authority would obscure the tested rejection or return another lease.")]
     private static void ExecuteAlias(NativePool<int> pool, long token, string operation)
     {
-        Pooled<int> alias = new(pool, 0, token, 4, 4);
+        Pooled<int> alias = new(pool, pool.SlabForTest(0), token, 4, 4);
         Execute(alias, operation);
     }
 

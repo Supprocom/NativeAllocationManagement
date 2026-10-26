@@ -137,8 +137,9 @@ public sealed unsafe partial class NativePool<T>
         ArgumentOutOfRangeException.ThrowIfNegative(length);
         ValidateOwner(nameof(Rent));
         long token = TakeLeaseToken();
+        // Take the index first: growth can replace the slot table.
         int slabIndex = TakeOrAddSlab(length);
-        ref Slab slab = ref _slabs[slabIndex];
+        Slab slab = _slabs[slabIndex];
         // Admission proves the whole range fits. This unmanaged fill cannot
         // invoke user code, so no callback writer or initializing frame is
         // needed. Publish authority only after every element has been written.
@@ -148,7 +149,7 @@ public sealed unsafe partial class NativePool<T>
         _liveLeaseCount++;
         _requestedBytes += checked((long)CalculateByteLength(length));
         _peakInitializedPayloadBytes = Math.Max(_peakInitializedPayloadBytes, _requestedBytes);
-        return new Pooled<T>(this, slabIndex, token, length, slab.Capacity);
+        return new Pooled<T>(this, slab, token, length, slab.Capacity);
     }
 
     /// <summary>Fills a temporary rental, processes it, and returns it before this call completes.</summary>
@@ -169,8 +170,9 @@ public sealed unsafe partial class NativePool<T>
         ArgumentNullException.ThrowIfNull(processor);
         ArgumentOutOfRangeException.ThrowIfNegative(length);
         ValidateOwner(nameof(Process));
+        // Take the index first: growth can replace the slot table.
         int slabIndex = TakeOrAddSlab(length);
-        ref Slab slab = ref _slabs[slabIndex];
+        Slab slab = _slabs[slabIndex];
         Span<T> values = new((void*)slab.Pointer, length);
         values.Fill(value);
         // No public lease escapes this frame. A distinct state rejects every
@@ -185,13 +187,11 @@ public sealed unsafe partial class NativePool<T>
         }
         finally
         {
-            // Only this frame owns the rental. A callback cannot return it, but
-            // nested rents can resize the metadata bank: reacquire its live entry.
-            ref Slab returned = ref _slabs[slabIndex];
-            returned.State = SlabState.Free;
+            // Only this frame owns the rental; a callback cannot return it.
+            slab.State = SlabState.Free;
             _liveLeaseCount--;
             _requestedBytes -= checked((long)CalculateByteLength(length));
-            CacheReturnedSlab(slabIndex, length);
+            CacheReturnedSlab(slab, length);
         }
     }
 
@@ -213,8 +213,9 @@ public sealed unsafe partial class NativePool<T>
     {
         ArgumentOutOfRangeException.ThrowIfNegative(length);
         ValidateOwner(nameof(Process));
+        // Take the index first: growth can replace the slot table.
         int slabIndex = TakeOrAddSlab(length);
-        ref Slab slab = ref _slabs[slabIndex];
+        Slab slab = _slabs[slabIndex];
         Span<T> values = new((void*)slab.Pointer, length);
         values.Fill(value);
         slab.State = SlabState.Processing;
@@ -227,12 +228,10 @@ public sealed unsafe partial class NativePool<T>
         }
         finally
         {
-            // Nested rents can resize the metadata bank: reacquire the live entry.
-            ref Slab returned = ref _slabs[slabIndex];
-            returned.State = SlabState.Free;
+            slab.State = SlabState.Free;
             _liveLeaseCount--;
             _requestedBytes -= checked((long)CalculateByteLength(length));
-            CacheReturnedSlab(slabIndex, length);
+            CacheReturnedSlab(slab, length);
         }
     }
 
@@ -241,7 +240,7 @@ public sealed unsafe partial class NativePool<T>
         NativeLeaseInitializer<T> initializer)
     {
 
-        ref Slab slab = ref _slabs[slabIndex];
+        Slab slab = _slabs[slabIndex];
         slab.State = SlabState.Initializing;
         slab.Token = token;
         _liveLeaseCount++;
@@ -263,15 +262,14 @@ public sealed unsafe partial class NativePool<T>
 
             _requestedBytes += checked((long)CalculateByteLength(length));
             _peakInitializedPayloadBytes = Math.Max(_peakInitializedPayloadBytes, _requestedBytes);
-            // Nested rentals can replace the bank while the initializer runs.
-            ref Slab published = ref _slabs[slabIndex];
-            published.State = SlabState.Leased;
+            // Nested rentals can grow the slot table, but this slab object stays put.
+            slab.State = SlabState.Leased;
             return new Pooled<T>(
                 this,
-                slabIndex,
+                slab,
                 token,
                 length,
-                published.Capacity);
+                slab.Capacity);
         }
         catch
         {
@@ -281,15 +279,12 @@ public sealed unsafe partial class NativePool<T>
     }
 
     internal IntPtr EnterBorrow(
-        int slabIndex,
+        Slab slab,
         long token,
         string operation)
     {
         ValidateLeaseOwner(operation);
-        ref Slab slab = ref ValidateLease(
-            slabIndex,
-            token,
-            operation);
+        ValidateLease(slab, token, operation);
         // Pooled carries the immutable length supplied only after complete
         // initialization. Process bounds a shorter prefix at its public boundary;
         // ordinary bounded access needs no redundant physical-capacity comparison.
@@ -300,10 +295,11 @@ public sealed unsafe partial class NativePool<T>
     // Direct span access validates once and enters no borrow: the span has no
     // ownership, and its scope is the lease's own lexical scope.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal IntPtr GetLeasePointer(int slabIndex, long token, string operation)
+    internal IntPtr GetLeasePointer(Slab slab, long token, string operation)
     {
         ValidateLeaseOwner(operation);
-        IntPtr pointer = ValidateLease(slabIndex, token, operation).Pointer;
+        ValidateLease(slab, token, operation);
+        IntPtr pointer = slab.Pointer;
         GC.KeepAlive(this);
         return pointer;
     }
@@ -311,44 +307,43 @@ public sealed unsafe partial class NativePool<T>
     // Unmanaged bulk operations invoke no user code and cannot reenter this
     // thread-confined owner. Validate authority without a callback borrow frame;
     // keep the actual finalizable owner alive through the last native access.
-    internal void Clear(int slabIndex, long token, int length)
+    internal void Clear(Slab slab, long token, int length)
     {
         ValidateLeaseOwner(nameof(Pooled<T>.Clear));
-        ref Slab slab = ref ValidateLease(slabIndex, token, nameof(Pooled<T>.Clear));
+        ValidateLease(slab, token, nameof(Pooled<T>.Clear));
         NativeMemoryAccounting.ClearStorage(new Span<T>((void*)slab.Pointer, length));
         GC.KeepAlive(this);
     }
 
-    internal void CopyFrom(int slabIndex, long token, scoped ReadOnlySpan<T> source)
+    internal void CopyFrom(Slab slab, long token, scoped ReadOnlySpan<T> source)
     {
         ValidateLeaseOwner(nameof(Pooled<T>.CopyFrom));
-        ref Slab slab = ref ValidateLease(slabIndex, token, nameof(Pooled<T>.CopyFrom));
+        ValidateLease(slab, token, nameof(Pooled<T>.CopyFrom));
         NativeMemoryAccounting.CopyRange(source, new Span<T>((void*)slab.Pointer, source.Length));
         GC.KeepAlive(this);
     }
 
-    internal void CopyTo(int slabIndex, long token, int length, scoped Span<T> destination)
+    internal void CopyTo(Slab slab, long token, int length, scoped Span<T> destination)
     {
         ValidateLeaseOwner(nameof(Pooled<T>.CopyTo));
-        ref Slab slab = ref ValidateLease(slabIndex, token, nameof(Pooled<T>.CopyTo));
+        ValidateLease(slab, token, nameof(Pooled<T>.CopyTo));
         NativeMemoryAccounting.CopyRange(new ReadOnlySpan<T>((void*)slab.Pointer, length), destination);
         GC.KeepAlive(this);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal void ExitBorrow(int slabIndex)
+    internal void ExitBorrow(Slab slab)
     {
-        ref Slab slab = ref _slabs[slabIndex];
         slab.BorrowCount--;
         // Keep the finalizable owner, not just its metadata bank, alive through
         // the borrow even when callers and their cleanup are inlined.
         GC.KeepAlive(this);
     }
 
-    internal long Move(int slabIndex, long token)
+    internal long Move(Slab slab, long token)
     {
         ValidateLeaseOwner(nameof(Pooled<T>.Move));
-        ref Slab slab = ref ValidateLease(slabIndex, token, nameof(Pooled<T>.Move));
+        ValidateLease(slab, token, nameof(Pooled<T>.Move));
         if (slab.BorrowCount != 0)
         {
             ThrowActiveMove();
@@ -368,15 +363,12 @@ public sealed unsafe partial class NativePool<T>
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     internal void Return(
-        int slabIndex,
+        Slab slab,
         long token,
         int length)
     {
         ValidateLeaseOwner(nameof(Pooled<T>.Dispose));
-        ref Slab slab = ref ValidateLease(
-            slabIndex,
-            token,
-            nameof(Pooled<T>.Dispose));
+        ValidateLease(slab, token, nameof(Pooled<T>.Dispose));
         if (slab.BorrowCount != 0)
         {
             ThrowActiveBorrow();
@@ -385,7 +377,7 @@ public sealed unsafe partial class NativePool<T>
         slab.State = SlabState.Free;
         _liveLeaseCount--;
         _requestedBytes -= checked((long)CalculateByteLength(length));
-        CacheReturnedSlab(slabIndex, length);
+        CacheReturnedSlab(slab, length);
     }
 
     /// <summary>Reads the current typed slab state.</summary>
@@ -476,7 +468,7 @@ public sealed unsafe partial class NativePool<T>
         RebuildFreeListsWithoutFreedSlabs();
         for (int index = 0; index < _slabCount; index++)
         {
-            ref Slab slab = ref _slabs[index];
+            Slab slab = _slabs[index];
             if (slab.State != SlabState.Free
                 || released >= byteBudget)
             {
@@ -484,7 +476,7 @@ public sealed unsafe partial class NativePool<T>
             }
 
             nuint bytes = slab.AllocationBytes;
-            FreeSlab(ref slab);
+            FreeSlab(slab);
             slab.State = SlabState.Unused;
             slab.Next = _unusedHead;
             _unusedHead = index;
@@ -563,7 +555,7 @@ public sealed unsafe partial class NativePool<T>
 #pragma warning disable HLQ013 // The slab's writable ref and active prefix are required.
         for (int index = 0; index < _slabCount; index++)
         {
-            ref Slab slab = ref _slabs[index];
+            Slab slab = _slabs[index];
             if (slab.BorrowCount != 0
                 || slab.State is SlabState.Initializing
                     or SlabState.Leased
@@ -643,7 +635,7 @@ public sealed unsafe partial class NativePool<T>
             int current = _freeHeads[sizeClass];
             while (current >= 0)
             {
-                ref Slab slab = ref _slabs[current];
+                Slab slab = _slabs[current];
                 int next = slab.Next;
                 if (slab.Capacity >= length)
                 {
@@ -726,7 +718,8 @@ public sealed unsafe partial class NativePool<T>
                 Token = 0,
                 State = SlabState.Free,
                 MetricsEpoch = metricsEpoch,
-                Ordinal = ordinal
+                Ordinal = ordinal,
+                Index = index
             };
             _retainedBytes = prospectiveBytes;
             if (allocationBytes != 0)
@@ -806,42 +799,37 @@ public sealed unsafe partial class NativePool<T>
         _slabs[index] = new Slab
         {
             State = SlabState.Unused,
-            Next = _unusedHead
+            Next = _unusedHead,
+            Index = index
         };
         _unusedHead = index;
     }
 
     private void RollBackRent(int slabIndex, int length)
     {
-        ref Slab slab = ref _slabs[slabIndex];
+        Slab slab = _slabs[slabIndex];
         slab.State = SlabState.Free;
         _liveLeaseCount--;
-        CacheReturnedSlab(slabIndex, length);
+        CacheReturnedSlab(slab, length);
     }
 
+    // A lease holds its slab object, so validation reads no slot table. Tokens
+    // are never reused, and trimming or disposal resets the object to Unused,
+    // so a stale lease fails here even after its slot holds another slab.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private ref Slab ValidateLease(
-        int slabIndex,
+    private void ValidateLease(
+        Slab slab,
         long token,
         string operation)
     {
-        if ((uint)slabIndex >= (uint)_slabCount)
-        {
-            ThrowStaleIndex(slabIndex, operation);
-        }
-
-        ref Slab slab = ref _slabs[slabIndex];
         if (slab.State != SlabState.Leased
             || slab.Token != token)
         {
             ThrowStaleToken(
-                slabIndex,
+                slab,
                 token,
-                ref slab,
                 operation);
         }
-
-        return ref slab;
     }
 
     // Pooled<T> is a ref struct: safe code cannot store it on the heap, capture
@@ -917,23 +905,9 @@ public sealed unsafe partial class NativePool<T>
 
     [DoesNotReturn]
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private void ThrowStaleIndex(int slabIndex, string operation) =>
-        throw new NativeAllocationReturnedException(
-            "The pooled slab index is stale.",
-            OwnerKind,
-            generation: 0,
-            currentGeneration: 0,
-            operation,
-            activeOperationCount: 0,
-            allocationId: slabIndex,
-            _lifecycle);
-
-    [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
     private void ThrowStaleToken(
-        int slabIndex,
+        Slab slab,
         long token,
-        ref Slab slab,
         string operation) =>
         throw new NativeAllocationReturnedException(
             "The pooled lease token is stale.",
@@ -942,7 +916,7 @@ public sealed unsafe partial class NativePool<T>
             currentGeneration: slab.Token,
             operation,
             slab.State == SlabState.Processing ? 1 : slab.BorrowCount,
-            slabIndex,
+            slab.Index,
             _lifecycle);
 
     [DoesNotReturn]
@@ -971,13 +945,16 @@ public sealed unsafe partial class NativePool<T>
             allocationId: 0,
             _lifecycle);
 
+    private void CacheReturnedSlab(int slabIndex, int logicalLength) =>
+        CacheReturnedSlab(_slabs[slabIndex], logicalLength);
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void CacheReturnedSlab(int slabIndex, int logicalLength)
+    private void CacheReturnedSlab(Slab slab, int logicalLength)
     {
         int displaced = _returnedSlabIndex;
-        _returnedSlabIndex = slabIndex;
+        _returnedSlabIndex = slab.Index;
         _returnedLogicalLength = logicalLength;
-        _slabs[slabIndex].Next = -1;
+        slab.Next = -1;
         if (displaced >= 0)
         {
             PushFreeList(displaced);
@@ -986,7 +963,7 @@ public sealed unsafe partial class NativePool<T>
 
     private void PushFreeList(int slabIndex)
     {
-        ref Slab slab = ref _slabs[slabIndex];
+        Slab slab = _slabs[slabIndex];
         int sizeClass = GetSizeClass(slab.Capacity);
         slab.Next = _freeHeads[sizeClass];
         _freeHeads[sizeClass] = slabIndex;
@@ -1013,7 +990,7 @@ public sealed unsafe partial class NativePool<T>
 #pragma warning disable HLQ013 // The slab's writable ref and active prefix are required.
         for (int index = 0; index < _slabCount; index++)
         {
-            ref Slab slab = ref _slabs[index];
+            Slab slab = _slabs[index];
             if (slab.State == SlabState.Unused
                 || slab.AllocationBytes == 0)
             {
@@ -1036,7 +1013,7 @@ public sealed unsafe partial class NativePool<T>
 #pragma warning disable HLQ013 // Free only initialized slabs by writable reference.
         for (int index = 0; index < _slabCount; index++)
         {
-            FreeSlab(ref _slabs[index]);
+            FreeSlab(_slabs[index]);
         }
 #pragma warning restore HLQ013
 
@@ -1044,11 +1021,16 @@ public sealed unsafe partial class NativePool<T>
         _budget = null;
     }
 
-    private void FreeSlab(ref Slab slab)
+    private void FreeSlab(Slab? slab)
     {
+        if (slab is null)
+        {
+            return;
+        }
+
         if (slab.AllocationBytes == 0)
         {
-            slab = default;
+            slab.Reset();
             return;
         }
 
@@ -1063,7 +1045,7 @@ public sealed unsafe partial class NativePool<T>
             detached,
             metricsEpoch);
         _retainedBytes -= checked((long)bytes);
-        slab = default;
+        slab.Reset();
     }
 
     private NativeAllocationFailedException CreateAllocationFailure(
@@ -1160,7 +1142,9 @@ public sealed unsafe partial class NativePool<T>
         }
     }
 
-    private struct Slab
+    // One retained slab. Leases hold the object itself, so lease checks skip
+    // the slot table; the slot index serves the free lists and diagnostics.
+    internal sealed class Slab
     {
         internal IntPtr Pointer;
         internal nuint AllocationBytes;
@@ -1169,9 +1153,25 @@ public sealed unsafe partial class NativePool<T>
         internal long Token;
         internal int BorrowCount;
         internal SlabState State;
+        internal int Index;
         internal long MetricsEpoch;
         internal long Ordinal;
         internal bool Detached;
+
+        // Keeps the slot index; every other field returns to an Unused slab.
+        internal void Reset()
+        {
+            Pointer = IntPtr.Zero;
+            AllocationBytes = 0;
+            Capacity = 0;
+            Next = 0;
+            Token = 0;
+            BorrowCount = 0;
+            State = SlabState.Unused;
+            MetricsEpoch = 0;
+            Ordinal = 0;
+            Detached = false;
+        }
     }
 
     private void IncrementHistory(ref long counter) =>
@@ -1194,7 +1194,7 @@ public sealed unsafe partial class NativePool<T>
         return result;
     }
 
-    private enum SlabState : byte
+    internal enum SlabState : byte
     {
         Unused,
         Free,

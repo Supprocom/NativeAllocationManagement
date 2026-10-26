@@ -9,20 +9,20 @@ public readonly ref struct Pooled<T>
     where T : unmanaged
 {
     private readonly NativePool<T>? _kernel;
-    private readonly int _slabIndex;
+    private readonly NativePool<T>.Slab? _slab;
     private readonly long _token;
     private readonly int _length;
     private readonly int _capacity;
 
     internal Pooled(
         NativePool<T> kernel,
-        int slabIndex,
+        NativePool<T>.Slab slab,
         long token,
         int length,
         int capacity)
     {
         _kernel = kernel;
-        _slabIndex = slabIndex;
+        _slab = slab;
         _token = token;
         _length = length;
         _capacity = capacity;
@@ -44,8 +44,8 @@ public readonly ref struct Pooled<T>
     public static Pooled<T> Move(scoped ref Pooled<T> source)
     {
         NativePool<T> kernel = source.GetKernel(nameof(Move));
-        long token = kernel.Move(source._slabIndex, source._token);
-        Pooled<T> destination = new(kernel, source._slabIndex, token,
+        long token = kernel.Move(source._slab!, source._token);
+        Pooled<T> destination = new(kernel, source._slab!, token,
             source._length, source._capacity);
         source = default;
         return destination;
@@ -58,10 +58,10 @@ public readonly ref struct Pooled<T>
     /// </remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public unsafe Span<T> AsSpan() =>
-        new((void*)GetKernel(nameof(AsSpan)).GetLeasePointer(_slabIndex, _token, nameof(AsSpan)), _length);
+        new((void*)GetKernel(nameof(AsSpan)).GetLeasePointer(_slab!, _token, nameof(AsSpan)), _length);
 
     /// <summary>Clears the logical range after validating this lease.</summary>
-    public void Clear() => GetKernel(nameof(Clear)).Clear(_slabIndex, _token, _length);
+    public void Clear() => GetKernel(nameof(Clear)).Clear(_slab!, _token, _length);
 
     /// <summary>Copies one exact source after validating this lease.</summary>
     public void CopyFrom(scoped ReadOnlySpan<T> source)
@@ -73,7 +73,7 @@ public readonly ref struct Pooled<T>
                 nameof(source));
         }
 
-        GetKernel(nameof(CopyFrom)).CopyFrom(_slabIndex, _token, source);
+        GetKernel(nameof(CopyFrom)).CopyFrom(_slab!, _token, source);
     }
 
     /// <summary>Copies the logical range after validating this lease.</summary>
@@ -86,7 +86,7 @@ public readonly ref struct Pooled<T>
                 nameof(destination));
         }
 
-        GetKernel(nameof(CopyTo)).CopyTo(_slabIndex, _token, _length, destination);
+        GetKernel(nameof(CopyTo)).CopyTo(_slab!, _token, _length, destination);
     }
 
     /// <summary>Runs one bounded write callback after one token check.</summary>
@@ -129,7 +129,7 @@ public readonly ref struct Pooled<T>
         ArgumentOutOfRangeException.ThrowIfGreaterThan((uint)logicalLength, (uint)_length, nameof(logicalLength));
         NativePool<T> kernel = GetKernel(nameof(Process));
         IntPtr pointer = kernel.EnterBorrow(
-            _slabIndex,
+            _slab!,
             _token,
             nameof(Process));
         try
@@ -143,7 +143,7 @@ public readonly ref struct Pooled<T>
         }
         finally
         {
-            kernel.ExitBorrow(_slabIndex);
+            kernel.ExitBorrow(_slab!);
         }
     }
 
@@ -160,7 +160,7 @@ public readonly ref struct Pooled<T>
         ArgumentOutOfRangeException.ThrowIfGreaterThan((uint)logicalLength, (uint)_length, nameof(logicalLength));
         NativePool<T> kernel = GetKernel(nameof(Process));
         IntPtr pointer = kernel.EnterBorrow(
-            _slabIndex,
+            _slab!,
             _token,
             nameof(Process));
         try
@@ -174,13 +174,13 @@ public readonly ref struct Pooled<T>
         }
         finally
         {
-            kernel.ExitBorrow(_slabIndex);
+            kernel.ExitBorrow(_slab!);
         }
     }
 
     /// <summary>Returns this slab exactly once.</summary>
     public void Dispose() => GetKernel(nameof(Dispose)).Return(
-        _slabIndex,
+        _slab!,
         _token,
         _length);
 
@@ -189,12 +189,12 @@ public readonly ref struct Pooled<T>
     {
         NativePool<T> kernel = GetKernel(operation);
         IntPtr pointer = kernel.EnterBorrow(
-            _slabIndex,
+            _slab!,
             _token,
             operation);
         return new PooledBorrow<T>(
             kernel,
-            _slabIndex,
+            _slab!,
             pointer,
             _length);
     }
@@ -223,20 +223,20 @@ internal readonly ref struct PooledBorrow<T>
     where T : unmanaged
 {
     private readonly NativePool<T> _kernel;
-    private readonly int _slabIndex;
+    private readonly NativePool<T>.Slab _slab;
 
     internal PooledBorrow(
         NativePool<T> kernel,
-        int slabIndex,
+        NativePool<T>.Slab slab,
         IntPtr pointer,
         int length)
     {
         _kernel = kernel;
-        _slabIndex = slabIndex;
+        _slab = slab;
         View = new NativeLeaseView<T>(pointer, length);
     }
 
     internal NativeLeaseView<T> View { get; }
 
-    internal void Dispose() => _kernel.ExitBorrow(_slabIndex);
+    internal void Dispose() => _kernel.ExitBorrow(_slab);
 }

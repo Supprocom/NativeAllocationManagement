@@ -93,14 +93,14 @@ public sealed class NativePoolProcessTests
         using (Pooled<int> old = pool.Rent(2, 5)) { }
         Assert.Equal(14, pool.Process(2, 7, 0, (values, _) =>
         {
-            NativeAllocationReturnedException stale = Assert.Throws<NativeAllocationReturnedException>(() => pool.EnterBorrow(0, 1, "stale"));
+            NativeAllocationReturnedException stale = Assert.Throws<NativeAllocationReturnedException>(() => pool.EnterBorrow(pool.SlabForTest(0), 1, "stale"));
             Assert.Equal(1, stale.ActiveOperationCount);
-            Assert.Throws<NativeAllocationReturnedException>(() => pool.Return(0, 1, 2));
-            Assert.Throws<NativeAllocationReturnedException>(() => pool.Move(0, 1));
-            NativeAllocationReturnedException guessed = Assert.Throws<NativeAllocationReturnedException>(() => pool.EnterBorrow(0, 2, "guessed"));
+            Assert.Throws<NativeAllocationReturnedException>(() => pool.Return(pool.SlabForTest(0), 1, 2));
+            Assert.Throws<NativeAllocationReturnedException>(() => pool.Move(pool.SlabForTest(0), 1));
+            NativeAllocationReturnedException guessed = Assert.Throws<NativeAllocationReturnedException>(() => pool.EnterBorrow(pool.SlabForTest(0), 2, "guessed"));
             Assert.Equal(1, guessed.ActiveOperationCount);
-            Assert.Throws<NativeAllocationReturnedException>(() => pool.Return(0, 2, 2));
-            Assert.Throws<NativeAllocationReturnedException>(() => pool.Move(0, 2));
+            Assert.Throws<NativeAllocationReturnedException>(() => pool.Return(pool.SlabForTest(0), 2, 2));
+            Assert.Throws<NativeAllocationReturnedException>(() => pool.Move(pool.SlabForTest(0), 2));
             Assert.Equal(1, pool.CurrentGenerationActiveOperationsForTest);
             return values[0] + values[1];
         }));

@@ -91,8 +91,8 @@ public sealed class NativePoolFilledRentTests
             moved.Access(_ =>
             {
                 Assert.Equal(1, pool.CurrentGenerationActiveOperationsForTest);
-                Assert.Throws<InvalidOperationException>(() => pool.Return(0, 2, 2));
-                Assert.Throws<InvalidOperationException>(() => pool.Move(0, 2));
+                Assert.Throws<InvalidOperationException>(() => pool.Return(pool.SlabForTest(0), 2, 2));
+                Assert.Throws<InvalidOperationException>(() => pool.Move(pool.SlabForTest(0), 2));
                 Assert.Throws<InvalidOperationException>(pool.Dispose);
                 Assert.Equal((nuint)0, pool.TrimRetainedMemory());
             });

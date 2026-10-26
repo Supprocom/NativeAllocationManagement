@@ -15,7 +15,21 @@ public sealed class PooledHandleRepresentationTests
         Assert.Equal(16, Unsafe.SizeOf<Span<int>>());
         string[] fields = typeof(Pooled<int>).GetFields(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly)
             .Select(static field => field.Name).Order(StringComparer.Ordinal).ToArray();
-        Assert.Equal(["_capacity", "_kernel", "_length", "_slabIndex", "_token"], fields);
+        Assert.Equal(["_capacity", "_kernel", "_length", "_slab", "_token"], fields);
+    }
+
+    [Fact]
+    public void StaleLeaseStaysReturnedAfterItsSlotHoldsANewSlab()
+    {
+        using NativePool<int> pool = new(preLease: 2, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        Pooled<int> initial = pool.Rent(2, 7);
+        Pooled<int> stale = initial;
+        initial.Dispose();
+        Assert.NotEqual((nuint)0, pool.TrimRetainedMemory());
+        using Pooled<int> current = pool.Rent(2, 31);
+        Assert.True(IsReturned(stale, dispose: false));
+        Assert.True(IsReturned(stale, dispose: true));
+        Assert.Equal(31, current.AsSpan()[1]);
     }
 
     [Fact]
