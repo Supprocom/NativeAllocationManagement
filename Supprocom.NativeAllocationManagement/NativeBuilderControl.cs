@@ -8,10 +8,11 @@ namespace Supprocom.NativeAllocationManagement;
 // acquiring a second finalizable control.
 //
 // Unbudgeted controls are reused: returning one (transfer Dispose, or builder
-// Dispose before Complete) parks it with its block in a per-thread slot, and
-// the next unbudgeted builder of the same element type on that thread takes
-// both. Diagnostics count a parked block as returned and a reused one as a new
-// allocation, the way malloc's own free lists are invisible to its callers.
+// Dispose before Complete) parks it with its block on a small per-thread
+// stack, and the next unbudgeted builder or transfer of the same element type
+// on that thread takes both. Diagnostics count a parked block as returned and
+// a reused one as a new allocation, the way malloc's own free lists are
+// invisible to its callers.
 internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
     where T : unmanaged
 {
@@ -20,11 +21,10 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
     private const nuint SmallReuseBytes = 1024;
 
     [ThreadStatic]
-    private static NativeBuilderControl<T>? t_parked;
+    private static ParkedControls? t_parked;
 
     private NativeBlock _spare;
     private long _lifetimeFirstVersion = 1;
-    private int _parkEpoch;
     private bool _parked;
 
     private NativeBuilderControl(NativeBlock block)
@@ -40,18 +40,13 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
         out NativeBlock block)
     {
         if (budget is null
-            && t_parked is NativeBuilderControl<T> parked
-            && !NativeMemoryTestHooks.FaultInjectionPending)
+            && t_parked is { Count: > 0 } stack
+            && !NativeMemoryTestHooks.FaultInjectionPending
+            && stack.TakeCurrent(byteLength) is NativeBuilderControl<T> parked)
         {
-            t_parked = null;
-            if (parked._parkEpoch == NativeStorageReuse.CurrentEpoch)
-            {
-                block = parked.TakeSpare(byteLength, ownerId);
-                parked.BeginLifetime(block, ownerId);
-                return parked;
-            }
-
-            parked.DiscardSpare();
+            block = parked.TakeSpare(byteLength, ownerId);
+            parked.BeginLifetime(block, ownerId);
+            return parked;
         }
 
         block = NativeBlockAllocator.Allocate(
@@ -146,7 +141,7 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
     internal override NativeTransferStatistics CaptureSnapshot(long bindingVersion)
     {
         long first = Volatile.Read(ref _lifetimeFirstVersion);
-        long derivedFieldBytes = sizeof(long) + Unsafe.SizeOf<NativeBlock>() + sizeof(int) + sizeof(bool);
+        long derivedFieldBytes = sizeof(long) + Unsafe.SizeOf<NativeBlock>() + sizeof(bool);
         if (bindingVersion < first)
         {
             // A value from an earlier lifetime of this reused control: that
@@ -173,11 +168,16 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
     private bool TryPark()
     {
         NativeBlock block = OwnedBlock;
-        if (t_parked is not null
-            || block.Budget is not null
+        if (block.Budget is not null
             || block.ByteLength > ParkLimitBytes
             || IsSharing
             || NativeMemoryTestHooks.FaultInjectionPending)
+        {
+            return false;
+        }
+
+        ParkedControls stack = t_parked ??= new ParkedControls();
+        if (!stack.HasRoom(block.ByteLength))
         {
             return false;
         }
@@ -186,13 +186,12 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
         _spare = block;
         CompleteStorageReturn();
         _parked = true;
-        _parkEpoch = NativeStorageReuse.CurrentEpoch;
-        t_parked = this;
+        stack.Push(this, block.ByteLength);
         return true;
     }
 
-    // A slot from an older reuse epoch frees its block; the control is dropped
-    // and its finalizer then finds nothing left to free.
+    // A stack from an older reuse epoch frees its blocks; the controls are
+    // dropped and their finalizers then find nothing left to free.
     private unsafe void DiscardSpare()
     {
         if (_spare.Pointer != IntPtr.Zero)
@@ -203,14 +202,16 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
         _spare = default;
     }
 
+    // Reuse only a block that fits without pinning far more than requested.
+    private static bool Fits(nuint spareBytes, nuint byteLength) =>
+        spareBytes >= byteLength
+        && spareBytes <= Math.Max(byteLength * 4, SmallReuseBytes);
+
     private unsafe NativeBlock TakeSpare(nuint byteLength, long ownerId)
     {
         NativeBlock spare = _spare;
         _spare = default;
-        // Reuse only a block that fits without pinning far more than requested.
-        if (spare.Pointer != IntPtr.Zero
-            && spare.ByteLength >= byteLength
-            && spare.ByteLength <= Math.Max(byteLength * 4, SmallReuseBytes))
+        if (spare.Pointer != IntPtr.Zero && Fits(spare.ByteLength, byteLength))
         {
             long metricsEpoch = NativeMemoryAccounting.RecordAllocation(spare.ByteLength, zeroed: false);
             return new NativeBlock(spare.Pointer, spare.ByteLength, metricsEpoch, Budget: null, ownerId);
@@ -236,6 +237,95 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
         Volatile.Write(ref _lifetimeFirstVersion, first);
         _parked = false;
         PublishControlState(Building);
+    }
+
+    // Parked controls of one element type on one thread: at most eight, holding
+    // at most ParkLimitBytes of spare blocks together.
+    private sealed class ParkedControls
+    {
+        private const int Capacity = 8;
+        private readonly NativeBuilderControl<T>?[] _items = new NativeBuilderControl<T>?[Capacity];
+        private nuint _bytes;
+        private int _epoch = NativeStorageReuse.CurrentEpoch;
+
+        internal int Count;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal bool HasRoom(nuint bytes)
+        {
+            if (_epoch != NativeStorageReuse.CurrentEpoch)
+            {
+                DiscardAll();
+            }
+
+            return (uint)Count < Capacity && _bytes + bytes <= ParkLimitBytes;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal void Push(NativeBuilderControl<T> control, nuint bytes)
+        {
+            _items[Count++] = control;
+            _bytes += bytes;
+        }
+
+        // Takes the most recent control when its block fits; otherwise searches
+        // the rest, and failing that reuses the most recent control with a new block.
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal NativeBuilderControl<T>? TakeCurrent(nuint byteLength)
+        {
+            if (_epoch != NativeStorageReuse.CurrentEpoch)
+            {
+                DiscardAll();
+                return null;
+            }
+
+            int top = Count - 1;
+            NativeBuilderControl<T> control = _items[top]!;
+            nuint bytes = control._spare.ByteLength;
+            if (!Fits(bytes, byteLength))
+            {
+                return TakeSearched(byteLength);
+            }
+
+            _items[top] = null;
+            Count = top;
+            _bytes -= bytes;
+            return control;
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private NativeBuilderControl<T> TakeSearched(nuint byteLength)
+        {
+            int index = Count - 1;
+            for (int candidate = index - 1; candidate >= 0; candidate--)
+            {
+                if (Fits(_items[candidate]!._spare.ByteLength, byteLength))
+                {
+                    index = candidate;
+                    break;
+                }
+            }
+
+            NativeBuilderControl<T> control = _items[index]!;
+            _items[index] = _items[--Count];
+            _items[Count] = null;
+            _bytes -= control._spare.ByteLength;
+            return control;
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private void DiscardAll()
+        {
+            foreach (ref readonly NativeBuilderControl<T>? control in _items.AsSpan(0, Count))
+            {
+                control!.DiscardSpare();
+            }
+
+            Array.Clear(_items);
+            Count = 0;
+            _bytes = 0;
+            _epoch = NativeStorageReuse.CurrentEpoch;
+        }
     }
 
     /// <summary>Returns an abandoned builder's unpublished block or a parked spare block.</summary>

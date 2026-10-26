@@ -72,6 +72,41 @@ public sealed class NativeBuilderReuseTests
     }
 
     [Fact]
+    public void SeveralReturnedTransfersAreAllReused()
+    {
+        NativeTransfer<int>[] first = [NativeTransfer<int>.Create(4, 1), NativeTransfer<int>.Create(4, 2), NativeTransfer<int>.Create(4, 3)];
+        object[] controls = [.. first.Select(static transfer => transfer.ControlForTest!)];
+        foreach (NativeTransfer<int> transfer in first)
+        {
+            transfer.Dispose();
+        }
+
+        NativeTransfer<int>[] second = [NativeTransfer<int>.Create(4, 4), NativeTransfer<int>.Create(4, 5), NativeTransfer<int>.Create(4, 6)];
+        Assert.All(second, transfer => Assert.Contains(transfer.ControlForTest, controls));
+        Assert.Equal(3, second.Select(static transfer => transfer.ControlForTest).Distinct().Count());
+        foreach (NativeTransfer<int> transfer in second)
+        {
+            transfer.Dispose();
+        }
+    }
+
+    [Fact]
+    public void ParkedBlocksStayWithinThePerThreadByteCeiling()
+    {
+        NativeMemoryTestHooks.Reset();
+        NativeTransfer<byte> large = NativeTransfer<byte>.Create(60 * 1024, 1);
+        NativeTransfer<byte> small = NativeTransfer<byte>.Create(8 * 1024, 2);
+        object smallControl = small.ControlForTest!;
+        large.Dispose();
+        small.Dispose();
+        // The large block parked first; the small one would exceed 64 KiB, so it was freed.
+        NativeTransfer<byte> next = NativeTransfer<byte>.Create(8 * 1024, 3);
+        Assert.NotSame(smallControl, next.ControlForTest);
+        next.Dispose();
+        Assert.Equal(0, NativeMemoryTestHooks.Snapshot().OutstandingNativeBytes);
+    }
+
+    [Fact]
     public void InjectedAllocationFailureBypassesReuse()
     {
         NativeMemoryTestHooks.Reset();

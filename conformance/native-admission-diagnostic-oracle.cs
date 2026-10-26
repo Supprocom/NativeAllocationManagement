@@ -15,7 +15,7 @@ internal static class NativeAdmissionDiagnosticOracle
     // A builder-produced unique control adds its reuse fields: lifetime start version,
     // parked block descriptor, park epoch and parked flag.
     internal static long BuilderUniqueControlFieldBytes => UniqueControlFieldBytes
-        + sizeof(long) + (3L * IntPtr.Size + 2L * sizeof(long)) + sizeof(int) + sizeof(bool);
+        + sizeof(long) + (3L * IntPtr.Size + 2L * sizeof(long)) + sizeof(bool);
     internal static long ReservationControlFieldBytes => UniqueControlFieldBytes + 3L * sizeof(long) + sizeof(int) + sizeof(bool);
 
     internal static void Run(int traceCapacity)
