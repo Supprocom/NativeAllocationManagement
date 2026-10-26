@@ -43,7 +43,9 @@ public sealed class NativePoolFilledRentTests
     [Fact]
     public void CapacityFailureAndInvalidLengthCannotPublishOrCorruptAnExistingLease()
     {
-        NativeMemoryBudget budget = new(64);
+        // Exactly one two-element slab fits.
+        long slabBytes = (long)NativeAlignedAllocation.GetBackingByteLength(8);
+        NativeMemoryBudget budget = new(slabBytes);
         using NativePool<int> pool = new(budget, 2, 0, NativeMemoryReturn.ToNativeMemory);
         using Pooled<int> current = pool.Rent(2, 7);
         Assert.Throws<ArgumentOutOfRangeException>(() => { using Pooled<int> invalid = pool.Rent(-1, 42); });
@@ -51,7 +53,7 @@ public sealed class NativePoolFilledRentTests
         Assert.Equal(14, current.Read(static view => view[0] + view[1]));
         Assert.Equal(1, pool.CurrentAllocationRecordCountForTest);
         Assert.Equal(8, pool.GetStatistics().RequestedBytes);
-        Assert.Equal(64, budget.CaptureStatistics().CommittedBytes);
+        Assert.Equal(slabBytes, budget.CaptureStatistics().CommittedBytes);
     }
 
     [Fact]

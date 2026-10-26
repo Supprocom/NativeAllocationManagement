@@ -77,13 +77,13 @@ public sealed class NativePoolProcessTests
             Assert.Equal(1, pool.CurrentGenerationActiveOperationsForTest);
             Assert.Throws<InvalidOperationException>(pool.Dispose);
             Assert.Throws<InvalidOperationException>(pool.Retire);
-            Assert.Equal((nuint)64, pool.TrimRetainedMemory());
+            Assert.Equal(NativeAlignedAllocation.GetBackingByteLength(8), pool.TrimRetainedMemory());
             Assert.Equal(8, pool.GetStatistics().RequestedBytes);
             return outer[0] + outer[1];
         });
         Assert.Equal(14, result);
         Assert.Equal(0, pool.CurrentGenerationActiveOperationsForTest);
-        Assert.Equal((nuint)64, pool.TrimRetainedMemory());
+        Assert.Equal(NativeAlignedAllocation.GetBackingByteLength(8), pool.TrimRetainedMemory());
     }
 
     [Fact]
@@ -109,7 +109,8 @@ public sealed class NativePoolProcessTests
     [Fact]
     public void RejectedEntryNeverInvokesProcessorOrClaimsASlab()
     {
-        NativeMemoryBudget budget = new(64);
+        // Exactly one two-element slab fits.
+        NativeMemoryBudget budget = new((long)NativeAlignedAllocation.GetBackingByteLength(8));
         using NativePool<int> pool = new(budget, 2, 0, NativeMemoryReturn.ToNativeMemory);
         int calls = 0;
         int CountCall(scoped Span<int> _, int __) => ++calls;

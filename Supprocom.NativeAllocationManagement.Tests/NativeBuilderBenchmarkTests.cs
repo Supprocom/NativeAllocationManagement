@@ -225,7 +225,9 @@ public sealed class NativeBuilderBenchmarkTests
             BatchSize = batchSize,
             WarmupIterations = 2,
             Iterations = 3,
-            NativeBudgetCapacityBytes = 16384
+            // Three two-builder packets can be live at once: one being consumed,
+            // one in the bounded channel and one being built.
+            NativeBudgetCapacityBytes = 24576
         };
         NativeBuilderWorkerEvidence evidence = await NativeBuilderBenchmark.RunWorkerAsync(
             NativeBuilderBenchmarkImplementation.NativeBuilderBudgeted, options);

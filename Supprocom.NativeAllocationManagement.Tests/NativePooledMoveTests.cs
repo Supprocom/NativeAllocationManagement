@@ -8,7 +8,8 @@ public sealed class NativePooledMoveTests
     [Fact]
     public void MovementInvalidatesAliasesWithoutChangingTheSlotOrItsCharge()
     {
-        NativeMemoryBudget budget = new(64);
+        long slabBytes = (long)NativeAlignedAllocation.GetBackingByteLength(8);
+        NativeMemoryBudget budget = new(slabBytes);
         using NativePool<int> pool = CreatePool(budget);
         Pooled<int> source = pool.Rent(2, static writer => writer.Fill(7));
         Pooled<int> alias = source;
@@ -27,7 +28,7 @@ public sealed class NativePooledMoveTests
         Assert.Equal(20, current.Read(static view => view[0] + view[1]));
         Assert.Equal(before, pool.GetStatistics());
         Assert.Equal(1, pool.CurrentAllocationRecordCountForTest);
-        Assert.Equal(64, budget.CaptureStatistics().CommittedBytes);
+        Assert.Equal(slabBytes, budget.CaptureStatistics().CommittedBytes);
         current.Dispose();
         AssertReturned(current);
         using Pooled<int> reused = pool.Rent(2, static writer => writer.Fill(31));
@@ -175,7 +176,8 @@ public sealed class NativePooledMoveTests
     [Fact]
     public void TraceUsesTheActualBackingOrdinalAndDoesNotInventACharge()
     {
-        NativeMemoryBudget budget = new(64, 16);
+        long slabBytes = (long)NativeAlignedAllocation.GetBackingByteLength(8);
+        NativeMemoryBudget budget = new(slabBytes, 16);
         using NativePool<int> pool = CreatePool(budget);
         Pooled<int> source = pool.Rent(2, static writer => writer.Fill(7));
         Pooled<int> destination = Pooled<int>.Move(ref source);
@@ -193,8 +195,8 @@ public sealed class NativePooledMoveTests
         Assert.Equal(pool.Id, moved.OwnerId);
         Assert.Equal(1, moved.AllocationOrdinal);
         Assert.Equal(2, moved.CorrelationId);
-        Assert.Equal((nuint)(64), moved.RequestedBytes);
-        Assert.Equal(64, moved.CommittedBytes);
+        Assert.Equal((nuint)slabBytes, moved.RequestedBytes);
+        Assert.Equal(slabBytes, moved.CommittedBytes);
         Assert.Equal(0, moved.ReservedBytes);
         Assert.Equal(1, budget.CaptureStatistics().AllocationCount);
         Assert.Equal(0, budget.CaptureStatistics().FreeCount);

@@ -14,9 +14,12 @@ public sealed class NativePoolTerminalBackingTests
     {
         NativeMemoryBudget budget = new(1024, traceCapacity: 32);
         WeakReference owner = ReleaseMultipleSlabs(budget, path, out NativeOwnerDiagnosticSnapshot terminal);
-        Assert.Equal(448, terminal.PeakOutstandingNativeBytes);
+        // Slabs of 1, 128 and 256 bytes; path 3 trims the first.
+        long first = (long)NativeAlignedAllocation.GetBackingByteLength(1);
+        long total = first + (long)NativeAlignedAllocation.GetBackingByteLength(128) + (long)NativeAlignedAllocation.GetBackingByteLength(256);
+        Assert.Equal(total, terminal.PeakOutstandingNativeBytes);
         Assert.Equal(0, terminal.InitializedPayloadBytes);
-        Assert.Equal(path == 0 ? 0 : path == 3 ? 384 : 448, terminal.OutstandingNativeBytes);
+        Assert.Equal(path == 0 ? 0 : path == 3 ? total - first : total, terminal.OutstandingNativeBytes);
         Assert.Equal(path is 1 or 3 ? terminal.OutstandingNativeBytes : 0, terminal.DetachedNativeBytes);
         Assert.Equal(path == 2 ? NativeOwnerLifecycle.Active : NativeOwnerLifecycle.Disposed, terminal.Lifecycle);
         NativeMemoryBudgetStatistics before = budget.CaptureStatistics();
@@ -48,7 +51,7 @@ public sealed class NativePoolTerminalBackingTests
             {
                 Assert.Equal(7, middle.Read(static values => values[64]));
                 Assert.Equal(11, largest.Read(static values => values[128]));
-                if (path == 3) Assert.Equal((nuint)64, pool.TrimRetainedMemoryByBytes(1));
+                if (path == 3) Assert.Equal(NativeAlignedAllocation.GetBackingByteLength(1), pool.TrimRetainedMemoryByBytes(1));
             }
             if (path != 2)
             {
