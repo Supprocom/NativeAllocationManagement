@@ -420,12 +420,16 @@ internal partial class NativeTransferControl<T>
 
         try
         {
+            // A handed-off control already published Disposed and may serve
+            // another value on another thread: do not touch it again.
+            if (TryHandOffForReuse())
+            {
+                return;
+            }
+
             ReturnStorage("NativeTransfer.Dispose");
             Volatile.Write(ref _state, Disposed);
-            if (!RetainsFinalizerAfterReturn)
-            {
-                GC.SuppressFinalize(this);
-            }
+            GC.SuppressFinalize(this);
         }
         catch
         {
@@ -780,7 +784,9 @@ internal partial class NativeTransferControl<T>
 
     // A control parked for reuse keeps its finalizer registration, so the next
     // lifetime needs no re-registration and thread exit still frees its storage.
-    private protected virtual bool RetainsFinalizerAfterReturn => false;
+    // Returns the storage and publishes Disposed, then hands the control to a
+    // reuse slot; true means the caller no longer owns this object.
+    private protected virtual bool TryHandOffForReuse() => false;
 
     private protected bool IsSharing => _sharingControl is not null;
 

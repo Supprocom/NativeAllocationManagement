@@ -107,6 +107,101 @@ public sealed class NativeBuilderReuseTests
     }
 
     [Fact]
+    public void TransfersReturnedOnAnotherThreadServeTheCreatingThread()
+    {
+        NativeMemoryTestHooks.Reset();
+        NativeTransfer<int>[] first = new NativeTransfer<int>[32];
+        for (int index = 0; index < first.Length; index++)
+        {
+            first[index] = NativeTransfer<int>.Create(4, index);
+        }
+
+        HashSet<object> controls = [.. first.Select(static transfer => transfer.ControlForTest!)];
+        RunOnNewThread(() =>
+        {
+            foreach (NativeTransfer<int> transfer in first)
+            {
+                transfer.Dispose();
+            }
+        });
+
+        // The other thread kept eight on its own stack; the rest overflowed into
+        // the shared partitions, which this thread's empty stack draws from.
+        NativeTransfer<int>[] second = new NativeTransfer<int>[32];
+        for (int index = 0; index < second.Length; index++)
+        {
+            second[index] = NativeTransfer<int>.Create(4, index);
+        }
+
+        Assert.True(second.Count(transfer => controls.Contains(transfer.ControlForTest!)) >= 16);
+        Assert.All(second, static (transfer, index) => Assert.Equal(index, transfer.Read(static view => view[3])));
+        foreach (NativeTransfer<int> transfer in second)
+        {
+            transfer.Dispose();
+        }
+
+        Assert.Equal(0, NativeMemoryTestHooks.Snapshot().OutstandingNativeBytes);
+    }
+
+    [Fact]
+    public void DisposeLeavesAControlAloneOnceAnotherThreadReusedIt()
+    {
+        // Fill this thread's stack so the next return overflows into a shared partition.
+        NativeTransfer<int>[] fillers = new NativeTransfer<int>[8];
+        for (int index = 0; index < fillers.Length; index++)
+        {
+            fillers[index] = NativeTransfer<int>.Create(4, index);
+        }
+
+        NativeTransfer<int> overflow = NativeTransfer<int>.Create(4, 99);
+        object control = overflow.ControlForTest!;
+        foreach (NativeTransfer<int> filler in fillers)
+        {
+            filler.Dispose();
+        }
+
+        NativeTransfer<int>? reused = null;
+        NativeBuilderControl<int>.AfterSharedHandOffForTest = () => RunOnNewThread(() => reused = NativeTransfer<int>.Create(4, 7));
+        try
+        {
+            overflow.Dispose();
+        }
+        finally
+        {
+            NativeBuilderControl<int>.AfterSharedHandOffForTest = null;
+        }
+
+        NativeTransfer<int> current = reused!.Value;
+        Assert.Same(control, current.ControlForTest);
+        Assert.Equal(7, current.Read(static view => view[0]));
+        Assert.ThrowsAny<InvalidOperationException>(() => overflow.Read(static view => view[0]));
+        current.Dispose();
+    }
+
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The worker failure is rethrown on the test thread.")]
+    private static void RunOnNewThread(Action action)
+    {
+        Exception? failure = null;
+        Thread thread = new(() =>
+        {
+            try
+            {
+                action();
+            }
+            catch (Exception exception)
+            {
+                failure = exception;
+            }
+        });
+        thread.Start();
+        thread.Join();
+        if (failure is not null)
+        {
+            throw new InvalidOperationException("The worker thread failed.", failure);
+        }
+    }
+
+    [Fact]
     public void InjectedAllocationFailureBypassesReuse()
     {
         NativeMemoryTestHooks.Reset();

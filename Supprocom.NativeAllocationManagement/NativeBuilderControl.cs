@@ -10,7 +10,9 @@ namespace Supprocom.NativeAllocationManagement;
 // Unbudgeted controls are reused: returning one (transfer Dispose, or builder
 // Dispose before Complete) parks it with its block on a small per-thread
 // stack, and the next unbudgeted builder or transfer of the same element type
-// on that thread takes both. Diagnostics count a parked block as returned and
+// on that thread takes both. A full stack overflows into a few locked shared
+// partitions, from which threads with an empty stack take, so values created
+// on one thread and returned on another are reused too. Diagnostics count a parked block as returned and
 // a reused one as a new allocation, the way malloc's own free lists are
 // invisible to its callers.
 internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
@@ -23,6 +25,8 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
     [ThreadStatic]
     private static ParkedControls? t_parked;
 
+    private static readonly SharedPartition[] s_shared = SharedPartition.CreateAll();
+
     private NativeBlock _spare;
     private long _lifetimeFirstVersion = 1;
     private bool _parked;
@@ -31,7 +35,6 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
         : base(block, length: 0, capacity: 0, published: false) =>
         PublishControlState(Building);
 
-    private protected override bool RetainsFinalizerAfterReturn => _parked;
 
     internal static NativeBuilderControl<T> Acquire(
         nuint byteLength,
@@ -40,9 +43,10 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
         out NativeBlock block)
     {
         if (budget is null
-            && t_parked is { Count: > 0 } stack
             && !NativeMemoryTestHooks.FaultInjectionPending
-            && stack.TakeCurrent(byteLength) is NativeBuilderControl<T> parked)
+            && (t_parked is { Count: > 0 } stack
+                ? stack.TakeCurrent(byteLength)
+                : SharedPartition.TryTake(s_shared, byteLength)) is NativeBuilderControl<T> parked)
         {
             block = parked.TakeSpare(byteLength, ownerId);
             parked.BeginLifetime(block, ownerId);
@@ -112,7 +116,6 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
         InstallOwnedBlock(block);
         if (TryPark())
         {
-            PublishControlState(Disposed);
             return;
         }
 
@@ -128,15 +131,7 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
         }
     }
 
-    private protected override void ReturnStorage(string operation)
-    {
-        if (string.Equals(operation, "NativeTransfer.Dispose", StringComparison.Ordinal) && TryPark())
-        {
-            return;
-        }
-
-        base.ReturnStorage(operation);
-    }
+    private protected override bool TryHandOffForReuse() => TryPark();
 
     internal override NativeTransferStatistics CaptureSnapshot(long bindingVersion)
     {
@@ -177,17 +172,35 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
         }
 
         ParkedControls stack = t_parked ??= new ParkedControls();
-        if (!stack.HasRoom(block.ByteLength))
+        if (stack.HasRoom(block.ByteLength))
+        {
+            BecomeParked(block);
+            stack.Push(this, block.ByteLength);
+            return true;
+        }
+
+        if (!SharedPartition.TryPark(s_shared, this, block))
         {
             return false;
         }
 
+        AfterSharedHandOffForTest?.Invoke();
+        return true;
+    }
+
+    // Runs after a control became visible to other threads and before the
+    // returning call completes, so a test can reuse it inside that window.
+    internal static Action? AfterSharedHandOffForTest { get; set; }
+
+    // Everything the returning thread writes happens here, before the control
+    // becomes visible in a reuse slot; it keeps its finalizer registration.
+    private void BecomeParked(NativeBlock block)
+    {
         NativeMemoryAccounting.RecordFree(block.ByteLength, detached: false, block.MetricsEpoch);
         _spare = block;
         CompleteStorageReturn();
         _parked = true;
-        stack.Push(this, block.ByteLength);
-        return true;
+        PublishControlState(Disposed);
     }
 
     // A stack from an older reuse epoch frees its blocks; the controls are
@@ -325,6 +338,130 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
             Count = 0;
             _bytes = 0;
             _epoch = NativeStorageReuse.CurrentEpoch;
+        }
+    }
+
+    // Overflow shared between threads, one partition per processor up to eight,
+    // each holding at most sixteen controls and 128 KiB of spare blocks. Empty or
+    // full partitions are skipped without taking their lock.
+    private sealed class SharedPartition
+    {
+        private const int Capacity = 16;
+        private const nuint LimitBytes = 128 * 1024;
+        private readonly Lock _gate = new();
+        private readonly NativeBuilderControl<T>?[] _items = new NativeBuilderControl<T>?[Capacity];
+        private nuint _bytes;
+        private int _epoch = NativeStorageReuse.SharedEpoch;
+        private int _count;
+
+        internal static SharedPartition[] CreateAll()
+        {
+            SharedPartition[] partitions = new SharedPartition[Math.Clamp(Environment.ProcessorCount, 1, 8)];
+            foreach (ref SharedPartition partition in partitions.AsSpan())
+            {
+                partition = new SharedPartition();
+            }
+
+            return partitions;
+        }
+
+        internal static NativeBuilderControl<T>? TryTake(SharedPartition[] partitions, nuint byteLength)
+        {
+            int start = Thread.GetCurrentProcessorId();
+            for (int offset = 0; offset < partitions.Length; offset++)
+            {
+                SharedPartition partition = partitions[(start + offset) % partitions.Length];
+                if (Volatile.Read(ref partition._count) != 0
+                    && partition.TryTake(byteLength) is NativeBuilderControl<T> control)
+                {
+                    return control;
+                }
+            }
+
+            return null;
+        }
+
+        internal static bool TryPark(SharedPartition[] partitions, NativeBuilderControl<T> control, NativeBlock block)
+        {
+            int start = Thread.GetCurrentProcessorId();
+            for (int offset = 0; offset < partitions.Length; offset++)
+            {
+                SharedPartition partition = partitions[(start + offset) % partitions.Length];
+                if (Volatile.Read(ref partition._count) != Capacity
+                    && partition.TryPark(control, block))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private NativeBuilderControl<T>? TryTake(nuint byteLength)
+        {
+            lock (_gate)
+            {
+                DiscardIfStale();
+                if (_count == 0)
+                {
+                    return null;
+                }
+
+                int index = _count - 1;
+                for (int candidate = index; candidate >= 0; candidate--)
+                {
+                    if (Fits(_items[candidate]!._spare.ByteLength, byteLength))
+                    {
+                        index = candidate;
+                        break;
+                    }
+                }
+
+                NativeBuilderControl<T> control = _items[index]!;
+                int last = _count - 1;
+                _items[index] = _items[last];
+                _items[last] = null;
+                _bytes -= control._spare.ByteLength;
+                Volatile.Write(ref _count, last);
+                return control;
+            }
+        }
+
+        private bool TryPark(NativeBuilderControl<T> control, NativeBlock block)
+        {
+            lock (_gate)
+            {
+                DiscardIfStale();
+                if (_count == Capacity || _bytes + block.ByteLength > LimitBytes)
+                {
+                    return false;
+                }
+
+                control.BecomeParked(block);
+                _items[_count] = control;
+                _bytes += block.ByteLength;
+                Volatile.Write(ref _count, _count + 1);
+                return true;
+            }
+        }
+
+        private void DiscardIfStale()
+        {
+            int epoch = NativeStorageReuse.SharedEpoch;
+            if (_epoch == epoch)
+            {
+                return;
+            }
+
+            foreach (ref readonly NativeBuilderControl<T>? parked in _items.AsSpan(0, _count))
+            {
+                parked!.DiscardSpare();
+            }
+
+            Array.Clear(_items);
+            _bytes = 0;
+            _epoch = epoch;
+            Volatile.Write(ref _count, 0);
         }
     }
 
