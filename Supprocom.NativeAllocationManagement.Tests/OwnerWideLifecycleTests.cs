@@ -592,7 +592,9 @@ public sealed class OwnerWideLifecycleTests
                 busy.Allows[0].Set();
                 NativeAllocationQuarantinedException failure =
                     Assert.IsType<NativeAllocationQuarantinedException>(await busy.Workers[0].ConfigureAwait(true));
-                Assert.Equal("clear", failure.Boundary);
+                // The worker's scratch comes from its thread's arena lane, which keeps no
+                // allocation record to clear, so the drain's first boundary moves its segment.
+                Assert.Equal("bump transfer", failure.Boundary);
                 Assert.Equal(1, arena.QuarantinedGenerationCountForTest);
                 long freeBeforeReturn = NativeMemoryTestHooks.Snapshot().FreeCount;
 

@@ -120,6 +120,17 @@ public sealed class NativeConcurrentArena : IDisposable
             return new ConcurrentArenaLease<T>(_kernel, direct);
         }
 
+        if (!containsReferences
+            && _kernel.TryLeaseArenaLaneInitialized(
+                length,
+                elementSize,
+                alignment,
+                initializer,
+                out NativeArenaAllocation lane))
+        {
+            return new ConcurrentArenaLease<T>(_kernel, lane);
+        }
+
         NativeRegionAllocation allocation = _kernel.LeaseBumpInitialized(
             length,
             elementSize,

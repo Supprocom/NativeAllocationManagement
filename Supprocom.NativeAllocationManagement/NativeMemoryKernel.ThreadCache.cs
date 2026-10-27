@@ -2,10 +2,11 @@ using System.Runtime.CompilerServices;
 
 namespace Supprocom.NativeAllocationManagement;
 
-// Per-thread record caches for synchronized pools of unmanaged values; see
-// NativePoolThreadCache for the protocol. Scoped, zero-length, transferable and
-// reference-holding leases, and every lease while a test injects faults, keep
-// the locked path.
+// Per-thread record caches for synchronized pools of unmanaged values, and
+// per-thread bump lanes for synchronized arenas; see NativePoolThreadCache for
+// the protocol. Scoped, zero-length, transferable and reference-holding leases,
+// large arena ranges, and every lease while a test injects faults, keep the
+// locked path.
 internal sealed partial class NativeOwnerKernel
 {
     private const int ThreadCacheLimit = 256;
@@ -651,9 +652,15 @@ internal sealed partial class NativeOwnerKernel
             RecordPayloadPeak(before + max);
         }
 
+        if (cache.LaneSegment is not null)
+        {
+            ReturnArenaLaneTailLocked(cache);
+        }
+
         if (cache.Initializing != 0)
         {
             generation.AddInitializations(cache.Initializing);
+            Volatile.Write(ref generation.ArenaInitializationsInProgress, generation.InitializationsInProgress);
         }
 
         if (cache.ActiveOperations != 0)
@@ -677,5 +684,324 @@ internal sealed partial class NativeOwnerKernel
         cache.Generation = null;
         cache.FoldEpoch++;
         Volatile.Write(ref cache.Revoked, 1);
+    }
+
+    // Ordinary unmanaged scratch on a thread other than the arena's own fast
+    // thread: bump-allocates from the thread's private lane segment without the
+    // owner lock. False sends the caller to the locked path.
+    internal bool TryLeaseArenaLaneInitialized<T>(
+        int length,
+        int elementSize,
+        nuint alignment,
+        NativeLeaseInitializer<T> initializer,
+        out NativeArenaAllocation allocation)
+    {
+        ArgumentNullException.ThrowIfNull(initializer);
+        ArgumentOutOfRangeException.ThrowIfNegative(length);
+        allocation = default;
+        nuint byteLength = CalculateArenaByteLength(length, elementSize);
+        if (byteLength == 0 || NativeMemoryTestHooks.FaultInjectionPending)
+        {
+            return false;
+        }
+
+        NativePoolThreadCache? cache = NativePoolThreadCaches.Find(Id);
+        if (!TryReserveArenaLane(cache, byteLength, alignment, out ArenaLaneReservation reservation)
+            && !ClaimArenaLane(ref cache, byteLength, alignment, out reservation))
+        {
+            return false;
+        }
+
+        IntPtr pointer = AddPointer(reservation.Segment.Segment.Pointer, reservation.Offset);
+        int initializedLength = 0;
+        try
+        {
+            NativeLeaseWriter<T> writer = new(pointer, length, ref initializedLength);
+            initializer(writer);
+            if (initializedLength != length)
+            {
+                throw new InvalidOperationException(
+                    "The native lease initializer did not write all logical elements.");
+            }
+
+            CompleteArenaLane(cache, reservation, checked((long)byteLength));
+        }
+        catch
+        {
+            AbortArenaLane(cache, reservation, checked(reservation.Offset + byteLength));
+            throw;
+        }
+
+        allocation = new NativeArenaAllocation(reservation.Generation, pointer, reservation.OriginalCursor, length);
+        return true;
+    }
+
+    private readonly record struct ArenaLaneReservation(
+        NativeGeneration Generation,
+        NativeBumpSegment Segment,
+        nuint Offset,
+        nuint OriginalCursor,
+        int Epoch);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool TryReserveArenaLane(
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] NativePoolThreadCache? cache,
+        nuint byteLength,
+        nuint alignment,
+        out ArenaLaneReservation reservation)
+    {
+        reservation = default;
+        if (cache is null || !cache.Enter())
+        {
+            return false;
+        }
+
+        NativeBumpSegment? lane = cache.LaneSegment;
+        if (lane is not null)
+        {
+            nuint cursor = cache.LaneCursor;
+            nuint aligned = AlignArenaBumpCursor(cursor, alignment);
+            if (aligned <= cache.LaneLimit && byteLength <= cache.LaneLimit - aligned)
+            {
+                cache.LaneCursor = aligned + byteLength;
+                cache.Initializing++;
+                reservation = new ArenaLaneReservation(cache.Generation!, lane, aligned, cursor, cache.FoldEpoch);
+                cache.Exit();
+                return true;
+            }
+        }
+
+        cache.Exit();
+        return false;
+    }
+
+    // Under the owner lock: arms the thread's cache, gives it a lane with room
+    // for the request and reserves the range, so no revocation can come
+    // between. A full lane goes back to the generation as an ordinary segment.
+    // False means the arena is not active or has no room for another cache;
+    // the locked path then reports or serves the request.
+    private bool ClaimArenaLane(
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] ref NativePoolThreadCache? cache,
+        nuint byteLength,
+        nuint alignment,
+        out ArenaLaneReservation reservation)
+    {
+        reservation = default;
+        NativePoolThreadCache? evicted = null;
+        lock (_gate)
+        {
+            if (_lifecycle != NativeOwnerLifecycle.Active || _current is not NativeGeneration generation)
+            {
+                return false;
+            }
+
+            if (cache is null)
+            {
+                if (_threadCacheCount == ThreadCacheLimit)
+                {
+                    return false;
+                }
+
+                cache = CreateThreadCacheLocked(out evicted);
+            }
+
+            if (cache.Generation is not null && !ReferenceEquals(cache.Generation, generation))
+            {
+                FoldThreadCacheLocked(cache);
+            }
+
+            if (cache.LaneSegment is not null)
+            {
+                ReturnArenaLaneTailLocked(cache);
+            }
+
+            // A full chunk if any segment has room, else just this range in a
+            // segment that has room for it, before the arena grows.
+            nuint requestBytes = RequiredFreshBumpBytes(byteLength, alignment);
+            nuint chunkBytes = Math.Max(requestBytes, cache.LaneChunkBytes);
+            cache.LaneChunkBytes = Math.Min(cache.LaneChunkBytes * 2, ArenaLaneChunkLimit);
+            NativeBumpSegment? segment = FindArenaLaneSpaceLocked(generation, ref chunkBytes, requestBytes, alignment);
+            if (segment is null
+                && _budget is not null
+                && OtherThreadCachesHoldLaneLocked(cache))
+            {
+                // A budget counts every segment, so other threads' unused chunk
+                // tails go back before the arena grows.
+                RevokeThreadCachesLocked();
+                segment = FindArenaLaneSpaceLocked(generation, ref chunkBytes, requestBytes, alignment);
+            }
+
+            if (segment is null)
+            {
+                segment = AllocateBumpSegmentLocked(
+                    generation,
+                    ChooseBumpSegmentBytes(generation, chunkBytes),
+                    chunkBytes,
+                    "arena lane growth",
+                    _lifecycle);
+                try
+                {
+                    AppendBumpSegmentLocked(generation, segment);
+                    generation.Owner.AddSegment(segment.Segment);
+                    NativeOwnerHistory.Increment(ref _freshSegmentAllocationCount, ref _historyOverflowed);
+                }
+                catch
+                {
+                    generation.BumpSegments.Remove(segment);
+                    generation.Owner.RemoveSegment(segment.Segment);
+                    segment.Segment.FreeNow();
+                    ResetBumpTraversal(generation);
+                    throw;
+                }
+            }
+
+            nuint chunkStart = AlignUp(segment.LowCursor, alignment);
+            segment.LowCursor = checked(chunkStart + chunkBytes);
+            cache.LaneSegment = segment;
+            cache.LaneCursor = chunkStart;
+            cache.LaneLimit = segment.LowCursor;
+            cache.Generation = generation;
+            Volatile.Write(ref cache.Revoked, 0);
+            if (!TryReserveArenaLane(cache, byteLength, alignment, out reservation))
+            {
+                throw new InvalidOperationException("A new arena lane could not hold the range it was chosen for.");
+            }
+        }
+
+        if (evicted is not null)
+        {
+            DetachEvictedThreadCache(evicted);
+        }
+
+        return true;
+    }
+
+    // Arena lane chunks double per claim up to this size.
+    private const nuint ArenaLaneChunkLimit = 64 * 1024;
+
+    // The unused tail of a thread's chunk goes back to its segment when nothing
+    // was allocated after the chunk; otherwise it stays unused until the
+    // generation resets.
+    private static void ReturnArenaLaneTailLocked(NativePoolThreadCache cache)
+    {
+        NativeBumpSegment segment = cache.LaneSegment!;
+        if (segment.LowCursor == cache.LaneLimit)
+        {
+            segment.LowCursor = cache.LaneCursor;
+        }
+
+        cache.LaneSegment = null;
+        cache.LaneCursor = 0;
+        cache.LaneLimit = 0;
+    }
+
+    private static NativeBumpSegment? FindArenaLaneSpaceLocked(
+        NativeGeneration generation,
+        ref nuint chunkBytes,
+        nuint requestBytes,
+        nuint alignment)
+    {
+        NativeBumpSegment? segment = FindBumpSpaceLocked(generation, chunkBytes, alignment, scoped: false);
+        if (segment is null && requestBytes < chunkBytes)
+        {
+            ResetBumpTraversal(generation);
+            segment = FindBumpSpaceLocked(generation, requestBytes, alignment, scoped: false);
+            if (segment is not null)
+            {
+                chunkBytes = requestBytes;
+            }
+        }
+
+        return segment;
+    }
+
+    private bool OtherThreadCachesHoldLaneLocked(NativePoolThreadCache cache)
+    {
+        foreach (ref readonly NativePoolThreadCache other in _threadCaches.AsSpan(0, _threadCacheCount))
+        {
+            if (!ReferenceEquals(other, cache) && other.LaneSegment is not null)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private void CompleteArenaLane(
+        NativePoolThreadCache cache,
+        ArenaLaneReservation reservation,
+        long payloadBytes)
+    {
+        if (cache.Enter())
+        {
+            if (cache.FoldEpoch == reservation.Epoch)
+            {
+                cache.Initializing--;
+                long payload = cache.PayloadDelta + payloadBytes;
+                cache.PayloadDelta = payload;
+                if (payload > cache.MaxPayloadDelta)
+                {
+                    cache.MaxPayloadDelta = payload;
+                }
+
+                cache.Exit();
+                return;
+            }
+
+            cache.Exit();
+        }
+
+        // A fold moved this initializer's count to the generation.
+        WaitForThreadCacheFold();
+        NativeGeneration generation = reservation.Generation;
+        lock (_gate)
+        {
+            generation.InitializationsInProgress--;
+            Volatile.Write(ref generation.ArenaInitializationsInProgress, generation.InitializationsInProgress);
+        }
+
+        RecordInitialization(generation, payloadBytes, scoped: false);
+    }
+
+    // A failed initializer gives its range back when nothing was allocated after
+    // it; otherwise the range stays unused until the generation resets.
+    private void AbortArenaLane(
+        NativePoolThreadCache cache,
+        ArenaLaneReservation reservation,
+        nuint end)
+    {
+        NativeBumpSegment segment = reservation.Segment;
+        if (cache.Enter())
+        {
+            if (cache.FoldEpoch == reservation.Epoch)
+            {
+                if (cache.LaneCursor == end)
+                {
+                    cache.LaneCursor = reservation.OriginalCursor;
+                }
+
+                cache.Initializing--;
+                cache.Exit();
+                return;
+            }
+
+            cache.Exit();
+        }
+
+        // The fold returned the chunk's tail, so the segment cursor ends at this
+        // range only if nothing was allocated after it.
+        WaitForThreadCacheFold();
+        NativeGeneration generation = reservation.Generation;
+        lock (_gate)
+        {
+            if (segment.LowCursor == end)
+            {
+                segment.LowCursor = reservation.OriginalCursor;
+            }
+
+            generation.InitializationsInProgress--;
+            Volatile.Write(ref generation.ArenaInitializationsInProgress, generation.InitializationsInProgress);
+        }
     }
 }

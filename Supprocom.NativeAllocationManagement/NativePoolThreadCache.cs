@@ -2,7 +2,8 @@ using System.Runtime.CompilerServices;
 
 namespace Supprocom.NativeAllocationManagement;
 
-// One thread's private stock of a synchronized pool's records. The owning
+// One thread's private stock of a synchronized pool's records, or its private
+// bump lane in a synchronized arena. The owning
 // thread rents, enters, exits and returns its cached records with plain memory
 // operations inside a short busy window and never takes the owner lock there,
 // so threads that share a pool stop contending for its lock and counters.
@@ -57,6 +58,14 @@ internal sealed class NativePoolThreadCache
     // Operations and initializers running on cached records since the last fold.
     internal int ActiveOperations;
     internal int Initializing;
+
+    // An arena thread's private chunk of a shared bump segment while armed: it
+    // allocates from LaneCursor up to LaneLimit. Chunks double per claim up to
+    // the kernel's chunk limit.
+    internal NativeBumpSegment? LaneSegment;
+    internal nuint LaneCursor;
+    internal nuint LaneLimit;
+    internal nuint LaneChunkBytes = 4096;
 
     internal NativePoolThreadCache(NativeOwnerKernel kernel, Thread owner)
     {

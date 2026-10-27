@@ -1045,7 +1045,9 @@ public sealed class MechanismRegressionTests
                 allows[index].Set();
                 NativeAllocationQuarantinedException failure =
                     Assert.IsType<NativeAllocationQuarantinedException>(await workers[index].ConfigureAwait(true));
-                Assert.Equal("clear", failure.Boundary);
+                // The worker's scratch comes from its thread's arena lane, which keeps no
+                // allocation record to clear, so the drain's first boundary moves its segment.
+                Assert.Equal("bump transfer", failure.Boundary);
                 Assert.Equal(index + 1, arena.QuarantinedGenerationCountForTest);
                 Assert.Equal(index + 1, arena.QuarantinedSegmentCountForTest);
                 Assert.Equal(generationCount - index - 1, arena.RetiredGenerationCountForTest);
