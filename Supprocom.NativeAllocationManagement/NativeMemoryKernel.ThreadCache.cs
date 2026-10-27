@@ -301,9 +301,11 @@ internal sealed partial class NativeOwnerKernel
         AbortPoolInitialization(allocation.GenerationState, allocation);
     }
 
-    // Returns a lease. Its own thread returns a cached record into the cache
-    // and ignores a stale one, as the locked path does; everything else takes
-    // the locked path, which first folds a cache that still holds the record.
+    // Returns a lease. A cached record goes back into its cache, and a stale
+    // handle is ignored, as the locked path does; everything else takes the
+    // locked path, which first folds a cache that still holds the record. A
+    // ConcurrentPooled<T> is a ref struct, so it is disposed on the thread that
+    // rented it, which owns the cache.
     internal void ReturnLease(
         NativeGeneration generationState,
         NativeAllocation allocation,
@@ -311,9 +313,7 @@ internal sealed partial class NativeOwnerKernel
         long allocationId,
         string operation = "Pooled.Dispose")
     {
-        if (allocation.CacheOwner is NativePoolThreadCache cache
-            && cache.OwnerThreadId == NativeThreadIdentity.Current
-            && !NativeMemoryTestHooks.FaultInjectionPending)
+        if (allocation.CacheOwner is NativePoolThreadCache cache)
         {
             if (cache.FreeCount == NativePoolThreadCache.FreeCapacity)
             {
@@ -362,7 +362,9 @@ internal sealed partial class NativeOwnerKernel
     }
 
     // The busy window replaces the generation and record admission atomics for
-    // an operation on this thread's own cached record.
+    // an operation on a cached record. Cached records back only ConcurrentPooled<T>
+    // leases, ref structs that stay on the renting thread, which owns the cache.
+    // Operation hooks need the locked path, which reports entries to them.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private bool TryEnterCachedOperation(
         NativeGeneration generation,
@@ -373,8 +375,7 @@ internal sealed partial class NativeOwnerKernel
         out NativeOperationToken token)
     {
         if (allocation.CacheOwner is NativePoolThreadCache cache
-            && cache.OwnerThreadId == NativeThreadIdentity.Current
-            && !NativeMemoryTestHooks.FaultInjectionPending
+            && !NativeMemoryTestHooks.OperationHooksEnabled
             && cache.Enter())
         {
             if (ReferenceEquals(allocation.CacheOwner, cache)

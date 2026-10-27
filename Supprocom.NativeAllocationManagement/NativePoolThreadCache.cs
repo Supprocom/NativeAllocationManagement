@@ -27,7 +27,6 @@ internal sealed class NativePoolThreadCache
     internal int Busy;
     internal int Revoked = 1;
     internal readonly long KernelId;
-    internal readonly int OwnerThreadId;
     internal readonly WeakReference<NativeOwnerKernel> Kernel;
     internal readonly WeakReference<Thread> OwnerThread;
 
@@ -70,7 +69,6 @@ internal sealed class NativePoolThreadCache
     internal NativePoolThreadCache(NativeOwnerKernel kernel, Thread owner)
     {
         KernelId = kernel.Id;
-        OwnerThreadId = NativeThreadIdentity.Current;
         Kernel = new WeakReference<NativeOwnerKernel>(kernel);
         OwnerThread = new WeakReference<Thread>(owner);
     }
