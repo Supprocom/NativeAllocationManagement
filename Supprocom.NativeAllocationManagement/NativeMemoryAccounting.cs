@@ -118,6 +118,197 @@ internal static class NativeMemoryAccounting
 
     internal static long CurrentMetricsEpoch => Volatile.Read(ref _metricsEpoch);
 
+    // Outstanding bytes change on every native allocation, free and parked-block
+    // reuse, so one shared counter would bounce between cores. Each thread instead
+    // keeps its change since its last flush in its own stripe; readers add every
+    // stripe of the current epoch to the flushed total, so a quiescent read is
+    // exact. A stripe flushes when its change passes FlushBytes either way, and
+    // publishes its high-water mark when its change falls back to zero, which keeps
+    // single-threaded peaks exact. Concurrent peaks can miss up to FlushBytes of
+    // another thread's unflushed allocations.
+    private const long FlushBytes = 256 * 1024;
+    private const int GaugeStripeLimit = 1024;
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Explicit, Size = 192)]
+    private struct GaugeFields
+    {
+        // The middle of 192 bytes keeps these off the cache lines of neighboring objects.
+        [System.Runtime.InteropServices.FieldOffset(64)] internal long Epoch;
+        [System.Runtime.InteropServices.FieldOffset(72)] internal long Delta;
+        [System.Runtime.InteropServices.FieldOffset(80)] internal long MaxDelta;
+    }
+
+    private sealed class GaugeStripe
+    {
+        internal GaugeFields Fields;
+        internal WeakReference<Thread>? OwnerThread;
+    }
+
+    private static class GaugeRegistry
+    {
+        internal static readonly Lock Gate = new();
+        internal static GaugeStripe[] Stripes = [];
+        internal static int Count;
+    }
+
+    [ThreadStatic]
+    private static GaugeStripe? t_gauge;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void AddOutstanding(long bytes, long metricsEpoch)
+    {
+        GaugeStripe? stripe = t_gauge;
+        if (stripe is null || stripe.Fields.Epoch != metricsEpoch)
+        {
+            stripe = ClaimGauge(metricsEpoch);
+            if (stripe is null)
+            {
+                RecordPeak(Interlocked.Add(ref _outstandingNativeBytes, bytes));
+                return;
+            }
+        }
+
+        ref GaugeFields fields = ref stripe.Fields;
+        long delta = fields.Delta + bytes;
+        Volatile.Write(ref fields.Delta, delta);
+        if (delta > fields.MaxDelta)
+        {
+            Volatile.Write(ref fields.MaxDelta, delta);
+            if (delta > FlushBytes)
+            {
+                FlushGauge(ref fields);
+            }
+        }
+        else if (delta <= 0 && fields.MaxDelta > 0 || delta < -FlushBytes)
+        {
+            FlushGauge(ref fields);
+        }
+    }
+
+    // Moves the stripe's change into the shared total and records its high-water
+    // mark against the total before this flush.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void FlushGauge(ref GaugeFields fields)
+    {
+        long delta = fields.Delta;
+        long max = fields.MaxDelta;
+        long before = delta == 0
+            ? Volatile.Read(ref _outstandingNativeBytes)
+            : Interlocked.Add(ref _outstandingNativeBytes, delta) - delta;
+        Volatile.Write(ref fields.Delta, 0);
+        Volatile.Write(ref fields.MaxDelta, 0);
+        RecordPeak(before + max);
+    }
+
+    // Null means the thread could not get a stripe and uses the shared total.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static GaugeStripe? ClaimGauge(long metricsEpoch)
+    {
+        GaugeStripe? stripe = t_gauge;
+        if (stripe is not null)
+        {
+            // The first use in a new measurement epoch drops the old epoch's change.
+            stripe.Fields.Delta = 0;
+            stripe.Fields.MaxDelta = 0;
+            Volatile.Write(ref stripe.Fields.Epoch, metricsEpoch);
+            return stripe;
+        }
+
+        try
+        {
+            lock (GaugeRegistry.Gate)
+            {
+                stripe = TakeDeadGaugeLocked() ?? AddGaugeLocked();
+                if (stripe is null)
+                {
+                    return null;
+                }
+
+                _threadOwner ??= Thread.CurrentThread;
+                stripe.OwnerThread = new WeakReference<Thread>(_threadOwner);
+                stripe.Fields.Delta = 0;
+                stripe.Fields.MaxDelta = 0;
+                Volatile.Write(ref stripe.Fields.Epoch, metricsEpoch);
+            }
+        }
+        catch (OutOfMemoryException)
+        {
+            return null;
+        }
+
+        t_gauge = stripe;
+        return stripe;
+    }
+
+    // A stripe whose thread exited folds its change into the shared total first.
+    private static GaugeStripe? TakeDeadGaugeLocked()
+    {
+        foreach (ref readonly GaugeStripe stripe in GaugeRegistry.Stripes.AsSpan(0, GaugeRegistry.Count))
+        {
+            if (stripe.OwnerThread is not null
+                && stripe.OwnerThread.TryGetTarget(out Thread? owner)
+                && owner.IsAlive)
+            {
+                continue;
+            }
+
+            if (Volatile.Read(ref stripe.Fields.Epoch) == CurrentMetricsEpoch)
+            {
+                FlushGauge(ref stripe.Fields);
+            }
+
+            Volatile.Write(ref stripe.Fields.Epoch, long.MinValue);
+            return stripe;
+        }
+
+        return null;
+    }
+
+    private static GaugeStripe? AddGaugeLocked()
+    {
+        int count = GaugeRegistry.Count;
+        if (count == GaugeStripeLimit)
+        {
+            return null;
+        }
+
+        GaugeStripe stripe = new() { Fields = { Epoch = long.MinValue } };
+        GaugeStripe[] stripes = GaugeRegistry.Stripes;
+        if (count == stripes.Length)
+        {
+            GaugeStripe[] grown = new GaugeStripe[Math.Max(8, count * 2)];
+            stripes.AsSpan().CopyTo(grown);
+            stripes = grown;
+        }
+
+        stripes[count] = stripe;
+        // Readers take the gate, so publishing the slot and then the count is enough.
+        GaugeRegistry.Stripes = stripes;
+        GaugeRegistry.Count = count + 1;
+        return stripe;
+    }
+
+    private static (long Outstanding, long Peak) ReadOutstanding()
+    {
+        lock (GaugeRegistry.Gate)
+        {
+            long epoch = CurrentMetricsEpoch;
+            long total = Volatile.Read(ref _outstandingNativeBytes);
+            long deltas = 0;
+            long maxima = 0;
+            foreach (ref readonly GaugeStripe stripe in GaugeRegistry.Stripes.AsSpan(0, GaugeRegistry.Count))
+            {
+                if (Volatile.Read(ref stripe.Fields.Epoch) == epoch)
+                {
+                    deltas += Volatile.Read(ref stripe.Fields.Delta);
+                    maxima += Volatile.Read(ref stripe.Fields.MaxDelta);
+                }
+            }
+
+            return (total + deltas, Math.Max(Volatile.Read(ref _peakOutstandingNativeBytes), total + maxima));
+        }
+    }
+
     internal static void PrepareThread()
     {
         if (DetailedCounters)
@@ -313,9 +504,7 @@ internal static class NativeMemoryAccounting
             }
         }
 
-        long current = Interlocked.Add(ref _outstandingNativeBytes, checked((long)byteLength));
-        RecordPeak(current);
-
+        AddOutstanding(checked((long)byteLength), metricsEpoch);
         return metricsEpoch;
     }
 
@@ -335,9 +524,7 @@ internal static class NativeMemoryAccounting
             return RecordAllocation(byteLength, zeroed: false);
         }
 
-        long difference = checked((long)byteLength - (long)previousByteLength);
-        long current = Interlocked.Add(ref _outstandingNativeBytes, difference);
-        RecordPeak(current);
+        AddOutstanding(checked((long)byteLength - (long)previousByteLength), previousMetricsEpoch);
         return previousMetricsEpoch;
     }
 
@@ -366,7 +553,7 @@ internal static class NativeMemoryAccounting
         }
 
         long bytes = checked((long)byteLength);
-        Interlocked.Add(ref _outstandingNativeBytes, -bytes);
+        AddOutstanding(-bytes, metricsEpoch);
         if (detached)
         {
             Interlocked.Add(ref _detachedNativeBytes, -bytes);
@@ -403,12 +590,13 @@ internal static class NativeMemoryAccounting
     internal static NativeMemoryTestMetrics Snapshot()
     {
         NativeHotMetricsSnapshot hot = SnapshotHotMetrics();
+        (long outstanding, _) = ReadOutstanding();
         return new NativeMemoryTestMetrics(
             Volatile.Read(ref _allocationCount),
             Volatile.Read(ref _zeroedAllocationCount),
             Volatile.Read(ref _freeCount),
             Volatile.Read(ref _detachedGenerationCount),
-            Volatile.Read(ref _outstandingNativeBytes),
+            outstanding,
             Volatile.Read(ref _detachedNativeBytes),
             Volatile.Read(ref _retiredNativeBytes),
             hot.BumpTraversalVisitCount,
@@ -429,9 +617,10 @@ internal static class NativeMemoryAccounting
     internal static NativeMemoryStatistics SnapshotPublic()
     {
         NativeHotMetricsSnapshot hot = SnapshotHotMetrics();
+        (long outstanding, long peak) = ReadOutstanding();
         return new NativeMemoryStatistics(
-            Volatile.Read(ref _outstandingNativeBytes),
-            Volatile.Read(ref _peakOutstandingNativeBytes),
+            outstanding,
+            peak,
             Volatile.Read(ref _detachedNativeBytes),
             Volatile.Read(ref _retiredNativeBytes),
             hot.ReusedNativeSegmentCount,

@@ -16,15 +16,15 @@
     {
       "name": "OutstandingNativeBytes", "units": "bytes", "role": "gauge",
       "definition": "Current actual acquired NAM-owned extents, including known headers/padding and retained, retired, quarantined and detached backing. Resize changes the old charge to the complete replacement; failed acquisition adds none.",
-      "implementation": ["NativeMemoryAccounting.cs#Interlocked.Add(ref _outstandingNativeBytes, checked((long)byteLength));", "NativeMemoryAccounting.cs#Interlocked.Add(ref _outstandingNativeBytes, -bytes);"],
-      "overflow": "Exact gauge for actual addressable acquired extents, not a saturating event history. Individual extent conversion is checked.",
+      "implementation": ["NativeMemoryAccounting.cs#AddOutstanding(checked((long)byteLength), metricsEpoch);", "NativeMemoryAccounting.cs#AddOutstanding(-bytes, metricsEpoch);"],
+      "overflow": "Exact gauge for actual addressable acquired extents, not a saturating event history. Each thread keeps its unflushed change in its own stripe and a capture adds every stripe of the current epoch, so a capture is exact whenever no other thread is acquiring or releasing at that moment. Individual extent conversion is checked.",
       "additionalProofs": ["NativeProductionAccountingTests.PublicDiagnosticsAccountWithoutFaultHookActivation", "NativeProductionAccountingTests.PreEpochReleaseAndResizeRespectMeasurementBoundaries"]
     },
     {
       "name": "PeakOutstandingNativeBytes", "units": "bytes", "role": "peak",
       "definition": "Highest process outstanding extent recorded after actual acquisition or resize in the current measurement epoch. Physical cleanup and capture do not reset it; not a claimed opaque realloc transient peak or RSS peak.",
-      "implementation": ["NativeMemoryAccounting.cs#RecordPeak(current);", "NativeMemoryAccounting.cs#Interlocked.CompareExchange(ref _peakOutstandingNativeBytes, current, peak)"],
-      "overflow": "Exact maximum of known outstanding gauges; internal epoch reset starts a new peak.",
+      "implementation": ["NativeMemoryAccounting.cs#RecordPeak(before + max);", "NativeMemoryAccounting.cs#Interlocked.CompareExchange(ref _peakOutstandingNativeBytes, current, peak)"],
+      "overflow": "Exact maximum when one thread acquires and releases; a thread publishes its high-water mark when its unflushed change returns to zero or passes 256 KiB, so concurrent acquisition can miss up to 256 KiB of each other thread's unflushed change. Internal epoch reset starts a new peak.",
       "additionalProofs": ["NativeProductionAccountingTests.PreEpochReleaseAndResizeRespectMeasurementBoundaries"]
     },
     {
