@@ -69,6 +69,37 @@ if (-not [OperatingSystem]::IsWindows()) {
     if ($LASTEXITCODE -ne 0) { throw 'Actual active endpoint fixture creation failed.' }
     Assert-NamEntryRejection $namActive 'still has an active process'
     $namResults.Add([pscustomobject]@{ Case = 'active-runtime-endpoint'; Passed = $true })
+    # Bind relative to the fixture: socket paths are limited to 108 bytes. The socket
+    # stays open through the check because disposing it removes the file.
+    function New-NamHostSocket {
+        param([string]$Directory, [string]$Name)
+        $namSocket = [Net.Sockets.Socket]::new([Net.Sockets.AddressFamily]::Unix, [Net.Sockets.SocketType]::Stream, [Net.Sockets.ProtocolType]::Unspecified)
+        $namPrevious = [Environment]::CurrentDirectory
+        [Environment]::CurrentDirectory = $Directory
+        try { $namSocket.Bind([Net.Sockets.UnixDomainSocketEndPoint]::new($Name)) }
+        finally { [Environment]::CurrentDirectory = $namPrevious }
+        $namSocket
+    }
+    $namDeadHost = New-NamEntryFixture 'dead-host-endpoint'
+    $namDeadSocket = New-NamHostSocket (Join-Path $namDeadHost 'tmp') 'CoreFxPipe_PSHost.DD65DB17.2147483647.None.pwsh'
+    try {
+        $namEntries = @(Get-NamDurableEntries -EvidenceRoot $namDeadHost -ObservationName 'observation.json')
+        $namObservation = [IO.File]::ReadAllText((Join-Path $namDeadHost 'observation.json')) | ConvertFrom-Json
+        if (@($namObservation.ExcludedEndpoints).Count -ne 1 -or
+            @($namEntries | Where-Object { -not $_.PSIsContainer }).Count -ne 1 -or
+            @($namObservation.ExcludedEndpoints | Where-Object { $_.ProcessPresent -or $_.ItemType -cne 'Socket' -or $_.ProcessId -ne 2147483647 -or
+                $_.RuntimeStartIdentifier -cne 'DD65DB17' }).Count -ne 0 -or
+            -not (Test-Path -LiteralPath (Join-Path $namDeadHost 'tmp/CoreFxPipe_PSHost.DD65DB17.2147483647.None.pwsh'))) {
+            throw 'A real abandoned host endpoint was not recorded without deletion.'
+        }
+    } finally { $namDeadSocket.Dispose() }
+    $namResults.Add([pscustomobject]@{ Case = 'dead-host-endpoint'; Passed = $true })
+    [IO.File]::Copy((Join-Path $namDeadHost 'observation.json'), (Join-Path $namRoot 'dead-host-endpoint.json'), $false)
+    $namActiveHost = New-NamEntryFixture 'active-host-endpoint'
+    $namActiveSocket = New-NamHostSocket (Join-Path $namActiveHost 'tmp') "CoreFxPipe_PSHost.DD65DB17.$PID.None.pwsh"
+    try { Assert-NamEntryRejection $namActiveHost 'still has an active process' }
+    finally { $namActiveSocket.Dispose() }
+    $namResults.Add([pscustomobject]@{ Case = 'active-host-endpoint'; Passed = $true })
     $namUnknown = New-NamEntryFixture 'unknown-special'
     & mkfifo -- (Join-Path $namUnknown 'tmp/unrecognized.pipe')
     if ($LASTEXITCODE -ne 0) { throw 'Actual unknown special-file fixture creation failed.' }

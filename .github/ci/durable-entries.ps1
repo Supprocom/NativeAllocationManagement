@@ -13,10 +13,16 @@ function Get-NamDurableEntries {
             continue
         }
         $namRelative = [IO.Path]::GetRelativePath($namRoot, $namEntry.FullName).Replace('\', '/')
-        $namMatch = [regex]::Match($namRelative, '^tmp/clr-debug-pipe-([1-9][0-9]*)-([0-9]+)-(in|out)$')
+        $namMatch = [regex]::Match($namRelative, '^tmp/clr-debug-pipe-(?<pid>[1-9][0-9]*)-(?<start>[0-9]+)-(in|out)$')
+        $namItemType = 'NamedPipe'
+        if (-not $namMatch.Success) {
+            # A killed pwsh also leaves its host IPC socket, PSHost.<start>.<pid>.<domain>.<process>.
+            $namMatch = [regex]::Match($namRelative, '^tmp/CoreFxPipe_PSHost\.(?<start>[0-9A-F]+)\.(?<pid>[1-9][0-9]*)\.None\.pwsh$')
+            $namItemType = 'Socket'
+        }
         $namProcessId = 0
-        if ($namEntry.UnixStat.ItemType.ToString() -cne 'NamedPipe' -or -not $namMatch.Success -or
-            -not [int]::TryParse($namMatch.Groups[1].Value, [ref]$namProcessId)) {
+        if ($namEntry.UnixStat.ItemType.ToString() -cne $namItemType -or -not $namMatch.Success -or
+            -not [int]::TryParse($namMatch.Groups['pid'].Value, [ref]$namProcessId)) {
             throw "Unexpected special evidence entry: $namRelative"
         }
         $namProcess = $null
@@ -27,7 +33,7 @@ function Get-NamDurableEntries {
             throw "A runtime endpoint still has an active process: $namRelative"
         }
         $namEndpoints.Add([pscustomobject]@{ Path = $namRelative; ItemType = $namEntry.UnixStat.ItemType.ToString();
-            ProcessId = $namProcessId; ProcessPresent = $false; RuntimeStartIdentifier = $namMatch.Groups[2].Value;
+            ProcessId = $namProcessId; ProcessPresent = $false; RuntimeStartIdentifier = $namMatch.Groups['start'].Value;
             UnixMode = $namEntry.UnixMode; Inode = $namEntry.UnixStat.Inode; UserId = $namEntry.UnixStat.UserId;
             GroupId = $namEntry.UnixStat.GroupId; ObservedAt = [DateTimeOffset]::UtcNow })
     }
