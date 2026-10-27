@@ -315,4 +315,24 @@ public sealed class AllocatorPerformanceRegressionTests
                 aggregateSpeedup,
                 1.50d));
     }
+
+    [Theory]
+    [InlineData(1.20d, 1.20d, "0", true)]
+    [InlineData(1.20d, 1.05d, "0", false)]
+    [InlineData(1.20d, 0.90d, "unset", true)]
+    [InlineData(1.05d, 1.20d, "unset", false)]
+    [InlineData(1.05d, 1.20d, "0", false)]
+    public void RegionFloorHoldsTheAggregateOnlyWithTieringOff(
+        double medianSpeedup,
+        double aggregateSpeedup,
+        string tieredCompilation,
+        bool expected)
+    {
+        Assert.Equal(
+            expected,
+            AllocatorPerformanceAcceptance.MeetsRegionFloor(
+                medianSpeedup,
+                aggregateSpeedup,
+                tieredCompilation));
+    }
 }

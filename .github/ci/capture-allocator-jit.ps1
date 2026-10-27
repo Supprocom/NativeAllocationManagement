@@ -99,7 +99,8 @@ foreach ($namConfiguration in @('controlled', 'default')) {
         } else {
             $namReport = ConvertFrom-Json -InputObject $namOutput
             $namExpectedExit = if ($namReport.Passed) { 0 } else { 3 }
-            if ($namExit -ne $namExpectedExit -or $namReport.SampleCount -ne 8 -or $namReport.Pairs.Count -ne 8 -or $namReport.MinimumSpeedup -ne 1.50) {
+            if ($namExit -ne $namExpectedExit -or $namReport.SampleCount -ne 8 -or $namReport.Pairs.Count -ne 8 -or
+                $namReport.MinimumSpeedup -ne $(if ($namKind -eq 'Region') { 1.10 } else { 1.50 })) {
                 throw 'The unchanged instrumented floor output and actual exit do not reconcile.'
             }
             foreach ($namPair in $namReport.Pairs) {

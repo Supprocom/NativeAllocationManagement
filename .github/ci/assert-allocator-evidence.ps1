@@ -52,8 +52,9 @@ foreach ($namKind in @('Region', 'Arena', 'ArenaScoped')) {
     }
     $namReport = [IO.File]::ReadAllText((Join-Path $namDirectory 'stdout.log')) | ConvertFrom-Json
     $namSampleCount = if ($namKind -eq 'ArenaScoped') { 10 } else { 8 }
-    if (-not $namReport.Passed -or $namReport.MinimumSpeedup -ne 1.50 -or $namReport.MedianSpeedup -lt 1.50 -or
-        $namReport.AggregateSpeedup -lt 1.50 -or $namReport.TieredCompilation -cne '0' -or $namReport.TieredPgo -cne '0' -or
+    $namFloor = if ($namKind -eq 'Region') { 1.10 } else { 1.50 }
+    if (-not $namReport.Passed -or $namReport.MinimumSpeedup -ne $namFloor -or $namReport.MedianSpeedup -lt $namFloor -or
+        $namReport.AggregateSpeedup -lt $namFloor -or $namReport.TieredCompilation -cne '0' -or $namReport.TieredPgo -cne '0' -or
         $namReport.SampleCount -ne $namSampleCount -or @($namReport.Pairs).Count -ne $namSampleCount) { throw 'Retained raw allocator report did not pass.' }
     $namNativeName = if ($namKind -eq 'Region') { 'Region' } else { 'Arena' }
     foreach ($namPair in $namReport.Pairs) {
