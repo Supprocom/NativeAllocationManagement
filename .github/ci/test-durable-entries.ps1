@@ -80,21 +80,24 @@ if (-not [OperatingSystem]::IsWindows()) {
         finally { [Environment]::CurrentDirectory = $namPrevious }
         $namSocket
     }
-    $namDeadHost = New-NamEntryFixture 'dead-host-endpoint'
-    $namDeadSocket = New-NamHostSocket (Join-Path $namDeadHost 'tmp') 'CoreFxPipe_PSHost.DD65DB17.2147483647.None.pwsh'
+    $namDeadSockets = New-NamEntryFixture 'dead-socket-endpoints'
+    $namSockets = @(
+        (New-NamHostSocket (Join-Path $namDeadSockets 'tmp') 'dotnet-diagnostic-2147483647-117072-socket'),
+        (New-NamHostSocket (Join-Path $namDeadSockets 'tmp') 'CoreFxPipe_PSHost.DD65DB17.2147483647.None.pwsh'))
     try {
-        $namEntries = @(Get-NamDurableEntries -EvidenceRoot $namDeadHost -ObservationName 'observation.json')
-        $namObservation = [IO.File]::ReadAllText((Join-Path $namDeadHost 'observation.json')) | ConvertFrom-Json
-        if (@($namObservation.ExcludedEndpoints).Count -ne 1 -or
+        $namEntries = @(Get-NamDurableEntries -EvidenceRoot $namDeadSockets -ObservationName 'observation.json')
+        $namObservation = [IO.File]::ReadAllText((Join-Path $namDeadSockets 'observation.json')) | ConvertFrom-Json
+        if (@($namObservation.ExcludedEndpoints).Count -ne 2 -or
             @($namEntries | Where-Object { -not $_.PSIsContainer }).Count -ne 1 -or
-            @($namObservation.ExcludedEndpoints | Where-Object { $_.ProcessPresent -or $_.ItemType -cne 'Socket' -or $_.ProcessId -ne 2147483647 -or
-                $_.RuntimeStartIdentifier -cne 'DD65DB17' }).Count -ne 0 -or
-            -not (Test-Path -LiteralPath (Join-Path $namDeadHost 'tmp/CoreFxPipe_PSHost.DD65DB17.2147483647.None.pwsh'))) {
-            throw 'A real abandoned host endpoint was not recorded without deletion.'
+            @($namObservation.ExcludedEndpoints | Where-Object { $_.ProcessPresent -or $_.ItemType -cne 'Socket' -or $_.ProcessId -ne 2147483647 }).Count -ne 0 -or
+            (@($namObservation.ExcludedEndpoints.RuntimeStartIdentifier | Sort-Object) -join ',') -cne '117072,DD65DB17' -or
+            -not (Test-Path -LiteralPath (Join-Path $namDeadSockets 'tmp/dotnet-diagnostic-2147483647-117072-socket')) -or
+            -not (Test-Path -LiteralPath (Join-Path $namDeadSockets 'tmp/CoreFxPipe_PSHost.DD65DB17.2147483647.None.pwsh'))) {
+            throw 'Real abandoned socket endpoints were not recorded without deletion.'
         }
-    } finally { $namDeadSocket.Dispose() }
-    $namResults.Add([pscustomobject]@{ Case = 'dead-host-endpoint'; Passed = $true })
-    [IO.File]::Copy((Join-Path $namDeadHost 'observation.json'), (Join-Path $namRoot 'dead-host-endpoint.json'), $false)
+    } finally { $namSockets | ForEach-Object { $_.Dispose() } }
+    $namResults.Add([pscustomobject]@{ Case = 'dead-socket-endpoints'; Passed = $true })
+    [IO.File]::Copy((Join-Path $namDeadSockets 'observation.json'), (Join-Path $namRoot 'dead-socket-endpoints.json'), $false)
     $namActiveHost = New-NamEntryFixture 'active-host-endpoint'
     $namActiveSocket = New-NamHostSocket (Join-Path $namActiveHost 'tmp') "CoreFxPipe_PSHost.DD65DB17.$PID.None.pwsh"
     try { Assert-NamEntryRejection $namActiveHost 'still has an active process' }

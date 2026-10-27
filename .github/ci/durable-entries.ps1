@@ -13,12 +13,15 @@ function Get-NamDurableEntries {
             continue
         }
         $namRelative = [IO.Path]::GetRelativePath($namRoot, $namEntry.FullName).Replace('\', '/')
-        $namMatch = [regex]::Match($namRelative, '^tmp/clr-debug-pipe-(?<pid>[1-9][0-9]*)-(?<start>[0-9]+)-(in|out)$')
-        $namItemType = 'NamedPipe'
-        if (-not $namMatch.Success) {
-            # A killed pwsh also leaves its host IPC socket, PSHost.<start>.<pid>.<domain>.<process>.
-            $namMatch = [regex]::Match($namRelative, '^tmp/CoreFxPipe_PSHost\.(?<start>[0-9A-F]+)\.(?<pid>[1-9][0-9]*)\.None\.pwsh$')
-            $namItemType = 'Socket'
+        # A killed .NET process leaves its debugger FIFOs and diagnostics socket; a killed
+        # pwsh also leaves its host IPC socket, PSHost.<start>.<pid>.<domain>.<process>.
+        foreach ($namEndpoint in @(
+                @('NamedPipe', '^tmp/clr-debug-pipe-(?<pid>[1-9][0-9]*)-(?<start>[0-9]+)-(in|out)$'),
+                @('Socket', '^tmp/dotnet-diagnostic-(?<pid>[1-9][0-9]*)-(?<start>[0-9]+)-socket$'),
+                @('Socket', '^tmp/CoreFxPipe_PSHost\.(?<start>[0-9A-F]+)\.(?<pid>[1-9][0-9]*)\.None\.pwsh$'))) {
+            $namItemType = $namEndpoint[0]
+            $namMatch = [regex]::Match($namRelative, $namEndpoint[1])
+            if ($namMatch.Success) { break }
         }
         $namProcessId = 0
         if ($namEntry.UnixStat.ItemType.ToString() -cne $namItemType -or -not $namMatch.Success -or
