@@ -2881,7 +2881,9 @@ public static class PressureWorkContract
     }
 
     // Builds one Z plane's 64-bit words (4 per range: 4 X columns of 16 Y
-    // bits each) in locals and ORs each into its output word once.
+    // bits each) in locals and ORs each into its output word once. Each
+    // 16-cell X row is classified with vector compares into 16-bit masks,
+    // which SpreadRow places at their (X & 3) * 16 + Y bits.
     private static void PopulateSectionStateBits(
         ReadOnlySpan<VoxelCell> cells,
         int sectionIndex,
@@ -2896,18 +2898,20 @@ public static class PressureWorkContract
         const int Empty = 0;
         const int Transparent = 1;
         const int Opaque = 2;
-        ReadOnlySpan<bool> transparentById = VoxelMath.TransparentById;
-        ReadOnlySpan<byte> typeIndexById = VoxelMath.TypeIndexById;
+        ReadOnlySpan<BlockTypeDescriptor> types = VoxelMath.BlockTypes;
+        ReadOnlySpan<bool> transparentByType = TransparentByType;
         bool buildMasks = !transparentMaskSlots.IsEmpty;
         Span<ulong> occupancy = stackalloc ulong[3 * WordsPerPlane];
-        Span<ulong> planeMasks = stackalloc ulong[
-            VoxelMath.BlockTypes.Length * WordsPerPlane];
+        Span<ulong> planeMasks = stackalloc ulong[types.Length * WordsPerPlane];
+        Span<ushort> rowIds = stackalloc ushort[VoxelMath.SectionDimension];
         Span<int> occupancyOffsets =
         [
             descriptor.EmptyBitsOffset - start,
             descriptor.TransparentBitsOffset - start,
             descriptor.OpaqueBitsOffset - start
         ];
+        int transparentFaces = descriptor.TransparentFaceBitsOffset - start;
+        int opaqueFaces = descriptor.OpaqueFaceBitsOffset - start;
         int sectionBase = SectionBaseCell(sectionIndex);
         for (int localZ = 0; localZ < VoxelMath.SectionDimension; localZ++)
         {
@@ -2918,23 +2922,31 @@ public static class PressureWorkContract
                 ReadOnlySpan<VoxelCell> row = cells.Slice(
                     sectionBase + SectionRowOffset(localZ, localY),
                     VoxelMath.SectionDimension);
-                bool rowOnBoundary = IsSectionEdge(localY) || IsSectionEdge(localZ);
                 for (int localX = 0; localX < row.Length; localX++)
                 {
-                    ushort blockId = row[localX].BlockId;
-                    int word = localX >> 2;
-                    ulong bit = 1UL << (((localX & 3) << 4) | localY);
-                    if (blockId == VoxelMath.AirBlockId)
+                    rowIds[localX] = row[localX].BlockId;
+                }
+
+                Vector128<ushort> low = Vector128.Create<ushort>(rowIds);
+                Vector128<ushort> high = Vector128.Create<ushort>(rowIds[Vector128<ushort>.Count..]);
+                uint emptyBits = RowBits(low, high, VoxelMath.AirBlockId);
+                uint transparentBits = 0;
+                for (int typeIndex = 1; typeIndex < types.Length; typeIndex++)
+                {
+                    if (!transparentByType[typeIndex])
                     {
-                        occupancy[Empty * WordsPerPlane + word] |= bit;
                         continue;
                     }
 
-                    bool transparent = transparentById[blockId];
-                    occupancy[(transparent ? Transparent : Opaque) * WordsPerPlane + word] |= bit;
-                    if (transparent && buildMasks)
+                    uint typeBits = RowBits(low, high, types[typeIndex].Id);
+                    if (typeBits == 0)
                     {
-                        int typeIndex = typeIndexById[blockId];
+                        continue;
+                    }
+
+                    transparentBits |= typeBits;
+                    if (buildMasks)
+                    {
                         ulong typeBit = 1UL << typeIndex;
                         if ((planeTypes & typeBit) == 0)
                         {
@@ -2942,17 +2954,24 @@ public static class PressureWorkContract
                             planeMasks.Slice(typeIndex * WordsPerPlane, WordsPerPlane).Clear();
                         }
 
-                        planeMasks[typeIndex * WordsPerPlane + word] |= bit;
+                        SpreadRow(
+                            planeMasks.Slice(typeIndex * WordsPerPlane, WordsPerPlane),
+                            typeBits,
+                            localY);
                     }
-
-                    SetBoundaryBitsIfEdge(
-                        states,
-                        transparent
-                            ? descriptor.TransparentFaceBitsOffset - start
-                            : descriptor.OpaqueFaceBitsOffset - start,
-                        SectionLocalIndex(localX, localY, localZ),
-                        rowOnBoundary || IsSectionEdge(localX));
                 }
+
+                uint opaqueBits = ~(emptyBits | transparentBits) & 0xFFFF;
+                RequireStateRange(occupancyOffsets[Empty], emptyBits, occupancy: true);
+                RequireStateRange(occupancyOffsets[Transparent], transparentBits, occupancy: true);
+                RequireStateRange(occupancyOffsets[Opaque], opaqueBits, occupancy: true);
+                SpreadRow(occupancy.Slice(Empty * WordsPerPlane, WordsPerPlane), emptyBits, localY);
+                SpreadRow(occupancy.Slice(Transparent * WordsPerPlane, WordsPerPlane), transparentBits, localY);
+                SpreadRow(occupancy.Slice(Opaque * WordsPerPlane, WordsPerPlane), opaqueBits, localY);
+                RequireStateRange(transparentFaces, transparentBits, occupancy: false);
+                RequireStateRange(opaqueFaces, opaqueBits, occupancy: false);
+                SetRowBoundaryBits(states, transparentFaces, transparentBits, localY, localZ);
+                SetRowBoundaryBits(states, opaqueFaces, opaqueBits, localY, localZ);
             }
 
             int planeWord = localZ * WordsPerPlane;
@@ -2962,12 +2981,6 @@ public static class PressureWorkContract
                 if ((words[0] | words[1] | words[2] | words[3]) == 0)
                 {
                     continue;
-                }
-
-                if (occupancyOffsets[range] < 0)
-                {
-                    throw new InvalidDataException(
-                        "Section state omitted a required occupancy range.");
                 }
 
                 Span<ulong> target = states.Slice(occupancyOffsets[range] + planeWord, WordsPerPlane);
@@ -3110,6 +3123,96 @@ public static class PressureWorkContract
                 $"Section {sectionIndex} transparent tile range has trailing values.");
         }
     }
+
+    // Bit X set where a 16-cell row holds blockId.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static uint RowBits(Vector128<ushort> low, Vector128<ushort> high, int blockId)
+    {
+        Vector128<ushort> id = Vector128.Create((ushort)blockId);
+        return Vector128.ExtractMostSignificantBits(Vector128.Equals(low, id))
+            | (Vector128.ExtractMostSignificantBits(Vector128.Equals(high, id))
+                << Vector128<ushort>.Count);
+    }
+
+    // A cell needing a range the layout omitted fails as SetWordBit and
+    // SetBoundaryBits do.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void RequireStateRange(int offset, uint rowBits, bool occupancy)
+    {
+        if (rowBits != 0 && offset < 0)
+        {
+            throw new InvalidDataException(
+                occupancy
+                    ? "Section state omitted a required occupancy range."
+                    : "Section state omitted a required boundary range.");
+        }
+    }
+
+    // SetBoundaryBits for every cell set in a row's 16-bit mask.
+    private static void SetRowBoundaryBits(
+        Span<ulong> states,
+        int offset,
+        uint rowBits,
+        int localY,
+        int localZ)
+    {
+        if (rowBits == 0)
+        {
+            return;
+        }
+
+        const int Last = VoxelMath.SectionDimension - 1;
+        if ((rowBits & 1) != 0)
+        {
+            SetFaceBit(states, offset, 0, localZ * 16 + localY);
+        }
+
+        if ((rowBits & (1u << Last)) != 0)
+        {
+            SetFaceBit(states, offset, 1, localZ * 16 + localY);
+        }
+
+        if (localY == 0)
+        {
+            SpreadRow(states.Slice(offset + 2 * BoundaryWordsPerFace, BoundaryWordsPerFace), rowBits, localZ);
+        }
+
+        if (localY == Last)
+        {
+            SpreadRow(states.Slice(offset + 3 * BoundaryWordsPerFace, BoundaryWordsPerFace), rowBits, localZ);
+        }
+
+        if (localZ == 0)
+        {
+            SpreadRow(states.Slice(offset + 4 * BoundaryWordsPerFace, BoundaryWordsPerFace), rowBits, localY);
+        }
+
+        if (localZ == Last)
+        {
+            SpreadRow(states.Slice(offset + 5 * BoundaryWordsPerFace, BoundaryWordsPerFace), rowBits, localY);
+        }
+    }
+
+    // ORs bit (X & 3) * 16 + shift into word X / 4 for each bit X of a
+    // 16-bit row mask.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void SpreadRow(Span<ulong> words, uint rowBits, int shift)
+    {
+        ReadOnlySpan<ulong> spread = NibbleSpread;
+        words[0] |= spread[(int)(rowBits & 0xF)] << shift;
+        words[1] |= spread[(int)((rowBits >> 4) & 0xF)] << shift;
+        words[2] |= spread[(int)((rowBits >> 8) & 0xF)] << shift;
+        words[3] |= spread[(int)((rowBits >> 12) & 0xF)] << shift;
+    }
+
+    // Bit i of the index moved to bit 16 * i.
+    private static ReadOnlySpan<ulong> NibbleSpread =>
+    [
+        0x0000_0000_0000_0000, 0x0000_0000_0000_0001, 0x0000_0000_0001_0000, 0x0000_0000_0001_0001,
+        0x0000_0001_0000_0000, 0x0000_0001_0000_0001, 0x0000_0001_0001_0000, 0x0000_0001_0001_0001,
+        0x0001_0000_0000_0000, 0x0001_0000_0000_0001, 0x0001_0000_0001_0000, 0x0001_0000_0001_0001,
+        0x0001_0001_0000_0000, 0x0001_0001_0000_0001, 0x0001_0001_0001_0000, 0x0001_0001_0001_0001
+    ];
 
     private static void VerifySectionStates(
         ReadOnlySpan<VoxelCell> cells,
@@ -3320,21 +3423,6 @@ public static class PressureWorkContract
         }
     }
 
-    private static void SetWordBit(
-        Span<ulong> states,
-        int offset,
-        int bitIndex)
-    {
-        if (offset < 0)
-        {
-            throw new InvalidDataException(
-                "Section state omitted a required occupancy range.");
-        }
-
-        int index = offset + (bitIndex >> 6);
-        states[index] |= 1UL << (bitIndex & 63);
-    }
-
     // First cell of a section: its local (0, 0, 0).
     private static int SectionBaseCell(int sectionIndex) =>
         VoxelMath.CellIndex(
@@ -3349,77 +3437,6 @@ public static class PressureWorkContract
 
     private static int SectionRowOffset(int localZ, int localY) =>
         (localZ * VoxelMath.ChunkDimension + localY) * VoxelMath.ChunkDimension;
-
-    // Section-local bit order: Y fastest, then X, then Z.
-    private static int SectionLocalIndex(int localX, int localY, int localZ) =>
-        (localZ << 8) | (localX << 4) | localY;
-
-    private static bool IsSectionEdge(int local) =>
-        local == 0 || local == VoxelMath.SectionDimension - 1;
-
-    // Interior cells set no boundary bits, but a missing range still fails.
-    private static void SetBoundaryBitsIfEdge(
-        Span<ulong> states,
-        int offset,
-        int localIndex,
-        bool onEdge)
-    {
-        if (onEdge)
-        {
-            SetBoundaryBits(states, offset, localIndex);
-        }
-        else if (offset < 0)
-        {
-            throw new InvalidDataException(
-                "Section state omitted a required boundary range.");
-        }
-    }
-
-    private static void SetBoundaryBits(
-        Span<ulong> states,
-        int offset,
-        int localIndex)
-    {
-        if (offset < 0)
-        {
-            throw new InvalidDataException(
-                "Section state omitted a required boundary range.");
-        }
-
-        int localY = localIndex & (VoxelMath.SectionDimension - 1);
-        int packed = localIndex >> 4;
-        int localX = packed & (VoxelMath.SectionDimension - 1);
-        int localZ = packed >> 4;
-        if (localX == 0)
-        {
-            SetFaceBit(states, offset, 0, localZ * 16 + localY);
-        }
-
-        if (localX == VoxelMath.SectionDimension - 1)
-        {
-            SetFaceBit(states, offset, 1, localZ * 16 + localY);
-        }
-
-        if (localY == 0)
-        {
-            SetFaceBit(states, offset, 2, localX * 16 + localZ);
-        }
-
-        if (localY == VoxelMath.SectionDimension - 1)
-        {
-            SetFaceBit(states, offset, 3, localX * 16 + localZ);
-        }
-
-        if (localZ == 0)
-        {
-            SetFaceBit(states, offset, 4, localX * 16 + localY);
-        }
-
-        if (localZ == VoxelMath.SectionDimension - 1)
-        {
-            SetFaceBit(states, offset, 5, localX * 16 + localY);
-        }
-    }
 
     private static void SetFaceBit(
         Span<ulong> states,
