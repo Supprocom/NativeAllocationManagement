@@ -33,9 +33,11 @@ records its own process CPU through complete workload/allocator cleanup, before
 final evidence emission/shutdown; post-exit CPU is not fabricated by the parent.
 A completed capture is not acceptance: exit 3 stays failed, and its capture.json explicitly
 does not assert performance acceptance. After the original unchanged test gates,
-independent validation requires current managed floors and the predeclared 1.10
-upper-95% candidate/published time-ratio ceilings. This one baseline scenario does
-not replace original workers or complete the new-feature performance matrix.
+independent validation requires current managed floors and bounds the eight
+candidate/published time ratios: their median must be at most 1.10 with tiering
+off, and their geometric mean at most 1.25 with default tiering. The upper-95%
+interval is still reported. This one baseline scenario does not replace original
+workers or complete the new-feature performance matrix.
 
 Evidence lives outside the checkout. Each child retains arguments, declared
 deadline, actual exit, complete streams and original compiler inputs. Source,

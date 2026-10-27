@@ -7,6 +7,10 @@ append and bounded copy-in/out are included. Delegated calls count once, not at
 both wrapper and storage boundaries. Partial initialization failure does not erase
 copying already performed; this is not a published-live-data gauge.
 
+Like the other event histories, `CopiedBytes` is recorded only when detailed
+counters are enabled at startup; see the
+[production accounting contract](production-accounting-contract.md).
+
 Empty copies and same-start memmove no-ops add no bytes. Distinct overlapping
 ranges retain normal span memmove semantics and record their moved length.
 Precondition failures add no bytes. Reallocation is opaque: its requests and

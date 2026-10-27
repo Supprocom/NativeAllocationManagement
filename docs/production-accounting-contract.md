@@ -1,7 +1,14 @@
 # Production accounting contract
 
 Accounting is active in ordinary runtime operation, without enabling tests or
-tracing. Fault injection can reject a backend operation but cannot disable its
+tracing. The outstanding, peak, detached and retired byte gauges are always
+recorded. Event histories (the allocation, reallocation, free, zeroed-allocation,
+detached-generation, clear, copy, reuse and traversal counts and bytes) are recorded
+only when the process starts with the
+`Supprocom.NativeAllocationManagement.DetailedCounters` AppContext switch enabled or
+the `NAM_DETAILED_COUNTERS` environment variable set to `1` or `true`; otherwise
+they stay zero. `NativeMemoryDiagnostics.DetailedCountersEnabled` reports which mode
+is active. Fault injection can reject a backend operation but cannot disable its
 accounting. Measurement reset is internal, quiescent, and advances a checked
 non-reusing epoch; pre-epoch release is excluded, while successful resizing brings
 that complete block into the current measurement epoch.
