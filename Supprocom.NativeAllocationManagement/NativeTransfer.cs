@@ -177,6 +177,7 @@ internal partial class NativeTransferControl<T>
     private int _operationAdmission;
     private long _authorityVersion = 1;
     private int _peakBorrows;
+    private bool _borrowed;
     private int _payloadReturned;
     private long _returnFailures;
     private bool _historyOverflowed;
@@ -257,7 +258,7 @@ internal partial class NativeTransferControl<T>
                 _ => NativeTransferLifecycle.Uninitialized
             },
             ActiveBorrowCount = borrows,
-            PeakBorrowCount = Volatile.Read(ref _peakBorrows),
+            PeakBorrowCount = Math.Max(Volatile.Read(ref _peakBorrows), Volatile.Read(ref _borrowed) ? 1 : 0),
             MoveCount = authority - 1,
             LiveUniqueOwnerCount = !returned && state == Active && allocationActive ? 1 : 0,
             HasReturnObligation = !returned,
@@ -269,7 +270,7 @@ internal partial class NativeTransferControl<T>
             PayloadReturnCount = returned ? 1 : 0,
             PayloadReturnFailureCount = Volatile.Read(ref _returnFailures),
             HistoryOverflowed = Volatile.Read(ref _historyOverflowed),
-            ControlFieldBytes = 3L * IntPtr.Size + 3L * sizeof(long) + 6L * sizeof(int) + 4L * sizeof(bool) + Unsafe.SizeOf<NativeBlock>()
+            ControlFieldBytes = 3L * IntPtr.Size + 3L * sizeof(long) + 6L * sizeof(int) + 5L * sizeof(bool) + Unsafe.SizeOf<NativeBlock>()
         };
     }
 
@@ -419,11 +420,11 @@ internal partial class NativeTransferControl<T>
             ThrowInactive(nameof(Dispose), Moved);
         }
 
-        int activeOperations =
-            NativeOperationAdmission.Close(ref _operationAdmission);
-        if (activeOperations != 0)
+        // The state CAS above and an entering callback's admission increment are
+        // both full fences, so either that callback sees Disposing and leaves, or
+        // this read sees it. Admission needs no separate close here.
+        if (NativeOperationAdmission.Count(ref _operationAdmission) != 0)
         {
-            NativeOperationAdmission.Open(ref _operationAdmission);
             Volatile.Write(ref _state, Active);
             throw new InvalidOperationException(
                 "NativeTransfer.Dispose cannot run during an active callback.");
@@ -556,18 +557,26 @@ internal partial class NativeTransferControl<T>
         int state = Volatile.Read(ref _state);
         if (state == Active && Volatile.Read(ref _authorityVersion) == authorityVersion)
         {
-            int peak = Volatile.Read(ref _peakBorrows);
-            while (enteredCount > peak)
-            {
-                int observed = Interlocked.CompareExchange(ref _peakBorrows, enteredCount, peak);
-                if (observed == peak) break;
-                peak = observed;
-            }
+            // A lone borrow, the usual case, records its peak of one without an atomic.
+            if (enteredCount == 1) _borrowed = true;
+            else RecordPeakBorrows(enteredCount);
             return;
         }
 
         NativeOperationAdmission.Exit(ref _operationAdmission);
         ThrowInactive(operation, state == Active ? Moved : state);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private void RecordPeakBorrows(int enteredCount)
+    {
+        int peak = Volatile.Read(ref _peakBorrows);
+        while (enteredCount > peak)
+        {
+            int observed = Interlocked.CompareExchange(ref _peakBorrows, enteredCount, peak);
+            if (observed == peak) break;
+            peak = observed;
+        }
     }
 
     private protected void ExitTransferOperation()
@@ -814,6 +823,7 @@ internal partial class NativeTransferControl<T>
         _capacity = 0;
         NativeOperationAdmission.Reset(ref _operationAdmission);
         _peakBorrows = 0;
+        _borrowed = false;
         _returnFailures = 0;
         _historyOverflowed = false;
         _sharingAllocationEntered = false;
