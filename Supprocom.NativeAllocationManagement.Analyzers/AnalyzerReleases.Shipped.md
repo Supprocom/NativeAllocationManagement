@@ -51,3 +51,12 @@ NAM1047 | Supprocom.NativeAllocationManagement | Error | Concurrent lease callba
 NAM1048 | Supprocom.NativeAllocationManagement | Error | Concurrent lease state cannot contain native ownership
 NAM1049 | Supprocom.NativeAllocationManagement | Error | Concurrent lease state cannot escape
 NAM9001 | Supprocom.NativeAllocationManagement | Error | Bundled analyzer is required
+
+## Release 0.3.0
+
+### New Rules
+
+Rule ID | Category | Severity | Notes
+--------|----------|----------|------
+NAM1050 | Supprocom.NativeAllocationManagement | Error | Prepared lease requires a successful acquisition guard
+NAM1051 | Supprocom.NativeAllocationManagement | Error | Lease span is used after its storage ended

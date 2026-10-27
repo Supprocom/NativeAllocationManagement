@@ -31,8 +31,6 @@ static Supprocom.NativeAllocationManagement.NativeMemoryStatistics.operator !=(S
 static Supprocom.NativeAllocationManagement.NativeMemoryStatistics.operator ==(Supprocom.NativeAllocationManagement.NativeMemoryStatistics left, Supprocom.NativeAllocationManagement.NativeMemoryStatistics right) -> bool
 static Supprocom.NativeAllocationManagement.NativeOwnerStatistics.operator !=(Supprocom.NativeAllocationManagement.NativeOwnerStatistics left, Supprocom.NativeAllocationManagement.NativeOwnerStatistics right) -> bool
 static Supprocom.NativeAllocationManagement.NativeOwnerStatistics.operator ==(Supprocom.NativeAllocationManagement.NativeOwnerStatistics left, Supprocom.NativeAllocationManagement.NativeOwnerStatistics right) -> bool
-static Supprocom.NativeAllocationManagement.NativeTransfer<T>.Move(ref Supprocom.NativeAllocationManagement.NativeTransfer<T>? source) -> Supprocom.NativeAllocationManagement.NativeTransfer<T>!
-static Supprocom.NativeAllocationManagement.NativeTransferPoolExtensions.RentTransferable<T>(this Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>! pool, int length, Supprocom.NativeAllocationManagement.NativeLeaseInitializer<T>! initializer) -> Supprocom.NativeAllocationManagement.NativeTransfer<T>!
 Supprocom.NativeAllocationManagement.ArenaLease<T>
 Supprocom.NativeAllocationManagement.ArenaLease<T>.Access(Supprocom.NativeAllocationManagement.NativeLeaseAction<T>! action) -> void
 Supprocom.NativeAllocationManagement.ArenaLease<T>.ArenaLease() -> void
@@ -111,10 +109,8 @@ Supprocom.NativeAllocationManagement.NativeBuilder<T>.Borrow(Supprocom.NativeAll
 Supprocom.NativeAllocationManagement.NativeBuilder<T>.Borrow(Supprocom.NativeAllocationManagement.NativeBuilderBorrowAction<T>! action, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> void
 Supprocom.NativeAllocationManagement.NativeBuilder<T>.Borrow<TState>(scoped in TState state, Supprocom.NativeAllocationManagement.NativeBuilderBorrowStateAction<T, TState>! action, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> void
 Supprocom.NativeAllocationManagement.NativeBuilder<T>.Capacity.get -> int
-Supprocom.NativeAllocationManagement.NativeBuilder<T>.Complete(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> Supprocom.NativeAllocationManagement.NativeTransfer<T>!
 Supprocom.NativeAllocationManagement.NativeBuilder<T>.Count.get -> int
 Supprocom.NativeAllocationManagement.NativeBuilder<T>.Dispose() -> void
-Supprocom.NativeAllocationManagement.NativeBuilder<T>.NativeBuilder(int preLease = 0) -> void
 Supprocom.NativeAllocationManagement.NativeBuilder<T>.Write(int maximumAdditionalCount, Supprocom.NativeAllocationManagement.NativeBuilderWriteAction<T>! action, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> void
 Supprocom.NativeAllocationManagement.NativeBuilder<T>.Write<TState, TAction>(int maximumAdditionalCount, scoped in TState state, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> void
 Supprocom.NativeAllocationManagement.NativeBuilder<T>.Write<TState>(int maximumAdditionalCount, scoped in TState state, Supprocom.NativeAllocationManagement.NativeBuilderWriteStateAction<T, TState>! action, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> void
@@ -360,3 +356,767 @@ virtual Supprocom.NativeAllocationManagement.NativeSpanStateProcessor<T, TState,
 ~override Supprocom.NativeAllocationManagement.NativeMemoryStatistics.ToString() -> string
 ~override Supprocom.NativeAllocationManagement.NativeOwnerStatistics.Equals(object obj) -> bool
 ~override Supprocom.NativeAllocationManagement.NativeOwnerStatistics.ToString() -> string
+static Supprocom.NativeAllocationManagement.NativeLeaseOperations.Access<TFirst, TSecond, TThird, TFourth, TFifth>(scoped Supprocom.NativeAllocationManagement.PreparedPooled<TFirst> first, scoped Supprocom.NativeAllocationManagement.PreparedPooled<TSecond> second, scoped Supprocom.NativeAllocationManagement.PreparedPooled<TThird> third, scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TFourth> fourth, scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TFifth> fifth, Supprocom.NativeAllocationManagement.NativeLeaseQuintupleAction<TFirst, TSecond, TThird, TFourth, TFifth>! action) -> void
+static Supprocom.NativeAllocationManagement.NativeLeaseOperations.Access<TFirst, TSecond, TThird, TFourth>(scoped Supprocom.NativeAllocationManagement.PreparedPooled<TFirst> first, scoped Supprocom.NativeAllocationManagement.PreparedPooled<TSecond> second, scoped Supprocom.NativeAllocationManagement.PreparedPooled<TThird> third, scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TFourth> fourth, Supprocom.NativeAllocationManagement.NativeLeaseQuadrupleAction<TFirst, TSecond, TThird, TFourth>! action) -> void
+static Supprocom.NativeAllocationManagement.NativeLeaseOperations.Access<TFirst, TSecond, TThird>(scoped Supprocom.NativeAllocationManagement.PreparedPooled<TFirst> first, scoped Supprocom.NativeAllocationManagement.PreparedPooled<TSecond> second, scoped Supprocom.NativeAllocationManagement.PreparedPooled<TThird> third, Supprocom.NativeAllocationManagement.NativeLeaseTripleAction<TFirst, TSecond, TThird>! action) -> void
+static Supprocom.NativeAllocationManagement.NativeLeaseOperations.Access<TFirst, TSecond>(scoped Supprocom.NativeAllocationManagement.PreparedPooled<TFirst> first, scoped Supprocom.NativeAllocationManagement.PreparedPooled<TSecond> second, Supprocom.NativeAllocationManagement.NativeLeasePairAction<TFirst, TSecond>! action) -> void
+static Supprocom.NativeAllocationManagement.NativeLeaseOperations.Access<TPooled, TArena>(scoped Supprocom.NativeAllocationManagement.PreparedPooled<TPooled> pooled, scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TArena> arena, Supprocom.NativeAllocationManagement.NativeLeasePooledArenaAction<TPooled, TArena>! action) -> void
+static Supprocom.NativeAllocationManagement.NativeLeaseOperations.Access<TPooled, TFirst, TSecond, TThird, TFourth>(scoped Supprocom.NativeAllocationManagement.PreparedPooled<TPooled> pooled, scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TFirst> first, scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TSecond> second, scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TThird> third, scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TFourth> fourth, Supprocom.NativeAllocationManagement.NativeLeaseQuintupleAction<TPooled, TFirst, TSecond, TThird, TFourth>! action) -> void
+static Supprocom.NativeAllocationManagement.NativeLeaseOperations.Access<TPooled, TFirst, TSecond>(scoped Supprocom.NativeAllocationManagement.PreparedPooled<TPooled> pooled, scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TFirst> first, scoped Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TSecond> second, Supprocom.NativeAllocationManagement.NativeLeasePooledArenaPairAction<TPooled, TFirst, TSecond>! action) -> void
+static Supprocom.NativeAllocationManagement.NativeLeaseOperations.InitializeScoped<TSource, TFirst, TSecond, TThird, TFourth>(scoped Supprocom.NativeAllocationManagement.PreparedPooled<TSource> source, Supprocom.NativeAllocationManagement.NativeConcurrentArena! arena, int firstLength, int secondLength, int thirdLength, int fourthLength, Supprocom.NativeAllocationManagement.NativeLeaseSourceQuadInitializer<TSource, TFirst, TSecond, TThird, TFourth>! initializer, out Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TFirst> first, out Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TSecond> second, out Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TThird> third, out Supprocom.NativeAllocationManagement.ConcurrentArenaLease<TFourth> fourth) -> void
+Supprocom.NativeAllocationManagement.PreparedPooled<T>
+Supprocom.NativeAllocationManagement.PreparedPooled<T>.Access(Supprocom.NativeAllocationManagement.NativeLeaseAction<T>! action) -> void
+Supprocom.NativeAllocationManagement.PreparedPooled<T>.Capacity.get -> int
+Supprocom.NativeAllocationManagement.PreparedPooled<T>.Clear() -> void
+Supprocom.NativeAllocationManagement.PreparedPooled<T>.CopyFrom(scoped System.ReadOnlySpan<T> source) -> void
+Supprocom.NativeAllocationManagement.PreparedPooled<T>.CopyTo(scoped System.Span<T> destination) -> void
+Supprocom.NativeAllocationManagement.PreparedPooled<T>.Dispose() -> void
+Supprocom.NativeAllocationManagement.PreparedPooled<T>.Length.get -> int
+Supprocom.NativeAllocationManagement.PreparedPooled<T>.PreparedPooled() -> void
+Supprocom.NativeAllocationManagement.PreparedPooled<T>.Process<TState, TResult>(int logicalLength, TState state, Supprocom.NativeAllocationManagement.NativeSpanStateProcessor<T, TState, TResult>! processor) -> TResult
+Supprocom.NativeAllocationManagement.PreparedPooled<T>.Read<TResult>(Supprocom.NativeAllocationManagement.NativeLeaseFunc<T, TResult>! action) -> TResult
+static Supprocom.NativeAllocationManagement.PreparedPooled<T>.Move(scoped ref Supprocom.NativeAllocationManagement.PreparedPooled<T> source) -> Supprocom.NativeAllocationManagement.PreparedPooled<T>
+Supprocom.NativeAllocationManagement.NativePreparedPoolBase
+Supprocom.NativeAllocationManagement.NativePreparedPool<T>
+Supprocom.NativeAllocationManagement.NativePreparedPool<T>.NativePreparedPool(Supprocom.NativeAllocationManagement.NativePoolPreparation preparation, Supprocom.NativeAllocationManagement.NativeMemoryBudget? budget) -> void
+Supprocom.NativeAllocationManagement.NativePreparedPool<T>.CapturePreparedSnapshot() -> Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics
+Supprocom.NativeAllocationManagement.NativePreparedPool<T>.CaptureDiagnosticSnapshot() -> Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot
+Supprocom.NativeAllocationManagement.NativePreparedPool<T>.Id.get -> long
+Supprocom.NativeAllocationManagement.NativePreparedPool<T>.TryRent(int length, Supprocom.NativeAllocationManagement.NativeLeaseInitializer<T>! initializer, out Supprocom.NativeAllocationManagement.PreparedPooled<T> lease, out Supprocom.NativeAllocationManagement.NativePoolExhaustionReason reason) -> bool
+Supprocom.NativeAllocationManagement.NativePreparedPool<T>.TryRent(int length, T value, out Supprocom.NativeAllocationManagement.PreparedPooled<T> lease, out Supprocom.NativeAllocationManagement.NativePoolExhaustionReason reason) -> bool
+Supprocom.NativeAllocationManagement.NativePreparedPool<T>.Dispose() -> void
+Supprocom.NativeAllocationManagement.NativePreparedPool<T>.GetStatistics() -> Supprocom.NativeAllocationManagement.NativeOwnerStatistics
+Supprocom.NativeAllocationManagement.NativePreparedPool<T>.ReleaseRetiredStorage() -> void
+Supprocom.NativeAllocationManagement.NativePreparedPool<T>.Rent(int length, Supprocom.NativeAllocationManagement.NativeLeaseInitializer<T>! initializer) -> Supprocom.NativeAllocationManagement.PreparedPooled<T>
+Supprocom.NativeAllocationManagement.NativePreparedPool<T>.Rent(int length, T value) -> Supprocom.NativeAllocationManagement.PreparedPooled<T>
+Supprocom.NativeAllocationManagement.NativePreparedPool<T>.Retire() -> void
+Supprocom.NativeAllocationManagement.NativePreparedPool<T>.TrimRetainedMemory() -> nuint
+Supprocom.NativeAllocationManagement.NativePreparedPool<T>.TrimRetainedMemoryByBytes(nuint bytesToRelease) -> nuint
+Supprocom.NativeAllocationManagement.NativePreparedPool<T>.TrimRetainedMemoryByLeaseSize(int leaseLength = 1) -> nuint
+static Supprocom.NativeAllocationManagement.Pooled<T>.Move(scoped ref Supprocom.NativeAllocationManagement.Pooled<T> source) -> Supprocom.NativeAllocationManagement.Pooled<T>
+Supprocom.NativeAllocationManagement.NativeMemoryReservation<T>.NativeMemoryReservation() -> void
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.ReservationCancelled = 26 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.ReservationInitializationFailed = 27 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.ReservationAbandoned = 28 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.ReservationReturnFailed = 29 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.ReservationAuthorityExhausted = 30 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryAdmissionStatistics
+Supprocom.NativeAllocationManagement.NativeMemoryAdmissionStatistics.NativeMemoryAdmissionStatistics() -> void
+Supprocom.NativeAllocationManagement.NativeMemoryAdmissionStatistics.BudgetId.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryAdmissionStatistics.CapacityBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryAdmissionStatistics.OutstandingReservationCount.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryAdmissionStatistics.PeakOutstandingReservationCount.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryAdmissionStatistics.PendingBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryAdmissionStatistics.PeakPendingBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryAdmissionStatistics.PreparedUnpublishedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryAdmissionStatistics.PeakPreparedUnpublishedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryAdmissionStatistics.AdmittedReservationCount.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryAdmissionStatistics.RejectedReservationCount.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryAdmissionStatistics.ControlPreparationFailureCount.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryAdmissionStatistics.BackingPreparationCount.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryAdmissionStatistics.BackingPreparationFailureCount.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryAdmissionStatistics.BackendAllocationFailureCount.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryAdmissionStatistics.ActivationCount.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryAdmissionStatistics.CancelledReservationCount.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryAdmissionStatistics.InitializationFailureCount.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryAdmissionStatistics.AbandonedReservationCount.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryAdmissionStatistics.ReturnFailureCount.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryAdmissionStatistics.HistoryOverflowed.get -> bool
+Supprocom.NativeAllocationManagement.NativeMemoryAdmissionStatistics.LedgerFieldBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryAdmissionStatistics.BudgetAdmissionFieldBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryAdmissionStatistics.Equals(Supprocom.NativeAllocationManagement.NativeMemoryAdmissionStatistics other) -> bool
+~override Supprocom.NativeAllocationManagement.NativeMemoryAdmissionStatistics.Equals(object obj) -> bool
+override Supprocom.NativeAllocationManagement.NativeMemoryAdmissionStatistics.GetHashCode() -> int
+~override Supprocom.NativeAllocationManagement.NativeMemoryAdmissionStatistics.ToString() -> string
+static Supprocom.NativeAllocationManagement.NativeMemoryAdmissionStatistics.operator ==(Supprocom.NativeAllocationManagement.NativeMemoryAdmissionStatistics left, Supprocom.NativeAllocationManagement.NativeMemoryAdmissionStatistics right) -> bool
+static Supprocom.NativeAllocationManagement.NativeMemoryAdmissionStatistics.operator !=(Supprocom.NativeAllocationManagement.NativeMemoryAdmissionStatistics left, Supprocom.NativeAllocationManagement.NativeMemoryAdmissionStatistics right) -> bool
+Supprocom.NativeAllocationManagement.NativeMemoryReservationStatistics
+Supprocom.NativeAllocationManagement.NativeMemoryReservationStatistics.NativeMemoryReservationStatistics() -> void
+Supprocom.NativeAllocationManagement.NativeMemoryReservationStatistics.BudgetId.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryReservationStatistics.OwnerId.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryReservationStatistics.BindingVersion.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryReservationStatistics.AuthorityVersion.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryReservationStatistics.BindingIsActive.get -> bool
+Supprocom.NativeAllocationManagement.NativeMemoryReservationStatistics.Outcome.get -> Supprocom.NativeAllocationManagement.NativeMemoryReservationOutcome
+Supprocom.NativeAllocationManagement.NativeMemoryReservationStatistics.DeclaredLength.get -> int
+Supprocom.NativeAllocationManagement.NativeMemoryReservationStatistics.RequestedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryReservationStatistics.ReservedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryReservationStatistics.OwnedBackingBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryReservationStatistics.PeakOwnedBackingBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryReservationStatistics.BackingIsPrepared.get -> bool
+Supprocom.NativeAllocationManagement.NativeMemoryReservationStatistics.ReservationMoveCount.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryReservationStatistics.BackingPreparationFailureCount.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryReservationStatistics.HasReservationReturnObligation.get -> bool
+Supprocom.NativeAllocationManagement.NativeMemoryReservationStatistics.ReturnFailureCount.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryReservationStatistics.HistoryOverflowed.get -> bool
+Supprocom.NativeAllocationManagement.NativeMemoryReservationStatistics.ControlFieldBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryReservationStatistics.Equals(Supprocom.NativeAllocationManagement.NativeMemoryReservationStatistics other) -> bool
+~override Supprocom.NativeAllocationManagement.NativeMemoryReservationStatistics.Equals(object obj) -> bool
+override Supprocom.NativeAllocationManagement.NativeMemoryReservationStatistics.GetHashCode() -> int
+~override Supprocom.NativeAllocationManagement.NativeMemoryReservationStatistics.ToString() -> string
+static Supprocom.NativeAllocationManagement.NativeMemoryReservationStatistics.operator ==(Supprocom.NativeAllocationManagement.NativeMemoryReservationStatistics left, Supprocom.NativeAllocationManagement.NativeMemoryReservationStatistics right) -> bool
+static Supprocom.NativeAllocationManagement.NativeMemoryReservationStatistics.operator !=(Supprocom.NativeAllocationManagement.NativeMemoryReservationStatistics left, Supprocom.NativeAllocationManagement.NativeMemoryReservationStatistics right) -> bool
+Supprocom.NativeAllocationManagement.NativeMemoryAdmissionExhaustionReason
+Supprocom.NativeAllocationManagement.NativeMemoryAdmissionExhaustionReason.None = 0 -> Supprocom.NativeAllocationManagement.NativeMemoryAdmissionExhaustionReason
+Supprocom.NativeAllocationManagement.NativeMemoryAdmissionExhaustionReason.NativeByteCapacity = 1 -> Supprocom.NativeAllocationManagement.NativeMemoryAdmissionExhaustionReason
+Supprocom.NativeAllocationManagement.NativeMemoryReservationOutcome
+Supprocom.NativeAllocationManagement.NativeMemoryReservationOutcome.None = 0 -> Supprocom.NativeAllocationManagement.NativeMemoryReservationOutcome
+Supprocom.NativeAllocationManagement.NativeMemoryReservationOutcome.Pending = 1 -> Supprocom.NativeAllocationManagement.NativeMemoryReservationOutcome
+Supprocom.NativeAllocationManagement.NativeMemoryReservationOutcome.Prepared = 2 -> Supprocom.NativeAllocationManagement.NativeMemoryReservationOutcome
+Supprocom.NativeAllocationManagement.NativeMemoryReservationOutcome.Activated = 3 -> Supprocom.NativeAllocationManagement.NativeMemoryReservationOutcome
+Supprocom.NativeAllocationManagement.NativeMemoryReservationOutcome.Cancelled = 4 -> Supprocom.NativeAllocationManagement.NativeMemoryReservationOutcome
+Supprocom.NativeAllocationManagement.NativeMemoryReservationOutcome.InitializationFailed = 5 -> Supprocom.NativeAllocationManagement.NativeMemoryReservationOutcome
+Supprocom.NativeAllocationManagement.NativeMemoryReservationOutcome.Abandoned = 6 -> Supprocom.NativeAllocationManagement.NativeMemoryReservationOutcome
+Supprocom.NativeAllocationManagement.NativeMemoryReservationOutcome.PreparationFailed = 7 -> Supprocom.NativeAllocationManagement.NativeMemoryReservationOutcome
+Supprocom.NativeAllocationManagement.NativeMemoryReservationOutcome.AuthorityExhausted = 8 -> Supprocom.NativeAllocationManagement.NativeMemoryReservationOutcome
+Supprocom.NativeAllocationManagement.NativeMemoryReservation<T>
+Supprocom.NativeAllocationManagement.NativeMemoryReservation<T>.Id.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryReservation<T>.PrepareBacking(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> void
+Supprocom.NativeAllocationManagement.NativeMemoryReservation<T>.Dispose() -> void
+Supprocom.NativeAllocationManagement.NativeMemoryReservation<T>.CaptureSnapshot() -> Supprocom.NativeAllocationManagement.NativeMemoryReservationStatistics
+Supprocom.NativeAllocationManagement.NativeMemoryReservation<T>.TryCompletePayloadReturn() -> bool
+static Supprocom.NativeAllocationManagement.NativeMemoryReservation<T>.Move(ref Supprocom.NativeAllocationManagement.NativeMemoryReservation<T>? source) -> Supprocom.NativeAllocationManagement.NativeMemoryReservation<T>
+static Supprocom.NativeAllocationManagement.NativeMemoryReservation<T>.Activate(ref Supprocom.NativeAllocationManagement.NativeMemoryReservation<T>? source, Supprocom.NativeAllocationManagement.NativeLeaseInitializer<T>! initializer, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> Supprocom.NativeAllocationManagement.NativeTransfer<T>
+Supprocom.NativeAllocationManagement.NativeMemoryBudget.TryReserve<T>(int length, out Supprocom.NativeAllocationManagement.NativeMemoryReservation<T>? reservation, out Supprocom.NativeAllocationManagement.NativeMemoryAdmissionExhaustionReason reason) -> bool
+Supprocom.NativeAllocationManagement.NativeMemoryBudget.CaptureAdmissionStatistics() -> Supprocom.NativeAllocationManagement.NativeMemoryAdmissionStatistics
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.ReservationAdmitted = 19 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.ReservationPreparationFailed = 20 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.ReservationBackingPrepared = 21 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.ReservationBackingFailed = 22 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.ReservationMoved = 23 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.ReservationActivated = 24 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.ReservationReturned = 25 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeTransferStatistics.HasReturnObligation.get -> bool
+Supprocom.NativeAllocationManagement.NativeTransferLifecycle.Invalidated = 7 -> Supprocom.NativeAllocationManagement.NativeTransferLifecycle
+Supprocom.NativeAllocationManagement.NativeTransferLifecycle.Shared = 8 -> Supprocom.NativeAllocationManagement.NativeTransferLifecycle
+Supprocom.NativeAllocationManagement.NativeTransfer<T>.CaptureSnapshot() -> Supprocom.NativeAllocationManagement.NativeTransferStatistics
+Supprocom.NativeAllocationManagement.NativeTransfer<T>.TryCompletePayloadReturn() -> bool
+Supprocom.NativeAllocationManagement.NativeTransferStatistics
+Supprocom.NativeAllocationManagement.NativeTransferStatistics.NativeTransferStatistics() -> void
+Supprocom.NativeAllocationManagement.NativeTransferStatistics.OwnerId.get -> long
+Supprocom.NativeAllocationManagement.NativeTransferStatistics.AllocationId.get -> long
+Supprocom.NativeAllocationManagement.NativeTransferStatistics.BindingVersion.get -> long
+Supprocom.NativeAllocationManagement.NativeTransferStatistics.AuthorityVersion.get -> long
+Supprocom.NativeAllocationManagement.NativeTransferStatistics.BindingIsActive.get -> bool
+Supprocom.NativeAllocationManagement.NativeTransferStatistics.Lifecycle.get -> Supprocom.NativeAllocationManagement.NativeTransferLifecycle
+Supprocom.NativeAllocationManagement.NativeTransferStatistics.ActiveBorrowCount.get -> int
+Supprocom.NativeAllocationManagement.NativeTransferStatistics.PeakBorrowCount.get -> int
+Supprocom.NativeAllocationManagement.NativeTransferStatistics.MoveCount.get -> long
+Supprocom.NativeAllocationManagement.NativeTransferStatistics.LiveUniqueOwnerCount.get -> int
+Supprocom.NativeAllocationManagement.NativeTransferStatistics.InitializedPayloadBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeTransferStatistics.PeakInitializedPayloadBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeTransferStatistics.OwnedBackingBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeTransferStatistics.BorrowedBackingBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeTransferStatistics.PeakOwnedBackingBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeTransferStatistics.PayloadReturnCount.get -> long
+Supprocom.NativeAllocationManagement.NativeTransferStatistics.PayloadReturnFailureCount.get -> long
+Supprocom.NativeAllocationManagement.NativeTransferStatistics.HistoryOverflowed.get -> bool
+Supprocom.NativeAllocationManagement.NativeTransferStatistics.ControlFieldBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeTransferStatistics.Equals(Supprocom.NativeAllocationManagement.NativeTransferStatistics other) -> bool
+~override Supprocom.NativeAllocationManagement.NativeTransferStatistics.Equals(object obj) -> bool
+override Supprocom.NativeAllocationManagement.NativeTransferStatistics.GetHashCode() -> int
+~override Supprocom.NativeAllocationManagement.NativeTransferStatistics.ToString() -> string
+static Supprocom.NativeAllocationManagement.NativeTransferStatistics.operator !=(Supprocom.NativeAllocationManagement.NativeTransferStatistics left, Supprocom.NativeAllocationManagement.NativeTransferStatistics right) -> bool
+static Supprocom.NativeAllocationManagement.NativeTransferStatistics.operator ==(Supprocom.NativeAllocationManagement.NativeTransferStatistics left, Supprocom.NativeAllocationManagement.NativeTransferStatistics right) -> bool
+Supprocom.NativeAllocationManagement.NativeTransferLifecycle
+Supprocom.NativeAllocationManagement.NativeTransferLifecycle.Uninitialized = 0 -> Supprocom.NativeAllocationManagement.NativeTransferLifecycle
+Supprocom.NativeAllocationManagement.NativeTransferLifecycle.Active = 1 -> Supprocom.NativeAllocationManagement.NativeTransferLifecycle
+Supprocom.NativeAllocationManagement.NativeTransferLifecycle.Moving = 2 -> Supprocom.NativeAllocationManagement.NativeTransferLifecycle
+Supprocom.NativeAllocationManagement.NativeTransferLifecycle.Returning = 3 -> Supprocom.NativeAllocationManagement.NativeTransferLifecycle
+Supprocom.NativeAllocationManagement.NativeTransferLifecycle.Retiring = 4 -> Supprocom.NativeAllocationManagement.NativeTransferLifecycle
+Supprocom.NativeAllocationManagement.NativeTransferLifecycle.Returned = 5 -> Supprocom.NativeAllocationManagement.NativeTransferLifecycle
+Supprocom.NativeAllocationManagement.NativeTransferLifecycle.Finalizing = 6 -> Supprocom.NativeAllocationManagement.NativeTransferLifecycle
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.UniqueReturned = 16 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.Moved = 17 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.Retired = 18 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeSharingPreparation
+Supprocom.NativeAllocationManagement.NativeSharingPreparation.NativeSharingPreparation() -> void
+Supprocom.NativeAllocationManagement.NativeSharingPreparation.NativeSharingPreparation(int strongBindingCount, int weakBindingCount) -> void
+Supprocom.NativeAllocationManagement.NativeSharingPreparation.StrongBindingCount.get -> int
+Supprocom.NativeAllocationManagement.NativeSharingPreparation.WeakBindingCount.get -> int
+Supprocom.NativeAllocationManagement.NativeSharingPreparation.Equals(Supprocom.NativeAllocationManagement.NativeSharingPreparation other) -> bool
+~override Supprocom.NativeAllocationManagement.NativeSharingPreparation.Equals(object obj) -> bool
+override Supprocom.NativeAllocationManagement.NativeSharingPreparation.GetHashCode() -> int
+~override Supprocom.NativeAllocationManagement.NativeSharingPreparation.ToString() -> string
+static Supprocom.NativeAllocationManagement.NativeSharingPreparation.operator !=(Supprocom.NativeAllocationManagement.NativeSharingPreparation left, Supprocom.NativeAllocationManagement.NativeSharingPreparation right) -> bool
+static Supprocom.NativeAllocationManagement.NativeSharingPreparation.operator ==(Supprocom.NativeAllocationManagement.NativeSharingPreparation left, Supprocom.NativeAllocationManagement.NativeSharingPreparation right) -> bool
+Supprocom.NativeAllocationManagement.NativeSharingStatistics
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.NativeSharingStatistics() -> void
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.Id.get -> long
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.OwnerId.get -> long
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.Preparation.get -> Supprocom.NativeAllocationManagement.NativeSharingPreparation
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.StrongBindingCount.get -> int
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.WeakBindingCount.get -> int
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.ActiveReadCount.get -> int
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.PeakStrongBindingCount.get -> int
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.PeakWeakBindingCount.get -> int
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.Expired.get -> bool
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.PayloadReleased.get -> bool
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.HistoryOverflowed.get -> bool
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.OwnedBackingBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.BorrowedBackingBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.InitializedPayloadBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.ManagedBankBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.ShareCount.get -> long
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.WeakCreationCount.get -> long
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.SuccessfulUpgradeCount.get -> long
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.RejectedStrongCount.get -> long
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.RejectedWeakCount.get -> long
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.ExpiredUpgradeCount.get -> long
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.PayloadReturnCount.get -> long
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.DetachCount.get -> long
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.RejectedDetachCount.get -> long
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.PayloadReturnFailureCount.get -> long
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.Equals(Supprocom.NativeAllocationManagement.NativeSharingStatistics other) -> bool
+~override Supprocom.NativeAllocationManagement.NativeSharingStatistics.Equals(object obj) -> bool
+override Supprocom.NativeAllocationManagement.NativeSharingStatistics.GetHashCode() -> int
+~override Supprocom.NativeAllocationManagement.NativeSharingStatistics.ToString() -> string
+static Supprocom.NativeAllocationManagement.NativeSharingStatistics.operator !=(Supprocom.NativeAllocationManagement.NativeSharingStatistics left, Supprocom.NativeAllocationManagement.NativeSharingStatistics right) -> bool
+static Supprocom.NativeAllocationManagement.NativeSharingStatistics.operator ==(Supprocom.NativeAllocationManagement.NativeSharingStatistics left, Supprocom.NativeAllocationManagement.NativeSharingStatistics right) -> bool
+Supprocom.NativeAllocationManagement.NativeSharingExhaustionReason
+Supprocom.NativeAllocationManagement.NativeSharingExhaustionReason.None = 0 -> Supprocom.NativeAllocationManagement.NativeSharingExhaustionReason
+Supprocom.NativeAllocationManagement.NativeSharingExhaustionReason.NoStrongBinding = 1 -> Supprocom.NativeAllocationManagement.NativeSharingExhaustionReason
+Supprocom.NativeAllocationManagement.NativeSharingExhaustionReason.NoWeakBinding = 2 -> Supprocom.NativeAllocationManagement.NativeSharingExhaustionReason
+Supprocom.NativeAllocationManagement.NativeSharingExhaustionReason.ExpiredPayload = 3 -> Supprocom.NativeAllocationManagement.NativeSharingExhaustionReason
+Supprocom.NativeAllocationManagement.NativeShared<T>
+Supprocom.NativeAllocationManagement.NativeShared<T>.NativeShared() -> void
+Supprocom.NativeAllocationManagement.NativeShared<T>.Id.get -> long
+Supprocom.NativeAllocationManagement.NativeShared<T>.Dispose() -> void
+Supprocom.NativeAllocationManagement.NativeShared<T>.CaptureSnapshot() -> Supprocom.NativeAllocationManagement.NativeSharingStatistics
+Supprocom.NativeAllocationManagement.NativeShared<T>.TryCompletePayloadReturn() -> bool
+Supprocom.NativeAllocationManagement.NativeWeak<T>
+Supprocom.NativeAllocationManagement.NativeWeak<T>.NativeWeak() -> void
+Supprocom.NativeAllocationManagement.NativeWeak<T>.Id.get -> long
+Supprocom.NativeAllocationManagement.NativeWeak<T>.Dispose() -> void
+Supprocom.NativeAllocationManagement.NativeWeak<T>.CaptureSnapshot() -> Supprocom.NativeAllocationManagement.NativeSharingStatistics
+Supprocom.NativeAllocationManagement.NativeWeak<T>.TryCompletePayloadReturn() -> bool
+Supprocom.NativeAllocationManagement.NativeShared<T>.Length.get -> int
+static Supprocom.NativeAllocationManagement.NativeShared<T>.Create(ref Supprocom.NativeAllocationManagement.NativeTransfer<T>? source, Supprocom.NativeAllocationManagement.NativeSharingPreparation preparation) -> Supprocom.NativeAllocationManagement.NativeShared<T>
+Supprocom.NativeAllocationManagement.NativeShared<T>.TryShare(out Supprocom.NativeAllocationManagement.NativeShared<T> share, out Supprocom.NativeAllocationManagement.NativeSharingExhaustionReason reason) -> bool
+Supprocom.NativeAllocationManagement.NativeShared<T>.TrySlice(int offset, int length, out Supprocom.NativeAllocationManagement.NativeShared<T> slice, out Supprocom.NativeAllocationManagement.NativeSharingExhaustionReason reason) -> bool
+Supprocom.NativeAllocationManagement.NativeShared<T>.TryDowngrade(out Supprocom.NativeAllocationManagement.NativeWeak<T> weak, out Supprocom.NativeAllocationManagement.NativeSharingExhaustionReason reason) -> bool
+Supprocom.NativeAllocationManagement.NativeShared<T>.Access(Supprocom.NativeAllocationManagement.NativeReadOnlyLeaseAction<T>! action) -> void
+Supprocom.NativeAllocationManagement.NativeShared<T>.Read<TResult>(Supprocom.NativeAllocationManagement.NativeReadOnlyLeaseFunc<T, TResult>! action) -> TResult
+Supprocom.NativeAllocationManagement.NativeShared<T>.TryDetach(Supprocom.NativeAllocationManagement.NativeMemoryBudget! budget, out Supprocom.NativeAllocationManagement.NativeTransfer<T> detached) -> bool
+Supprocom.NativeAllocationManagement.NativeWeak<T>.IsExpired.get -> bool
+Supprocom.NativeAllocationManagement.NativeWeak<T>.TryUpgrade(out Supprocom.NativeAllocationManagement.NativeShared<T> shared, out Supprocom.NativeAllocationManagement.NativeSharingExhaustionReason reason) -> bool
+Supprocom.NativeAllocationManagement.NativeReadOnlyLeaseView<T>
+Supprocom.NativeAllocationManagement.NativeReadOnlyLeaseView<T>.NativeReadOnlyLeaseView() -> void
+Supprocom.NativeAllocationManagement.NativeReadOnlyLeaseView<T>.Length.get -> int
+Supprocom.NativeAllocationManagement.NativeReadOnlyLeaseView<T>.this[int index].get -> T
+Supprocom.NativeAllocationManagement.NativeReadOnlyLeaseView<T>.AsSpan() -> System.ReadOnlySpan<T>
+Supprocom.NativeAllocationManagement.NativeReadOnlyLeaseView<T>.CopyTo(scoped System.Span<T> destination) -> void
+Supprocom.NativeAllocationManagement.NativeReadOnlyLeaseAction<T>
+virtual Supprocom.NativeAllocationManagement.NativeReadOnlyLeaseAction<T>.Invoke(scoped Supprocom.NativeAllocationManagement.NativeReadOnlyLeaseView<T> view) -> void
+Supprocom.NativeAllocationManagement.NativeReadOnlyLeaseFunc<T, TResult>
+virtual Supprocom.NativeAllocationManagement.NativeReadOnlyLeaseFunc<T, TResult>.Invoke(scoped Supprocom.NativeAllocationManagement.NativeReadOnlyLeaseView<T> view) -> TResult
+Supprocom.NativeAllocationManagement.NativeMemoryTraceEvent.CorrelationId.get -> long?
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.Shared = 9 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.WeakCreated = 10 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.WeakUpgraded = 11 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.UpgradeRejected = 12 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.OwnershipReleased = 13 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.PayloadReturned = 14 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.Detached = 15 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeArena.NativeArena(Supprocom.NativeAllocationManagement.NativeMemoryBudget! budget, Supprocom.NativeAllocationManagement.NativeArenaRetentionPolicy retentionPolicy, nuint preAllocateBytes, Supprocom.NativeAllocationManagement.NativeMemoryReturn returnMemoryOnDispose) -> void
+Supprocom.NativeAllocationManagement.NativeArena.CaptureRetentionSnapshot() -> Supprocom.NativeAllocationManagement.NativeArenaRetentionStatistics
+Supprocom.NativeAllocationManagement.NativeArena.MaintainRetention() -> nuint
+Supprocom.NativeAllocationManagement.NativeArenaRetentionPolicy
+Supprocom.NativeAllocationManagement.NativeArenaRetentionPolicy.NativeArenaRetentionPolicy() -> void
+Supprocom.NativeAllocationManagement.NativeArenaRetentionPolicy.NativeArenaRetentionPolicy(nuint ordinarySegmentCeilingBytes, nuint idleRetentionBytes) -> void
+Supprocom.NativeAllocationManagement.NativeArenaRetentionPolicy.OrdinarySegmentCeilingBytes.get -> nuint
+Supprocom.NativeAllocationManagement.NativeArenaRetentionPolicy.IdleRetentionBytes.get -> nuint
+Supprocom.NativeAllocationManagement.NativeArenaRetentionPolicy.Equals(Supprocom.NativeAllocationManagement.NativeArenaRetentionPolicy other) -> bool
+~override Supprocom.NativeAllocationManagement.NativeArenaRetentionPolicy.Equals(object obj) -> bool
+override Supprocom.NativeAllocationManagement.NativeArenaRetentionPolicy.GetHashCode() -> int
+~override Supprocom.NativeAllocationManagement.NativeArenaRetentionPolicy.ToString() -> string
+static Supprocom.NativeAllocationManagement.NativeArenaRetentionPolicy.operator ==(Supprocom.NativeAllocationManagement.NativeArenaRetentionPolicy left, Supprocom.NativeAllocationManagement.NativeArenaRetentionPolicy right) -> bool
+static Supprocom.NativeAllocationManagement.NativeArenaRetentionPolicy.operator !=(Supprocom.NativeAllocationManagement.NativeArenaRetentionPolicy left, Supprocom.NativeAllocationManagement.NativeArenaRetentionPolicy right) -> bool
+Supprocom.NativeAllocationManagement.NativeArenaRetentionStatistics
+Supprocom.NativeAllocationManagement.NativeArenaRetentionStatistics.NativeArenaRetentionStatistics() -> void
+Supprocom.NativeAllocationManagement.NativeArenaRetentionStatistics.OwnerId.get -> long
+Supprocom.NativeAllocationManagement.NativeArenaRetentionStatistics.Lifecycle.get -> Supprocom.NativeAllocationManagement.NativeOwnerLifecycle
+Supprocom.NativeAllocationManagement.NativeArenaRetentionStatistics.Enabled.get -> bool
+Supprocom.NativeAllocationManagement.NativeArenaRetentionStatistics.Policy.get -> Supprocom.NativeAllocationManagement.NativeArenaRetentionPolicy
+Supprocom.NativeAllocationManagement.NativeArenaRetentionStatistics.RetainedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeArenaRetentionStatistics.IdleBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeArenaRetentionStatistics.OversizedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeArenaRetentionStatistics.PeakOversizedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeArenaRetentionStatistics.MaintenanceCount.get -> long
+Supprocom.NativeAllocationManagement.NativeArenaRetentionStatistics.ReleasedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeArenaRetentionStatistics.HistoryOverflowed.get -> bool
+Supprocom.NativeAllocationManagement.NativeArenaRetentionStatistics.Equals(Supprocom.NativeAllocationManagement.NativeArenaRetentionStatistics other) -> bool
+~override Supprocom.NativeAllocationManagement.NativeArenaRetentionStatistics.Equals(object obj) -> bool
+override Supprocom.NativeAllocationManagement.NativeArenaRetentionStatistics.GetHashCode() -> int
+~override Supprocom.NativeAllocationManagement.NativeArenaRetentionStatistics.ToString() -> string
+static Supprocom.NativeAllocationManagement.NativeArenaRetentionStatistics.operator ==(Supprocom.NativeAllocationManagement.NativeArenaRetentionStatistics left, Supprocom.NativeAllocationManagement.NativeArenaRetentionStatistics right) -> bool
+static Supprocom.NativeAllocationManagement.NativeArenaRetentionStatistics.operator !=(Supprocom.NativeAllocationManagement.NativeArenaRetentionStatistics left, Supprocom.NativeAllocationManagement.NativeArenaRetentionStatistics right) -> bool
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.HistoryOverflowed.get -> bool
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.HistoryOverflowed.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.HistoryOverflowed.get -> bool
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.HistoryOverflowed.init -> void
+static Supprocom.NativeAllocationManagement.NativeLeaseOperations.TryInitializeScoped<TSource, TFirst, TSecond, TThird, TFourth>(scoped Supprocom.NativeAllocationManagement.ArenaLease<TSource> source, Supprocom.NativeAllocationManagement.NativeArena! arena, int firstLength, int secondLength, int thirdLength, int fourthLength, Supprocom.NativeAllocationManagement.NativeLeaseSourceQuadSpanInitializer<TSource, TFirst, TSecond, TThird, TFourth>! initializer, out Supprocom.NativeAllocationManagement.ArenaLease<TFirst> first, out Supprocom.NativeAllocationManagement.ArenaLease<TSecond> second, out Supprocom.NativeAllocationManagement.ArenaLease<TThird> third, out Supprocom.NativeAllocationManagement.ArenaLease<TFourth> fourth) -> bool
+static Supprocom.NativeAllocationManagement.NativeLeaseOperations.TryInitializeScoped<TSource, TFirst, TSecond, TThird, TFourth, TFifth, TSixth, TSeventh, TEighth>(scoped Supprocom.NativeAllocationManagement.ArenaLease<TSource> source, Supprocom.NativeAllocationManagement.NativeArena! arena, int firstLength, int secondLength, int thirdLength, int fourthLength, int fifthLength, int sixthLength, int seventhLength, int eighthLength, Supprocom.NativeAllocationManagement.NativeLeaseSourceOctupleSpanInitializer<TSource, TFirst, TSecond, TThird, TFourth, TFifth, TSixth, TSeventh, TEighth>! initializer, out Supprocom.NativeAllocationManagement.ArenaLease<TFirst> first, out Supprocom.NativeAllocationManagement.ArenaLease<TSecond> second, out Supprocom.NativeAllocationManagement.ArenaLease<TThird> third, out Supprocom.NativeAllocationManagement.ArenaLease<TFourth> fourth, out Supprocom.NativeAllocationManagement.ArenaLease<TFifth> fifth, out Supprocom.NativeAllocationManagement.ArenaLease<TSixth> sixth, out Supprocom.NativeAllocationManagement.ArenaLease<TSeventh> seventh, out Supprocom.NativeAllocationManagement.ArenaLease<TEighth> eighth) -> bool
+static Supprocom.NativeAllocationManagement.NativeLeaseOperations.Access<TFirst, TSecond>(scoped Supprocom.NativeAllocationManagement.ArenaLease<TFirst> first, scoped Supprocom.NativeAllocationManagement.ArenaLease<TSecond> second, Supprocom.NativeAllocationManagement.NativeLeasePairAction<TFirst, TSecond>! action) -> void
+static Supprocom.NativeAllocationManagement.NativeLeaseOperations.Access<TFirst, TSecond, TThird>(scoped Supprocom.NativeAllocationManagement.ArenaLease<TFirst> first, scoped Supprocom.NativeAllocationManagement.ArenaLease<TSecond> second, scoped Supprocom.NativeAllocationManagement.ArenaLease<TThird> third, Supprocom.NativeAllocationManagement.NativeLeaseTripleAction<TFirst, TSecond, TThird>! action) -> void
+static Supprocom.NativeAllocationManagement.NativeLeaseOperations.Access<TFirst, TSecond, TThird, TFourth>(scoped Supprocom.NativeAllocationManagement.ArenaLease<TFirst> first, scoped Supprocom.NativeAllocationManagement.ArenaLease<TSecond> second, scoped Supprocom.NativeAllocationManagement.ArenaLease<TThird> third, scoped Supprocom.NativeAllocationManagement.ArenaLease<TFourth> fourth, Supprocom.NativeAllocationManagement.NativeLeaseQuadrupleAction<TFirst, TSecond, TThird, TFourth>! action) -> void
+static Supprocom.NativeAllocationManagement.NativeLeaseOperations.Access<TFirst, TSecond, TThird, TFourth, TFifth>(scoped Supprocom.NativeAllocationManagement.ArenaLease<TFirst> first, scoped Supprocom.NativeAllocationManagement.ArenaLease<TSecond> second, scoped Supprocom.NativeAllocationManagement.ArenaLease<TThird> third, scoped Supprocom.NativeAllocationManagement.ArenaLease<TFourth> fourth, scoped Supprocom.NativeAllocationManagement.ArenaLease<TFifth> fifth, Supprocom.NativeAllocationManagement.NativeLeaseQuintupleAction<TFirst, TSecond, TThird, TFourth, TFifth>! action) -> void
+static Supprocom.NativeAllocationManagement.NativeLeaseOperations.Access<TFirst, TSecond, TThird, TFourth, TFifth, TSixth, TSeventh>(scoped Supprocom.NativeAllocationManagement.ArenaLease<TFirst> first, scoped Supprocom.NativeAllocationManagement.ArenaLease<TSecond> second, scoped Supprocom.NativeAllocationManagement.ArenaLease<TThird> third, scoped Supprocom.NativeAllocationManagement.ArenaLease<TFourth> fourth, scoped Supprocom.NativeAllocationManagement.ArenaLease<TFifth> fifth, scoped Supprocom.NativeAllocationManagement.ArenaLease<TSixth> sixth, scoped Supprocom.NativeAllocationManagement.ArenaLease<TSeventh> seventh, Supprocom.NativeAllocationManagement.NativeLeaseSeptupleAction<TFirst, TSecond, TThird, TFourth, TFifth, TSixth, TSeventh>! action) -> void
+static Supprocom.NativeAllocationManagement.NativeLeaseOperations.Access<TFirst, TSecond, TThird, TFourth, TFifth, TSixth, TSeventh, TEighth>(scoped Supprocom.NativeAllocationManagement.ArenaLease<TFirst> first, scoped Supprocom.NativeAllocationManagement.ArenaLease<TSecond> second, scoped Supprocom.NativeAllocationManagement.ArenaLease<TThird> third, scoped Supprocom.NativeAllocationManagement.ArenaLease<TFourth> fourth, scoped Supprocom.NativeAllocationManagement.ArenaLease<TFifth> fifth, scoped Supprocom.NativeAllocationManagement.ArenaLease<TSixth> sixth, scoped Supprocom.NativeAllocationManagement.ArenaLease<TSeventh> seventh, scoped Supprocom.NativeAllocationManagement.ArenaLease<TEighth> eighth, Supprocom.NativeAllocationManagement.NativeLeaseOctupleAction<TFirst, TSecond, TThird, TFourth, TFifth, TSixth, TSeventh, TEighth>! action) -> void
+static Supprocom.NativeAllocationManagement.NativeLeaseOperations.InitializeScoped<TSource, TFirst, TSecond, TThird, TFourth>(scoped Supprocom.NativeAllocationManagement.ArenaLease<TSource> source, Supprocom.NativeAllocationManagement.NativeArena! arena, int firstLength, int secondLength, int thirdLength, int fourthLength, Supprocom.NativeAllocationManagement.NativeLeaseSourceQuadSpanInitializer<TSource, TFirst, TSecond, TThird, TFourth>! initializer, out Supprocom.NativeAllocationManagement.ArenaLease<TFirst> first, out Supprocom.NativeAllocationManagement.ArenaLease<TSecond> second, out Supprocom.NativeAllocationManagement.ArenaLease<TThird> third, out Supprocom.NativeAllocationManagement.ArenaLease<TFourth> fourth) -> void
+static Supprocom.NativeAllocationManagement.NativeLeaseOperations.InitializeScoped<TSource, TFirst, TSecond, TThird, TFourth, TFifth, TSixth, TSeventh, TEighth>(scoped Supprocom.NativeAllocationManagement.ArenaLease<TSource> source, Supprocom.NativeAllocationManagement.NativeArena! arena, int firstLength, int secondLength, int thirdLength, int fourthLength, int fifthLength, int sixthLength, int seventhLength, int eighthLength, Supprocom.NativeAllocationManagement.NativeLeaseSourceOctupleSpanInitializer<TSource, TFirst, TSecond, TThird, TFourth, TFifth, TSixth, TSeventh, TEighth>! initializer, out Supprocom.NativeAllocationManagement.ArenaLease<TFirst> first, out Supprocom.NativeAllocationManagement.ArenaLease<TSecond> second, out Supprocom.NativeAllocationManagement.ArenaLease<TThird> third, out Supprocom.NativeAllocationManagement.ArenaLease<TFourth> fourth, out Supprocom.NativeAllocationManagement.ArenaLease<TFifth> fifth, out Supprocom.NativeAllocationManagement.ArenaLease<TSixth> sixth, out Supprocom.NativeAllocationManagement.ArenaLease<TSeventh> seventh, out Supprocom.NativeAllocationManagement.ArenaLease<TEighth> eighth) -> void
+Supprocom.NativeAllocationManagement.NativeArena.NativeArena(System.Runtime.InteropServices.SafeBuffer! buffer, nuint byteOffset, Supprocom.NativeAllocationManagement.NativeArenaPreparation preparation, Supprocom.NativeAllocationManagement.NativeMemoryBudget! budget) -> void
+Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics.ActiveBorrowedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics.ActiveBorrowedBytes.init -> void
+Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics.RetainedBorrowedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics.RetainedBorrowedBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeArena.NativeArena(Supprocom.NativeAllocationManagement.NativeArenaPreparation preparation, Supprocom.NativeAllocationManagement.NativeMemoryBudget! budget) -> void
+Supprocom.NativeAllocationManagement.NativeArena.CapturePreparedSnapshot() -> Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics
+Supprocom.NativeAllocationManagement.NativeArena.TryScratch<T>(int length, Supprocom.NativeAllocationManagement.NativeLeaseInitializer<T>! initializer, out Supprocom.NativeAllocationManagement.ArenaLease<T> lease) -> bool
+Supprocom.NativeAllocationManagement.NativeArena.TryScratchScoped<T>(int length, Supprocom.NativeAllocationManagement.NativeLeaseInitializer<T>! initializer, out Supprocom.NativeAllocationManagement.ArenaLease<T> lease) -> bool
+Supprocom.NativeAllocationManagement.NativeArenaPreparation
+Supprocom.NativeAllocationManagement.NativeArenaPreparation.NativeArenaPreparation() -> void
+Supprocom.NativeAllocationManagement.NativeArenaPreparation.NativeArenaPreparation(nuint ordinaryBytes, nuint scopedBytes) -> void
+Supprocom.NativeAllocationManagement.NativeArenaPreparation.OrdinaryBytes.get -> nuint
+Supprocom.NativeAllocationManagement.NativeArenaPreparation.ScopedBytes.get -> nuint
+Supprocom.NativeAllocationManagement.NativeArenaPreparation.Equals(Supprocom.NativeAllocationManagement.NativeArenaPreparation other) -> bool
+~override Supprocom.NativeAllocationManagement.NativeArenaPreparation.Equals(object obj) -> bool
+override Supprocom.NativeAllocationManagement.NativeArenaPreparation.GetHashCode() -> int
+~override Supprocom.NativeAllocationManagement.NativeArenaPreparation.ToString() -> string
+static Supprocom.NativeAllocationManagement.NativeArenaPreparation.operator ==(Supprocom.NativeAllocationManagement.NativeArenaPreparation left, Supprocom.NativeAllocationManagement.NativeArenaPreparation right) -> bool
+static Supprocom.NativeAllocationManagement.NativeArenaPreparation.operator !=(Supprocom.NativeAllocationManagement.NativeArenaPreparation left, Supprocom.NativeAllocationManagement.NativeArenaPreparation right) -> bool
+Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics
+Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics.NativePreparedArenaStatistics() -> void
+Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics.OwnerId.get -> long
+Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics.Lifecycle.get -> Supprocom.NativeAllocationManagement.NativeOwnerLifecycle
+Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics.Preparation.get -> Supprocom.NativeAllocationManagement.NativeArenaPreparation
+Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics.OrdinaryUsedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics.ScopedUsedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics.OrdinaryAvailableBytes.get -> long
+Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics.ScopedAvailableBytes.get -> long
+Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics.PeakOrdinaryUsedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics.PeakScopedUsedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics.RetainedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics.PeakRetainedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics.SuccessfulScratchCount.get -> long
+Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics.RejectedCapacityCount.get -> long
+Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics.InitializerFailureCount.get -> long
+Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics.HistoryOverflowed.get -> bool
+Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics.Equals(Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics other) -> bool
+~override Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics.Equals(object obj) -> bool
+override Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics.GetHashCode() -> int
+~override Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics.ToString() -> string
+static Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics.operator ==(Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics left, Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics right) -> bool
+static Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics.operator !=(Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics left, Supprocom.NativeAllocationManagement.NativePreparedArenaStatistics right) -> bool
+Supprocom.NativeAllocationManagement.NativeTransfer<T>.NativeTransfer() -> void
+static Supprocom.NativeAllocationManagement.NativeTransfer<T>.Move(ref Supprocom.NativeAllocationManagement.NativeTransfer<T>? source) -> Supprocom.NativeAllocationManagement.NativeTransfer<T>
+static Supprocom.NativeAllocationManagement.NativeTransferPoolExtensions.RentTransferable<T>(this Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>! pool, int length, Supprocom.NativeAllocationManagement.NativeLeaseInitializer<T>! initializer) -> Supprocom.NativeAllocationManagement.NativeTransfer<T>
+Supprocom.NativeAllocationManagement.NativeBuilder<T>.Complete(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> Supprocom.NativeAllocationManagement.NativeTransfer<T>
+Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.HistoryOverflowed.get -> bool
+Supprocom.NativeAllocationManagement.NativeMemoryTraceEvent.AllocationOrdinal.get -> long?
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.PageAcquired = 6 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.Prepared = 7 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.Trimmed = 8 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativePoolPreparation
+Supprocom.NativeAllocationManagement.NativePoolPreparation.NativePoolPreparation() -> void
+Supprocom.NativeAllocationManagement.NativePoolPreparation.NativePoolPreparation(int slotCount, int slotCapacity, int slotsPerPage) -> void
+Supprocom.NativeAllocationManagement.NativePoolPreparation.SlotCount.get -> int
+Supprocom.NativeAllocationManagement.NativePoolPreparation.SlotCapacity.get -> int
+Supprocom.NativeAllocationManagement.NativePoolPreparation.SlotsPerPage.get -> int
+Supprocom.NativeAllocationManagement.NativePoolPreparation.Equals(Supprocom.NativeAllocationManagement.NativePoolPreparation other) -> bool
+~override Supprocom.NativeAllocationManagement.NativePoolPreparation.Equals(object obj) -> bool
+override Supprocom.NativeAllocationManagement.NativePoolPreparation.GetHashCode() -> int
+~override Supprocom.NativeAllocationManagement.NativePoolPreparation.ToString() -> string
+static Supprocom.NativeAllocationManagement.NativePoolPreparation.operator ==(Supprocom.NativeAllocationManagement.NativePoolPreparation left, Supprocom.NativeAllocationManagement.NativePoolPreparation right) -> bool
+static Supprocom.NativeAllocationManagement.NativePoolPreparation.operator !=(Supprocom.NativeAllocationManagement.NativePoolPreparation left, Supprocom.NativeAllocationManagement.NativePoolPreparation right) -> bool
+Supprocom.NativeAllocationManagement.NativePoolExhaustionReason
+Supprocom.NativeAllocationManagement.NativePoolExhaustionReason.None = 0 -> Supprocom.NativeAllocationManagement.NativePoolExhaustionReason
+Supprocom.NativeAllocationManagement.NativePoolExhaustionReason.ShapeExceeded = 1 -> Supprocom.NativeAllocationManagement.NativePoolExhaustionReason
+Supprocom.NativeAllocationManagement.NativePoolExhaustionReason.NoAvailableSlot = 2 -> Supprocom.NativeAllocationManagement.NativePoolExhaustionReason
+Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics
+Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics.NativePreparedPoolStatistics() -> void
+Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics.OwnerId.get -> long
+Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics.Lifecycle.get -> Supprocom.NativeAllocationManagement.NativeOwnerLifecycle
+Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics.Preparation.get -> Supprocom.NativeAllocationManagement.NativePoolPreparation
+Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics.RetainedPageCount.get -> int
+Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics.RetainedSlotCount.get -> int
+Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics.OccupiedSlotCount.get -> int
+Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics.PeakOccupiedSlotCount.get -> int
+Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics.AvailableSlotCount.get -> int
+Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics.RetainedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics.PeakRetainedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics.SuccessfulRentCount.get -> long
+Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics.RejectedShapeCount.get -> long
+Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics.RejectedFullCount.get -> long
+Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics.InitializerFailureCount.get -> long
+Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics.ManagedBankBytes.get -> long
+Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics.UnusedSlotBytes.get -> long
+Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics.HistoryOverflowed.get -> bool
+Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics.Equals(Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics other) -> bool
+~override Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics.Equals(object obj) -> bool
+override Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics.GetHashCode() -> int
+~override Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics.ToString() -> string
+static Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics.operator ==(Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics left, Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics right) -> bool
+static Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics.operator !=(Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics left, Supprocom.NativeAllocationManagement.NativePreparedPoolStatistics right) -> bool
+Supprocom.NativeAllocationManagement.NativeOwnerModel
+Supprocom.NativeAllocationManagement.NativeOwnerModel.Unspecified = 0 -> Supprocom.NativeAllocationManagement.NativeOwnerModel
+Supprocom.NativeAllocationManagement.NativeOwnerModel.ThreadConfinedPool = 1 -> Supprocom.NativeAllocationManagement.NativeOwnerModel
+Supprocom.NativeAllocationManagement.NativeOwnerModel.ThreadConfinedRegion = 2 -> Supprocom.NativeAllocationManagement.NativeOwnerModel
+Supprocom.NativeAllocationManagement.NativeOwnerModel.ThreadConfinedArena = 3 -> Supprocom.NativeAllocationManagement.NativeOwnerModel
+Supprocom.NativeAllocationManagement.NativeOwnerModel.SynchronizedPool = 4 -> Supprocom.NativeAllocationManagement.NativeOwnerModel
+Supprocom.NativeAllocationManagement.NativeOwnerModel.SynchronizedRegion = 5 -> Supprocom.NativeAllocationManagement.NativeOwnerModel
+Supprocom.NativeAllocationManagement.NativeOwnerModel.SynchronizedArena = 6 -> Supprocom.NativeAllocationManagement.NativeOwnerModel
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.Model.get -> Supprocom.NativeAllocationManagement.NativeOwnerModel
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.Model.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.Model.get -> Supprocom.NativeAllocationManagement.NativeOwnerModel
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.Model.init -> void
+Supprocom.NativeAllocationManagement.NativePool<T>.CaptureDiagnosticSnapshot() -> Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot
+Supprocom.NativeAllocationManagement.NativeArena.CaptureDiagnosticSnapshot() -> Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot
+Supprocom.NativeAllocationManagement.NativeRegion.CaptureDiagnosticSnapshot() -> Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot
+Supprocom.NativeAllocationManagement.NativePool<T>.Id.get -> long
+Supprocom.NativeAllocationManagement.NativePool<T>.Rent(int length, T value) -> Supprocom.NativeAllocationManagement.Pooled<T>
+Supprocom.NativeAllocationManagement.NativePool<T>.Process<TState, TResult>(int length, T value, TState state, Supprocom.NativeAllocationManagement.NativeSpanStateProcessor<T, TState, TResult>! processor) -> TResult
+Supprocom.NativeAllocationManagement.NativeArena.Id.get -> long
+Supprocom.NativeAllocationManagement.NativeRegion.Id.get -> long
+Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>.Id.get -> long
+Supprocom.NativeAllocationManagement.NativeConcurrentArena.Id.get -> long
+Supprocom.NativeAllocationManagement.NativeBuilder<T>.Id.get -> long
+Supprocom.NativeAllocationManagement.NativeWorkspace<T>.Id.get -> long
+Supprocom.NativeAllocationManagement.NativeTransfer<T>.Id.get -> long
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.OwnerId.get -> long
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.OwnerId.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.OwnerId.get -> long
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.OwnerId.init -> void
+Supprocom.NativeAllocationManagement.NativeMemoryBudget.NativeMemoryBudget(long capacityBytes, int traceCapacity) -> void
+Supprocom.NativeAllocationManagement.NativeMemoryBudget.CopyTraceTo(scoped System.Span<Supprocom.NativeAllocationManagement.NativeMemoryTraceEvent> destination) -> int
+Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.TraceCapacity.get -> int
+Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.TraceCount.get -> int
+Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.DroppedTraceEventCount.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.TraceOverflowed.get -> bool
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.Admitted = 0 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.Allocated = 1 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.Reallocated = 2 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.Released = 3 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.Rejected = 4 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.AcquisitionFailed = 5 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceEvent
+Supprocom.NativeAllocationManagement.NativeMemoryTraceEvent.NativeMemoryTraceEvent() -> void
+Supprocom.NativeAllocationManagement.NativeMemoryTraceEvent.Sequence.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryTraceEvent.TimestampTicks.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryTraceEvent.BudgetId.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryTraceEvent.OwnerId.get -> long?
+Supprocom.NativeAllocationManagement.NativeMemoryTraceEvent.Kind.get -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceEvent.RequestedBytes.get -> nuint
+Supprocom.NativeAllocationManagement.NativeMemoryTraceEvent.PreviousBytes.get -> nuint
+Supprocom.NativeAllocationManagement.NativeMemoryTraceEvent.CommittedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryTraceEvent.ReservedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryTraceEvent.Equals(Supprocom.NativeAllocationManagement.NativeMemoryTraceEvent other) -> bool
+override Supprocom.NativeAllocationManagement.NativeMemoryTraceEvent.GetHashCode() -> int
+~override Supprocom.NativeAllocationManagement.NativeMemoryTraceEvent.Equals(object obj) -> bool
+~override Supprocom.NativeAllocationManagement.NativeMemoryTraceEvent.ToString() -> string
+static Supprocom.NativeAllocationManagement.NativeMemoryTraceEvent.operator ==(Supprocom.NativeAllocationManagement.NativeMemoryTraceEvent left, Supprocom.NativeAllocationManagement.NativeMemoryTraceEvent right) -> bool
+static Supprocom.NativeAllocationManagement.NativeMemoryTraceEvent.operator !=(Supprocom.NativeAllocationManagement.NativeMemoryTraceEvent left, Supprocom.NativeAllocationManagement.NativeMemoryTraceEvent right) -> bool
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.UsableCapacityBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.UsableCapacityBytes.init -> void
+Supprocom.NativeAllocationManagement.NativePool<T>.NativePool(Supprocom.NativeAllocationManagement.NativeMemoryBudget! budget, int preLease, nuint preAllocateBytes, Supprocom.NativeAllocationManagement.NativeMemoryReturn returnMemoryOnDispose) -> void
+Supprocom.NativeAllocationManagement.NativeArena.NativeArena(Supprocom.NativeAllocationManagement.NativeMemoryBudget! budget, nuint preAllocateBytes, Supprocom.NativeAllocationManagement.NativeMemoryReturn returnMemoryOnDispose) -> void
+Supprocom.NativeAllocationManagement.NativeRegion.NativeRegion(Supprocom.NativeAllocationManagement.NativeMemoryBudget! budget, nuint preAllocateBytes, Supprocom.NativeAllocationManagement.NativeMemoryReturn returnMemoryOnDispose) -> void
+Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>.NativeConcurrentPool(Supprocom.NativeAllocationManagement.NativeMemoryBudget! budget, int preLease, nuint preAllocateBytes, Supprocom.NativeAllocationManagement.NativeMemoryReturn returnMemoryOnDispose, bool doNotLeaseOnDeclaration) -> void
+Supprocom.NativeAllocationManagement.NativeConcurrentArena.NativeConcurrentArena(Supprocom.NativeAllocationManagement.NativeMemoryBudget! budget, nuint preAllocateBytes, Supprocom.NativeAllocationManagement.NativeMemoryReturn returnMemoryOnDispose, bool doNotLeaseOnDeclaration) -> void
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.BorrowedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.BorrowedBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.RetiredBorrowedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.RetiredBorrowedBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.OutstandingNativeBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.OutstandingNativeBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.DetachedNativeBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.DetachedNativeBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.PeakOutstandingNativeBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.PeakOutstandingNativeBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.OutstandingNativeBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.OutstandingNativeBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.DetachedNativeBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.DetachedNativeBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.PeakOutstandingNativeBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.PeakOutstandingNativeBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeBuilder<T>.NativeBuilder() -> void
+Supprocom.NativeAllocationManagement.NativeBuilder<T>.NativeBuilder(int preLease) -> void
+Supprocom.NativeAllocationManagement.NativeBuilder<T>.NativeBuilder(Supprocom.NativeAllocationManagement.NativeMemoryBudget! budget, int preLease) -> void
+Supprocom.NativeAllocationManagement.NativeBuilder<T>.TryEnsureCapacity(int capacity) -> bool
+Supprocom.NativeAllocationManagement.NativeWorkspace<T>.NativeWorkspace(Supprocom.NativeAllocationManagement.NativeMemoryBudget! budget, int preLease) -> void
+Supprocom.NativeAllocationManagement.NativeMemoryBudget
+Supprocom.NativeAllocationManagement.NativeMemoryBudget.NativeMemoryBudget(long capacityBytes) -> void
+Supprocom.NativeAllocationManagement.NativeMemoryBudget.CapacityBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryBudget.Id.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryBudget.CaptureStatistics() -> Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics
+Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics
+Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.NativeMemoryBudgetStatistics() -> void
+Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.Id.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.CapacityBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.CommittedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.ReservedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.PeakCommittedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.PeakAdmittedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.AllocationCount.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.ReallocationCount.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.AcquiredBackingBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.ReplacementBackingBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.FreeCount.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.ActiveAllocationCount.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.RejectedAllocationCount.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.FailedAllocationCount.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.Equals(Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics other) -> bool
+override Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.GetHashCode() -> int
+~override Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.Equals(object obj) -> bool
+~override Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.ToString() -> string
+static Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.operator ==(Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics left, Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics right) -> bool
+static Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics.operator !=(Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics left, Supprocom.NativeAllocationManagement.NativeMemoryBudgetStatistics right) -> bool
+Supprocom.NativeAllocationManagement.NativeMemoryBudgetExceededException
+Supprocom.NativeAllocationManagement.NativeMemoryBudgetExceededException.BudgetId.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryBudgetExceededException.CapacityBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryBudgetExceededException.RequestedBytes.get -> nuint
+Supprocom.NativeAllocationManagement.NativeMemoryBudgetExceededException.AvailableBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryStatistics.AllocationCount.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryStatistics.AllocationCount.init -> void
+Supprocom.NativeAllocationManagement.NativeMemoryStatistics.FreeCount.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryStatistics.FreeCount.init -> void
+Supprocom.NativeAllocationManagement.NativeMemoryStatistics.MetricsEpoch.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryStatistics.MetricsEpoch.init -> void
+Supprocom.NativeAllocationManagement.NativeMemoryStatistics.HistoryOverflowed.get -> bool
+Supprocom.NativeAllocationManagement.NativeMemoryStatistics.HistoryOverflowed.init -> void
+Supprocom.NativeAllocationManagement.NativeMemoryStatistics.ZeroedAllocationCount.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryStatistics.ZeroedAllocationCount.init -> void
+Supprocom.NativeAllocationManagement.NativeMemoryStatistics.DetachedGenerationCount.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryStatistics.DetachedGenerationCount.init -> void
+Supprocom.NativeAllocationManagement.NativeMemoryStatistics.BumpTraversalVisitCount.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryStatistics.BumpTraversalVisitCount.init -> void
+Supprocom.NativeAllocationManagement.NativeMemoryStatistics.StorageClearCount.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryStatistics.StorageClearCount.init -> void
+Supprocom.NativeAllocationManagement.NativeMemoryStatistics.StorageClearBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryStatistics.StorageClearBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeMemoryStatistics.WrittenClearBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryStatistics.WrittenClearBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeMemoryStatistics.CopiedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryStatistics.CopiedBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeMemoryStatistics.ReallocationCount.get -> long
+Supprocom.NativeAllocationManagement.NativeMemoryStatistics.ReallocationCount.init -> void
+Supprocom.NativeAllocationManagement.NativeConcurrentArena.CaptureDiagnosticSnapshot() -> Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot
+Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>.CaptureDiagnosticSnapshot() -> Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.ActiveRecords.get -> int
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.ActiveRecords.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.AvailableSegmentCount.get -> int
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.AvailableSegmentCount.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.CurrentGenerationQuarantined.get -> bool
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.CurrentGenerationQuarantined.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.Deconstruct(out Supprocom.NativeAllocationManagement.NativeOwnerLifecycle Lifecycle, out long Generation, out long ScopeEpoch, out long MetricsEpoch, out int ActiveRecords, out int ScopedRecords, out int ReferenceRoots, out int OrdinaryTraversalIndex, out int ScopedTraversalIndex, out int RetainedSegmentCount, out int AvailableSegmentCount, out int RetiredGenerationCount, out int RetiredSegmentCount, out long RetiredBytes, out int QuarantinedGenerationCount, out int QuarantinedSegmentCount, out bool CurrentGenerationQuarantined) -> void
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.Equals(Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot other) -> bool
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.Generation.get -> long
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.Generation.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.Lifecycle.get -> Supprocom.NativeAllocationManagement.NativeOwnerLifecycle
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.Lifecycle.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.MetricsEpoch.get -> long
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.MetricsEpoch.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.NativeOwnerDiagnosticSnapshot() -> void
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.NativeOwnerDiagnosticSnapshot(Supprocom.NativeAllocationManagement.NativeOwnerLifecycle Lifecycle, long Generation, long ScopeEpoch, long MetricsEpoch, int ActiveRecords, int ScopedRecords, int ReferenceRoots, int OrdinaryTraversalIndex, int ScopedTraversalIndex, int RetainedSegmentCount, int AvailableSegmentCount, int RetiredGenerationCount, int RetiredSegmentCount, long RetiredBytes, int QuarantinedGenerationCount, int QuarantinedSegmentCount, bool CurrentGenerationQuarantined) -> void
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.OrdinaryTraversalIndex.get -> int
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.OrdinaryTraversalIndex.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.QuarantinedGenerationCount.get -> int
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.QuarantinedGenerationCount.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.QuarantinedSegmentCount.get -> int
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.QuarantinedSegmentCount.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.ReferenceRoots.get -> int
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.ReferenceRoots.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.RetainedSegmentCount.get -> int
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.RetainedSegmentCount.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.RetiredBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.RetiredBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.RetiredGenerationCount.get -> int
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.RetiredGenerationCount.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.RetiredSegmentCount.get -> int
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.RetiredSegmentCount.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.ScopeEpoch.get -> long
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.ScopeEpoch.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.ScopedRecords.get -> int
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.ScopedRecords.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.ScopedTraversalIndex.get -> int
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.ScopedTraversalIndex.init -> void
+override Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.GetHashCode() -> int
+static Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.operator !=(Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot left, Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot right) -> bool
+static Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.operator ==(Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot left, Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot right) -> bool
+~override Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.Equals(object obj) -> bool
+~override Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.ToString() -> string
+Supprocom.NativeAllocationManagement.NativeLayout
+Supprocom.NativeAllocationManagement.NativeLayout.Alignment.get -> int
+Supprocom.NativeAllocationManagement.NativeLayout.BackingBytes.get -> int
+Supprocom.NativeAllocationManagement.NativeLayout.Describe<T>(Supprocom.NativeAllocationManagement.NativeLayoutField<T> field) -> Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics
+Supprocom.NativeAllocationManagement.NativeLayout.ExtentBytes.get -> int
+Supprocom.NativeAllocationManagement.NativeLayout.Id.get -> long
+Supprocom.NativeAllocationManagement.NativeLayout.LogicalBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeLayout.MetadataFieldBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeLayout.RegionCount.get -> int
+Supprocom.NativeAllocationManagement.NativeLayout.TryReserve(Supprocom.NativeAllocationManagement.NativeMemoryBudget! budget, out Supprocom.NativeAllocationManagement.NativeLayoutReservation? reservation, out Supprocom.NativeAllocationManagement.NativeMemoryAdmissionExhaustionReason reason) -> bool
+Supprocom.NativeAllocationManagement.NativeLayoutAction<TState>
+Supprocom.NativeAllocationManagement.NativeLayoutBuilder
+Supprocom.NativeAllocationManagement.NativeLayoutBuilder.Add<T>(int length, int alignment = 0) -> Supprocom.NativeAllocationManagement.NativeLayoutField<T>
+Supprocom.NativeAllocationManagement.NativeLayoutBuilder.Build() -> Supprocom.NativeAllocationManagement.NativeLayout!
+Supprocom.NativeAllocationManagement.NativeLayoutBuilder.NativeLayoutBuilder(int regionCapacity) -> void
+Supprocom.NativeAllocationManagement.NativeLayoutField<T>
+Supprocom.NativeAllocationManagement.NativeLayoutField<T>.Equals(Supprocom.NativeAllocationManagement.NativeLayoutField<T> other) -> bool
+Supprocom.NativeAllocationManagement.NativeLayoutField<T>.Index.get -> int
+Supprocom.NativeAllocationManagement.NativeLayoutField<T>.LayoutId.get -> long
+Supprocom.NativeAllocationManagement.NativeLayoutField<T>.NativeLayoutField() -> void
+Supprocom.NativeAllocationManagement.NativeLayoutFunc<TState, TResult>
+Supprocom.NativeAllocationManagement.NativeLayoutInitializer<TState>
+Supprocom.NativeAllocationManagement.NativeLayoutOwner
+Supprocom.NativeAllocationManagement.NativeLayoutOwner.Access<TState>(TState state, Supprocom.NativeAllocationManagement.NativeLayoutAction<TState>! action) -> void
+Supprocom.NativeAllocationManagement.NativeLayoutOwner.CaptureSnapshot() -> Supprocom.NativeAllocationManagement.NativeLayoutStatistics
+Supprocom.NativeAllocationManagement.NativeLayoutOwner.DetachField<T>(Supprocom.NativeAllocationManagement.NativeLayoutField<T> field, Supprocom.NativeAllocationManagement.NativeMemoryBudget! budget, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> Supprocom.NativeAllocationManagement.NativeTransfer<T>
+Supprocom.NativeAllocationManagement.NativeLayoutOwner.Dispose() -> void
+Supprocom.NativeAllocationManagement.NativeLayoutOwner.Id.get -> long
+Supprocom.NativeAllocationManagement.NativeLayoutOwner.NativeLayoutOwner() -> void
+Supprocom.NativeAllocationManagement.NativeLayoutOwner.Read<TState, TResult>(TState state, Supprocom.NativeAllocationManagement.NativeLayoutFunc<TState, TResult>! action) -> TResult
+Supprocom.NativeAllocationManagement.NativeLayoutOwner.TryCompletePayloadReturn() -> bool
+Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics
+Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics.Alignment.get -> int
+Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics.Alignment.init -> void
+Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics.Deconstruct(out long LayoutId, out int Index, out int Length, out int ElementBytes, out int OffsetBytes, out int PayloadBytes, out int Alignment) -> void
+Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics.ElementBytes.get -> int
+Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics.ElementBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics.Equals(Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics other) -> bool
+Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics.Index.get -> int
+Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics.Index.init -> void
+Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics.LayoutId.get -> long
+Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics.LayoutId.init -> void
+Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics.Length.get -> int
+Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics.Length.init -> void
+Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics.NativeLayoutRegionStatistics() -> void
+Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics.NativeLayoutRegionStatistics(long LayoutId, int Index, int Length, int ElementBytes, int OffsetBytes, int PayloadBytes, int Alignment) -> void
+Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics.OffsetBytes.get -> int
+Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics.OffsetBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics.PayloadBytes.get -> int
+Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics.PayloadBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeLayoutReservation
+Supprocom.NativeAllocationManagement.NativeLayoutReservation.CaptureSnapshot() -> Supprocom.NativeAllocationManagement.NativeLayoutStatistics
+Supprocom.NativeAllocationManagement.NativeLayoutReservation.Dispose() -> void
+Supprocom.NativeAllocationManagement.NativeLayoutReservation.Id.get -> long
+Supprocom.NativeAllocationManagement.NativeLayoutReservation.NativeLayoutReservation() -> void
+Supprocom.NativeAllocationManagement.NativeLayoutReservation.PrepareBacking(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> void
+Supprocom.NativeAllocationManagement.NativeLayoutReservation.TryCompletePayloadReturn() -> bool
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.AlignmentSlackBytes.get -> int
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.AlignmentSlackBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.CopiedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.CopiedBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.DescriptorFieldBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.DescriptorFieldBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.DetachedOwnerCount.get -> long
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.DetachedOwnerCount.init -> void
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.Equals(Supprocom.NativeAllocationManagement.NativeLayoutStatistics other) -> bool
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.HistoryOverflowed.get -> bool
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.HistoryOverflowed.init -> void
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.InitializationCompleted.get -> bool
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.InitializationCompleted.init -> void
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.InitializedRegionCount.get -> int
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.InitializedRegionCount.init -> void
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.InterRegionPaddingBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.InterRegionPaddingBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.LayoutExtentBytes.get -> int
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.LayoutExtentBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.LayoutId.get -> long
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.LayoutId.init -> void
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.LayoutIsPrepared.get -> bool
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.LayoutIsPrepared.init -> void
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.LogicalInitializedBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.LogicalInitializedBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.NativeLayoutStatistics() -> void
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.Ownership.get -> Supprocom.NativeAllocationManagement.NativeTransferStatistics
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.Ownership.init -> void
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.PayloadAlignment.get -> int
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.PayloadAlignment.init -> void
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.PayloadOffsetBytes.get -> int
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.PayloadOffsetBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.RegionCount.get -> int
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.RegionCount.init -> void
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.Reservation.get -> Supprocom.NativeAllocationManagement.NativeMemoryReservationStatistics
+Supprocom.NativeAllocationManagement.NativeLayoutStatistics.Reservation.init -> void
+Supprocom.NativeAllocationManagement.NativeLayoutView
+Supprocom.NativeAllocationManagement.NativeLayoutView.NativeLayoutView() -> void
+Supprocom.NativeAllocationManagement.NativeLayoutView.Region<T>(Supprocom.NativeAllocationManagement.NativeLayoutField<T> field) -> System.Span<T>
+Supprocom.NativeAllocationManagement.NativeLayoutWriter
+Supprocom.NativeAllocationManagement.NativeLayoutWriter.NativeLayoutWriter() -> void
+Supprocom.NativeAllocationManagement.NativeLayoutWriter.Region<T>(Supprocom.NativeAllocationManagement.NativeLayoutField<T> field) -> Supprocom.NativeAllocationManagement.NativeLeaseWriter<T>
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.LayoutInitialized = 32 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.LayoutPrepared = 31 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceEvent.Generation.get -> long?
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.GenerationDetached = 33 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.GenerationRetired = 34 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.GenerationQuarantined = 35 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+Supprocom.NativeAllocationManagement.NativeMemoryTraceKind.GenerationReleased = 36 -> Supprocom.NativeAllocationManagement.NativeMemoryTraceKind
+const Supprocom.NativeAllocationManagement.NativeLayoutBuilder.MaximumRegionCount = 64 -> int
+override Supprocom.NativeAllocationManagement.NativeLayoutField<T>.GetHashCode() -> int
+override Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics.GetHashCode() -> int
+override Supprocom.NativeAllocationManagement.NativeLayoutStatistics.GetHashCode() -> int
+static Supprocom.NativeAllocationManagement.NativeLayoutField<T>.operator !=(Supprocom.NativeAllocationManagement.NativeLayoutField<T> left, Supprocom.NativeAllocationManagement.NativeLayoutField<T> right) -> bool
+static Supprocom.NativeAllocationManagement.NativeLayoutField<T>.operator ==(Supprocom.NativeAllocationManagement.NativeLayoutField<T> left, Supprocom.NativeAllocationManagement.NativeLayoutField<T> right) -> bool
+static Supprocom.NativeAllocationManagement.NativeLayoutOwner.Move(ref Supprocom.NativeAllocationManagement.NativeLayoutOwner? source) -> Supprocom.NativeAllocationManagement.NativeLayoutOwner
+static Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics.operator !=(Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics left, Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics right) -> bool
+static Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics.operator ==(Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics left, Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics right) -> bool
+static Supprocom.NativeAllocationManagement.NativeLayoutReservation.Activate<TState>(ref Supprocom.NativeAllocationManagement.NativeLayoutReservation? source, TState state, Supprocom.NativeAllocationManagement.NativeLayoutInitializer<TState>! initializer, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> Supprocom.NativeAllocationManagement.NativeLayoutOwner
+static Supprocom.NativeAllocationManagement.NativeLayoutReservation.Move(ref Supprocom.NativeAllocationManagement.NativeLayoutReservation? source) -> Supprocom.NativeAllocationManagement.NativeLayoutReservation
+static Supprocom.NativeAllocationManagement.NativeLayoutStatistics.operator !=(Supprocom.NativeAllocationManagement.NativeLayoutStatistics left, Supprocom.NativeAllocationManagement.NativeLayoutStatistics right) -> bool
+static Supprocom.NativeAllocationManagement.NativeLayoutStatistics.operator ==(Supprocom.NativeAllocationManagement.NativeLayoutStatistics left, Supprocom.NativeAllocationManagement.NativeLayoutStatistics right) -> bool
+virtual Supprocom.NativeAllocationManagement.NativeLayoutAction<TState>.Invoke(scoped Supprocom.NativeAllocationManagement.NativeLayoutView view, scoped TState state) -> void
+virtual Supprocom.NativeAllocationManagement.NativeLayoutFunc<TState, TResult>.Invoke(scoped Supprocom.NativeAllocationManagement.NativeLayoutView view, scoped TState state) -> TResult
+virtual Supprocom.NativeAllocationManagement.NativeLayoutInitializer<TState>.Invoke(scoped Supprocom.NativeAllocationManagement.NativeLayoutWriter writer, scoped TState state) -> void
+~override Supprocom.NativeAllocationManagement.NativeLayoutField<T>.Equals(object obj) -> bool
+~override Supprocom.NativeAllocationManagement.NativeLayoutField<T>.ToString() -> string
+~override Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics.Equals(object obj) -> bool
+~override Supprocom.NativeAllocationManagement.NativeLayoutRegionStatistics.ToString() -> string
+~override Supprocom.NativeAllocationManagement.NativeLayoutStatistics.Equals(object obj) -> bool
+~override Supprocom.NativeAllocationManagement.NativeLayoutStatistics.ToString() -> string
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.InitializedPayloadBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.InitializedPayloadBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.PeakInitializedPayloadBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot.PeakInitializedPayloadBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.InitializedPayloadBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.InitializedPayloadBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.PeakInitializedPayloadBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeOwnerStatistics.PeakInitializedPayloadBytes.init -> void
+Supprocom.NativeAllocationManagement.NativeSharingStatistics.PeakInitializedPayloadBytes.get -> long
+Supprocom.NativeAllocationManagement.NativeBuilder<T>.CaptureDiagnosticSnapshot() -> Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot
+Supprocom.NativeAllocationManagement.NativeBuilder<T>.GetStatistics() -> Supprocom.NativeAllocationManagement.NativeOwnerStatistics
+Supprocom.NativeAllocationManagement.NativeWorkspace<T>.CaptureDiagnosticSnapshot() -> Supprocom.NativeAllocationManagement.NativeOwnerDiagnosticSnapshot
+Supprocom.NativeAllocationManagement.NativeWorkspace<T>.GetStatistics() -> Supprocom.NativeAllocationManagement.NativeOwnerStatistics
+Supprocom.NativeAllocationManagement.NativeOwnerModel.SingleWriterBuilder = 7 -> Supprocom.NativeAllocationManagement.NativeOwnerModel
+Supprocom.NativeAllocationManagement.NativeOwnerModel.ThreadConfinedWorkspace = 8 -> Supprocom.NativeAllocationManagement.NativeOwnerModel
+Supprocom.NativeAllocationManagement.NativeArena.Scratch<T>(int length, T value) -> Supprocom.NativeAllocationManagement.ArenaLease<T>
+Supprocom.NativeAllocationManagement.NativeArena.ScratchScoped<T>(int length, T value) -> Supprocom.NativeAllocationManagement.ArenaLease<T>
+Supprocom.NativeAllocationManagement.NativeRegion.Lease<T>(int length, T value) -> Supprocom.NativeAllocationManagement.Local<T>
+Supprocom.NativeAllocationManagement.INativeSpanProcessor<T, TState, TResult>
+Supprocom.NativeAllocationManagement.INativeSpanProcessor<T, TState, TResult>.Invoke(scoped System.Span<T> values, scoped in TState state) -> TResult
+Supprocom.NativeAllocationManagement.NativePool<T>.Process<TState, TResult, TProcessor>(int length, T value, scoped in TState state) -> TResult
+Supprocom.NativeAllocationManagement.Pooled<T>.Process<TState, TResult, TProcessor>(int logicalLength, scoped in TState state) -> TResult
+Supprocom.NativeAllocationManagement.Local<T>.Process<TState, TResult, TProcessor>(scoped in TState state) -> TResult
+Supprocom.NativeAllocationManagement.ArenaLease<T>.Process<TState, TResult, TProcessor>(scoped in TState state) -> TResult
+Supprocom.NativeAllocationManagement.NativeWorkspace<T>.Process<TState, TResult, TProcessor>(int length, scoped in TState state) -> TResult
+Supprocom.NativeAllocationManagement.NativeWorkspace<T>.Process<TState, TResult, TProcessor>(int length, scoped in TState state, System.Threading.CancellationToken cancellationToken) -> TResult
+Supprocom.NativeAllocationManagement.Pooled<T>.AsSpan() -> System.Span<T>
+Supprocom.NativeAllocationManagement.PreparedPooled<T>.AsSpan() -> System.Span<T>
+Supprocom.NativeAllocationManagement.ArenaLease<T>.AsSpan() -> System.Span<T>
+Supprocom.NativeAllocationManagement.Local<T>.AsSpan() -> System.Span<T>
+static Supprocom.NativeAllocationManagement.NativeMemoryDiagnostics.DetailedCountersEnabled.get -> bool
+Supprocom.NativeAllocationManagement.INativeReadOnlySpanProcessor<T, TState, TResult>
+Supprocom.NativeAllocationManagement.INativeReadOnlySpanProcessor<T, TState, TResult>.Invoke(scoped System.ReadOnlySpan<T> values, scoped in TState state) -> TResult
+Supprocom.NativeAllocationManagement.NativeTransfer<T>.Process<TState, TResult, TProcessor>(scoped in TState state) -> TResult
+Supprocom.NativeAllocationManagement.NativeShared<T>.Process<TState, TResult, TProcessor>(scoped in TState state) -> TResult
+Supprocom.NativeAllocationManagement.ConcurrentPooled<T>.Process<TState, TResult, TProcessor>(int length, scoped in TState state) -> TResult
+static Supprocom.NativeAllocationManagement.NativePool<T>.Shared.get -> Supprocom.NativeAllocationManagement.NativePool<T>!
+static Supprocom.NativeAllocationManagement.NativeTransfer<T>.Create(int length, T value) -> Supprocom.NativeAllocationManagement.NativeTransfer<T>
+static Supprocom.NativeAllocationManagement.NativeTransfer<T>.Create(scoped System.ReadOnlySpan<T> values) -> Supprocom.NativeAllocationManagement.NativeTransfer<T>
+Supprocom.NativeAllocationManagement.NativeArena.ScratchScopedUninitialized<T>(int length) -> Supprocom.NativeAllocationManagement.ArenaLease<T>
+Supprocom.NativeAllocationManagement.NativeArena.ScratchUninitialized<T>(int length) -> Supprocom.NativeAllocationManagement.ArenaLease<T>
+Supprocom.NativeAllocationManagement.NativePool<T>.RentUninitialized(int length) -> Supprocom.NativeAllocationManagement.Pooled<T>
+Supprocom.NativeAllocationManagement.NativeRegion.LeaseUninitialized<T>(int length) -> Supprocom.NativeAllocationManagement.Local<T>
+static Supprocom.NativeAllocationManagement.NativeTransfer<T>.CreateUninitialized(int length) -> Supprocom.NativeAllocationManagement.NativeTransfer<T>
