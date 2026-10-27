@@ -484,10 +484,11 @@ public static class VoxelMath
         FillPressurePlanes(seed, chunkIndex, 0, ChunkDimension, ref writer);
     }
 
-    // Receives each cell FillPressurePlanes generates, in row order.
+    // Receives each X row FillPressurePlanes generates: its block IDs and
+    // densities for x = 0, 1, ....
     internal interface IPressureCellSink
     {
-        void Write(int x, int y, int z, ushort blockId, short density, int section);
+        void WriteRow(int y, int z, scoped ReadOnlySpan<ushort> blockIds, scoped ReadOnlySpan<short> densities);
     }
 
     // Generates the Z planes [firstZ, endZ) of one chunk into a sink. Each
@@ -525,6 +526,8 @@ public static class VoxelMath
         int coarseMask = (1 << TPattern.CoarseShift) - 1;
         Span<int> columnHashes = stackalloc int[ChunkDimension];
         Span<int> rowHashes = stackalloc int[ChunkDimension];
+        Span<ushort> rowIds = stackalloc ushort[ChunkDimension];
+        Span<short> rowDensities = stackalloc short[ChunkDimension];
         for (int z = firstZ; z < endZ; z++)
         {
             if (TPattern.UsesColumnHash)
@@ -562,14 +565,11 @@ public static class VoxelMath
                         TPattern.UsesColumnHash ? columnHashes[x] : 0,
                         section,
                         y);
-                    sink.Write(
-                        x,
-                        y,
-                        z,
-                        checked((ushort)blockId),
-                        DensityFromHash(hash, blockId),
-                        section);
+                    rowIds[x] = checked((ushort)blockId);
+                    rowDensities[x] = DensityFromHash(hash, blockId);
                 }
+
+                sink.WriteRow(y, z, rowIds, rowDensities);
             }
         }
     }
@@ -584,14 +584,24 @@ public static class VoxelMath
             _cells = cells;
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public readonly void Write(int x, int y, int z, ushort blockId, short density, int section) =>
-            _cells[(z * ChunkDimension + y) * ChunkDimension + x] = new VoxelCell
+        public readonly void WriteRow(int y, int z, scoped ReadOnlySpan<ushort> blockIds, scoped ReadOnlySpan<short> densities)
+        {
+            Span<VoxelCell> row = _cells.Slice(
+                (z * ChunkDimension + y) * ChunkDimension,
+                ChunkDimension);
+            int sectionRow =
+                ((z / SectionDimension) * SectionsPerAxis + y / SectionDimension)
+                * SectionsPerAxis;
+            for (int x = 0; x < row.Length; x++)
             {
-                BlockId = blockId,
-                Density = density,
-                Section = section
-            };
+                row[x] = new VoxelCell
+                {
+                    BlockId = blockIds[x],
+                    Density = densities[x],
+                    Section = sectionRow + x / SectionDimension
+                };
+            }
+        }
     }
 
     // Hash(seed, chunkIndex, x, y, z) for x = 0, 1, ...: its input is linear

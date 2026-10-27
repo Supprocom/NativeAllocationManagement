@@ -542,8 +542,6 @@ public static class PressureWorkContract
             stackalloc int[VoxelMath.SectionsPerChunk * typeCount];
         Span<int> sectionOccupied = stackalloc int[VoxelMath.SectionsPerChunk];
         Span<ushort> rowMasks = stackalloc ushort[VoxelMath.ChunkDimension];
-        Vector128<ushort> airKind = Vector128.Create(AirKind);
-        Vector128<ushort> transparentKind = Vector128.Create(TransparentKind);
         int cell = 0;
         for (int z = 0; z < VoxelMath.ChunkDimension; z++)
         {
@@ -561,41 +559,39 @@ public static class PressureWorkContract
                         + y / VoxelMath.SectionDimension)
                     * VoxelMath.SectionsPerAxis;
 
-                // Eight cells per vector: a transparent block shows a face toward
-                // any other ID, air included; an opaque block toward air or
-                // transparent blocks; air shows none.
-                for (int x = 0; x < VoxelMath.ChunkDimension; x += Vector128<ushort>.Count)
+                // A half row (16 cells, one section) at a time, eight cells per
+                // vector: a transparent block shows a face toward any other ID,
+                // air included; an opaque block toward air or transparent blocks;
+                // air shows none.
+                const int Lanes = 8;
+                for (int x = 0; x < VoxelMath.ChunkDimension; x += 2 * Lanes)
                 {
                     int at = padded + x;
-                    Vector128<ushort> id = Vector128.Create<ushort>(ids.Slice(at));
-                    Vector128<ushort> kind = Vector128.Create<ushort>(kinds.Slice(at));
-                    Vector128<ushort> transparent = Vector128.Equals(kind, transparentKind);
-                    Vector128<ushort> mask = Vector128.AndNot(
-                        (FaceVisible(ids, kinds, at - 1, id, transparent) & Vector128.Create((ushort)(1 << 0)))
-                        | (FaceVisible(ids, kinds, at + 1, id, transparent) & Vector128.Create((ushort)(1 << 1)))
-                        | (FaceVisible(ids, kinds, at - FaceScratch.RowStride, id, transparent) & Vector128.Create((ushort)(1 << 2)))
-                        | (FaceVisible(ids, kinds, at + FaceScratch.RowStride, id, transparent) & Vector128.Create((ushort)(1 << 3)))
-                        | (FaceVisible(ids, kinds, at - FaceScratch.PlaneStride, id, transparent) & Vector128.Create((ushort)(1 << 4)))
-                        | (FaceVisible(ids, kinds, at + FaceScratch.PlaneStride, id, transparent) & Vector128.Create((ushort)(1 << 5))),
-                        Vector128.Equals(kind, airKind));
-                    mask.CopyTo(rowMasks.Slice(x));
+                    Vector128<ushort> lowId = Vector128.Create<ushort>(ids.Slice(at));
+                    Vector128<ushort> highId = Vector128.Create<ushort>(ids.Slice(at + Lanes));
+                    Vector128<ushort> lowMask = FaceMasks(ids, kinds, at, lowId);
+                    Vector128<ushort> highMask = FaceMasks(ids, kinds, at + Lanes, highId);
+                    lowMask.CopyTo(rowMasks.Slice(x));
+                    highMask.CopyTo(rowMasks.Slice(x + Lanes));
 
-                    // Count the block's cells per type with one compare per type,
-                    // not one counter update per cell. Every lane is in one section.
+                    // Count the half row's cells per type with one compare per type,
+                    // not one counter update per cell.
                     int section = sectionRow + x / VoxelMath.SectionDimension;
-                    uint visibleBits = ~Vector128.ExtractMostSignificantBits(
-                        Vector128.Equals(mask, Vector128<ushort>.Zero)) & 0xFF;
-                    Vector128<ushort> faceCounts = FaceCounts(mask);
-                    uint matchedBits = Vector128.ExtractMostSignificantBits(
-                        Vector128.Equals(id, Vector128<ushort>.Zero));
-                    sectionOccupied[section] +=
-                        Vector128<ushort>.Count - BitOperations.PopCount(matchedBits);
+                    uint visibleBits = ~HalfRowBits(
+                        Vector128.Equals(lowMask, Vector128<ushort>.Zero),
+                        Vector128.Equals(highMask, Vector128<ushort>.Zero)) & 0xFFFF;
+                    Vector128<ushort> lowFaces = FaceCounts(lowMask);
+                    Vector128<ushort> highFaces = FaceCounts(highMask);
+                    uint matchedBits = HalfRowBits(
+                        Vector128.Equals(lowId, Vector128<ushort>.Zero),
+                        Vector128.Equals(highId, Vector128<ushort>.Zero));
+                    sectionOccupied[section] += 2 * Lanes - BitOperations.PopCount(matchedBits);
                     for (int typeIndex = 1; typeIndex < typeCount; typeIndex++)
                     {
-                        Vector128<ushort> match = Vector128.Equals(
-                            id,
-                            Vector128.Create((ushort)types[typeIndex].Id));
-                        uint matchBits = Vector128.ExtractMostSignificantBits(match);
+                        Vector128<ushort> typeId = Vector128.Create((ushort)types[typeIndex].Id);
+                        Vector128<ushort> lowMatch = Vector128.Equals(lowId, typeId);
+                        Vector128<ushort> highMatch = Vector128.Equals(highId, typeId);
+                        uint matchBits = HalfRowBits(lowMatch, highMatch);
                         if (matchBits == 0)
                         {
                             continue;
@@ -608,12 +604,13 @@ public static class PressureWorkContract
                             transparentByType[typeIndex] ? matches : 0;
                         recordsByType[typeIndex] +=
                             BitOperations.PopCount(matchBits & visibleBits);
-                        facesByType[typeIndex] += Vector128.Sum(faceCounts & match);
+                        facesByType[typeIndex] += Vector128.Sum(
+                            (lowFaces & lowMatch) + (highFaces & highMatch));
                     }
 
                     // Unregistered IDs count as type 0, as TypeIndexById maps
                     // them; a visible one fails as the registry lookup does.
-                    uint unregisteredBits = ~matchedBits & 0xFF;
+                    uint unregisteredBits = ~matchedBits & 0xFFFF;
                     if (unregisteredBits != 0)
                     {
                         sectionCounts[section * typeCount] +=
@@ -751,6 +748,11 @@ public static class PressureWorkContract
     private const ushort OpaqueKind = 1;
     private const ushort TransparentKind = 2;
 
+    // The IDs VoxelMath.TransparentById marks, all registered.
+    private static readonly ushort[] TransparentIds = Array.ConvertAll(
+        Array.FindAll(VoxelMath.BlockTypes, static type => VoxelMath.TransparentById[type.Id]),
+        static type => checked((ushort)type.Id));
+
     // Visibility kind per block ID; unregistered IDs count as opaque, as
     // VoxelMath.TransparentById reports them.
     private static readonly byte[] KindById = CreateKindById();
@@ -773,6 +775,32 @@ public static class PressureWorkContract
     // Indexed like VoxelMath.BlockTypes.
     private static readonly bool[] TransparentByType =
         Array.ConvertAll(VoxelMath.BlockTypes, static type => VoxelMath.TransparentById[type.Id]);
+
+    // Face masks of eight cells starting at padded index at.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector128<ushort> FaceMasks(
+        ReadOnlySpan<ushort> ids,
+        ReadOnlySpan<ushort> kinds,
+        int at,
+        Vector128<ushort> id)
+    {
+        Vector128<ushort> kind = Vector128.Create<ushort>(kinds.Slice(at));
+        Vector128<ushort> transparent = Vector128.Equals(kind, Vector128.Create(TransparentKind));
+        return Vector128.AndNot(
+            (FaceVisible(ids, kinds, at - 1, id, transparent) & Vector128.Create((ushort)(1 << 0)))
+            | (FaceVisible(ids, kinds, at + 1, id, transparent) & Vector128.Create((ushort)(1 << 1)))
+            | (FaceVisible(ids, kinds, at - FaceScratch.RowStride, id, transparent) & Vector128.Create((ushort)(1 << 2)))
+            | (FaceVisible(ids, kinds, at + FaceScratch.RowStride, id, transparent) & Vector128.Create((ushort)(1 << 3)))
+            | (FaceVisible(ids, kinds, at - FaceScratch.PlaneStride, id, transparent) & Vector128.Create((ushort)(1 << 4)))
+            | (FaceVisible(ids, kinds, at + FaceScratch.PlaneStride, id, transparent) & Vector128.Create((ushort)(1 << 5))),
+            Vector128.Equals(kind, Vector128.Create(AirKind)));
+    }
+
+    // Lane bits of two 8-lane comparisons as one 16-bit mask.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static uint HalfRowBits(Vector128<ushort> low, Vector128<ushort> high) =>
+        Vector128.ExtractMostSignificantBits(low)
+        | (Vector128.ExtractMostSignificantBits(high) << Vector128<ushort>.Count);
 
     // Set bits per lane of 6-bit face masks.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -909,13 +937,30 @@ public static class PressureWorkContract
         public void Load(int z) =>
             VoxelMath.FillPressurePlanes(_seed, _chunkIndex, z, z + 1, ref this);
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public readonly void Write(int x, int y, int z, ushort blockId, short density, int section)
+        public readonly void WriteRow(int y, int z, scoped ReadOnlySpan<ushort> blockIds, scoped ReadOnlySpan<short> densities)
         {
-            int padded = FaceScratch.Interior(y, z) + x;
-            _scratch.Ids[padded] = blockId;
-            _scratch.Kinds[padded] = KindById[blockId];
-            _scratch.Densities[FaceScratch.DensityIndex(x, y, z)] = density;
+            int padded = FaceScratch.Interior(y, z);
+            blockIds.CopyTo(_scratch.Ids.AsSpan(padded, VoxelMath.ChunkDimension));
+            densities.CopyTo(_scratch.Densities.AsSpan(
+                FaceScratch.DensityIndex(0, y, z),
+                VoxelMath.ChunkDimension));
+
+            // Kinds as KindById gives them: air 0, opaque 1, transparent 2.
+            Span<ushort> kinds = _scratch.Kinds.AsSpan(padded, VoxelMath.ChunkDimension);
+            ReadOnlySpan<ushort> transparentIds = TransparentIds;
+            Vector128<ushort> one = Vector128<ushort>.One;
+            for (int x = 0; x < blockIds.Length; x += Vector128<ushort>.Count)
+            {
+                Vector128<ushort> id = Vector128.Create(blockIds.Slice(x));
+                Vector128<ushort> transparent = Vector128<ushort>.Zero;
+                foreach (ref readonly ushort transparentId in transparentIds)
+                {
+                    transparent |= Vector128.Equals(id, Vector128.Create(transparentId));
+                }
+
+                (Vector128.AndNot(one, Vector128.Equals(id, Vector128<ushort>.Zero))
+                    + (transparent & one)).CopyTo(kinds.Slice(x));
+            }
         }
 
         public readonly void StoreRow(Span<VoxelCell> row, int y, int z, scoped ReadOnlySpan<ushort> masks)
