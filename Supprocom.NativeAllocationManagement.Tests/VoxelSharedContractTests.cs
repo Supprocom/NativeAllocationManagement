@@ -2633,6 +2633,32 @@ public sealed class VoxelSharedContractTests
     }
 
     [VoxelDemonstrationFact]
+    public void GenerateChunkMatchesGeneratingThenDerivingEveryCycleChunk()
+    {
+        VoxelCell[] separate = new VoxelCell[VoxelMath.CellsPerChunk];
+        VoxelCell[] fused = new VoxelCell[VoxelMath.CellsPerChunk];
+        SectionSummary[] separateSummaries = new SectionSummary[VoxelMath.SectionsPerChunk];
+        SectionSummary[] fusedSummaries = new SectionSummary[VoxelMath.SectionsPerChunk];
+        for (int chunkId = 0; chunkId < PressureWorkContract.CanonicalPressureCycleLength; chunkId++)
+        {
+            // Stale masks must not survive either path.
+            fused.AsSpan().Fill(new VoxelCell { FaceMask = -1, OpaqueMask = -1, TransparentMask = -1 });
+            PressureWorkContract.GenerateCells(0x4E414D, chunkId, separate);
+            PressureChunkShape expected =
+                PressureWorkContract.DeriveChunkShape(separate, separateSummaries);
+            PressureChunkShape actual = PressureWorkContract.GenerateChunk(
+                0x4E414D,
+                chunkId,
+                fused,
+                fusedSummaries);
+
+            Assert.Equal(expected, actual);
+            Assert.Equal(separateSummaries, fusedSummaries);
+            Assert.True(separate.AsSpan().SequenceEqual(fused), $"chunk {chunkId}");
+        }
+    }
+
+    [VoxelDemonstrationFact]
     public void CanonicalPressureChunkMaterializesEveryVoxelEngineSectionKind()
     {
         VoxelCell[] cells = new VoxelCell[VoxelMath.CellsPerChunk];

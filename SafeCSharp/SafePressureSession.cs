@@ -194,11 +194,9 @@ internal sealed class SafePressureSession :
                         Span<SectionSummary> chunkSections = _sections.AsSpan(
                             checked(batchCount * VoxelMath.SectionsPerChunk),
                             VoxelMath.SectionsPerChunk);
-                        PressureWorkContract.GenerateCells(
+                        PressureChunkShape shape = PressureWorkContract.GenerateChunk(
                             request.Seed,
                             chunkId,
-                            chunkCells);
-                        PressureChunkShape shape = PressureWorkContract.DeriveChunkShape(
                             chunkCells,
                             chunkSections);
                         long demand =
@@ -1489,14 +1487,11 @@ internal sealed class SafePressureSession :
                     }
                     else
                     {
-                        PressureWorkContract.GenerateCells(
+                        shape = PressureWorkContract.GenerateChunk(
                             request.Seed,
                             request.GetChunkId(builtChunks),
-                            cells!);
-                        shape =
-                            PressureWorkContract.DeriveChunkShape(
-                                cells!,
-                                sections!);
+                            cells!,
+                            sections!);
                     }
                     records = checked(
                         records + Math.Max(1, shape.RecordCount));

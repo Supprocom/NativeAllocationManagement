@@ -1116,11 +1116,9 @@ internal sealed class NativePressureSession :
                 Span<SectionSummary> chunkSections = _sections.AsSpan(
                     checked(BatchCount * VoxelMath.SectionsPerChunk),
                     VoxelMath.SectionsPerChunk);
-                PressureWorkContract.GenerateCells(
+                PressureChunkShape shape = PressureWorkContract.GenerateChunk(
                     _request.Seed,
                     chunkId,
-                    chunkCells);
-                PressureChunkShape shape = PressureWorkContract.DeriveChunkShape(
                     chunkCells,
                     chunkSections);
                 long demand =
@@ -1787,14 +1785,11 @@ internal sealed class NativePressureSession :
                     }
                     else
                     {
-                        PressureWorkContract.GenerateCells(
+                        shape = PressureWorkContract.GenerateChunk(
                             request.Seed,
                             request.GetChunkId(builtChunks),
-                            cells!);
-                        shape =
-                            PressureWorkContract.DeriveChunkShape(
-                                cells!,
-                                sections!);
+                            cells!,
+                            sections!);
                     }
                     int candidateSlices = checked(
                         batchSlices + Math.Max(1, shape.FaceCount));

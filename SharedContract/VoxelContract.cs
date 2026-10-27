@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Runtime.Intrinsics;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -467,7 +468,6 @@ public static class VoxelMath
     // Fills one chunk with BlockIdForCell, DensityForCell and SectionIndex for
     // every cell, computing each hash once: the cell hash serves the pattern
     // and the density, and coarse and column hashes serve their whole block.
-    // Each pattern gets its own loop through a struct type argument.
     internal static void FillPressureCells(
         int seed,
         int chunkIndex,
@@ -480,28 +480,52 @@ public static class VoxelMath
                 nameof(cells));
         }
 
+        PressureCellWriter writer = new(cells);
+        FillPressurePlanes(seed, chunkIndex, 0, ChunkDimension, ref writer);
+    }
+
+    // Receives each cell FillPressurePlanes generates, in row order.
+    internal interface IPressureCellSink
+    {
+        void Write(int x, int y, int z, ushort blockId, short density, int section);
+    }
+
+    // Generates the Z planes [firstZ, endZ) of one chunk into a sink. Each
+    // pattern gets its own loop through a struct type argument.
+    internal static void FillPressurePlanes<TSink>(
+        int seed,
+        int chunkIndex,
+        int firstZ,
+        int endZ,
+        ref TSink sink)
+        where TSink : IPressureCellSink, allows ref struct
+    {
         switch (chunkIndex & 7)
         {
-            case 0: FillPressureCells<CompleteSectionMixPattern>(seed, chunkIndex, cells); break;
-            case 1: FillPressureCells<SparsePattern>(seed, chunkIndex, cells); break;
-            case 2: FillPressureCells<UniformPattern>(seed, chunkIndex, cells); break;
-            case 3: FillPressureCells<PackedPattern>(seed, chunkIndex, cells); break;
-            case 4: FillPressureCells<ExpandedPattern>(seed, chunkIndex, cells); break;
-            case 5: FillPressureCells<MultiPackedPattern>(seed, chunkIndex, cells); break;
-            case 6: FillPressureCells<TransparentPattern>(seed, chunkIndex, cells); break;
-            default: FillPressureCells<TerrainPattern>(seed, chunkIndex, cells); break;
+            case 0: FillPressurePlanes<CompleteSectionMixPattern, TSink>(seed, chunkIndex, firstZ, endZ, ref sink); break;
+            case 1: FillPressurePlanes<SparsePattern, TSink>(seed, chunkIndex, firstZ, endZ, ref sink); break;
+            case 2: FillPressurePlanes<UniformPattern, TSink>(seed, chunkIndex, firstZ, endZ, ref sink); break;
+            case 3: FillPressurePlanes<PackedPattern, TSink>(seed, chunkIndex, firstZ, endZ, ref sink); break;
+            case 4: FillPressurePlanes<ExpandedPattern, TSink>(seed, chunkIndex, firstZ, endZ, ref sink); break;
+            case 5: FillPressurePlanes<MultiPackedPattern, TSink>(seed, chunkIndex, firstZ, endZ, ref sink); break;
+            case 6: FillPressurePlanes<TransparentPattern, TSink>(seed, chunkIndex, firstZ, endZ, ref sink); break;
+            default: FillPressurePlanes<TerrainPattern, TSink>(seed, chunkIndex, firstZ, endZ, ref sink); break;
         }
     }
 
-    private static void FillPressureCells<TPattern>(
+    private static void FillPressurePlanes<TPattern, TSink>(
         int seed,
         int chunkIndex,
-        Span<VoxelCell> cells)
+        int firstZ,
+        int endZ,
+        ref TSink sink)
         where TPattern : struct, IChunkPattern
+        where TSink : IPressureCellSink, allows ref struct
     {
         int coarseMask = (1 << TPattern.CoarseShift) - 1;
         Span<int> columnHashes = stackalloc int[ChunkDimension];
-        for (int z = 0; z < ChunkDimension; z++)
+        Span<int> rowHashes = stackalloc int[ChunkDimension];
+        for (int z = firstZ; z < endZ; z++)
         {
             if (TPattern.UsesColumnHash)
             {
@@ -513,17 +537,15 @@ public static class VoxelMath
 
             for (int y = 0; y < ChunkDimension; y++)
             {
-                Span<VoxelCell> row = cells.Slice(
-                    (z * ChunkDimension + y) * ChunkDimension,
-                    ChunkDimension);
                 int sectionRow =
                     ((z / SectionDimension) * SectionsPerAxis + y / SectionDimension)
                     * SectionsPerAxis;
                 int coarseHash = 0;
-                for (int x = 0; x < row.Length; x++)
+                FillRowHashes(seed, chunkIndex, y, z, rowHashes);
+                for (int x = 0; x < ChunkDimension; x++)
                 {
                     int section = sectionRow + x / SectionDimension;
-                    int hash = Hash(seed, chunkIndex, x, y, z);
+                    int hash = rowHashes[x];
                     if (TPattern.CoarseShift != 0 && (x & coarseMask) == 0)
                     {
                         coarseHash = Hash(
@@ -540,14 +562,58 @@ public static class VoxelMath
                         TPattern.UsesColumnHash ? columnHashes[x] : 0,
                         section,
                         y);
-                    row[x] = new VoxelCell
-                    {
-                        BlockId = checked((ushort)blockId),
-                        Density = DensityFromHash(hash, blockId),
-                        Section = section
-                    };
+                    sink.Write(
+                        x,
+                        y,
+                        z,
+                        checked((ushort)blockId),
+                        DensityFromHash(hash, blockId),
+                        section);
                 }
             }
+        }
+    }
+
+    // Writes generated cells straight into a chunk's cells.
+    private ref struct PressureCellWriter : IPressureCellSink
+    {
+        private readonly Span<VoxelCell> _cells;
+
+        internal PressureCellWriter(Span<VoxelCell> cells)
+        {
+            _cells = cells;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public readonly void Write(int x, int y, int z, ushort blockId, short density, int section) =>
+            _cells[(z * ChunkDimension + y) * ChunkDimension + x] = new VoxelCell
+            {
+                BlockId = blockId,
+                Density = density,
+                Section = section
+            };
+    }
+
+    // Hash(seed, chunkIndex, x, y, z) for x = 0, 1, ...: its input is linear
+    // in x along a row, so four lanes are hashed at once.
+    private static void FillRowHashes(
+        int seed,
+        int chunkIndex,
+        int y,
+        int z,
+        Span<int> hashes)
+    {
+        uint rowBase = unchecked((uint)(seed * 31 + chunkIndex * 113 + y * 29 + z * 43));
+        uint step = unchecked((uint)(13 + z * 7));
+        Vector128<uint> lanes = Vector128.Create(0u, 1u, 2u, 3u);
+        for (int x = 0; x < hashes.Length; x += Vector128<uint>.Count)
+        {
+            Vector128<uint> value = Vector128.Create(rowBase)
+                + (lanes + Vector128.Create((uint)x)) * Vector128.Create(step);
+            value ^= Vector128.ShiftRightLogical(value, 16);
+            value *= Vector128.Create(0x7feb352du);
+            value ^= Vector128.ShiftRightLogical(value, 15);
+            (value & Vector128.Create(0x7fffffffu)).AsInt32().CopyTo(hashes[x..]);
         }
     }
 
@@ -667,6 +733,15 @@ public static class VoxelMath
             ? short.MinValue
             : DensityFromHash(Hash(seed, chunkIndex, x, y, z), blockId);
 
+    // Indexed like BlockTypes.
+    private static readonly int[] IdByType =
+        Array.ConvertAll(BlockTypes, static type => type.Id);
+
+    private static readonly int[] DensityBiasByType =
+        Array.ConvertAll(BlockTypes, static type => type.DensityBias);
+
+    // DensityForCell from its hash, reading the bias by type index; only an
+    // unregistered ID reaches the registry lookup, which throws.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static short DensityFromHash(int hash, int blockId)
     {
@@ -675,8 +750,14 @@ public static class VoxelMath
             return short.MinValue;
         }
 
+        int typeIndex = (uint)blockId <= ushort.MaxValue ? BlockTypeIndexById[blockId] : 0;
+        if (IdByType[typeIndex] != blockId)
+        {
+            _ = RegisteredType(blockId);
+        }
+
         int value = hash % 241 - 120;
-        return checked((short)(value + RegisteredType(blockId).DensityBias));
+        return checked((short)(value + DensityBiasByType[typeIndex]));
     }
 
     public static bool IsAir(int blockId) => blockId == AirBlockId;

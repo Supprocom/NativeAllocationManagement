@@ -353,11 +353,9 @@ public static class PressureWorkContract
             || entries.Count % CanonicalPressureCycleLength != 0)
         {
             int chunkId = entries.Count;
-            GenerateCells(
+            PressureChunkShape shape = GenerateChunk(
                 seed,
                 chunkId,
-                cells);
-            PressureChunkShape shape = DeriveChunkShape(
                 cells,
                 sections);
             long demand = CalculateLogicalDemand(shape);
@@ -484,29 +482,52 @@ public static class PressureWorkContract
                 nameof(sectionSummaries));
         }
 
-        // Copy IDs and visibility kinds into the padded scratch: with its air
-        // border, every neighbor read below is a plain load.
         FaceScratch scratch = t_faceScratch ??= new FaceScratch();
-        Span<ushort> ids = scratch.Ids;
-        Span<ushort> kinds = scratch.Kinds;
-        ReadOnlySpan<byte> kindById = KindById;
-        for (int z = 0; z < VoxelMath.ChunkDimension; z++)
+        CopiedFacePlanes planes = new(cells, scratch);
+        return DeriveChunkShape(cells, sectionSummaries, scratch, ref planes);
+    }
+
+    // GenerateCells followed by DeriveChunkShape, with the same results, in one
+    // pass: each plane is generated into the face scratch one plane ahead of
+    // its masks, and each cell is written once, complete.
+    public static PressureChunkShape GenerateChunk(
+        int seed,
+        int chunkId,
+        Span<VoxelCell> cells,
+        Span<SectionSummary> sectionSummaries)
+    {
+        if (cells.Length != VoxelMath.CellsPerChunk)
         {
-            for (int y = 0; y < VoxelMath.ChunkDimension; y++)
-            {
-                ReadOnlySpan<VoxelCell> row = cells.Slice(
-                    VoxelMath.CellIndex(0, y, z),
-                    VoxelMath.ChunkDimension);
-                int padded = FaceScratch.Interior(y, z);
-                for (int x = 0; x < row.Length; x++)
-                {
-                    ushort id = row[x].BlockId;
-                    ids[padded + x] = id;
-                    kinds[padded + x] = kindById[id];
-                }
-            }
+            throw new ArgumentException("The pressure build requires one complete canonical chunk.", nameof(cells));
         }
 
+        if (sectionSummaries.Length != VoxelMath.SectionsPerChunk)
+        {
+            throw new ArgumentException(
+                "The section summary buffer does not cover one canonical chunk.",
+                nameof(sectionSummaries));
+        }
+
+        FaceScratch scratch = t_faceScratch ??= new FaceScratch();
+        GeneratedFacePlanes planes = new(
+            seed,
+            PressureSourceChunkIndex(chunkId),
+            scratch);
+        return DeriveChunkShape(cells, sectionSummaries, scratch, ref planes);
+    }
+
+    // The padded scratch's air border makes every neighbor read a plain load.
+    // Plane z + 1 is loaded before plane z's masks, which need it.
+    private static PressureChunkShape DeriveChunkShape<TPlanes>(
+        Span<VoxelCell> cells,
+        Span<SectionSummary> sectionSummaries,
+        FaceScratch scratch,
+        ref TPlanes planes)
+        where TPlanes : IFacePlanes, allows ref struct
+    {
+        Span<ushort> ids = scratch.Ids;
+        Span<ushort> kinds = scratch.Kinds;
+        planes.Load(0);
         ReadOnlySpan<BlockTypeDescriptor> types = VoxelMath.BlockTypes;
         ReadOnlySpan<bool> transparentByType = TransparentByType;
         Span<int> recordsByType = stackalloc int[types.Length];
@@ -526,6 +547,11 @@ public static class PressureWorkContract
         int cell = 0;
         for (int z = 0; z < VoxelMath.ChunkDimension; z++)
         {
+            if (z + 1 < VoxelMath.ChunkDimension)
+            {
+                planes.Load(z + 1);
+            }
+
             for (int y = 0; y < VoxelMath.ChunkDimension; y++)
             {
                 int padded = FaceScratch.Interior(y, z);
@@ -601,17 +627,11 @@ public static class PressureWorkContract
                     }
                 }
 
-                Span<VoxelCell> row = cells.Slice(cell, VoxelMath.ChunkDimension);
-                for (int x = 0; x < row.Length; x++)
-                {
-                    int mask = rowMasks[x];
-                    bool transparent = kinds[padded + x] == TransparentKind;
-                    ref VoxelCell target = ref row[x];
-                    target.FaceMask = mask;
-                    target.OpaqueMask = !transparent ? mask : 0;
-                    target.TransparentMask = transparent ? mask : 0;
-                }
-
+                planes.StoreRow(
+                    cells.Slice(cell, VoxelMath.ChunkDimension),
+                    y,
+                    z,
+                    rowMasks);
                 cell += VoxelMath.ChunkDimension;
             }
         }
@@ -795,6 +815,13 @@ public static class PressureWorkContract
         internal readonly ushort[] Ids = new ushort[Side * Side * Side];
         internal readonly ushort[] Kinds = new ushort[Side * Side * Side];
 
+        // Densities of two planes for GeneratedFacePlanes: z and z + 1.
+        internal readonly short[] Densities =
+            new short[2 * VoxelMath.ChunkDimension * VoxelMath.ChunkDimension];
+
+        internal static int DensityIndex(int x, int y, int z) =>
+            ((z & 1) * VoxelMath.ChunkDimension + y) * VoxelMath.ChunkDimension + x;
+
         // Padded index of cell (0, y, z).
         internal static int Interior(int y, int z) =>
             (z + 1) * PlaneStride + (y + 1) * RowStride + 1;
@@ -802,6 +829,123 @@ public static class PressureWorkContract
 
     [ThreadStatic]
     private static FaceScratch? t_faceScratch;
+
+    // Where DeriveChunkShape's planes come from and how its rows are stored.
+    private interface IFacePlanes
+    {
+        // Puts plane z's IDs and kinds into the face scratch.
+        void Load(int z);
+
+        // Stores one row's face masks; StoreRow runs after Load(z + 1).
+        void StoreRow(Span<VoxelCell> row, int y, int z, scoped ReadOnlySpan<ushort> masks);
+    }
+
+    // Planes of existing cells: the cells keep their IDs, densities and
+    // sections and receive only their masks.
+    private readonly ref struct CopiedFacePlanes : IFacePlanes
+    {
+        private readonly ReadOnlySpan<VoxelCell> _cells;
+        private readonly FaceScratch _scratch;
+
+        internal CopiedFacePlanes(ReadOnlySpan<VoxelCell> cells, FaceScratch scratch)
+        {
+            _cells = cells;
+            _scratch = scratch;
+        }
+
+        public void Load(int z)
+        {
+            ReadOnlySpan<byte> kindById = KindById;
+            Span<ushort> ids = _scratch.Ids;
+            Span<ushort> kinds = _scratch.Kinds;
+            for (int y = 0; y < VoxelMath.ChunkDimension; y++)
+            {
+                ReadOnlySpan<VoxelCell> row = _cells.Slice(
+                    VoxelMath.CellIndex(0, y, z),
+                    VoxelMath.ChunkDimension);
+                int padded = FaceScratch.Interior(y, z);
+                for (int x = 0; x < row.Length; x++)
+                {
+                    ushort id = row[x].BlockId;
+                    ids[padded + x] = id;
+                    kinds[padded + x] = kindById[id];
+                }
+            }
+        }
+
+        public void StoreRow(Span<VoxelCell> row, int y, int z, scoped ReadOnlySpan<ushort> masks)
+        {
+            ReadOnlySpan<ushort> kinds = _scratch.Kinds.AsSpan(
+                FaceScratch.Interior(y, z),
+                VoxelMath.ChunkDimension);
+            for (int x = 0; x < row.Length; x++)
+            {
+                int mask = masks[x];
+                bool transparent = kinds[x] == TransparentKind;
+                ref VoxelCell target = ref row[x];
+                target.FaceMask = mask;
+                target.OpaqueMask = !transparent ? mask : 0;
+                target.TransparentMask = transparent ? mask : 0;
+            }
+        }
+    }
+
+    // Planes generated as GenerateCells would: IDs and kinds go to the face
+    // scratch, densities to a two-plane buffer, and each row's cells are
+    // written whole once their masks are known.
+    private ref struct GeneratedFacePlanes : IFacePlanes, VoxelMath.IPressureCellSink
+    {
+        private readonly int _seed;
+        private readonly int _chunkIndex;
+        private readonly FaceScratch _scratch;
+
+        internal GeneratedFacePlanes(int seed, int chunkIndex, FaceScratch scratch)
+        {
+            _seed = seed;
+            _chunkIndex = chunkIndex;
+            _scratch = scratch;
+        }
+
+        public void Load(int z) =>
+            VoxelMath.FillPressurePlanes(_seed, _chunkIndex, z, z + 1, ref this);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public readonly void Write(int x, int y, int z, ushort blockId, short density, int section)
+        {
+            int padded = FaceScratch.Interior(y, z) + x;
+            _scratch.Ids[padded] = blockId;
+            _scratch.Kinds[padded] = KindById[blockId];
+            _scratch.Densities[FaceScratch.DensityIndex(x, y, z)] = density;
+        }
+
+        public readonly void StoreRow(Span<VoxelCell> row, int y, int z, scoped ReadOnlySpan<ushort> masks)
+        {
+            int padded = FaceScratch.Interior(y, z);
+            ReadOnlySpan<ushort> ids = _scratch.Ids.AsSpan(padded, VoxelMath.ChunkDimension);
+            ReadOnlySpan<ushort> kinds = _scratch.Kinds.AsSpan(padded, VoxelMath.ChunkDimension);
+            ReadOnlySpan<short> densities = _scratch.Densities.AsSpan(
+                FaceScratch.DensityIndex(0, y, z),
+                VoxelMath.ChunkDimension);
+            int sectionRow =
+                ((z / VoxelMath.SectionDimension) * VoxelMath.SectionsPerAxis
+                    + y / VoxelMath.SectionDimension)
+                * VoxelMath.SectionsPerAxis;
+            for (int x = 0; x < row.Length; x++)
+            {
+                int mask = masks[x];
+                bool transparent = kinds[x] == TransparentKind;
+                row[x] = new VoxelCell
+                {
+                    BlockId = ids[x],
+                    Density = densities[x],
+                    FaceMask = mask,
+                    OpaqueMask = !transparent ? mask : 0,
+                    TransparentMask = transparent ? mask : 0,
+                    Section = sectionRow + x / VoxelMath.SectionDimension
+                };
+            }
+        }
+    }
 
     public static string BuildAndVerifySectionRepresentations(
         int chunkId,
@@ -1380,53 +1524,72 @@ public static class PressureWorkContract
         ReadOnlySpan<byte> typeIndexById = VoxelMath.TypeIndexById;
         ReadOnlySpan<int> stageBytesByType = PressureStageBytesByType;
         ReadOnlySpan<bool> transparentById = VoxelMath.TransparentById;
+
+        // Each section's bits of the record stage mask, read once.
+        Span<int> sectionStageBits = stackalloc int[VoxelMath.SectionsPerChunk];
+        Span<bool> sectionEmpty = stackalloc bool[VoxelMath.SectionsPerChunk];
+        for (int index = 0; index < sections.Length; index++)
+        {
+            ref readonly SectionPrerenderDescriptor section = ref sections[index];
+            sectionStageBits[index] = unchecked(
+                ((int)section.Kind << 8)
+                | ((section.ContentTag & 0x000F_FFFF) << 12));
+            sectionEmpty[index] = section.Kind == SectionRepresentationKind.Empty;
+        }
+
+        // Visibility of eight cells at a time goes into a bit set without
+        // branching; only the visible cells are then visited.
+        const int GroupCells = 8;
         int opaque = 0;
         int transparent = 0;
-        for (int cell = 0; cell < cells.Length; cell++)
+        for (int group = 0; group < cells.Length; group += GroupCells)
         {
-            ref readonly VoxelCell source = ref cells[cell];
-            int mask = source.FaceMask;
-            if (mask == 0)
+            ReadOnlySpan<VoxelCell> block = cells.Slice(
+                group,
+                Math.Min(GroupCells, cells.Length - group));
+            uint visible = 0;
+            for (int index = 0; index < block.Length; index++)
             {
-                continue;
+                visible |= (block[index].FaceMask != 0 ? 1u : 0u) << index;
             }
 
-            int blockId = source.BlockId;
-            int typeIndex = typeIndexById[blockId];
-            ref readonly BlockTypeDescriptor type = ref types[typeIndex];
-            if (type.Id != blockId)
+            while (visible != 0)
             {
-                _ = VoxelMath.RegisteredType(blockId);
-            }
+                int index = BitOperations.TrailingZeroCount(visible);
+                visible &= visible - 1;
+                ref readonly VoxelCell source = ref block[index];
+                int blockId = source.BlockId;
+                int typeIndex = typeIndexById[blockId];
+                ref readonly BlockTypeDescriptor type = ref types[typeIndex];
+                if (type.Id != blockId)
+                {
+                    _ = VoxelMath.RegisteredType(blockId);
+                }
 
-            ref readonly SectionPrerenderDescriptor section =
-                ref sections[source.Section];
-            if (section.Kind == SectionRepresentationKind.Empty)
-            {
-                throw new InvalidDataException(
-                    "A visible face referenced an empty section representation.");
-            }
+                if (sectionEmpty[source.Section])
+                {
+                    throw new InvalidDataException(
+                        "A visible face referenced an empty section representation.");
+                }
 
-            FaceRecord record = new(
-                cell,
-                blockId,
-                mask,
-                type.PayloadBytes,
-                type.Alignment,
-                unchecked(
-                    type.StageMask
-                    | ((int)section.Kind << 8)
-                    | ((section.ContentTag & 0x000F_FFFF) << 12)),
-                stageBytesByType[typeIndex]);
-            if (transparentById[blockId])
-            {
-                records[
-                    shape.OpaqueRecordCount
-                    + transparent++] = record;
-            }
-            else
-            {
-                records[opaque++] = record;
+                FaceRecord record = new(
+                    group + index,
+                    blockId,
+                    source.FaceMask,
+                    type.PayloadBytes,
+                    type.Alignment,
+                    unchecked(type.StageMask | sectionStageBits[source.Section]),
+                    stageBytesByType[typeIndex]);
+                if (transparentById[blockId])
+                {
+                    records[
+                        shape.OpaqueRecordCount
+                        + transparent++] = record;
+                }
+                else
+                {
+                    records[opaque++] = record;
+                }
             }
         }
 
@@ -1597,7 +1760,6 @@ public static class PressureWorkContract
         int sliceCount = 0;
         Span<int> stageCursors = stackalloc int[5];
         Span<int> vertexInts = MemoryMarshal.Cast<Vertex, int>(vertices);
-        ref int indexBase = ref MemoryMarshal.GetReference(indices);
         ref PayloadSlice sliceBase = ref MemoryMarshal.GetReference(slices);
         foreach (ref readonly var recordIndexValue in records)
         {
@@ -1637,8 +1799,8 @@ public static class PressureWorkContract
                 vertexCount += VoxelMath.VerticesPerFace;
 
                 WriteFaceIndices(
-                    ref Unsafe.Add(ref indexBase, indexCount),
-                    vertexOffset);
+                    vertexOffset,
+                    indices.Slice(indexCount, VoxelMath.IndicesPerFace));
                 indexCount += VoxelMath.IndicesPerFace;
 
                 Unsafe.Add(ref sliceBase, sliceCount++) = new PayloadSlice(
@@ -4196,25 +4358,10 @@ public static class PressureWorkContract
         int vertexOffset,
         Span<int> destination)
     {
-        destination[0] = vertexOffset;
-        destination[1] = vertexOffset + 1;
-        destination[2] = vertexOffset + 2;
-        destination[3] = vertexOffset + 2;
+        // (v, v + 1, v + 2, v + 2) as one vector, then v + 3 and v.
+        (Vector128.Create(vertexOffset) + Vector128.Create(0, 1, 2, 2)).CopyTo(destination);
         destination[4] = vertexOffset + 3;
         destination[5] = vertexOffset;
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void WriteFaceIndices(
-        ref int destination,
-        int vertexOffset)
-    {
-        destination = vertexOffset;
-        Unsafe.Add(ref destination, 1) = vertexOffset + 1;
-        Unsafe.Add(ref destination, 2) = vertexOffset + 2;
-        Unsafe.Add(ref destination, 3) = vertexOffset + 2;
-        Unsafe.Add(ref destination, 4) = vertexOffset + 3;
-        Unsafe.Add(ref destination, 5) = vertexOffset;
     }
 
     private static void WriteVertices(
