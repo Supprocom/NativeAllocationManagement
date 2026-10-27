@@ -530,6 +530,7 @@ public static class PressureWorkContract
         planes.Load(0);
         ReadOnlySpan<BlockTypeDescriptor> types = VoxelMath.BlockTypes;
         ReadOnlySpan<bool> transparentByType = TransparentByType;
+        ReadOnlySpan<byte> typeIndexById = VoxelMath.TypeIndexById;
         Span<int> recordsByType = stackalloc int[types.Length];
         Span<int> facesByType = stackalloc int[types.Length];
 
@@ -586,6 +587,32 @@ public static class PressureWorkContract
                         Vector128.Equals(lowId, Vector128<ushort>.Zero),
                         Vector128.Equals(highId, Vector128<ushort>.Zero));
                     sectionOccupied[section] += 2 * Lanes - BitOperations.PopCount(matchedBits);
+
+                    // Many half rows hold one registered ID (air, uniform sections,
+                    // solid terrain): count them without the per-type compares.
+                    ushort firstId = ids[at];
+                    Vector128<ushort> first = Vector128.Create(firstId);
+                    int firstType = typeIndexById[firstId];
+                    if (firstType != 0
+                        && types[firstType].Id == firstId
+                        && Vector128.EqualsAll(lowId, first)
+                        && Vector128.EqualsAll(highId, first))
+                    {
+                        sectionCounts[section * typeCount + firstType] += 2 * Lanes;
+                        sectionTransparentCounts[section * typeCount + firstType] +=
+                            transparentByType[firstType] ? 2 * Lanes : 0;
+                        recordsByType[firstType] += BitOperations.PopCount(visibleBits);
+                        facesByType[firstType] += Vector128.Sum(lowFaces + highFaces);
+                        continue;
+                    }
+
+                    if (firstId == VoxelMath.AirBlockId
+                        && Vector128.EqualsAll(lowId, first)
+                        && Vector128.EqualsAll(highId, first))
+                    {
+                        continue;
+                    }
+
                     for (int typeIndex = 1; typeIndex < typeCount; typeIndex++)
                     {
                         Vector128<ushort> typeId = Vector128.Create((ushort)types[typeIndex].Id);
