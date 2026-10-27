@@ -1,11 +1,9 @@
 # Getting started
 
-This guide follows **unreleased 0.3.0 development** on `main`. Install the
-released `0.2.3` package only for its own stable API boundary; the new budget,
-prepared, layout and smart-pointer APIs below do not all exist in that package.
-Use documentation at the matching release tag when consuming 0.2.3, not examples
-for the changed development tree. Transfer representation and rebuild requirements
-are described in the ownership section below.
+This guide describes the released `0.3.0` package. Its budget, prepared, layout
+and smart-pointer APIs do not exist in 0.2.x. Transfer representation and rebuild
+requirements for consumers built against 0.2.x are described in the ownership
+section below.
 
 `Supprocom.NativeAllocationManagement` combines a native-memory runtime with a
 bundled Roslyn analyzer. Each allocator uses only the state checks that its contract
@@ -20,17 +18,17 @@ The package targets .NET 10. The fast `NativePool<T>`, `NativeRegion`, and
 generation model for concurrent ownership. Their ordinary leases can store managed
 references through a separate root-aware path. Transferable leases remain unmanaged.
 
-Install the released version `0.2.3` with the .NET CLI (not the development APIs):
+Install version `0.3.0` with the .NET CLI:
 
 ```powershell
-dotnet add package Supprocom.NativeAllocationManagement --version 0.2.3
+dotnet add package Supprocom.NativeAllocationManagement --version 0.3.0
 ```
 
 The equivalent project file entry is:
 
 ```xml
 <ItemGroup>
-  <PackageReference Include="Supprocom.NativeAllocationManagement" Version="0.2.3" />
+  <PackageReference Include="Supprocom.NativeAllocationManagement" Version="0.3.0" />
 </ItemGroup>
 ```
 

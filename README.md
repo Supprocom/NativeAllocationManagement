@@ -14,11 +14,9 @@ targets .NET 10.
 
 ## Installation and source builds
 
-Install the released `0.2.3` package. This `main`
-checkout contains **unreleased 0.3.0 development**, including budgets, prepared
-execution, typed layouts and unique/shared/weak ownership. Use the matching
-release-tag documentation for 0.2.3 applications. The value-based
-`NativeTransfer<T>` in 0.3.0 requires rebuilding consumers.
+Install the released `0.3.0` package. Version 0.3.0 adds budgets, prepared
+execution, typed layouts and unique/shared/weak ownership. Its value-based
+`NativeTransfer<T>` requires rebuilding consumers built against 0.2.x.
 
 Build the source with .NET SDK 10.0.302 and C# 13. The repository pins the SDK
 without feature-band roll-forward.

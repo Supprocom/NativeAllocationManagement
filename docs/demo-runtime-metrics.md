@@ -1,4 +1,4 @@
-# Demo process and GC observations (0.3.0 development)
+# Demo process and GC observations
 
 `PressureRuntimeSnapshot.Capture` reports actual cold runtime/process/kernel
 observations. Its20 properties and the two nested compilation properties have

@@ -1,4 +1,4 @@
-# Unique native ownership (0.3.0 work in progress)
+# Unique native ownership
 
 `NativeTransfer<T>` is NAM's unique smart-pointer family for an initialized
 unmanaged range. It is not a wrapper around another published smart-pointer

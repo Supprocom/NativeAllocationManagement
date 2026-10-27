@@ -1,4 +1,4 @@
-# Immutable native sharing (0.3.0 work in progress)
+# Immutable native sharing
 
 NAM remains an optimization tool with explicit memory and lifetime risks, not a
 replacement for ordinary managed ownership. Use `NativeTransfer<T>` as the

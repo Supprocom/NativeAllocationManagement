@@ -1,4 +1,4 @@
-# Demo kernel observations (0.3.0 development)
+# Demo kernel observations
 
 `CgroupMemorySnapshot` observes a Linux kernel cgroup, not NAM's budget or one
 process's exclusive memory. Its 29-property inventory is checked against compiled

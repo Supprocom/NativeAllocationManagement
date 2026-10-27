@@ -3,15 +3,16 @@ namespace Supprocom.NativeAllocationManagement.Tests;
 public sealed class ReleaseDocumentationContractTests
 {
     [Fact]
-    public void EntryPointsSeparateReleasedInstallationFromUnreleasedSource()
+    public void EntryPointsInstallTheReleasedPackage()
     {
         string readme = Read("README.md");
         string guide = Read("docs", "getting-started.md");
-        Assert.Contains("unreleased 0.3.0 development", readme, StringComparison.Ordinal);
-        Assert.Contains("unreleased 0.3.0 development", guide, StringComparison.Ordinal);
-        Assert.Contains("released `0.2.3` package", readme, StringComparison.Ordinal);
-        Assert.Contains("--version 0.2.3", guide, StringComparison.Ordinal);
-        Assert.Contains("Version=\"0.2.3\"", guide, StringComparison.Ordinal);
+        Assert.DoesNotContain("unreleased", readme, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("unreleased", guide, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("released `0.3.0` package", readme, StringComparison.Ordinal);
+        Assert.Contains("released `0.3.0` package", guide, StringComparison.Ordinal);
+        Assert.Contains("--version 0.3.0", guide, StringComparison.Ordinal);
+        Assert.Contains("Version=\"0.3.0\"", guide, StringComparison.Ordinal);
         Assert.DoesNotContain("version-status.md", readme, StringComparison.Ordinal);
         Assert.DoesNotContain("version-status.md", guide, StringComparison.Ordinal);
     }
@@ -66,7 +67,7 @@ public sealed class ReleaseDocumentationContractTests
     public void BudgetIntroductionLinksImplementedPreparationInsteadOfStaleMissingWork()
     {
         string budget = Read("docs", "memory-budgets.md");
-        Assert.Contains("unreleased 0.3.0 development", budget, StringComparison.Ordinal);
+        Assert.Contains("available from version 0.3.0", budget, StringComparison.Ordinal);
         Assert.Contains("(prepared-pools.md)", budget, StringComparison.Ordinal);
         Assert.Contains("(prepared-arenas.md)", budget, StringComparison.Ordinal);
         Assert.Contains("(immutable-sharing.md)", budget, StringComparison.Ordinal);
