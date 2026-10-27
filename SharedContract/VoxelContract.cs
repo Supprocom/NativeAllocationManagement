@@ -501,9 +501,9 @@ public static class VoxelMath
         ref TSink sink)
         where TSink : IPressureCellSink, allows ref struct
     {
-        if (!PatternIdsRegistered)
+        if (!PatternIdsRegistered || !DensityBiasesFitShort)
         {
-            throw new InvalidOperationException("A chunk pattern produces an unregistered block id.");
+            throw new InvalidOperationException("A chunk pattern produces an unregistered block id or an out-of-range density.");
         }
 
         switch (chunkIndex & 7)
@@ -533,6 +533,8 @@ public static class VoxelMath
         Span<int> rowHashes = stackalloc int[ChunkDimension];
         Span<ushort> rowIds = stackalloc ushort[ChunkDimension];
         Span<short> rowDensities = stackalloc short[ChunkDimension];
+        ReadOnlySpan<byte> typeIndexById = TypeIndexById;
+        ReadOnlySpan<int> densityBiasByType = DensityBiasByType;
         for (int z = firstZ; z < endZ; z++)
         {
             if (TPattern.UsesColumnHash)
@@ -571,7 +573,7 @@ public static class VoxelMath
                         section,
                         y);
                     rowIds[x] = (ushort)blockId;
-                    rowDensities[x] = PatternDensity(hash, blockId);
+                    rowDensities[x] = PatternDensity(hash, blockId, typeIndexById, densityBiasByType);
                 }
 
                 sink.WriteRow(y, z, rowIds, rowDensities);
@@ -756,17 +758,30 @@ public static class VoxelMath
         Array.ConvertAll(BlockTypes, static type => type.DensityBias);
 
     // DensityForCell for an ID from the pattern tables, which hold only
-    // registered IDs (checked once, by PatternIdsRegistered).
+    // registered IDs (checked once, by PatternIdsRegistered). The tables come
+    // in as locals: as static fields they would be reloaded per cell.
+    // DensityFromHash's checked conversion cannot fail here: -120..120 plus a
+    // registered bias (checked once, by DensityBiasesFitShort) fits a short.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static short PatternDensity(int hash, int blockId) =>
+    private static short PatternDensity(
+        int hash,
+        int blockId,
+        ReadOnlySpan<byte> typeIndexById,
+        ReadOnlySpan<int> densityBiasByType) =>
         IsAir(blockId)
             ? short.MinValue
-            : checked((short)(hash % 241 - 120 + DensityBiasByType[TypeIndexById[blockId]]));
+            : unchecked((short)(hash % 241 - 120 + densityBiasByType[typeIndexById[blockId]]));
 
     // Every ID the chunk patterns produce is registered, so FillPressurePlanes
     // needs no per-cell registry check. Checked when VoxelMath initializes,
     // with its other static fields; an unregistered ID would fail it there.
     private static readonly bool PatternIdsRegistered = CheckPatternIdsRegistered();
+
+    // Every registered bias keeps -120..120 plus the bias within a short, as
+    // PatternDensity assumes.
+    private static readonly bool DensityBiasesFitShort = Array.TrueForAll(
+        BlockTypes,
+        static type => type.DensityBias - 120 >= short.MinValue && type.DensityBias + 120 <= short.MaxValue);
 
     private static bool CheckPatternIdsRegistered()
     {
