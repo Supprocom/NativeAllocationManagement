@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -329,190 +330,353 @@ public static class VoxelMath
         int chunkIndex,
         int x,
         int y,
-        int z)
-    {
-        int sectionPattern = SectionIndex(x, y, z) % 6;
-        if (sectionPattern == 0)
-        {
-            return AirBlockId;
-        }
-
-        if (sectionPattern == 1)
-        {
-            return 256;
-        }
-
-        if (sectionPattern == 2)
-        {
-            return 257;
-        }
-
-        int hash = Hash(seed, chunkIndex, x, y, z);
-        return sectionPattern switch
-        {
-            3 => (hash & 31) == 0 ? 259 : 256,
-            4 => (hash % 11) switch
-            {
-                0 or 1 or 2 or 3 or 4 => 257,
-                5 or 6 or 7 => 258,
-                8 => 261,
-                _ => AirBlockId
-            },
-            _ => (hash % 13) switch
-            {
-                0 or 1 => AirBlockId,
-                2 or 3 or 4 => 257,
-                5 or 6 => 258,
-                7 or 8 => 259,
-                9 or 10 => 260,
-                _ => 261
-            }
-        };
-    }
+        int z) =>
+        CompleteSectionMixId(
+            SectionIndex(x, y, z) % 6,
+            Hash(seed, chunkIndex, x, y, z));
 
     private static int BlockIdForSparseChunk(
         int seed,
         int chunkIndex,
         int x,
         int y,
-        int z)
-    {
-        int section = SectionIndex(x, y, z);
-        if (section < 6)
-        {
-            return AirBlockId;
-        }
-
-        int hash = Hash(seed, chunkIndex, x, y, z);
-        return section == 6
-            ? (hash & 31) == 0 ? 256 : AirBlockId
-            : (hash & 63) == 0 ? 258 : AirBlockId;
-    }
+        int z) =>
+        SparseId(SectionIndex(x, y, z), Hash(seed, chunkIndex, x, y, z));
 
     private static int BlockIdForUniformChunk(int x, int y, int z) =>
-        SectionIndex(x, y, z) switch
-        {
-            0 or 1 or 2 => 256,
-            3 => 259,
-            4 or 5 => 257,
-            6 => AirBlockId,
-            _ => 261
-        };
+        UniformId(SectionIndex(x, y, z));
 
     private static int BlockIdForPackedChunk(
         int seed,
         int chunkIndex,
         int x,
         int y,
-        int z)
-    {
-        int hash = Hash(seed, chunkIndex, x >> 1, y >> 1, z >> 1);
-        if ((hash & 3) != 0)
-        {
-            return AirBlockId;
-        }
-
-        return (SectionIndex(x, y, z) & 3) switch
-        {
-            0 => 256,
-            1 => 257,
-            2 => 259,
-            _ => 258
-        };
-    }
+        int z) =>
+        PackedId(
+            Hash(seed, chunkIndex, x >> 1, y >> 1, z >> 1),
+            SectionIndex(x, y, z));
 
     private static int BlockIdForExpandedChunk(
         int seed,
         int chunkIndex,
         int x,
         int y,
-        int z)
-    {
-        int hash = Hash(seed, chunkIndex, x >> 2, y >> 2, z >> 2);
-        return (hash & 3) switch
-        {
-            0 => AirBlockId,
-            1 => 256,
-            2 => 257,
-            _ => 259
-        };
-    }
+        int z) =>
+        ExpandedId(Hash(seed, chunkIndex, x >> 2, y >> 2, z >> 2));
 
     private static int BlockIdForMultiPackedChunk(
         int seed,
         int chunkIndex,
         int x,
         int y,
-        int z)
-    {
-        int hash = Hash(seed, chunkIndex, x >> 2, y >> 2, z >> 2);
-        return (hash % 13) switch
-        {
-            0 or 1 => AirBlockId,
-            2 or 3 or 4 => 256,
-            5 or 6 => 257,
-            7 or 8 => 258,
-            9 or 10 => 259,
-            11 => 260,
-            _ => 261
-        };
-    }
+        int z) =>
+        MultiPackedId(Hash(seed, chunkIndex, x >> 2, y >> 2, z >> 2));
 
     private static int BlockIdForTransparentChunk(
         int seed,
         int chunkIndex,
         int x,
         int y,
-        int z)
-    {
-        int hash = Hash(seed, chunkIndex, x >> 2, y >> 2, z >> 2);
-        return (hash & 15) switch
-        {
-            <= 8 => 257,
-            <= 11 => 258,
-            <= 13 => 261,
-            14 => AirBlockId,
-            _ => 256
-        };
-    }
+        int z) =>
+        TransparentId(Hash(seed, chunkIndex, x >> 2, y >> 2, z >> 2));
 
     private static int BlockIdForTerrainChunk(
         int seed,
         int chunkIndex,
         int x,
         int y,
-        int z)
-    {
-        int columnHash = Hash(seed, chunkIndex, x, 0, z);
-        int surface = 9 + columnHash % 14;
-        if (y > surface)
-        {
-            return y <= 15 ? 257 : AirBlockId;
-        }
+        int z) =>
+        TerrainId(Hash(seed, chunkIndex, x, 0, z), y);
 
-        if (y + 3 < surface)
-        {
-            return 256;
-        }
+    // Each chunk pattern maps its hash and section to an ID in one place, used
+    // by the per-cell functions above and by FillPressureCells. Hash-dependent
+    // choices are table lookups or selects: hash bits are random, so branches
+    // on them would mispredict.
+    private static ReadOnlySpan<ushort> MixByHashMod11 =>
+        [257, 257, 257, 257, 257, 258, 258, 258, 261, AirBlockId, AirBlockId];
 
-        return (columnHash % 11) switch
+    private static ReadOnlySpan<ushort> MixByHashMod13 =>
+        [AirBlockId, AirBlockId, 257, 257, 257, 258, 258, 259, 259, 260, 260, 261, 261];
+
+    private static ReadOnlySpan<ushort> ExpandedByHash =>
+        [AirBlockId, 256, 257, 259];
+
+    private static ReadOnlySpan<ushort> MultiPackedByHashMod13 =>
+        [AirBlockId, AirBlockId, 256, 256, 256, 257, 257, 258, 258, 259, 259, 260, 261];
+
+    private static ReadOnlySpan<ushort> TransparentByHash =>
+        [257, 257, 257, 257, 257, 257, 257, 257, 257, 258, 258, 258, 261, 261, AirBlockId, 256];
+
+    private static ReadOnlySpan<ushort> PackedBySection => [256, 257, 259, 258];
+
+    private static ReadOnlySpan<ushort> UniformBySection =>
+        [256, 256, 256, 259, 257, 257, AirBlockId, 261];
+
+    private static ReadOnlySpan<ushort> TerrainSurfaceByHashMod11 =>
+        [258, 261, 259, 256, 256, 256, 256, 256, 256, 256, 256];
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int CompleteSectionMixId(int sectionPattern, int hash) =>
+        sectionPattern switch
         {
-            0 => 258,
-            1 => 261,
-            2 => 259,
-            _ => 256
+            0 => AirBlockId,
+            1 => 256,
+            2 => 257,
+            3 => (hash & 31) == 0 ? 259 : 256,
+            4 => MixByHashMod11[hash % 11],
+            _ => MixByHashMod13[hash % 13]
         };
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int SparseId(int section, int hash) =>
+        section < 6
+            ? AirBlockId
+            : section == 6
+                ? (hash & 31) == 0 ? 256 : AirBlockId
+                : (hash & 63) == 0 ? 258 : AirBlockId;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int UniformId(int section) =>
+        (uint)section < (uint)UniformBySection.Length
+            ? UniformBySection[section]
+            : 261;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int PackedId(int hash, int section) =>
+        (hash & 3) != 0 ? AirBlockId : PackedBySection[section & 3];
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int ExpandedId(int hash) => ExpandedByHash[hash & 3];
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int MultiPackedId(int hash) => MultiPackedByHashMod13[hash % 13];
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int TransparentId(int hash) => TransparentByHash[hash & 15];
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int TerrainId(int columnHash, int y)
+    {
+        int surface = 9 + columnHash % 14;
+        int aboveSurface = y <= 15 ? 257 : AirBlockId;
+        int nearSurface = TerrainSurfaceByHashMod11[columnHash % 11];
+        int belowSurface = y + 3 < surface ? 256 : nearSurface;
+        return y > surface ? aboveSurface : belowSurface;
     }
 
-    public static short DensityForCell(int seed, int chunkIndex, int x, int y, int z, int blockId)
+    // Fills one chunk with BlockIdForCell, DensityForCell and SectionIndex for
+    // every cell, computing each hash once: the cell hash serves the pattern
+    // and the density, and coarse and column hashes serve their whole block.
+    // Each pattern gets its own loop through a struct type argument.
+    internal static void FillPressureCells(
+        int seed,
+        int chunkIndex,
+        Span<VoxelCell> cells)
+    {
+        if (cells.Length != CellsPerChunk)
+        {
+            throw new ArgumentException(
+                "The pressure build requires one complete canonical chunk.",
+                nameof(cells));
+        }
+
+        switch (chunkIndex & 7)
+        {
+            case 0: FillPressureCells<CompleteSectionMixPattern>(seed, chunkIndex, cells); break;
+            case 1: FillPressureCells<SparsePattern>(seed, chunkIndex, cells); break;
+            case 2: FillPressureCells<UniformPattern>(seed, chunkIndex, cells); break;
+            case 3: FillPressureCells<PackedPattern>(seed, chunkIndex, cells); break;
+            case 4: FillPressureCells<ExpandedPattern>(seed, chunkIndex, cells); break;
+            case 5: FillPressureCells<MultiPackedPattern>(seed, chunkIndex, cells); break;
+            case 6: FillPressureCells<TransparentPattern>(seed, chunkIndex, cells); break;
+            default: FillPressureCells<TerrainPattern>(seed, chunkIndex, cells); break;
+        }
+    }
+
+    private static void FillPressureCells<TPattern>(
+        int seed,
+        int chunkIndex,
+        Span<VoxelCell> cells)
+        where TPattern : struct, IChunkPattern
+    {
+        int coarseMask = (1 << TPattern.CoarseShift) - 1;
+        Span<int> columnHashes = stackalloc int[ChunkDimension];
+        for (int z = 0; z < ChunkDimension; z++)
+        {
+            if (TPattern.UsesColumnHash)
+            {
+                for (int x = 0; x < ChunkDimension; x++)
+                {
+                    columnHashes[x] = Hash(seed, chunkIndex, x, 0, z);
+                }
+            }
+
+            for (int y = 0; y < ChunkDimension; y++)
+            {
+                Span<VoxelCell> row = cells.Slice(
+                    (z * ChunkDimension + y) * ChunkDimension,
+                    ChunkDimension);
+                int sectionRow =
+                    ((z / SectionDimension) * SectionsPerAxis + y / SectionDimension)
+                    * SectionsPerAxis;
+                int coarseHash = 0;
+                for (int x = 0; x < row.Length; x++)
+                {
+                    int section = sectionRow + x / SectionDimension;
+                    int hash = Hash(seed, chunkIndex, x, y, z);
+                    if (TPattern.CoarseShift != 0 && (x & coarseMask) == 0)
+                    {
+                        coarseHash = Hash(
+                            seed,
+                            chunkIndex,
+                            x >> TPattern.CoarseShift,
+                            y >> TPattern.CoarseShift,
+                            z >> TPattern.CoarseShift);
+                    }
+
+                    int blockId = TPattern.BlockId(
+                        hash,
+                        coarseHash,
+                        TPattern.UsesColumnHash ? columnHashes[x] : 0,
+                        section,
+                        y);
+                    row[x] = new VoxelCell
+                    {
+                        BlockId = checked((ushort)blockId),
+                        Density = DensityFromHash(hash, blockId),
+                        Section = section
+                    };
+                }
+            }
+        }
+    }
+
+    private interface IChunkPattern
+    {
+        // Coarse hashes cover blocks of 2^CoarseShift cells per axis; 0: none.
+        static abstract int CoarseShift { get; }
+
+        static abstract bool UsesColumnHash { get; }
+
+        static abstract int BlockId(
+            int hash,
+            int coarseHash,
+            int columnHash,
+            int section,
+            int y);
+    }
+
+    [StructLayout(LayoutKind.Auto)]
+    private readonly struct CompleteSectionMixPattern : IChunkPattern
+    {
+        public static int CoarseShift => 0;
+
+        public static bool UsesColumnHash => false;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static int BlockId(int hash, int coarseHash, int columnHash, int section, int y) =>
+            CompleteSectionMixId(section % 6, hash);
+    }
+
+    [StructLayout(LayoutKind.Auto)]
+    private readonly struct SparsePattern : IChunkPattern
+    {
+        public static int CoarseShift => 0;
+
+        public static bool UsesColumnHash => false;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static int BlockId(int hash, int coarseHash, int columnHash, int section, int y) =>
+            SparseId(section, hash);
+    }
+
+    [StructLayout(LayoutKind.Auto)]
+    private readonly struct UniformPattern : IChunkPattern
+    {
+        public static int CoarseShift => 0;
+
+        public static bool UsesColumnHash => false;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static int BlockId(int hash, int coarseHash, int columnHash, int section, int y) =>
+            UniformId(section);
+    }
+
+    [StructLayout(LayoutKind.Auto)]
+    private readonly struct PackedPattern : IChunkPattern
+    {
+        public static int CoarseShift => 1;
+
+        public static bool UsesColumnHash => false;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static int BlockId(int hash, int coarseHash, int columnHash, int section, int y) =>
+            PackedId(coarseHash, section);
+    }
+
+    [StructLayout(LayoutKind.Auto)]
+    private readonly struct ExpandedPattern : IChunkPattern
+    {
+        public static int CoarseShift => 2;
+
+        public static bool UsesColumnHash => false;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static int BlockId(int hash, int coarseHash, int columnHash, int section, int y) =>
+            ExpandedId(coarseHash);
+    }
+
+    [StructLayout(LayoutKind.Auto)]
+    private readonly struct MultiPackedPattern : IChunkPattern
+    {
+        public static int CoarseShift => 2;
+
+        public static bool UsesColumnHash => false;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static int BlockId(int hash, int coarseHash, int columnHash, int section, int y) =>
+            MultiPackedId(coarseHash);
+    }
+
+    [StructLayout(LayoutKind.Auto)]
+    private readonly struct TransparentPattern : IChunkPattern
+    {
+        public static int CoarseShift => 2;
+
+        public static bool UsesColumnHash => false;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static int BlockId(int hash, int coarseHash, int columnHash, int section, int y) =>
+            TransparentId(coarseHash);
+    }
+
+    [StructLayout(LayoutKind.Auto)]
+    private readonly struct TerrainPattern : IChunkPattern
+    {
+        public static int CoarseShift => 0;
+
+        public static bool UsesColumnHash => true;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static int BlockId(int hash, int coarseHash, int columnHash, int section, int y) =>
+            TerrainId(columnHash, y);
+    }
+
+    public static short DensityForCell(int seed, int chunkIndex, int x, int y, int z, int blockId) =>
+        IsAir(blockId)
+            ? short.MinValue
+            : DensityFromHash(Hash(seed, chunkIndex, x, y, z), blockId);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static short DensityFromHash(int hash, int blockId)
     {
         if (IsAir(blockId))
         {
             return short.MinValue;
         }
 
-        int value = Hash(seed, chunkIndex, x, y, z) % 241 - 120;
-        return checked((short)(value + BlockTypeForId(blockId).DensityBias));
+        int value = hash % 241 - 120;
+        return checked((short)(value + RegisteredType(blockId).DensityBias));
     }
 
     public static bool IsAir(int blockId) => blockId == AirBlockId;
@@ -1142,6 +1306,23 @@ public static class VoxelMath
         return BlockTypes[index];
     }
 
+    // BlockTypeForId without copying the descriptor; throws the same exceptions.
+    internal static ref readonly BlockTypeDescriptor RegisteredType(int blockId)
+    {
+        if ((uint)blockId <= ushort.MaxValue)
+        {
+            ref readonly BlockTypeDescriptor type =
+                ref BlockTypes[BlockTypeIndexById[blockId]];
+            if (type.Id == blockId)
+            {
+                return ref type;
+            }
+        }
+
+        _ = BlockTypeForId(blockId);
+        throw new UnreachableException();
+    }
+
     public static FaceRecord CreateFaceRecord(int cellIndex, int blockId, int mask)
     {
         BlockTypeDescriptor type = BlockTypeForId(blockId);
@@ -1257,6 +1438,28 @@ public static class VoxelMath
                     }
                 }
             }
+        }
+
+        return CreateSectionSummary(
+            counts,
+            transparentCounts,
+            distinct,
+            transparentIds,
+            firstBlockId);
+    }
+
+    // ClassifySection from per-type counts gathered elsewhere.
+    internal static SectionSummary SummarizeSection(
+        ReadOnlySpan<int> counts,
+        ReadOnlySpan<int> transparentCounts,
+        int firstBlockId)
+    {
+        int distinct = 0;
+        int transparentIds = 0;
+        for (int index = 0; index < counts.Length; index++)
+        {
+            distinct += counts[index] != 0 ? 1 : 0;
+            transparentIds += transparentCounts[index] != 0 ? 1 : 0;
         }
 
         return CreateSectionSummary(
