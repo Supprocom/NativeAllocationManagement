@@ -3,7 +3,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $namRoot = [IO.Path]::GetFullPath($EvidenceRoot)
 $namCapture = [IO.File]::ReadAllText((Join-Path $namRoot 'capture.json')) | ConvertFrom-Json
-if (-not $namCapture.CaptureComplete -or $namCapture.PerformanceAccepted -or $namCapture.PublishedVersion -cne '0.2.3') {
+if (-not $namCapture.CaptureComplete -or $namCapture.PerformanceAccepted -or $namCapture.PublishedVersion -cne '0.3.0') {
     throw 'An incomplete capture or invented prior verdict cannot satisfy comparison acceptance.'
 }
 $namInputs = @([IO.File]::ReadAllText((Join-Path $namRoot 'input-identities.json')) | ConvertFrom-Json)
@@ -25,7 +25,7 @@ foreach ($namPublishedInput in $namPublished) {
     $namCandidateInput = @($namCandidates | Where-Object Name -ceq $namPublishedInput.Name)
     if ($namCandidateInput.Count -ne 1) { throw 'Candidate input is missing or duplicated.' }
     if ($namPublishedInput.Name -ceq 'Supprocom.NativeAllocationManagement.dll') {
-        if ($namPublishedInput.SHA256 -cne '87B8131B0D05B626ACA4DD570E686E0519D3E0D93A8DE4865CF210C8A479F68B' -or
+        if ($namPublishedInput.SHA256 -cne '30DB91F303655C7A25F82071777D1B866DC09144D3CB4BDBE1AF7D7DE29E9B48' -or
             $namCandidateInput[0].SHA256 -cne $namCapture.CandidateSHA256) { throw 'Actual published/candidate runtime identities differ.' }
     } elseif ($namPublishedInput.SHA256 -cne $namCandidateInput[0].SHA256 -or $namPublishedInput.Length -ne $namCandidateInput[0].Length) {
         throw 'Comparison variants differ in more than the actual NAM runtime.'
