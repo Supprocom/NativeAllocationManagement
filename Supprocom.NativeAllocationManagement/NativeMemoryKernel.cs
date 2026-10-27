@@ -4172,9 +4172,9 @@ internal sealed partial class NativeOwnerKernel
         {
             if (!NativeMemoryTestHooks.FaultInjectionPending)
             {
-                if (TakeCachedForRent(length) is NativeAllocation cached)
+                if (TakeCachedForRent(length, out NativePoolThreadCache? cache) is NativeAllocation cached)
                 {
-                    return InitializeCached(cached, initializer);
+                    return InitializeCached(cache!, cached, initializer);
                 }
             }
             else if (_threadCacheCount != 0)

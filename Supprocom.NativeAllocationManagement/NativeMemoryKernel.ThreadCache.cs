@@ -16,11 +16,12 @@ internal sealed partial class NativeOwnerKernel
     private bool ThreadCacheEligible =>
         _kind == NativeOwnerKind.Pool && !_containsReferences;
 
-    // The returned record's CacheOwner is the cache it was rented through.
+    // Returns the cache too: once the busy window closes, a revocation on
+    // another thread may clear the record's CacheOwner.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private NativeAllocation? TakeCachedForRent(int length)
+    private NativeAllocation? TakeCachedForRent(int length, out NativePoolThreadCache? cache)
     {
-        NativePoolThreadCache? cache = NativePoolThreadCaches.Find(Id);
+        cache = NativePoolThreadCaches.Find(Id);
         if (cache is not null && cache.Enter())
         {
             if (cache.NextId <= cache.LastId
@@ -35,13 +36,13 @@ internal sealed partial class NativeOwnerKernel
             cache.Exit();
         }
 
-        return ClaimForThreadCache(length, cache);
+        return ClaimForThreadCache(length, ref cache);
     }
 
     // Takes a record for the cache under the owner lock: arms the cache, refills
     // its identities and leased set, then uses a cached record, an available
     // slab or a new slab. Null means this thread has no cache for the pool.
-    private NativeAllocation? ClaimForThreadCache(int length, NativePoolThreadCache? cache)
+    private NativeAllocation? ClaimForThreadCache(int length, ref NativePoolThreadCache? cache)
     {
         NativePoolThreadCache? evicted = null;
         NativeAllocation? claimed = null;
@@ -211,10 +212,10 @@ internal sealed partial class NativeOwnerKernel
     }
 
     private NativePoolLease InitializeCached<T>(
+        NativePoolThreadCache cache,
         NativeAllocation allocation,
         NativeLeaseInitializer<T> initializer)
     {
-        NativePoolThreadCache cache = allocation.CacheOwner!;
         long allocationId = allocation.Id;
         int initializedLength = 0;
         try
