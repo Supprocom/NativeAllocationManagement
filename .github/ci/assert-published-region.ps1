@@ -169,11 +169,12 @@ foreach ($namMode in @('Controlled', 'Default')) {
         $namWholeRatios += [double]$namNewCommand.ElapsedMilliseconds / [double]$namOldCommand.ElapsedMilliseconds
     }
     $namRegion = Get-NamPublishedInterval $namRegionRatios
-    # The median pair ratio: on GitHub-hosted runners one disturbed pair (seen at 3.6x, with the
-    # managed control at 1.7x) inflates the 95% interval past any useful ceiling. Default's pairs also
-    # carry tier-up noise, so its ceiling only catches gross regressions.
-    $namRegionStatistic = 'MedianRatio'
-    $namRegionCeiling = if ($namMode -ceq 'Controlled') { 1.10 } else { 1.25 }
+    # Controlled: the median pair ratio. On GitHub-hosted runners one disturbed pair (seen at 3.6x,
+    # with the managed control at 1.7x) inflates the 95% interval past any useful ceiling.
+    # Default: the geometric mean. Its pairs split by run order from tier-up (seen at ~1.5 when the
+    # published runtime ran first, ~1.0 when the candidate did), so the median falls between the two
+    # clusters; the mean over balanced orders cancels that. Its ceiling only catches gross regressions.
+    $namRegionStatistic, $namRegionCeiling = if ($namMode -ceq 'Controlled') { 'MedianRatio', 1.10 } else { 'CandidateOverPublished', 1.25 }
     $namNoMaterialRegression = $namNoMaterialRegression -and $namRegion.$namRegionStatistic -le $namRegionCeiling
     $namComparisons.Add([pscustomobject]@{ Mode = $namMode; Region = $namRegion; ExpertManagedControl = Get-NamPublishedInterval $namManagedRatios;
         WholeChild = Get-NamPublishedInterval $namWholeRatios; TimeRatioStatistic = $namRegionStatistic; TimeRatioCeiling = $namRegionCeiling })
