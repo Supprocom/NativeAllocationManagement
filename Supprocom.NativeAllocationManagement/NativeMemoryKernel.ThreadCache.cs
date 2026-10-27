@@ -27,7 +27,7 @@ internal sealed partial class NativeOwnerKernel
         {
             if (cache.NextId <= cache.LastId
                 && cache.LeasedCount < cache.Leased.Length
-                && cache.TakeFree(length) is NativeAllocation allocation)
+                && (cache.TakeFree(length) ?? TakeRemoteFree(cache, length)) is NativeAllocation allocation)
             {
                 BeginCachedLease(cache, allocation, length);
                 cache.Exit();
@@ -78,10 +78,10 @@ internal sealed partial class NativeOwnerKernel
                 FoldThreadCacheLocked(cache);
             }
 
-            // A budget counts every slab, so a budgeted pool reuses idle records
-            // other threads cache before it grows.
-            if (_budget is not null
-                && !CacheHoldsFit(cache, length)
+            // A pool grows only when no thread holds an idle record: idle records
+            // cached by other threads, for example threads an async producer has
+            // left, come back first. A budget counts every slab, too.
+            if (!CacheHoldsFit(cache, length)
                 && !HasAvailableSlabLocked(generation, length)
                 && OtherThreadCachesHoldFreeLocked(cache))
             {
@@ -98,7 +98,7 @@ internal sealed partial class NativeOwnerKernel
             cache.ReserveLeased();
             cache.Generation = generation;
             Volatile.Write(ref cache.Revoked, 0);
-            claimed = cache.TakeFree(length);
+            claimed = cache.TakeFree(length) ?? TakeRemoteFree(cache, length);
             if (claimed is null)
             {
                 NativeSlab? slab = TakeSmallestAvailableSlabLocked(generation, length);
@@ -164,7 +164,15 @@ internal sealed partial class NativeOwnerKernel
             }
         }
 
-        return false;
+        if (Volatile.Read(ref cache.RemoteFreeCount) == 0)
+        {
+            return false;
+        }
+
+        lock (cache.TransferGate)
+        {
+            return FindRemoteFreeFit(cache, length) >= 0;
+        }
     }
 
     private static bool HasAvailableSlabLocked(NativeGeneration generation, int length)
@@ -184,13 +192,60 @@ internal sealed partial class NativeOwnerKernel
     {
         foreach (ref readonly NativePoolThreadCache other in _threadCaches.AsSpan(0, _threadCacheCount))
         {
-            if (!ReferenceEquals(other, cache) && Volatile.Read(ref other.FreeCount) != 0)
+            if (!ReferenceEquals(other, cache)
+                && (Volatile.Read(ref other.FreeCount) != 0 || Volatile.Read(ref other.RemoteFreeCount) != 0))
             {
                 return true;
             }
         }
 
         return false;
+    }
+
+    // In the owner's busy window or under the owner lock: takes the smallest
+    // record other threads returned that holds the length.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static NativeAllocation? TakeRemoteFree(NativePoolThreadCache cache, int length)
+    {
+        if (Volatile.Read(ref cache.RemoteFreeCount) == 0)
+        {
+            return null;
+        }
+
+        lock (cache.TransferGate)
+        {
+            int best = FindRemoteFreeFit(cache, length);
+            if (best < 0)
+            {
+                return null;
+            }
+
+            NativeAllocation allocation = cache.RemoteFree[best]!;
+            int last = --cache.RemoteFreeCount;
+            cache.RemoteFree[best] = cache.RemoteFree[last];
+            cache.RemoteFree[last] = null;
+            allocation.CacheOwner = cache;
+            cache.PayloadDelta -= (long)allocation.StorageBytes;
+            return allocation;
+        }
+    }
+
+    // Under TransferGate.
+    private static int FindRemoteFreeFit(NativePoolThreadCache cache, int length)
+    {
+        int best = -1;
+        int bestCapacity = int.MaxValue;
+        for (int index = 0; index < cache.RemoteFreeCount; index++)
+        {
+            int capacity = cache.RemoteFree[index]!.Slab!.Capacity;
+            if (capacity >= length && capacity < bestCapacity)
+            {
+                best = index;
+                bestCapacity = capacity;
+            }
+        }
+
+        return best;
     }
 
     private void BeginCachedLease(NativePoolThreadCache cache, NativeAllocation allocation, int length)
@@ -215,7 +270,8 @@ internal sealed partial class NativeOwnerKernel
     private NativePoolLease InitializeCached<T>(
         NativePoolThreadCache cache,
         NativeAllocation allocation,
-        NativeLeaseInitializer<T> initializer)
+        NativeLeaseInitializer<T> initializer,
+        bool transferable)
     {
         long allocationId = allocation.Id;
         int initializedLength = 0;
@@ -224,7 +280,7 @@ internal sealed partial class NativeOwnerKernel
             NativeLeaseWriter<T> writer = new(allocation, ref initializedLength);
             initializer(writer);
             allocation.InitializedLength = initializedLength;
-            CompleteCachedInitialization(cache, allocation);
+            CompleteCachedInitialization(cache, allocation, transferable);
             return new NativePoolLease(allocationId, allocation);
         }
         catch
@@ -235,8 +291,23 @@ internal sealed partial class NativeOwnerKernel
         }
     }
 
-    private void CompleteCachedInitialization(NativePoolThreadCache cache, NativeAllocation allocation)
+    // A transferable lease leaves the owner-only leased set for the transfer
+    // list, because its NativeTransfer<T> may be used and returned anywhere.
+    private void CompleteCachedInitialization(NativePoolThreadCache cache, NativeAllocation allocation, bool transferable)
     {
+        // Only this thread adds transfers; other threads only remove them, so a
+        // list with room now keeps it. Growing copies the list under its lock.
+        if (transferable && Volatile.Read(ref cache.TransferCount) == cache.Transfers.Length)
+        {
+            lock (cache.TransferGate)
+            {
+                if (cache.TransferCount == cache.Transfers.Length)
+                {
+                    Array.Resize(ref cache.Transfers, cache.Transfers.Length * 2);
+                }
+            }
+        }
+
         if (cache.Enter())
         {
             if (ReferenceEquals(allocation.CacheOwner, cache))
@@ -246,6 +317,17 @@ internal sealed partial class NativeOwnerKernel
                     cache.Exit();
                     throw new InvalidOperationException(
                         "The native lease initializer did not write all logical elements.");
+                }
+
+                if (transferable)
+                {
+                    lock (cache.TransferGate)
+                    {
+                        cache.RemoveLeased(allocation);
+                        cache.AddTransfer(allocation);
+                        allocation.CacheOwner = null;
+                        allocation.TransferOwner = cache;
+                    }
                 }
 
                 allocation.InitializedLength = 0;
@@ -388,8 +470,51 @@ internal sealed partial class NativeOwnerKernel
                 cache.ActiveOperations++;
                 int epoch = cache.FoldEpoch;
                 cache.Exit();
-                token = new NativeOperationToken(this, generation, allocation, cache, epoch, operation);
+                token = new NativeOperationToken(this, generation, allocation, cache, epoch, atomicAllocation: false, operation);
                 return true;
+            }
+
+            cache.Exit();
+        }
+        else if (allocation.TransferOwner is not null
+            && !NativeMemoryTestHooks.OperationHooksEnabled)
+        {
+            return TryEnterTransferOperation(generation, allocation, generationNumber, allocationId, operation, out token);
+        }
+
+        token = default;
+        return false;
+    }
+
+    // A transferable lease may be borrowed on several threads at once, so its own
+    // admission stays atomic; the generation's count goes to the operating
+    // thread's cache instead of the shared generation counter.
+    private bool TryEnterTransferOperation(
+        NativeGeneration generation,
+        NativeAllocation allocation,
+        long generationNumber,
+        long allocationId,
+        string operation,
+        out NativeOperationToken token)
+    {
+        NativePoolThreadCache? cache = NativePoolThreadCaches.Find(Id);
+        if (cache is not null && cache.Enter())
+        {
+            if (ReferenceEquals(cache.Generation, generation)
+                && generation.Number == generationNumber
+                && allocation.TryEnterOperation())
+            {
+                if (allocation.Id == allocationId
+                    && allocation.Lifecycle == NativeAllocationLifecycle.Active)
+                {
+                    cache.ActiveOperations++;
+                    int epoch = cache.FoldEpoch;
+                    cache.Exit();
+                    token = new NativeOperationToken(this, generation, allocation, cache, epoch, atomicAllocation: true, operation);
+                    return true;
+                }
+
+                allocation.ExitOperation();
             }
 
             cache.Exit();
@@ -403,13 +528,22 @@ internal sealed partial class NativeOwnerKernel
         NativeGeneration generation,
         NativeAllocation allocation,
         NativePoolThreadCache cache,
-        int epoch)
+        int epoch,
+        bool atomicAllocation)
     {
         if (cache.Enter())
         {
             if (cache.FoldEpoch == epoch)
             {
-                allocation.ExitOwnerOperation();
+                if (atomicAllocation)
+                {
+                    allocation.ExitOperation();
+                }
+                else
+                {
+                    allocation.ExitOwnerOperation();
+                }
+
                 cache.ActiveOperations--;
                 cache.Exit();
                 return;
@@ -422,6 +556,106 @@ internal sealed partial class NativeOwnerKernel
         WaitForThreadCacheFold();
         allocation.ExitOperation();
         ExitGenerationOperation(generation);
+    }
+
+    // Returns a transferable lease from any thread. A lease still on its renting
+    // cache's transfer list leaves the list under that list's lock; its record
+    // and slab then go into the returning thread's cache, or to the generation.
+    // A lease a fold moved to the generation takes the locked path.
+    internal void ReturnTransferLease(
+        NativeAllocation allocation,
+        long generationNumber,
+        long allocationId,
+        string operation)
+    {
+        if (allocation.TransferOwner is NativePoolThreadCache owner)
+        {
+            bool returned = false;
+            lock (owner.TransferGate)
+            {
+                if (ReferenceEquals(allocation.TransferOwner, owner))
+                {
+                    if (allocation.Id != allocationId
+                        || allocation.Lifecycle != NativeAllocationLifecycle.Active
+                        || allocation.GenerationState.Number != generationNumber)
+                    {
+                        return;
+                    }
+
+                    int activeOperations = allocation.CloseOperationAdmission();
+                    if (activeOperations != 0)
+                    {
+                        allocation.OpenOperationAdmission();
+                        throw CreateInUseException(
+                            operation,
+                            generationNumber,
+                            allocationId,
+                            activeOperations,
+                            "The lease has an active native operation. No storage was cleared or requeued.");
+                    }
+
+                    owner.RemoveTransfer(allocation);
+                    allocation.TransferOwner = null;
+                    allocation.Lifecycle = NativeAllocationLifecycle.Returned;
+                    if (owner.RemoteFreeCount < NativePoolThreadCache.RemoteFreeCapacity
+                        && !ReferenceEquals(NativePoolThreadCaches.Find(Id), owner))
+                    {
+                        // The renting thread takes it back on a later rent; its
+                        // payload leaves that thread's count then.
+                        owner.RemoteFree[owner.RemoteFreeCount++] = allocation;
+                        return;
+                    }
+
+                    returned = true;
+                }
+            }
+
+            if (returned)
+            {
+                RecycleReturnedTransfer(allocation);
+                return;
+            }
+        }
+
+        ReturnLease(generationNumber, allocationId, operation);
+    }
+
+    // The returned record is in no list yet; a transition that runs now treats
+    // its slab as idle, which it is.
+    private void RecycleReturnedTransfer(NativeAllocation allocation)
+    {
+        NativeGeneration generation = allocation.GenerationState;
+        long payloadBytes = (long)allocation.StorageBytes;
+        NativePoolThreadCache? cache = NativePoolThreadCaches.Find(Id);
+        if (cache is not null
+            && !NativeMemoryTestHooks.FaultInjectionPending
+            && cache.Enter())
+        {
+            if (ReferenceEquals(cache.Generation, generation)
+                && cache.FreeCount < NativePoolThreadCache.FreeCapacity)
+            {
+                allocation.CacheOwner = cache;
+                cache.Free[cache.FreeCount++] = allocation;
+                cache.PayloadDelta -= payloadBytes;
+                cache.Exit();
+                return;
+            }
+
+            cache.Exit();
+        }
+
+        lock (_gate)
+        {
+            if (ReferenceEquals(generation, _current))
+            {
+                generation.ReusableAllocations.Add(allocation);
+                generation.AddAvailableSlabOrdered(allocation.Slab!);
+                generation.HotPoolAllocation = null;
+            }
+
+            PublishThreadCachePeak(generation);
+            RecordPayloadReturn(generation, payloadBytes, scoped: false);
+        }
     }
 
     // The generation's payload is about to change on the locked path. This
@@ -645,6 +879,36 @@ internal sealed partial class NativeOwnerKernel
         }
 
         cache.LeasedCount = 0;
+        lock (cache.TransferGate)
+        {
+            generation.Allocations.EnsureCapacity(checked(generation.Allocations.Count + cache.TransferCount));
+            for (int index = 0; index < cache.TransferCount; index++)
+            {
+                NativeAllocation allocation = cache.Transfers[index]!;
+                cache.Transfers[index] = null;
+                allocation.TransferOwner = null;
+                generation.Allocations.Add(allocation.Id, allocation);
+            }
+
+            cache.TransferCount = 0;
+            generation.ReusableAllocations.EnsureCapacity(checked(generation.ReusableAllocations.Count + cache.RemoteFreeCount));
+            generation.AvailableSlabs.EnsureCapacity(checked(generation.AvailableSlabs.Count + cache.RemoteFreeCount));
+            for (int index = 0; index < cache.RemoteFreeCount; index++)
+            {
+                NativeAllocation allocation = cache.RemoteFree[index]!;
+                cache.RemoteFree[index] = null;
+                cache.PayloadDelta -= (long)allocation.StorageBytes;
+                if (current)
+                {
+                    generation.ReusableAllocations.Add(allocation);
+                    generation.AddAvailableSlabOrdered(allocation.Slab!);
+                    generation.HotPoolAllocation = null;
+                }
+            }
+
+            cache.RemoteFreeCount = 0;
+        }
+
         long delta = cache.PayloadDelta;
         long max = cache.MaxPayloadDelta;
         if (delta != 0 || max != 0)

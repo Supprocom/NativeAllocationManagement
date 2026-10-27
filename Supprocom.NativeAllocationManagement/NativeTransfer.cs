@@ -694,7 +694,7 @@ internal partial class NativeTransferControl<T>
         {
             NativeMemoryTestHooks.CheckManagedPublicationBoundary(operation, 4, "unique payload authority return");
             if (_kernel is null) NativeBlockAllocator.Free(_block);
-            else _kernel.ReturnLease(_block.MetricsEpoch, _block.OwnerId, operation);
+            else _kernel.ReturnTransferLease(_allocationState!, _block.MetricsEpoch, _block.OwnerId, operation);
         }
         catch
         {

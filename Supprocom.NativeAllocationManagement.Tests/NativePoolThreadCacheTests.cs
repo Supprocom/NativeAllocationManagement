@@ -270,6 +270,50 @@ public sealed class NativePoolThreadCacheTests
     }
 
     [Fact]
+    public void APoolReusesASlabAnotherThreadCachesBeforeGrowing()
+    {
+        using NativeConcurrentPool<int> pool = new();
+        Thread owner = new(() =>
+        {
+            using ConcurrentPooled<int> lease = pool.Rent(16, static writer => writer.Fill(1));
+        });
+        owner.Start();
+        Assert.True(owner.Join(Timeout));
+
+        using ConcurrentPooled<int> reused = pool.Rent(16, static writer => writer.Fill(2));
+        Assert.Equal(1, pool.GetStatistics().SegmentCount);
+    }
+
+    [Fact]
+    public void TransfersReturnedOnOtherThreadsComeBackWithoutGrowth()
+    {
+        using NativeConcurrentPool<int> pool = new();
+        using (pool.RentTransferable(16, static writer => writer.Fill(0)))
+        {
+        }
+
+        int segments = pool.GetStatistics().SegmentCount;
+        for (int round = 0; round < 20; round++)
+        {
+            NativeTransfer<int>? transfer = null;
+            Thread producer = new(() => transfer = pool.RentTransferable(16, writer => writer.Fill(round)));
+            producer.Start();
+            Assert.True(producer.Join(Timeout));
+            NativeTransfer<int> received = transfer!.Value;
+            Thread consumer = new(() =>
+            {
+                Assert.Equal(round, received.Read(static view => view[15]));
+                received.Dispose();
+            });
+            consumer.Start();
+            Assert.True(consumer.Join(Timeout));
+        }
+
+        Assert.Equal(segments, pool.GetStatistics().SegmentCount);
+        Assert.Equal(0, pool.GetStatistics().InitializedPayloadBytes);
+    }
+
+    [Fact]
     public void CachedRentsProcessesAndReturnsAllocateNothingAfterWarmup()
     {
         using NativeConcurrentPool<int> pool = new();

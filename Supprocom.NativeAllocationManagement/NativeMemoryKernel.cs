@@ -1497,8 +1497,12 @@ internal sealed class NativeAllocation
     // The thread cache that holds this record, free or leased; see NativePoolThreadCache.
     internal NativePoolThreadCache? CacheOwner;
 
-    // The record's index in its cache's leased set.
+    // The record's index in its cache's leased set or transfer list.
     internal int CacheSlot;
+
+    // The cache whose transfer list holds this transferable lease. Unlike
+    // CacheOwner it does not make the record owner-thread only.
+    internal NativePoolThreadCache? TransferOwner;
 
     // Only the owning thread touches a cached record's admission until a fold.
     internal void EnterOwnerOperation() => _operationAdmission++;
@@ -2855,6 +2859,7 @@ internal ref struct NativeOperationToken
     private readonly string _operation;
     private readonly NativePoolThreadCache? _cache;
     private readonly int _cacheEpoch;
+    private readonly bool _atomicAllocation;
 
     internal NativeOperationToken(
         NativeOwnerKernel kernel,
@@ -2873,15 +2878,18 @@ internal ref struct NativeOperationToken
         _operation = operation;
         _cache = null;
         _cacheEpoch = 0;
+        _atomicAllocation = false;
     }
 
-    // An operation entered through the owning thread's cache.
+    // An operation counted in a thread's cache; a transferable lease's own
+    // admission was entered atomically.
     internal NativeOperationToken(
         NativeOwnerKernel kernel,
         NativeGeneration generation,
         NativeAllocation allocation,
         NativePoolThreadCache cache,
         int cacheEpoch,
+        bool atomicAllocation,
         string operation)
     {
         _kernel = kernel;
@@ -2893,6 +2901,7 @@ internal ref struct NativeOperationToken
         _operation = operation;
         _cache = cache;
         _cacheEpoch = cacheEpoch;
+        _atomicAllocation = atomicAllocation;
     }
 
     internal NativeLeaseView<T> GetView<T>() => new(_allocation);
@@ -2936,7 +2945,7 @@ internal ref struct NativeOperationToken
         _kernel = null;
         if (_cache is not null)
         {
-            kernel.ExitCachedOperation(_generationState, _allocation, _cache, _cacheEpoch);
+            kernel.ExitCachedOperation(_generationState, _allocation, _cache, _cacheEpoch, _atomicAllocation);
             return;
         }
 
@@ -4168,13 +4177,13 @@ internal sealed partial class NativeOwnerKernel
         bool transferable = false)
     {
         ArgumentNullException.ThrowIfNull(initializer);
-        if (!scoped && !transferable && length > 0 && ThreadCacheEligible)
+        if (!scoped && length > 0 && ThreadCacheEligible)
         {
             if (!NativeMemoryTestHooks.FaultInjectionPending)
             {
                 if (TakeCachedForRent(length, out NativePoolThreadCache? cache) is NativeAllocation cached)
                 {
-                    return InitializeCached(cache!, cached, initializer);
+                    return InitializeCached(cache!, cached, initializer, transferable);
                 }
             }
             else if (_threadCacheCount != 0)
@@ -8523,6 +8532,14 @@ internal sealed partial class NativeOwnerKernel
         lock (_gate)
         {
             NativeGeneration generation = EnsureActiveLocked("NativeShared.PrepareReturn", generationNumber, allocationId);
+            if (generation.Number == generationNumber
+                && _threadCacheCount != 0
+                && !generation.Allocations.TryGetValue(allocationId, out _))
+            {
+                // A thread cache may still list the transferable lease.
+                RevokeThreadCachesLocked();
+            }
+
             if (generation.Number != generationNumber || !generation.Allocations.TryGetValue(allocationId, out NativeAllocation allocation)
                 || allocation.Lifecycle != NativeAllocationLifecycle.Active)
             {

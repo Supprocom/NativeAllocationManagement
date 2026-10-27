@@ -58,6 +58,18 @@ internal sealed class NativePoolThreadCache
     internal int ActiveOperations;
     internal int Initializing;
 
+    // Transferable leases rented through this cache. Any thread may return one,
+    // so the list has its own short lock; a fold takes it too.
+    internal readonly Lock TransferGate = new();
+    internal NativeAllocation?[] Transfers = new NativeAllocation?[4];
+    internal int TransferCount;
+
+    // Transferable leases other threads returned, kept for this thread's next
+    // rents so records flow back to the thread that rents them. Under TransferGate.
+    internal const int RemoteFreeCapacity = 64;
+    internal readonly NativeAllocation?[] RemoteFree = new NativeAllocation?[RemoteFreeCapacity];
+    internal int RemoteFreeCount;
+
     // An arena thread's private chunk of a shared bump segment while armed: it
     // allocates from LaneCursor up to LaneLimit. Chunks double per claim up to
     // the kernel's chunk limit.
@@ -151,6 +163,34 @@ internal sealed class NativePoolThreadCache
         {
             Array.Resize(ref Leased, Leased.Length * 2);
         }
+    }
+
+    // Under TransferGate.
+    internal void AddTransfer(NativeAllocation allocation)
+    {
+        if (TransferCount == Transfers.Length)
+        {
+            Array.Resize(ref Transfers, Transfers.Length * 2);
+        }
+
+        allocation.CacheSlot = TransferCount;
+        Transfers[TransferCount++] = allocation;
+    }
+
+    // Under TransferGate.
+    internal void RemoveTransfer(NativeAllocation allocation)
+    {
+        int slot = allocation.CacheSlot;
+        int last = TransferCount - 1;
+        if (slot != last)
+        {
+            NativeAllocation moved = Transfers[last]!;
+            Transfers[slot] = moved;
+            moved.CacheSlot = slot;
+        }
+
+        Transfers[last] = null;
+        TransferCount = last;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
