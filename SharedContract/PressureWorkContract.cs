@@ -2813,26 +2813,23 @@ public static class PressureWorkContract
         where TValueBuffer : ISectionInitializationBuffer<ushort>, allows ref struct
         where TWordBuffer : ISectionInitializationBuffer<uint>, allows ref struct
     {
-        if (summary.Kind == SectionRepresentationKind.Expanded)
+        if (summary.Kind is not (
+            SectionRepresentationKind.Expanded
+            or SectionRepresentationKind.Packed
+            or SectionRepresentationKind.MultiPacked))
         {
-            for (int localIndex = 0;
-                localIndex < VoxelMath.CellsPerSection;
-                localIndex++)
-            {
-                values.Append(
-                    GetSectionBlockId(
-                        cells,
-                        sectionIndex,
-                        localIndex));
-            }
-
             return;
         }
 
-        if (summary.Kind is not (
-            SectionRepresentationKind.Packed
-            or SectionRepresentationKind.MultiPacked))
+        Span<ushort> localIds = stackalloc ushort[VoxelMath.CellsPerSection];
+        CopySectionIdsInLocalOrder(cells, sectionIndex, localIds);
+        if (summary.Kind == SectionRepresentationKind.Expanded)
         {
+            foreach (ref ushort blockId in localIds)
+            {
+                values.Append(blockId);
+            }
+
             return;
         }
 
@@ -2845,8 +2842,7 @@ public static class PressureWorkContract
             descriptor.ValueLength,
             paletteByType);
         AppendPackedIndices(
-            cells,
-            sectionIndex,
+            localIds,
             descriptor,
             paletteByType,
             ref words);
@@ -2880,8 +2876,7 @@ public static class PressureWorkContract
     }
 
     private static void AppendPackedIndices<TWordBuffer>(
-        ReadOnlySpan<VoxelCell> cells,
-        int sectionIndex,
+        scoped ReadOnlySpan<ushort> localIds,
         SectionPrerenderDescriptor descriptor,
         scoped Span<int> paletteByType,
         ref TWordBuffer words)
@@ -2890,14 +2885,8 @@ public static class PressureWorkContract
         ulong pending = 0;
         int pendingBits = 0;
         int wordCount = 0;
-        for (int localIndex = 0;
-            localIndex < VoxelMath.CellsPerSection;
-            localIndex++)
+        foreach (ref readonly ushort blockId in localIds)
         {
-            ushort blockId = GetSectionBlockId(
-                cells,
-                sectionIndex,
-                localIndex);
             int paletteIndex = paletteByType[VoxelMath.TypeIndexById[blockId]];
             pending |= unchecked((ulong)(uint)paletteIndex) << pendingBits;
             pendingBits += descriptor.BitsPerIndex;
@@ -3444,15 +3433,20 @@ public static class PressureWorkContract
     {
         Span<byte> seen = stackalloc byte[VoxelMath.BlockTypes.Length];
         paletteByType.Fill(-1);
-        for (int localIndex = 0;
-            localIndex < VoxelMath.CellsPerSection;
-            localIndex++)
+
+        // Which types occur does not depend on the visiting order.
+        int sectionBase = SectionBaseCell(sectionIndex);
+        for (int localZ = 0; localZ < VoxelMath.SectionDimension; localZ++)
         {
-            ushort blockId = GetSectionBlockId(
-                cells,
-                sectionIndex,
-                localIndex);
-            seen[VoxelMath.TypeIndexById[blockId]] = 1;
+            for (int localY = 0; localY < VoxelMath.SectionDimension; localY++)
+            {
+                foreach (ref readonly VoxelCell cell in cells.Slice(
+                    sectionBase + SectionRowOffset(localZ, localY),
+                    VoxelMath.SectionDimension))
+                {
+                    seen[VoxelMath.TypeIndexById[cell.BlockId]] = 1;
+                }
+            }
         }
 
         int cursor = 0;
@@ -3596,6 +3590,31 @@ public static class PressureWorkContract
             (sectionIndex
                     / (VoxelMath.SectionsPerAxis * VoxelMath.SectionsPerAxis))
                 * VoxelMath.SectionDimension);
+
+    // A section's IDs in its Y-fastest local order, read row by row.
+    private static void CopySectionIdsInLocalOrder(
+        ReadOnlySpan<VoxelCell> cells,
+        int sectionIndex,
+        Span<ushort> localIds)
+    {
+        int sectionBase = SectionBaseCell(sectionIndex);
+        for (int localZ = 0; localZ < VoxelMath.SectionDimension; localZ++)
+        {
+            Span<ushort> plane = localIds.Slice(
+                localZ * VoxelMath.SectionDimension * VoxelMath.SectionDimension,
+                VoxelMath.SectionDimension * VoxelMath.SectionDimension);
+            for (int localY = 0; localY < VoxelMath.SectionDimension; localY++)
+            {
+                ReadOnlySpan<VoxelCell> row = cells.Slice(
+                    sectionBase + SectionRowOffset(localZ, localY),
+                    VoxelMath.SectionDimension);
+                for (int localX = 0; localX < row.Length; localX++)
+                {
+                    plane[localX * VoxelMath.SectionDimension + localY] = row[localX].BlockId;
+                }
+            }
+        }
+    }
 
     private static int SectionRowOffset(int localZ, int localY) =>
         (localZ * VoxelMath.ChunkDimension + localY) * VoxelMath.ChunkDimension;
