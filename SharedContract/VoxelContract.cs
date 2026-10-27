@@ -501,6 +501,11 @@ public static class VoxelMath
         ref TSink sink)
         where TSink : IPressureCellSink, allows ref struct
     {
+        if (!PatternIdsRegistered)
+        {
+            throw new InvalidOperationException("A chunk pattern produces an unregistered block id.");
+        }
+
         switch (chunkIndex & 7)
         {
             case 0: FillPressurePlanes<CompleteSectionMixPattern, TSink>(seed, chunkIndex, firstZ, endZ, ref sink); break;
@@ -565,8 +570,8 @@ public static class VoxelMath
                         TPattern.UsesColumnHash ? columnHashes[x] : 0,
                         section,
                         y);
-                    rowIds[x] = checked((ushort)blockId);
-                    rowDensities[x] = DensityFromHash(hash, blockId);
+                    rowIds[x] = (ushort)blockId;
+                    rowDensities[x] = PatternDensity(hash, blockId);
                 }
 
                 sink.WriteRow(y, z, rowIds, rowDensities);
@@ -749,6 +754,41 @@ public static class VoxelMath
 
     private static readonly int[] DensityBiasByType =
         Array.ConvertAll(BlockTypes, static type => type.DensityBias);
+
+    // DensityForCell for an ID from the pattern tables, which hold only
+    // registered IDs (checked once, by PatternIdsRegistered).
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static short PatternDensity(int hash, int blockId) =>
+        IsAir(blockId)
+            ? short.MinValue
+            : checked((short)(hash % 241 - 120 + DensityBiasByType[TypeIndexById[blockId]]));
+
+    // Every ID the chunk patterns produce is registered, so FillPressurePlanes
+    // needs no per-cell registry check. Checked when VoxelMath initializes,
+    // with its other static fields; an unregistered ID would fail it there.
+    private static readonly bool PatternIdsRegistered = CheckPatternIdsRegistered();
+
+    private static bool CheckPatternIdsRegistered()
+    {
+        CheckRegistered([AirBlockId, 256, 257, 258, 259, 260, 261]);
+        CheckRegistered(MixByHashMod11);
+        CheckRegistered(MixByHashMod13);
+        CheckRegistered(ExpandedByHash);
+        CheckRegistered(MultiPackedByHashMod13);
+        CheckRegistered(TransparentByHash);
+        CheckRegistered(PackedBySection);
+        CheckRegistered(UniformBySection);
+        CheckRegistered(TerrainSurfaceByHashMod11);
+        return true;
+
+        static void CheckRegistered(ReadOnlySpan<ushort> blockIds)
+        {
+            foreach (ref readonly ushort blockId in blockIds)
+            {
+                _ = RegisteredType(blockId);
+            }
+        }
+    }
 
     // DensityForCell from its hash, reading the bias by type index; only an
     // unregistered ID reaches the registry lookup, which throws.

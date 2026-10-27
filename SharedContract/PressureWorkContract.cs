@@ -843,6 +843,12 @@ public static class PressureWorkContract
         internal readonly ushort[] Ids = new ushort[Side * Side * Side];
         internal readonly ushort[] Kinds = new ushort[Side * Side * Side];
 
+        // One section's IDs in its local order, for its values and indices.
+        internal readonly ushort[] SectionIds = new ushort[VoxelMath.CellsPerSection];
+
+        // One section's IDs row by row (X fastest), gathered once per section.
+        internal readonly ushort[] SectionRows = new ushort[VoxelMath.CellsPerSection];
+
         // Densities of two planes for GeneratedFacePlanes: z and z + 1.
         internal readonly short[] Densities =
             new short[2 * VoxelMath.ChunkDimension * VoxelMath.ChunkDimension];
@@ -1255,8 +1261,9 @@ public static class PressureWorkContract
         int valueStart = valueCursor;
         int wordStart = wordCursor;
         int stateStart = stateCursor;
+        ReadOnlySpan<ushort> sectionRows = GatherSectionRows(cells, sectionIndex);
         SectionPrerenderDescriptor descriptor = CreateSectionLayout(
-            cells,
+            sectionRows,
             sectionIndex,
             summary,
             ref valueCursor,
@@ -1289,8 +1296,7 @@ public static class PressureWorkContract
             wordStart,
             stateStart);
         PopulateSectionValuesAndWords(
-            cells,
-            sectionIndex,
+            sectionRows,
             summary,
             relative,
             ref values,
@@ -1298,8 +1304,7 @@ public static class PressureWorkContract
         if (transparentMasks.IsEmpty)
         {
             PopulateSectionStateWords(
-                cells,
-                sectionIndex,
+                sectionRows,
                 relative,
                 states,
                 clearStates);
@@ -1307,8 +1312,7 @@ public static class PressureWorkContract
         else
         {
             PopulateSectionStateWordsAndMasks(
-                cells,
-                sectionIndex,
+                sectionRows,
                 summary,
                 relative,
                 states,
@@ -2742,6 +2746,21 @@ public static class PressureWorkContract
         SectionSummary summary,
         ref int valueCursor,
         ref int wordCursor,
+        ref int stateCursor) =>
+        CreateSectionLayout(
+            GatherSectionRows(cells, sectionIndex),
+            sectionIndex,
+            summary,
+            ref valueCursor,
+            ref wordCursor,
+            ref stateCursor);
+
+    private static SectionPrerenderDescriptor CreateSectionLayout(
+        ReadOnlySpan<ushort> sectionRows,
+        int sectionIndex,
+        SectionSummary summary,
+        ref int valueCursor,
+        ref int wordCursor,
         ref int stateCursor)
     {
         int valueLength = SectionValueCount(summary);
@@ -2797,8 +2816,7 @@ public static class PressureWorkContract
                 : 0));
 
         ComputeSectionBounds(
-            cells,
-            sectionIndex,
+            sectionRows,
             out bool hasBounds,
             out byte minX,
             out byte minY,
@@ -2849,8 +2867,7 @@ public static class PressureWorkContract
     private static void PopulateSectionValuesAndWords<
         TValueBuffer,
         TWordBuffer>(
-        ReadOnlySpan<VoxelCell> cells,
-        int sectionIndex,
+        ReadOnlySpan<ushort> sectionRows,
         SectionSummary summary,
         SectionPrerenderDescriptor descriptor,
         ref TValueBuffer values,
@@ -2866,8 +2883,10 @@ public static class PressureWorkContract
             return;
         }
 
-        Span<ushort> localIds = stackalloc ushort[VoxelMath.CellsPerSection];
-        CopySectionIdsInLocalOrder(cells, sectionIndex, localIds);
+        // A per-thread buffer: a stack buffer this size would be zeroed on
+        // every call.
+        Span<ushort> localIds = (t_faceScratch ??= new FaceScratch()).SectionIds;
+        CopySectionIdsInLocalOrder(sectionRows, localIds);
         if (summary.Kind == SectionRepresentationKind.Expanded)
         {
             foreach (ref ushort blockId in localIds)
@@ -2880,8 +2899,7 @@ public static class PressureWorkContract
 
         Span<int> paletteByType = stackalloc int[VoxelMath.BlockTypes.Length];
         BuildSectionPalette(
-            cells,
-            sectionIndex,
+            sectionRows,
             ref values,
             descriptor.ValueOffset,
             descriptor.ValueLength,
@@ -2978,6 +2996,17 @@ public static class PressureWorkContract
         int sectionIndex,
         SectionPrerenderDescriptor descriptor,
         Span<ulong> states,
+        bool clearStates) =>
+        PopulateSectionStateWords(
+            GatherSectionRows(cells, sectionIndex),
+            descriptor,
+            states,
+            clearStates);
+
+    private static void PopulateSectionStateWords(
+        ReadOnlySpan<ushort> sectionRows,
+        SectionPrerenderDescriptor descriptor,
+        Span<ulong> states,
         bool clearStates)
     {
         int start = FirstStateOffset(descriptor);
@@ -2995,8 +3024,7 @@ public static class PressureWorkContract
         }
 
         PopulateSectionStateBits(
-            cells,
-            sectionIndex,
+            sectionRows,
             descriptor,
             start,
             states,
@@ -3005,8 +3033,7 @@ public static class PressureWorkContract
     }
 
     private static void PopulateSectionStateWordsAndMasks(
-        ReadOnlySpan<VoxelCell> cells,
-        int sectionIndex,
+        ReadOnlySpan<ushort> sectionRows,
         SectionSummary summary,
         SectionPrerenderDescriptor descriptor,
         Span<ulong> states,
@@ -3067,8 +3094,7 @@ public static class PressureWorkContract
         }
 
         PopulateSectionStateBits(
-            cells,
-            sectionIndex,
+            sectionRows,
             descriptor,
             start,
             states,
@@ -3081,8 +3107,7 @@ public static class PressureWorkContract
     // 16-cell X row is classified with vector compares into 16-bit masks,
     // which SpreadRow places at their (X & 3) * 16 + Y bits.
     private static void PopulateSectionStateBits(
-        ReadOnlySpan<VoxelCell> cells,
-        int sectionIndex,
+        ReadOnlySpan<ushort> sectionRows,
         SectionPrerenderDescriptor descriptor,
         int start,
         Span<ulong> states,
@@ -3099,7 +3124,6 @@ public static class PressureWorkContract
         bool buildMasks = !transparentMaskSlots.IsEmpty;
         Span<ulong> occupancy = stackalloc ulong[3 * WordsPerPlane];
         Span<ulong> planeMasks = stackalloc ulong[types.Length * WordsPerPlane];
-        Span<ushort> rowIds = stackalloc ushort[VoxelMath.SectionDimension];
         Span<int> occupancyOffsets =
         [
             descriptor.EmptyBitsOffset - start,
@@ -3108,21 +3132,15 @@ public static class PressureWorkContract
         ];
         int transparentFaces = descriptor.TransparentFaceBitsOffset - start;
         int opaqueFaces = descriptor.OpaqueFaceBitsOffset - start;
-        int sectionBase = SectionBaseCell(sectionIndex);
         for (int localZ = 0; localZ < VoxelMath.SectionDimension; localZ++)
         {
             occupancy.Clear();
             ulong planeTypes = 0;
             for (int localY = 0; localY < VoxelMath.SectionDimension; localY++)
             {
-                ReadOnlySpan<VoxelCell> row = cells.Slice(
-                    sectionBase + SectionRowOffset(localZ, localY),
+                ReadOnlySpan<ushort> rowIds = sectionRows.Slice(
+                    (localZ * VoxelMath.SectionDimension + localY) * VoxelMath.SectionDimension,
                     VoxelMath.SectionDimension);
-                for (int localX = 0; localX < row.Length; localX++)
-                {
-                    rowIds[localX] = row[localX].BlockId;
-                }
-
                 Vector128<ushort> low = Vector128.Create<ushort>(rowIds);
                 Vector128<ushort> high = Vector128.Create<ushort>(rowIds[Vector128<ushort>.Count..]);
                 uint emptyBits = RowBits(low, high, VoxelMath.AirBlockId);
@@ -3459,8 +3477,7 @@ public static class PressureWorkContract
     {
         SpanSectionInitializationBuffer<ushort> buffer = new(palette);
         BuildSectionPalette(
-            cells,
-            sectionIndex,
+            GatherSectionRows(cells, sectionIndex),
             ref buffer,
             offset: 0,
             palette.Length,
@@ -3468,8 +3485,7 @@ public static class PressureWorkContract
     }
 
     private static void BuildSectionPalette<TValueBuffer>(
-        ReadOnlySpan<VoxelCell> cells,
-        int sectionIndex,
+        ReadOnlySpan<ushort> sectionRows,
         ref TValueBuffer palette,
         int offset,
         int length,
@@ -3480,18 +3496,10 @@ public static class PressureWorkContract
         paletteByType.Fill(-1);
 
         // Which types occur does not depend on the visiting order.
-        int sectionBase = SectionBaseCell(sectionIndex);
-        for (int localZ = 0; localZ < VoxelMath.SectionDimension; localZ++)
+        ReadOnlySpan<byte> typeIndexById = VoxelMath.TypeIndexById;
+        foreach (ref readonly ushort blockId in sectionRows)
         {
-            for (int localY = 0; localY < VoxelMath.SectionDimension; localY++)
-            {
-                foreach (ref readonly VoxelCell cell in cells.Slice(
-                    sectionBase + SectionRowOffset(localZ, localY),
-                    VoxelMath.SectionDimension))
-                {
-                    seen[VoxelMath.TypeIndexById[cell.BlockId]] = 1;
-                }
-            }
+            seen[typeIndexById[blockId]] = 1;
         }
 
         int cursor = 0;
@@ -3567,8 +3575,7 @@ public static class PressureWorkContract
     }
 
     private static void ComputeSectionBounds(
-        ReadOnlySpan<VoxelCell> cells,
-        int sectionIndex,
+        ReadOnlySpan<ushort> sectionRows,
         out bool hasBounds,
         out byte minX,
         out byte minY,
@@ -3580,39 +3587,29 @@ public static class PressureWorkContract
         hasBounds = false;
         minX = minY = minZ = byte.MaxValue;
         maxX = maxY = maxZ = 0;
-        // Rows in memory order; each row contributes its first and last
-        // occupied X, and min/max do not depend on the visiting order.
-        int sectionBase = SectionBaseCell(sectionIndex);
-        for (int localZ = 0; localZ < VoxelMath.SectionDimension; localZ++)
-        {
-            for (int localY = 0; localY < VoxelMath.SectionDimension; localY++)
-            {
-                ReadOnlySpan<VoxelCell> row = cells.Slice(
-                    sectionBase + SectionRowOffset(localZ, localY),
-                    VoxelMath.SectionDimension);
-                int first = 0;
-                while (first < row.Length
-                    && row[first].BlockId == VoxelMath.AirBlockId)
-                {
-                    first++;
-                }
 
-                if (first == row.Length)
+        // Each row contributes its first and last occupied X; min and max do
+        // not depend on the visiting order.
+        const int Side = VoxelMath.SectionDimension;
+        for (int localZ = 0; localZ < Side; localZ++)
+        {
+            for (int localY = 0; localY < Side; localY++)
+            {
+                ReadOnlySpan<ushort> row = sectionRows.Slice((localZ * Side + localY) * Side, Side);
+                uint occupied = ~RowBits(
+                    Vector128.Create<ushort>(row),
+                    Vector128.Create<ushort>(row[Vector128<ushort>.Count..]),
+                    VoxelMath.AirBlockId) & 0xFFFF;
+                if (occupied == 0)
                 {
                     continue;
                 }
 
-                int last = row.Length - 1;
-                while (row[last].BlockId == VoxelMath.AirBlockId)
-                {
-                    last--;
-                }
-
                 hasBounds = true;
-                minX = Math.Min(minX, (byte)first);
+                minX = Math.Min(minX, (byte)BitOperations.TrailingZeroCount(occupied));
                 minY = Math.Min(minY, (byte)localY);
                 minZ = Math.Min(minZ, (byte)localZ);
-                maxX = Math.Max(maxX, (byte)last);
+                maxX = Math.Max(maxX, (byte)(31 - BitOperations.LeadingZeroCount(occupied)));
                 maxY = Math.Max(maxY, (byte)localY);
                 maxZ = Math.Max(maxZ, (byte)localZ);
             }
@@ -3636,26 +3633,49 @@ public static class PressureWorkContract
                     / (VoxelMath.SectionsPerAxis * VoxelMath.SectionsPerAxis))
                 * VoxelMath.SectionDimension);
 
-    // A section's IDs in its Y-fastest local order, read row by row.
-    private static void CopySectionIdsInLocalOrder(
+    // A section's IDs row by row (X fastest) in the per-thread scratch: the
+    // one strided pass over its cells that its layout, values and states read.
+    private static ReadOnlySpan<ushort> GatherSectionRows(
         ReadOnlySpan<VoxelCell> cells,
-        int sectionIndex,
-        Span<ushort> localIds)
+        int sectionIndex)
     {
+        Span<ushort> rows = (t_faceScratch ??= new FaceScratch()).SectionRows;
         int sectionBase = SectionBaseCell(sectionIndex);
         for (int localZ = 0; localZ < VoxelMath.SectionDimension; localZ++)
         {
-            Span<ushort> plane = localIds.Slice(
-                localZ * VoxelMath.SectionDimension * VoxelMath.SectionDimension,
-                VoxelMath.SectionDimension * VoxelMath.SectionDimension);
             for (int localY = 0; localY < VoxelMath.SectionDimension; localY++)
             {
-                ReadOnlySpan<VoxelCell> row = cells.Slice(
+                ReadOnlySpan<VoxelCell> source = cells.Slice(
                     sectionBase + SectionRowOffset(localZ, localY),
                     VoxelMath.SectionDimension);
+                Span<ushort> target = rows.Slice(
+                    (localZ * VoxelMath.SectionDimension + localY) * VoxelMath.SectionDimension,
+                    VoxelMath.SectionDimension);
+                for (int localX = 0; localX < source.Length; localX++)
+                {
+                    target[localX] = source[localX].BlockId;
+                }
+            }
+        }
+
+        return rows;
+    }
+
+    // A section's IDs in its Y-fastest local order, from its rows.
+    private static void CopySectionIdsInLocalOrder(
+        ReadOnlySpan<ushort> sectionRows,
+        Span<ushort> localIds)
+    {
+        const int Side = VoxelMath.SectionDimension;
+        for (int localZ = 0; localZ < Side; localZ++)
+        {
+            Span<ushort> plane = localIds.Slice(localZ * Side * Side, Side * Side);
+            for (int localY = 0; localY < Side; localY++)
+            {
+                ReadOnlySpan<ushort> row = sectionRows.Slice((localZ * Side + localY) * Side, Side);
                 for (int localX = 0; localX < row.Length; localX++)
                 {
-                    plane[localX * VoxelMath.SectionDimension + localY] = row[localX].BlockId;
+                    plane[localX * Side + localY] = row[localX];
                 }
             }
         }
