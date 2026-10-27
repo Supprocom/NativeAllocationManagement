@@ -1494,6 +1494,19 @@ internal sealed class NativeAllocation
 
     internal int InitializedLength { get; set; }
 
+    // The thread cache that holds this record, free or leased; see NativePoolThreadCache.
+    internal NativePoolThreadCache? CacheOwner;
+
+    // The record's index in its cache's leased set.
+    internal int CacheSlot;
+
+    // Only the owning thread touches a cached record's admission until a fold.
+    internal void EnterOwnerOperation() => _operationAdmission++;
+
+    internal void ExitOwnerOperation() => _operationAdmission--;
+
+    internal void SetSlabForCache(NativeSlab slab) => Slab = slab;
+
     internal void Reset(
         long id,
         NativeSlab? slab,
@@ -2659,6 +2672,12 @@ internal sealed class NativeGeneration
         Interlocked.Increment(
             ref _initializationsInProgress);
 
+    internal void AddInitializations(int count) =>
+        Interlocked.Add(ref _initializationsInProgress, count);
+
+    internal void AddOperations(int count) =>
+        Interlocked.Add(ref _operationAdmission, count);
+
     internal void EndInitialization()
     {
         int remaining = Interlocked.Decrement(
@@ -2834,6 +2853,8 @@ internal ref struct NativeOperationToken
     private readonly bool _allocationEntered;
     private readonly bool _generationEntered;
     private readonly string _operation;
+    private readonly NativePoolThreadCache? _cache;
+    private readonly int _cacheEpoch;
 
     internal NativeOperationToken(
         NativeOwnerKernel kernel,
@@ -2850,6 +2871,28 @@ internal ref struct NativeOperationToken
         _allocationEntered = allocationEntered;
         _generationEntered = generationEntered;
         _operation = operation;
+        _cache = null;
+        _cacheEpoch = 0;
+    }
+
+    // An operation entered through the owning thread's cache.
+    internal NativeOperationToken(
+        NativeOwnerKernel kernel,
+        NativeGeneration generation,
+        NativeAllocation allocation,
+        NativePoolThreadCache cache,
+        int cacheEpoch,
+        string operation)
+    {
+        _kernel = kernel;
+        _generationState = generation;
+        _generationOwner = generation.Owner;
+        _allocation = allocation;
+        _allocationEntered = true;
+        _generationEntered = true;
+        _operation = operation;
+        _cache = cache;
+        _cacheEpoch = cacheEpoch;
     }
 
     internal NativeLeaseView<T> GetView<T>() => new(_allocation);
@@ -2875,6 +2918,8 @@ internal ref struct NativeOperationToken
     internal void MoveToSharingCustody(out bool allocationEntered, out bool generationEntered)
     {
         if (_kernel is null) throw new InvalidOperationException("The operation token has already ended.");
+        // Transferable leases never use a thread cache, so their tokens hold real admissions.
+        if (_cache is not null) throw new InvalidOperationException("A thread-cached operation cannot move to sharing custody.");
         allocationEntered = _allocationEntered;
         generationEntered = _generationEntered;
         _kernel = null;
@@ -2889,6 +2934,12 @@ internal ref struct NativeOperationToken
         }
 
         _kernel = null;
+        if (_cache is not null)
+        {
+            kernel.ExitCachedOperation(_generationState, _allocation, _cache, _cacheEpoch);
+            return;
+        }
+
         kernel.ExitOperation(
             _generationState,
             _allocation,
@@ -3240,7 +3291,7 @@ internal ref struct NativeMultiOwnerOperationToken
     }
 }
 
-internal sealed class NativeOwnerKernel
+internal sealed partial class NativeOwnerKernel
 {
     internal long Id { get; } = NativeOwnerIdentity.Next();
     internal NativeMemoryBudget? BudgetForSharing => _budget;
@@ -3308,6 +3359,7 @@ internal sealed class NativeOwnerKernel
     {
         lock (_gate)
         {
+            RevokeThreadCachesLocked();
             var backing = _backingHistory.Capture();
             NativeGeneration? current = _current;
             if (current is null)
@@ -3403,6 +3455,7 @@ internal sealed class NativeOwnerKernel
     {
         lock (_gate)
         {
+            RevokeThreadCachesLocked();
             var backing = _backingHistory.Capture();
             NativeGeneration? current = _current;
             int activeRecords = 0;
@@ -3610,6 +3663,7 @@ internal sealed class NativeOwnerKernel
     {
         lock (_gate)
         {
+            RevokeThreadCachesLocked();
             NativeGeneration? current = _current;
             if (current is null)
             {
@@ -3642,6 +3696,7 @@ internal sealed class NativeOwnerKernel
     {
         lock (_gate)
         {
+            RevokeThreadCachesLocked();
             NativeGeneration? generation = _current;
             if (generation is null)
             {
@@ -3671,6 +3726,7 @@ internal sealed class NativeOwnerKernel
     {
         lock (_gate)
         {
+            RevokeThreadCachesLocked();
             NativeGeneration? generation = _current;
             if (generation is null)
             {
@@ -3695,6 +3751,7 @@ internal sealed class NativeOwnerKernel
     {
         lock (_gate)
         {
+            RevokeThreadCachesLocked();
             return _current?.ReferenceRoots.Count ?? 0;
         }
     }
@@ -3703,6 +3760,7 @@ internal sealed class NativeOwnerKernel
     {
         lock (_gate)
         {
+            RevokeThreadCachesLocked();
             NativeGeneration? generation = _current;
             if (generation is null)
             {
@@ -3731,6 +3789,7 @@ internal sealed class NativeOwnerKernel
     {
         lock (_gate)
         {
+            RevokeThreadCachesLocked();
             NativeGeneration? generation = _current;
             return generation is null
                 ? (0, -1, 0)
@@ -3742,6 +3801,7 @@ internal sealed class NativeOwnerKernel
     {
         lock (_gate)
         {
+            RevokeThreadCachesLocked();
             int count = 0;
 #pragma warning disable HLQ012 // Retain the enumerator's mutation checks during ownership cleanup; a span removes them.
             foreach (NativeGeneration generation in _quarantinedGenerations)
@@ -3758,6 +3818,7 @@ internal sealed class NativeOwnerKernel
     {
         lock (_gate)
         {
+            RevokeThreadCachesLocked();
             return _quarantinedGenerations.Count;
         }
     }
@@ -3766,6 +3827,7 @@ internal sealed class NativeOwnerKernel
     {
         lock (_gate)
         {
+            RevokeThreadCachesLocked();
             return _retiredGenerations.Count;
         }
     }
@@ -3774,6 +3836,7 @@ internal sealed class NativeOwnerKernel
     {
         lock (_gate)
         {
+            RevokeThreadCachesLocked();
             return _quarantinedGenerations.Capacity;
         }
     }
@@ -3782,6 +3845,7 @@ internal sealed class NativeOwnerKernel
     {
         lock (_gate)
         {
+            RevokeThreadCachesLocked();
             NativeGeneration? generation = _current;
             return generation is null
                 ? (0, 0, 0, 0)
@@ -3797,6 +3861,7 @@ internal sealed class NativeOwnerKernel
     {
         lock (_gate)
         {
+            RevokeThreadCachesLocked();
             return _current?.ScopeEpoch ?? 0;
         }
     }
@@ -3805,6 +3870,7 @@ internal sealed class NativeOwnerKernel
     {
         lock (_gate)
         {
+            RevokeThreadCachesLocked();
             return _generation;
         }
     }
@@ -3813,6 +3879,7 @@ internal sealed class NativeOwnerKernel
     {
         lock (_gate)
         {
+            RevokeThreadCachesLocked();
             NativeGeneration generation = EnsureActiveLocked("SetScopeEpochForTest");
             generation.ScopeEpoch = value;
             foreach (NativeAllocation allocation in generation.Allocations.Values)
@@ -3840,6 +3907,7 @@ internal sealed class NativeOwnerKernel
     {
         lock (_gate)
         {
+            RevokeThreadCachesLocked();
             _generation = value;
         }
     }
@@ -3848,6 +3916,7 @@ internal sealed class NativeOwnerKernel
     {
         lock (_gate)
         {
+            RevokeThreadCachesLocked();
             if (_current is null)
             {
                 return [];
@@ -4095,9 +4164,29 @@ internal sealed class NativeOwnerKernel
     internal NativePoolLease RentInitialized<T>(
         int length,
         bool scoped,
-        NativeLeaseInitializer<T> initializer)
+        NativeLeaseInitializer<T> initializer,
+        bool transferable = false)
     {
         ArgumentNullException.ThrowIfNull(initializer);
+        if (!scoped && !transferable && length > 0 && ThreadCacheEligible)
+        {
+            if (!NativeMemoryTestHooks.FaultInjectionPending)
+            {
+                if (TakeCachedForRent(length) is NativeAllocation cached)
+                {
+                    return InitializeCached(cached, initializer);
+                }
+            }
+            else if (_threadCacheCount != 0)
+            {
+                // Injected faults test the locked path against the pool's exact state.
+                lock (_gate)
+                {
+                    RevokeThreadCachesLocked();
+                }
+            }
+        }
+
         (NativeGeneration Generation, NativeAllocation Allocation, NativePoolLease Lease)
             reservation = BeginPoolInitialization(length, scoped);
         int initializedLength = 0;
@@ -4340,6 +4429,8 @@ internal sealed class NativeOwnerKernel
         {
             return;
         }
+
+        PublishThreadCachePeak(generation);
         if (scoped)
         {
             Interlocked.Add(ref generation.ScopedInitializedPayloadBytes, payloadBytes);
@@ -7818,6 +7909,11 @@ internal sealed class NativeOwnerKernel
         }
 
         NativeOperationToken token;
+        if (TryEnterCachedOperation(generation, allocation, generationNumber, allocationId, operation, out token))
+        {
+            return token;
+        }
+
         bool enterAllocation = _kind == NativeOwnerKind.Pool;
         if (IsDirectHandleActive(
                 generation,
@@ -8322,9 +8418,24 @@ internal sealed class NativeOwnerKernel
             }
 
             NativeGeneration generation = _current!;
-            if (generation.Number != generationNumber || !generation.Allocations.TryGetValue(allocationId, out NativeAllocation allocation))
+            if (generation.Number != generationNumber)
             {
                 return;
+            }
+
+            if (!generation.Allocations.TryGetValue(allocationId, out NativeAllocation allocation))
+            {
+                // A thread cache may still hold the lease; fold the caches and look again.
+                if (_threadCacheCount == 0)
+                {
+                    return;
+                }
+
+                RevokeThreadCachesLocked();
+                if (!generation.Allocations.TryGetValue(allocationId, out allocation))
+                {
+                    return;
+                }
             }
 
             if (allocation.Lifecycle != NativeAllocationLifecycle.Active)
@@ -8380,6 +8491,7 @@ internal sealed class NativeOwnerKernel
                     generation.AddAvailableSlabOrdered(allocation.Slab);
                 }
 
+                PublishThreadCachePeak(generation);
                 RecordPayloadReturn(generation, checked((long)allocation.StorageBytes), allocation.IsScoped);
                 allocation.Lifecycle = NativeAllocationLifecycle.Returned;
                 generation.Allocations.Remove(allocation.Id);
@@ -8434,6 +8546,7 @@ internal sealed class NativeOwnerKernel
     {
         lock (_gate)
         {
+            RevokeThreadCachesLocked();
             EnsureNotDisposedLocked("LeaseFromMemory", 0);
             if (_lifecycle == NativeOwnerLifecycle.Active)
             {
@@ -8477,6 +8590,7 @@ internal sealed class NativeOwnerKernel
     {
         lock (_gate)
         {
+            RevokeThreadCachesLocked();
             NativeGeneration generation = EnsureActiveLocked("RecycleScoped");
             if (generation.ScopedRecordCount == 0
                 && !generation.FastArenaScopedActive
@@ -8662,6 +8776,7 @@ internal sealed class NativeOwnerKernel
         ArgumentOutOfRangeException.ThrowIfZero(byteLength);
         lock (_gate)
         {
+            RevokeThreadCachesLocked();
             if (!CanTrimLocked("ReserveRetainedMemory"))
             {
                 return 0;
@@ -8719,6 +8834,7 @@ internal sealed class NativeOwnerKernel
         ArgumentOutOfRangeException.ThrowIfZero(byteLength);
         lock (_gate)
         {
+            RevokeThreadCachesLocked();
             if (!CanTrimLocked("ReserveExternalMemory"))
             {
                 return 0;
@@ -8779,6 +8895,7 @@ internal sealed class NativeOwnerKernel
     {
         lock (_gate)
         {
+            RevokeThreadCachesLocked();
             if (!CanTrimLocked("TrimRetainedMemory"))
             {
                 return 0;
@@ -8814,6 +8931,7 @@ internal sealed class NativeOwnerKernel
 
         lock (_gate)
         {
+            RevokeThreadCachesLocked();
             if (!CanTrimLocked("TrimRetainedMemoryByBytes"))
             {
                 return 0;
@@ -8850,6 +8968,7 @@ internal sealed class NativeOwnerKernel
         ArgumentOutOfRangeException.ThrowIfZero(alignment);
         lock (_gate)
         {
+            RevokeThreadCachesLocked();
             if (!CanTrimLocked("TrimRetainedMemoryByLeaseSize"))
             {
                 return 0;
@@ -8891,6 +9010,7 @@ internal sealed class NativeOwnerKernel
     {
         lock (_gate)
         {
+            RevokeThreadCachesLocked();
             if (_lifecycle == NativeOwnerLifecycle.Disposed)
             {
                 return;
@@ -9341,6 +9461,7 @@ internal sealed class NativeOwnerKernel
     {
         lock (_gate)
         {
+            RevokeThreadCachesLocked();
             EnsureNotDisposedLocked(operation, 0);
             if (_lifecycle == NativeOwnerLifecycle.Returned)
             {
@@ -9457,6 +9578,7 @@ internal sealed class NativeOwnerKernel
     {
         lock (_gate)
         {
+            RevokeThreadCachesLocked();
             EnsureNotDisposedLocked(operation, 0);
             if (_kind == NativeOwnerKind.Region)
             {
@@ -10803,7 +10925,14 @@ internal sealed class NativeOwnerKernel
         generation.ScopedRecordCount = recordCount - 1;
     }
 
-    private long NextAllocationIdLocked() => checked(++_nextAllocationId);
+    // A thread with an armed cache takes identities from its reserved block, so
+    // its locked and cached leases stay consecutive.
+    private long NextAllocationIdLocked() =>
+        _threadCacheCount != 0
+        && NativePoolThreadCaches.Find(Id) is { Generation: not null } cache
+        && cache.NextId <= cache.LastId
+            ? cache.NextId++
+            : checked(++_nextAllocationId);
 
     private int ActiveOperationCountLocked() => GetOwnerWideActivityLocked().ActiveOperations;
 

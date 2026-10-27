@@ -161,6 +161,8 @@ public readonly ref struct ConcurrentPooled<T>
     /// <summary>Returns this synchronized lease exactly once.</summary>
     public void Dispose() =>
         GetKernel(nameof(Dispose)).ReturnLease(
+            GetGenerationState(nameof(Dispose)),
+            GetAllocationState(nameof(Dispose)),
             _generation,
             _allocationId);
 

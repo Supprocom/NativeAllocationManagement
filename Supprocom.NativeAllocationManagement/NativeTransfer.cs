@@ -17,7 +17,8 @@ public static class NativeTransferPoolExtensions
         NativePoolLease lease = kernel.RentInitialized(
             length,
             scoped: false,
-            initializer);
+            initializer,
+            transferable: true);
         return NativeTransfer<T>.Create(
             kernel,
             lease,
