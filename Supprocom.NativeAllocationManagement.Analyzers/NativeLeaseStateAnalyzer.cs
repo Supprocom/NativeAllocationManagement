@@ -518,7 +518,7 @@ public sealed class NativeLeaseStateAnalyzer : DiagnosticAnalyzer
             DiagnosticSeverity.Error,
             isEnabledByDefault: true,
             description: message,
-            helpLinkUri: "https://github.com/Supprocom/NativeAllocationManagement#ownership-diagnostics",
+            helpLinkUri: "https://github.com/Supprocom/NativeAllocationManagement/blob/main/docs/diagnostics/" + id + ".md",
             customTags: WellKnownDiagnosticTags.Telemetry);
 
     private sealed class Symbols

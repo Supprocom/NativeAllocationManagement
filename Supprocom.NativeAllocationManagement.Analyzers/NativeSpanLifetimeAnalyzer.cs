@@ -24,7 +24,7 @@ public sealed class NativeSpanLifetimeAnalyzer : DiagnosticAnalyzer
         DiagnosticSeverity.Error,
         isEnabledByDefault: true,
         description: "Span '{0}' comes from a NAM lease and is used after '{1}'. A span carries no ownership; take a new span from a current lease.",
-        helpLinkUri: "https://github.com/Supprocom/NativeAllocationManagement#ownership-diagnostics",
+        helpLinkUri: "https://github.com/Supprocom/NativeAllocationManagement/blob/main/docs/diagnostics/NAM1051.md",
         customTags: WellKnownDiagnosticTags.Telemetry);
 
     /// <inheritdoc />

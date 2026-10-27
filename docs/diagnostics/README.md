@@ -42,7 +42,17 @@ maintained independently of the optional IDE cleanup provider.
 | [NAM1038](NAM1038.md) | error | Native workspace ownership must end |
 | [NAM1039](NAM1039.md) | error | Native workspace acquisition requires one proven owner |
 | [NAM1040](NAM1040.md) | error | Native workspace parameter must be a scoped read-only borrow |
+| [NAM1041](NAM1041.md) | error | Native builder write view cannot escape |
+| [NAM1042](NAM1042.md) | error | Native builder write authority must remain direct |
+| [NAM1043](NAM1043.md) | error | Exclusive native builder borrow cannot escape |
+| [NAM1044](NAM1044.md) | error | Exclusive native builder borrow requires scoped ref authority |
+| [NAM1045](NAM1045.md) | error | Native builder write state cannot escape |
+| [NAM1046](NAM1046.md) | error | Native builder write state requires direct authority |
+| [NAM1047](NAM1047.md) | error | Concurrent lease callback requires direct authority |
+| [NAM1048](NAM1048.md) | error | Concurrent lease state cannot contain native ownership |
+| [NAM1049](NAM1049.md) | error | Concurrent lease state cannot escape |
 | [NAM1050](NAM1050.md) | error | Prepared lease requires a successful acquisition guard |
+| [NAM1051](NAM1051.md) | error | Lease span is used after its storage ended |
 | [NAM9001](NAM9001.md) | error | Bundled analyzer is required |
 
 See [safe fixes](../analyzer-usability.md) and the

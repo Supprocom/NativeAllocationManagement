@@ -116,13 +116,22 @@ public sealed class NativeOwnershipCodeFixTests
     [Fact]
     public void EveryPublishedDiagnosticHasOneActualDocumentationPageAndHelpUri()
     {
-        NativeAllocationAnalyzer analyzer = new();
+        // Every analyzer in the shipped assembly, so a new analyzer cannot skip its pages.
+        DiagnosticDescriptor[] descriptors = typeof(NativeAllocationAnalyzer).Assembly.GetTypes()
+            .Where(static type => !type.IsAbstract && typeof(DiagnosticAnalyzer).IsAssignableFrom(type)
+                && type.IsDefined(typeof(DiagnosticAnalyzerAttribute), inherit: false))
+            .SelectMany(static type => ((DiagnosticAnalyzer)Activator.CreateInstance(type)!).SupportedDiagnostics)
+            .DistinctBy(static descriptor => descriptor.Id, StringComparer.Ordinal)
+            .ToArray();
+        Assert.Contains(descriptors, static descriptor => string.Equals(descriptor.Id, "NAM1051", StringComparison.Ordinal));
         string root = RepositoryTestPaths.Root;
-        foreach (DiagnosticDescriptor descriptor in analyzer.SupportedDiagnostics)
+        string index = File.ReadAllText(Path.Combine(root, "docs", "diagnostics", "README.md"));
+        foreach (DiagnosticDescriptor descriptor in descriptors)
         {
             string file = Path.Combine(root, "docs", "diagnostics", descriptor.Id + ".md");
             Assert.True(File.Exists(file), file);
             Assert.Equal("https://github.com/Supprocom/NativeAllocationManagement/blob/main/docs/diagnostics/" + descriptor.Id + ".md", descriptor.HelpLinkUri);
+            Assert.Contains("[" + descriptor.Id + "](" + descriptor.Id + ".md)", index, StringComparison.Ordinal);
             string content = File.ReadAllText(file);
             Assert.Contains(descriptor.Id, content, StringComparison.Ordinal);
             string severity = descriptor.DefaultSeverity switch
@@ -133,7 +142,7 @@ public sealed class NativeOwnershipCodeFixTests
             };
             Assert.Contains("Severity: " + severity, content, StringComparison.Ordinal);
         }
-        Assert.Equal(analyzer.SupportedDiagnostics.Length, Directory.EnumerateFiles(Path.Combine(root, "docs", "diagnostics"), "NAM*.md").Count());
+        Assert.Equal(descriptors.Length, Directory.EnumerateFiles(Path.Combine(root, "docs", "diagnostics"), "NAM*.md").Count());
     }
 
     private static Document CreateDocument(AdhocWorkspace workspace, string source)

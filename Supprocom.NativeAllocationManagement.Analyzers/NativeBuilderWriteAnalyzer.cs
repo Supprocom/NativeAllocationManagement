@@ -681,9 +681,18 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
                 InvalidBorrowAuthority,
                 location,
                 borrow.Name,
-                borrow.RefKind.ToString()));
+                DescribeParameterKind(borrow.RefKind)));
         }
     }
+
+    private static string DescribeParameterKind(RefKind refKind) => refKind switch
+    {
+        RefKind.None => "a by-value parameter",
+        RefKind.Ref => "an unscoped ref parameter",
+        RefKind.Out => "an out parameter",
+        RefKind.In => "an in parameter",
+        _ => "a ref readonly parameter",
+    };
 
     private static DiagnosticDescriptor Create(
         string id,
@@ -697,7 +706,7 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
             DiagnosticSeverity.Error,
             isEnabledByDefault: true,
             description: message,
-            helpLinkUri: "https://github.com/Supprocom/NativeAllocationManagement#ownership-diagnostics",
+            helpLinkUri: "https://github.com/Supprocom/NativeAllocationManagement/blob/main/docs/diagnostics/" + id + ".md",
             customTags: WellKnownDiagnosticTags.Telemetry);
 
     private sealed class Symbols

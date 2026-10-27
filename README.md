@@ -137,7 +137,7 @@ project that uses it.
 ## Ownership diagnostics
 
 The bundled analyzer reports ownership mistakes as compile errors with IDs such as
-`NAM1051`. Most rules have a help page in the [diagnostic index][diagnostics] that
+`NAM1051`. Every rule has a help page in the [diagnostic index][diagnostics] that
 explains why the code is unsafe and how to fix it. IDE code fixes can apply the
 [common fixes][analyzer-usability]; they never switch the checks off.
 
