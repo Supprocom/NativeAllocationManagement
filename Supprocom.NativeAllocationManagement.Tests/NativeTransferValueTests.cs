@@ -16,13 +16,27 @@ public sealed class NativeTransferValueTests
         NativeTransfer<int> current = NativeTransfer<int>.Move(ref binding);
         binding = current;
         NativeMemoryBudgetStatistics before = budget.CaptureStatistics();
-        long allocated = GC.GetAllocatedBytesForCurrentThread();
-        for (int move = 0; move < 10_000; move++)
+
+        // Round 0 warms up tiering and on-stack replacement. Runtime work can still land on
+        // this thread now and then (CI saw 6-7 KB on Linux), so any later round that reads
+        // zero proves the moves themselves allocate nothing; real allocation fails them all.
+        long delta = 0;
+        for (int round = 0; round < 4; round++)
         {
-            current = NativeTransfer<int>.Move(ref binding);
-            binding = current;
+            long allocated = GC.GetAllocatedBytesForCurrentThread();
+            for (int move = 0; move < 10_000; move++)
+            {
+                current = NativeTransfer<int>.Move(ref binding);
+                binding = current;
+            }
+
+            delta = GC.GetAllocatedBytesForCurrentThread() - allocated;
+            if (round > 0 && delta == 0)
+            {
+                break;
+            }
         }
-        long delta = GC.GetAllocatedBytesForCurrentThread() - allocated;
+
         Assert.Equal(0, delta);
         Assert.Same(control, current.ControlForTest);
         Assert.Equal(before.AllocationCount, budget.CaptureStatistics().AllocationCount);
