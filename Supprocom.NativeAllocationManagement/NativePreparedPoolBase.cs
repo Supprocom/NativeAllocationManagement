@@ -50,9 +50,8 @@ public abstract unsafe class NativePreparedPoolBase
         _ownerThreadId = NativeThreadIdentity.Current;
         _preparation = preparation;
         nuint slotBytes = CalculateByteLength(preparation.SlotCapacity, elementSize);
-        // This owner is thread-confined and exposes ordinary typed spans, not
-        // aligned SIMD addresses. Consecutive slots use the CLR element stride;
-        // cache-line padding and an over-aligned backend add no authority.
+        // Consecutive slots use the CLR element stride without padding; pages
+        // are cache-line aligned, so slots of a 32-byte multiple start aligned.
         nuint stride = slotBytes;
         nuint totalBytes = checked(stride * (nuint)preparation.SlotCount);
         _ = checked((long)totalBytes);
@@ -339,7 +338,7 @@ public abstract unsafe class NativePreparedPoolBase
             return;
         }
         nuint bytes = page.AllocationBytes;
-        NativeMemory.Free((void*)page.Pointer);
+        NativeMemory.AlignedFree((void*)page.Pointer);
         _budget?.Release(bytes, _id,
             trimmed ? NativeMemoryTraceKind.Trimmed : NativeMemoryTraceKind.Released,
             page.Ordinal);

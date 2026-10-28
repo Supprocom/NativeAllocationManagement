@@ -46,7 +46,9 @@ internal static unsafe class NativePreparedPoolStorage
                         throw new NativeAllocationFailedException(bytes, "NativePreparedPool", 0,
                             "page preparation", lifecycle);
                     }
-                    memory = NativeMemory.Alloc(bytes);
+                    // Cache-line-aligned pages: slots whose size is a multiple of
+                    // 32 bytes start aligned for vector loops, at no extra memory.
+                    memory = NativeMemory.AlignedAlloc(bytes, NativeBlockAllocator.BlockAlignment);
                     if (memory == null)
                     {
                         throw new NativeAllocationFailedException(bytes, "NativePreparedPool", 0,
@@ -75,7 +77,7 @@ internal static unsafe class NativePreparedPoolStorage
                 {
                     if (!committed && memory != null)
                     {
-                        NativeMemory.Free(memory);
+                        NativeMemory.AlignedFree(memory);
                         NativeMemoryAccounting.RecordFree(bytes, detached: false, epoch);
                     }
                 }
@@ -105,7 +107,7 @@ internal static unsafe class NativePreparedPoolStorage
                     {
                         continue;
                     }
-                    NativeMemory.Free((void*)page.Pointer);
+                    NativeMemory.AlignedFree((void*)page.Pointer);
                     budget?.Release(page.AllocationBytes, ownerId,
                         NativeMemoryTraceKind.Released, page.Ordinal);
                     NativeMemoryAccounting.RecordFree(page.AllocationBytes,
