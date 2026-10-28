@@ -5,7 +5,7 @@ using System.Runtime.InteropServices;
 
 namespace Supprocom.NativeAllocationManagement;
 
-public sealed unsafe partial class NativePool<T>
+public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget
     where T : unmanaged
 {
     private const int SizeClassCount = 32;
@@ -72,15 +72,18 @@ public sealed unsafe partial class NativePool<T>
         _budget = budget;
         _ownerThreadId = NativeThreadIdentity.Current;
         _lifecycle = NativeOwnerLifecycle.Active;
+        NativeThreadState thread = NativeThreadState.Current;
         if (returnMemoryOnDispose == NativeMemoryReturn.ToGarbageCollector
             && budget is null
             && preLease == 0
             && preAllocateBytes == 0
-            && TryAdoptRetainedSlabs())
+            && TryAdoptRetainedSlabs(thread))
         {
             return;
         }
 
+        // Before any native storage: the guard is this pool's finalizer.
+        _guard = NativeFinalizationGuard.Rent(thread, this);
         _slabs = new Slab[4];
 
         try
@@ -553,7 +556,6 @@ public sealed unsafe partial class NativePool<T>
     }
 
     /// <summary>Releases one retired pool from a coordinator thread.</summary>
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA1816", Justification = "Coordinator-owned retirement cleanup disarms the emergency finalizer.")]
     public void ReleaseRetiredStorage()
     {
         int prior = Interlocked.CompareExchange(
@@ -567,11 +569,10 @@ public sealed unsafe partial class NativePool<T>
 
         _lifecycle = NativeOwnerLifecycle.Disposed;
         FreeAll();
-        GC.SuppressFinalize(this);
+        ReleaseGuard();
     }
 
     /// <summary>Closes the pool after all leases return.</summary>
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA1816", Justification = "ToNativeMemory disposal suppresses finalization after physical cleanup. The explicit ToGarbageCollector policy must retain emergency finalization until the detached backing is actually freed.")]
     public void Dispose()
     {
         ValidateThread(nameof(Dispose));
@@ -594,7 +595,7 @@ public sealed unsafe partial class NativePool<T>
         if (_returnMemoryOnDispose == NativeMemoryReturn.ToNativeMemory)
         {
             FreeAll();
-            GC.SuppressFinalize(this);
+            ReleaseGuard();
             return;
         }
 
@@ -625,8 +626,7 @@ public sealed unsafe partial class NativePool<T>
     // Takes the slab table of this thread's retained pool, unless it is from
     // an older reuse or measurement epoch; such a donor is detached for its
     // finalizer as its disposal would have.
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA1816", Justification = "The donor's slabs now belong to this pool, so the donor's emergency finalizer has nothing left to return.")]
-    private bool TryAdoptRetainedSlabs()
+    private bool TryAdoptRetainedSlabs(NativeThreadState thread)
     {
         NativePool<T>? donor = t_reusable;
         if (donor is null)
@@ -635,7 +635,7 @@ public sealed unsafe partial class NativePool<T>
         }
 
         t_reusable = null;
-        if (donor._retainEpoch != NativeThreadState.Current.ReuseEpoch || !donor.SlabsInCurrentMetricsEpoch())
+        if (donor._retainEpoch != thread.ReuseEpoch || !donor.SlabsInCurrentMetricsEpoch())
         {
             donor.MarkDetached();
             return false;
@@ -661,7 +661,10 @@ public sealed unsafe partial class NativePool<T>
         donor._returnedSlabIndex = -1;
         donor._returnedCapacity = -1;
         donor._retainedBytes = 0;
-        GC.SuppressFinalize(donor);
+        // The donor's guard, still registered, becomes this pool's.
+        _guard = donor._guard;
+        donor._guard = null;
+        _guard!.Target = this;
         return true;
     }
 
@@ -1255,18 +1258,20 @@ public sealed unsafe partial class NativePool<T>
         throw new InvalidOperationException(
             $"The native lease initializer wrote {initializedLength} of {requiredLength} required elements.");
 
-    /// <summary>Returns abandoned or GC-detached backing through emergency cleanup.</summary>
-    /// <remarks>Call Dispose or ReleaseRetiredStorage for deterministic native release; finalization is not a scheduling or memory-ceiling guarantee.</remarks>
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "MA0055", Justification = "Emergency native-memory cleanup supplements mandatory deterministic disposal.")]
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "An emergency finalizer must never let cleanup exceptions terminate the process.")]
-    ~NativePool()
+    // This pool's emergency finalizer, shared through its thread; see
+    // NativeFinalizationGuard. Null once the pool returned its storage.
+    private NativeFinalizationGuard? _guard;
+
+    void INativeFinalizationTarget.FinalizeNativeStorage() => FreeAll();
+
+    // After the storage is actually returned; detached backing keeps its guard.
+    private void ReleaseGuard()
     {
-        try
+        NativeFinalizationGuard? guard = _guard;
+        if (guard is not null)
         {
-            FreeAll();
-        }
-        catch
-        {
+            _guard = null;
+            guard.Release(NativeThreadState.Current);
         }
     }
 

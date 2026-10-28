@@ -4,7 +4,7 @@ using System.Runtime.InteropServices;
 
 namespace Supprocom.NativeAllocationManagement;
 
-public sealed unsafe partial class NativeArena
+public sealed unsafe partial class NativeArena : INativeFinalizationTarget
 {
     private const nuint DefaultSegmentBytes = 4_096;
     private const nuint SegmentAlignment = 64;
@@ -56,12 +56,16 @@ public sealed unsafe partial class NativeArena
         _budget = budget;
         _ownerThreadId = NativeThreadIdentity.Current;
         _lifecycle = NativeOwnerLifecycle.Active;
+        NativeThreadState thread = NativeThreadState.Current;
         if (returnMemoryOnDispose == NativeMemoryReturn.ToGarbageCollector
             && budget is null
-            && TryAdoptRetainedSegment(preAllocateBytes))
+            && TryAdoptRetainedSegment(thread, preAllocateBytes))
         {
             return;
         }
+
+        // Before any native storage: the guard is this arena's finalizer.
+        _guard = NativeFinalizationGuard.Rent(thread, this);
 
         if (preAllocateBytes != 0)
         {
@@ -76,10 +80,8 @@ public sealed unsafe partial class NativeArena
     // Takes the segment of this thread's retained arena, unless it is from an
     // older reuse or measurement epoch or too short for the reservation; such
     // a donor is detached for its finalizer as its disposal would have.
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA1816", Justification = "The donor's segment now belongs to this arena, so the donor's emergency finalizer has nothing left to return.")]
-    private bool TryAdoptRetainedSegment(nuint preAllocateBytes)
+    private bool TryAdoptRetainedSegment(NativeThreadState thread, nuint preAllocateBytes)
     {
-        NativeThreadState thread = NativeThreadState.Current;
         NativeArena? donor = thread.ReusableArena;
         if (donor is null)
         {
@@ -96,10 +98,13 @@ public sealed unsafe partial class NativeArena
             return false;
         }
 
+        // The donor's guard, still registered, becomes this arena's.
+        _guard = donor._guard;
+        donor._guard = null;
+        _guard!.Target = this;
         donor._ordinary = default;
         donor._retainedBytes = 0;
         donor._segmentCount = 0;
-        GC.SuppressFinalize(donor);
         _ordinary.First = segment;
         _ordinary.Tail = segment;
         ResetLane(ref _ordinary);
@@ -493,7 +498,6 @@ public sealed unsafe partial class NativeArena
         Close();
     }
 
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA1816", Justification = "This owning close helper disarms finalization only after actual native return; detached backing remains finalizable.")]
     private void Close()
     {
         _lifecycle = NativeOwnerLifecycle.Disposed;
@@ -501,7 +505,7 @@ public sealed unsafe partial class NativeArena
             == NativeMemoryReturn.ToNativeMemory)
         {
             FreeAllSegments();
-            GC.SuppressFinalize(this);
+            ReleaseGuard();
             return;
         }
 
@@ -1161,17 +1165,20 @@ public sealed unsafe partial class NativeArena
             allocationId: 0,
             _lifecycle);
 
-    /// <summary>Returns abandoned or explicitly detached backing through emergency cleanup.</summary>
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "MA0055", Justification = "Emergency native-memory cleanup supplements mandatory deterministic disposal.")]
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "An emergency finalizer must never let cleanup exceptions terminate the process.")]
-    ~NativeArena()
+    // This arena's emergency finalizer, shared through its thread; see
+    // NativeFinalizationGuard. Null once the arena returned its storage.
+    private NativeFinalizationGuard? _guard;
+
+    void INativeFinalizationTarget.FinalizeNativeStorage() => FreeAllSegments();
+
+    // After the storage is actually returned; detached backing keeps its guard.
+    private void ReleaseGuard()
     {
-        try
+        NativeFinalizationGuard? guard = _guard;
+        if (guard is not null)
         {
-            FreeAllSegments();
-        }
-        catch
-        {
+            _guard = null;
+            guard.Release(NativeThreadState.Current);
         }
     }
 

@@ -16,7 +16,10 @@ public sealed class NativeArenaOwnershipRepresentationTests
         Assert.Equal(owner, owner.GetField("_ordinary", BindingFlags.Instance | BindingFlags.NonPublic)!.DeclaringType);
         Assert.Equal(owner, owner.GetField("_budget", BindingFlags.Instance | BindingFlags.NonPublic)!.DeclaringType);
         Assert.Equal(owner, typeof(ArenaLease<int>).GetField("_kernel", BindingFlags.Instance | BindingFlags.NonPublic)!.FieldType);
-        Assert.Equal(owner, owner.GetMethod("Finalize", BindingFlags.Instance | BindingFlags.NonPublic)!.DeclaringType);
+        // The emergency finalizer is a guard the owner takes from its thread,
+        // so creating an owner is not a finalizable allocation.
+        Assert.Equal(typeof(object), owner.GetMethod("Finalize", BindingFlags.Instance | BindingFlags.NonPublic)!.DeclaringType);
+        Assert.Equal(typeof(NativeFinalizationGuard), owner.GetField("_guard", BindingFlags.Instance | BindingFlags.NonPublic)!.FieldType);
         Assert.Equal(5, owner.GetConstructors().Length);
     }
 

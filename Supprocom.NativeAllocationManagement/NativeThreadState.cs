@@ -33,6 +33,10 @@ internal sealed class NativeThreadState
     // arena on this thread takes.
     internal NativeArena? ReusableArena;
 
+    // NativeFinalizationGuard: one guard, still registered for finalization,
+    // waiting for the next arena or pool created on this thread.
+    internal NativeFinalizationGuard? SpareFinalizationGuard;
+
     // Per element type state, such as parked transfer controls, by slot index.
     private object?[] _typed = new object?[8];
 

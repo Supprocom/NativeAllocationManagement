@@ -22,6 +22,7 @@ public sealed unsafe partial class NativeArena
         _budget = budget;
         _ownerThreadId = NativeThreadIdentity.Current;
         _lifecycle = NativeOwnerLifecycle.Active;
+        _guard = NativeFinalizationGuard.Rent(NativeThreadState.Current, this);
         _prepared = true;
         _preparation = preparation;
         nuint ordinaryExtent = PreparedExtent(preparation.OrdinaryBytes);
