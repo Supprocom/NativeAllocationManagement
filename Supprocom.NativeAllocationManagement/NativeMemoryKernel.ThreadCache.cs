@@ -238,9 +238,17 @@ internal sealed partial class NativeOwnerKernel
         return allocation;
     }
 
-    // Under the transfer gate.
+    // Under the transfer gate. The most recent return usually fits: a
+    // pipeline rents and returns one size.
     private static int FindRemoteFreeFit(NativePoolThreadCache cache, int length)
     {
+        int newest = cache.RemoteFreeCount - 1;
+        if (newest >= 0 && cache.RemoteFree[newest]!.Slab!.Capacity is int newestCapacity
+            && newestCapacity >= length && newestCapacity <= 2 * length)
+        {
+            return newest;
+        }
+
         int best = -1;
         int bestCapacity = int.MaxValue;
         for (int index = 0; index < cache.RemoteFreeCount; index++)
@@ -334,7 +342,26 @@ internal sealed partial class NativeOwnerKernel
             cache.Exit();
         }
 
-        return RentInitialized(length, scoped: false, FillInitializer(value), transferable);
+        if (RuntimeHelpers.IsReferenceOrContainsReferences<T>())
+        {
+            return RentInitialized(length, scoped: false, FillInitializer(value), transferable);
+        }
+
+        // Elements without references: a cached initializer writes defaults,
+        // and the value goes into the published lease before anyone else can
+        // reach it, so this path allocates no closure.
+        NativePoolLease lease = RentInitialized(length, scoped: false, DefaultInitializer<T>.Instance, transferable);
+        if (fill && length != 0)
+        {
+            lease.AllocationState.AsSpan<T>()[..length].Fill(value);
+        }
+
+        return lease;
+    }
+
+    private static class DefaultInitializer<T>
+    {
+        internal static readonly NativeLeaseInitializer<T> Instance = static writer => writer.Fill(default!);
     }
 
     // A fill this small finishes inside the rent's busy window, so a revoking

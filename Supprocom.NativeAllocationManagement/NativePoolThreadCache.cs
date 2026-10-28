@@ -69,7 +69,8 @@ internal sealed class NativePoolThreadCache
 
     // Transferable leases other threads returned, kept for this thread's next
     // rents so records flow back to the thread that rents them. Under the transfer gate.
-    internal const int RemoteFreeCapacity = 64;
+    // Deep enough for a producer-consumer queue of a few hundred transfers.
+    internal const int RemoteFreeCapacity = 512;
     internal readonly NativeAllocation?[] RemoteFree = new NativeAllocation?[RemoteFreeCapacity];
     internal int RemoteFreeCount;
 
