@@ -331,6 +331,20 @@ public readonly ref struct ConcurrentArenaLease<T>
     /// <summary>Clears the logical range.</summary>
     public void Clear()
     {
+        if (_kernel is NativeOwnerKernel kernel && TryEnterLane(kernel, out NativePoolThreadCache? cache, out int epoch))
+        {
+            try
+            {
+                new NativeLeaseView<T>(GetArenaPointer(), _length).Clear();
+            }
+            finally
+            {
+                kernel.ExitCacheCountedOperation(_generationState!, cache, epoch);
+            }
+
+            return;
+        }
+
         NativeArenaOperationToken token = EnterOperation(nameof(Clear));
         try
         {
@@ -345,6 +359,27 @@ public readonly ref struct ConcurrentArenaLease<T>
     /// <summary>Copies exactly the logical range from a source span.</summary>
     public void CopyFrom(scoped ReadOnlySpan<T> source)
     {
+        if (_kernel is NativeOwnerKernel kernel && TryEnterLane(kernel, out NativePoolThreadCache? cache, out int epoch))
+        {
+            try
+            {
+                if (source.Length != _length)
+                {
+                    throw new ArgumentException(
+                        "The source length must equal the arena logical length.",
+                        nameof(source));
+                }
+
+                new NativeLeaseView<T>(GetArenaPointer(), _length).CopyFrom(source);
+            }
+            finally
+            {
+                kernel.ExitCacheCountedOperation(_generationState!, cache, epoch);
+            }
+
+            return;
+        }
+
         NativeArenaOperationToken token = EnterOperation(nameof(CopyFrom));
         try
         {
@@ -366,6 +401,27 @@ public readonly ref struct ConcurrentArenaLease<T>
     /// <summary>Copies the logical range into a destination span.</summary>
     public void CopyTo(scoped Span<T> destination)
     {
+        if (_kernel is NativeOwnerKernel kernel && TryEnterLane(kernel, out NativePoolThreadCache? cache, out int epoch))
+        {
+            try
+            {
+                if (destination.Length < _length)
+                {
+                    throw new ArgumentException(
+                        "The destination must contain at least the arena logical length.",
+                        nameof(destination));
+                }
+
+                new NativeLeaseView<T>(GetArenaPointer(), _length).CopyTo(destination);
+            }
+            finally
+            {
+                kernel.ExitCacheCountedOperation(_generationState!, cache, epoch);
+            }
+
+            return;
+        }
+
         NativeArenaOperationToken token = EnterOperation(nameof(CopyTo));
         try
         {
@@ -410,6 +466,20 @@ public readonly ref struct ConcurrentArenaLease<T>
             return;
         }
 
+        if (TryEnterLane(kernel, out NativePoolThreadCache? cache, out int epoch))
+        {
+            try
+            {
+                action(new NativeLeaseView<T>(GetArenaPointer(), _length));
+            }
+            finally
+            {
+                kernel.ExitCacheCountedOperation(_generationState!, cache, epoch);
+            }
+
+            return;
+        }
+
         NativeArenaOperationToken token = EnterOperation(nameof(Access));
         try
         {
@@ -443,6 +513,18 @@ public readonly ref struct ConcurrentArenaLease<T>
             finally
             {
                 localToken.Dispose();
+            }
+        }
+
+        if (TryEnterLane(kernel, out NativePoolThreadCache? cache, out int epoch))
+        {
+            try
+            {
+                return action(new NativeLeaseView<T>(GetArenaPointer(), _length));
+            }
+            finally
+            {
+                kernel.ExitCacheCountedOperation(_generationState!, cache, epoch);
             }
         }
 
@@ -514,6 +596,24 @@ public readonly ref struct ConcurrentArenaLease<T>
                 _generation,
                 _payload,
                 operation);
+
+    // A scratch range from a lane of this thread's cache counts its operations
+    // there; see NativeOwnerKernel.TryEnterArenaLaneOperation.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private bool TryEnterLane(
+        NativeOwnerKernel kernel,
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out NativePoolThreadCache? cache,
+        out int epoch)
+    {
+        if (IsArenaFast && !RuntimeHelpers.IsReferenceOrContainsReferences<T>())
+        {
+            return kernel.TryEnterArenaLaneOperation(CreateArenaAllocation(), out cache, out epoch);
+        }
+
+        cache = null;
+        epoch = 0;
+        return false;
+    }
 
     private bool IsArenaFast =>
         _allocationState is null

@@ -3008,6 +3008,8 @@ internal ref struct NativeArenaOperationToken
     private readonly int _length;
     private readonly bool _localOperation;
     private readonly string? _operation;
+    private readonly NativePoolThreadCache? _cache;
+    private readonly int _cacheEpoch;
 
     internal NativeArenaOperationToken(
         NativeOperationToken legacy)
@@ -3020,6 +3022,30 @@ internal ref struct NativeArenaOperationToken
         _length = 0;
         _localOperation = false;
         _operation = null;
+        _cache = null;
+        _cacheEpoch = 0;
+    }
+
+    // An operation counted in the scratching thread's cache.
+    internal NativeArenaOperationToken(
+        NativeOwnerKernel kernel,
+        NativeGeneration generation,
+        IntPtr pointer,
+        int length,
+        NativePoolThreadCache cache,
+        int cacheEpoch,
+        string operation)
+    {
+        _legacy = default;
+        _kernel = kernel;
+        _generationState = generation;
+        _generationOwner = generation.Owner;
+        _pointer = pointer;
+        _length = length;
+        _localOperation = false;
+        _operation = operation;
+        _cache = cache;
+        _cacheEpoch = cacheEpoch;
     }
 
     internal NativeArenaOperationToken(
@@ -3038,6 +3064,8 @@ internal ref struct NativeArenaOperationToken
         _length = length;
         _localOperation = localOperation;
         _operation = operation;
+        _cache = null;
+        _cacheEpoch = 0;
     }
 
     internal NativeLeaseView<T> GetView<T>() =>
@@ -3079,7 +3107,11 @@ internal ref struct NativeArenaOperationToken
         }
 
         _kernel = null;
-        if (_localOperation)
+        if (_cache is not null)
+        {
+            kernel.ExitCacheCountedOperation(generation, _cache, _cacheEpoch);
+        }
+        else if (_localOperation)
         {
             kernel.ExitArenaFastLocalOperation(
                 generation,
@@ -7519,6 +7551,13 @@ internal sealed partial class NativeOwnerKernel
                 operation,
                 out token))
         {
+            goto Entered;
+        }
+
+        if (_threadCacheCount != 0
+            && TryEnterArenaLaneOperation(allocation, out NativePoolThreadCache? cache, out int epoch))
+        {
+            token = new NativeArenaOperationToken(this, generation, allocation.Pointer, allocation.Length, cache, epoch, operation);
             goto Entered;
         }
 

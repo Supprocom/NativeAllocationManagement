@@ -567,14 +567,14 @@ internal sealed partial class NativeOwnerKernel
             cache.Exit();
         }
 
-        ExitFoldedOperation(generation, allocation);
+        ExitFoldedOperation(generation, allocation, cache, epoch);
     }
 
     // A fold moved this operation's count into the generation.
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private void ExitFoldedOperation(NativeGeneration generation, NativeAllocation allocation)
+    private void ExitFoldedOperation(NativeGeneration generation, NativeAllocation allocation, NativePoolThreadCache cache, int epoch)
     {
-        WaitForThreadCacheFold();
+        WaitForCacheFold(cache, epoch);
         allocation.ExitOperation();
         ExitGenerationOperation(generation);
     }
@@ -681,8 +681,41 @@ internal sealed partial class NativeOwnerKernel
         return false;
     }
 
+    // An operation on an arena scratch range from a thread whose cache holds a
+    // lane of the range's generation: the count goes to that cache instead of
+    // the generation's shared counter. Scratch leases are ref structs, so the
+    // operating thread is the one that scratched the range.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal void ExitCachedTransferOperation(NativeGeneration generation, NativePoolThreadCache cache, int epoch)
+    internal bool TryEnterArenaLaneOperation(
+        NativeArenaAllocation allocation,
+        [NotNullWhen(true)] out NativePoolThreadCache? cache,
+        out int epoch)
+    {
+        if (!NativeMemoryTestHooks.OperationHooksEnabled
+            && NativePoolThreadCaches.Find(Id) is NativePoolThreadCache found
+            && found.Enter())
+        {
+            if (ReferenceEquals(found.Generation, allocation.GenerationState)
+                && IsArenaFastHandleActive(allocation))
+            {
+                found.ActiveOperations++;
+                epoch = found.FoldEpoch;
+                found.Exit();
+                cache = found;
+                return true;
+            }
+
+            found.Exit();
+        }
+
+        cache = null;
+        epoch = 0;
+        return false;
+    }
+
+    // Ends an operation counted in a thread's cache without a record admission.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void ExitCacheCountedOperation(NativeGeneration generation, NativePoolThreadCache cache, int epoch)
     {
         if (cache.Enter())
         {
@@ -696,14 +729,14 @@ internal sealed partial class NativeOwnerKernel
             cache.Exit();
         }
 
-        ExitFoldedTransferOperation(generation);
+        ExitFoldedCacheCountedOperation(generation, cache, epoch);
     }
 
     // A fold moved this operation's count into the generation.
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private void ExitFoldedTransferOperation(NativeGeneration generation)
+    private void ExitFoldedCacheCountedOperation(NativeGeneration generation, NativePoolThreadCache cache, int epoch)
     {
-        WaitForThreadCacheFold();
+        WaitForCacheFold(cache, epoch);
         ExitGenerationOperation(generation);
     }
 
@@ -720,7 +753,7 @@ internal sealed partial class NativeOwnerKernel
             return;
         }
 
-        ExitCachedTransferOperation(generation, cache, epoch);
+        ExitCacheCountedOperation(generation, cache, epoch);
     }
 
     // Returns a transferable lease from any thread. A lease still on its renting
@@ -857,6 +890,20 @@ internal sealed partial class NativeOwnerKernel
         lock (_gate)
         {
             _ = _threadCacheCount;
+        }
+    }
+
+    // An operation entered at a fold epoch waits for that fold to finish
+    // without the owner lock, which a busy revoking thread may hold for long:
+    // an operation kept open that long makes releases retain its whole
+    // generation. A revocation folds every cache it revokes, right after the
+    // owner leaves its busy window, and publishes the next epoch last.
+    private static void WaitForCacheFold(NativePoolThreadCache cache, int epoch)
+    {
+        SpinWait spinner = default;
+        while (Volatile.Read(ref cache.FoldEpoch) == epoch)
+        {
+            spinner.SpinOnce();
         }
     }
 
@@ -1114,7 +1161,7 @@ internal sealed partial class NativeOwnerKernel
         cache.Initializing = 0;
         cache.ActiveOperations = 0;
         cache.Generation = null;
-        cache.FoldEpoch++;
+        Volatile.Write(ref cache.FoldEpoch, cache.FoldEpoch + 1);
         Volatile.Write(ref cache.Revoked, 1);
     }
 
@@ -1384,8 +1431,9 @@ internal sealed partial class NativeOwnerKernel
             cache.Exit();
         }
 
-        // A fold moved this initializer's count to the generation.
-        WaitForThreadCacheFold();
+        // A fold moved this initializer's count to the generation. The revoker
+        // holds the owner lock from revocation through the fold, so taking it
+        // here sees the fold finished.
         NativeGeneration generation = reservation.Generation;
         lock (_gate)
         {
@@ -1422,8 +1470,8 @@ internal sealed partial class NativeOwnerKernel
         }
 
         // The fold returned the chunk's tail, so the segment cursor ends at this
-        // range only if nothing was allocated after it.
-        WaitForThreadCacheFold();
+        // range only if nothing was allocated after it. Taking the owner lock
+        // sees that fold finished.
         NativeGeneration generation = reservation.Generation;
         lock (_gate)
         {

@@ -332,7 +332,7 @@ internal partial class NativeTransferControl<T>
                 }
                 finally
                 {
-                    _kernel.ExitCachedTransferOperation(allocation.GenerationState, cache, epoch);
+                    _kernel.ExitCacheCountedOperation(allocation.GenerationState, cache, epoch);
                 }
             }
             else
@@ -379,7 +379,7 @@ internal partial class NativeTransferControl<T>
                 }
                 finally
                 {
-                    _kernel.ExitCachedTransferOperation(allocation.GenerationState, cache, epoch);
+                    _kernel.ExitCacheCountedOperation(allocation.GenerationState, cache, epoch);
                 }
             }
 
@@ -425,7 +425,7 @@ internal partial class NativeTransferControl<T>
                 }
                 finally
                 {
-                    _kernel.ExitCachedTransferOperation(allocation.GenerationState, cache, epoch);
+                    _kernel.ExitCacheCountedOperation(allocation.GenerationState, cache, epoch);
                 }
             }
 

@@ -497,6 +497,80 @@ public sealed class NativePoolThreadCacheTests
         Assert.Equal(0, pool.GetStatistics().InitializedPayloadBytes);
     }
 
+    [Fact]
+    public void AnOperationThatOutlivesAFoldExitsWhileAnotherThreadHoldsTheOwnerLock()
+    {
+        using NativeConcurrentPool<int> pool = new();
+        using NativeConcurrentArena arena = new();
+        Lock poolGate = OwnerGate(pool.KernelForTransfer);
+        Lock arenaGate = OwnerGate(arena.KernelForInitialization);
+        using CountdownEvent entered = new(2);
+        using ManualResetEventSlim release = new(false);
+        using CountdownEvent exited = new(2);
+        int pooled = 0;
+        int scratched = 0;
+        Thread poolOwner = new(() =>
+        {
+            using ConcurrentPooled<int> lease = pool.Rent(2, static writer => writer.Fill(3));
+            pooled = lease.Read(view =>
+            {
+                entered.Signal();
+                Assert.True(release.Wait(Timeout));
+                return view[0];
+            });
+            exited.Signal();
+        });
+        Thread arenaOwner = new(() =>
+        {
+            ConcurrentArenaLease<int> scratch = arena.Scratch<int>(2, static writer => writer.Fill(4));
+            scratched = scratch.Read(view =>
+            {
+                entered.Signal();
+                Assert.True(release.Wait(Timeout));
+                return view[1];
+            });
+            exited.Signal();
+        });
+        poolOwner.Start();
+        arenaOwner.Start();
+        Assert.True(entered.Wait(Timeout));
+
+        // Both operations are folded into their generations, then their owners'
+        // locks are held while the operations end.
+        Assert.Equal(1, pool.CurrentGenerationActiveOperationsForTest);
+        Assert.Equal(1, arena.CurrentGenerationActiveOperationsForTest);
+        using ManualResetEventSlim held = new(false);
+        using ManualResetEventSlim unlock = new(false);
+        Thread holder = new(() =>
+        {
+            poolGate.Enter();
+            arenaGate.Enter();
+            held.Set();
+            Assert.True(unlock.Wait(Timeout));
+            arenaGate.Exit();
+            poolGate.Exit();
+        });
+        holder.Start();
+        Assert.True(held.Wait(Timeout));
+        release.Set();
+        bool exitedWhileHeld = exited.Wait(Timeout);
+        unlock.Set();
+        Assert.True(holder.Join(Timeout));
+        Assert.True(poolOwner.Join(Timeout));
+        Assert.True(arenaOwner.Join(Timeout));
+
+        Assert.True(exitedWhileHeld);
+        Assert.Equal(3, pooled);
+        Assert.Equal(4, scratched);
+        Assert.Equal(0, pool.CurrentGenerationActiveOperationsForTest);
+        Assert.Equal(0, arena.CurrentGenerationActiveOperationsForTest);
+    }
+
+    private static Lock OwnerGate(NativeOwnerKernel kernel) =>
+        (Lock)typeof(NativeOwnerKernel)
+            .GetField("_gate", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .GetValue(kernel)!;
+
     private struct SumProcessor : INativeSpanProcessor<int, int, int>
     {
         public static int Invoke(Span<int> span, in int add)

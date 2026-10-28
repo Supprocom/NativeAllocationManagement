@@ -201,6 +201,81 @@ public sealed class NativeArenaThreadLaneTests
         Assert.Equal(segmentsAfterFirst, arena.GetStatistics().SegmentCount);
     }
 
+    [Fact]
+    public void ALaneOperationRunningDuringRevocationExitsThroughTheGeneration()
+    {
+        using NativeConcurrentArena arena = new();
+        using ManualResetEventSlim entered = new(false);
+        using ManualResetEventSlim release = new(false);
+        int result = 0;
+        Thread owner = new(() =>
+        {
+            ConcurrentArenaLease<int> lease = arena.Scratch<int>(3, static writer => writer.Fill(4));
+            result = lease.Read(view =>
+            {
+                entered.Set();
+                Assert.True(release.Wait(Timeout));
+                return view[2];
+            });
+            lease.CopyFrom([5, 6, 7]);
+            Span<int> copy = stackalloc int[3];
+            lease.CopyTo(copy);
+            result += copy[2];
+            lease.Clear();
+            result += lease.Read(static view => view[0]);
+        });
+        owner.Start();
+        Assert.True(entered.Wait(Timeout));
+
+        Assert.Equal(1, arena.CurrentGenerationActiveOperationsForTest);
+        Assert.Throws<NativeAllocationInUseException>(arena.ReleaseLeasesToNativeMemory);
+        release.Set();
+        Assert.True(owner.Join(Timeout));
+
+        Assert.Equal(11, result);
+        Assert.Equal(0, arena.CurrentGenerationActiveOperationsForTest);
+        arena.ReleaseLeasesToNativeMemory();
+    }
+
+    [Fact]
+    public void ALaneOperationAfterReleaseIsRejected()
+    {
+        using NativeConcurrentArena arena = new();
+        using ManualResetEventSlim scratched = new(false);
+        using ManualResetEventSlim released = new(false);
+        int rejected = 0;
+        Thread owner = new(() =>
+        {
+            ConcurrentArenaLease<int> lease = arena.Scratch<int>(2, static writer => writer.Fill(1));
+            scratched.Set();
+            Assert.True(released.Wait(Timeout));
+            try
+            {
+                lease.Clear();
+            }
+            catch (NativeAllocationException)
+            {
+                rejected++;
+            }
+
+            try
+            {
+                lease.CopyTo(new int[2]);
+            }
+            catch (NativeAllocationException)
+            {
+                rejected++;
+            }
+        });
+        owner.Start();
+        Assert.True(scratched.Wait(Timeout));
+        arena.ReleaseLeasesToNativeMemory();
+        released.Set();
+        Assert.True(owner.Join(Timeout));
+        Assert.Equal(2, rejected);
+        Assert.Equal(0, arena.CurrentGenerationActiveOperationsForTest);
+    }
+
     private static int Count(Span<int> span, int marker)
     {
         int count = 0;
