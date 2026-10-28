@@ -1477,9 +1477,14 @@ internal sealed class NativeAllocation
         bool scoped,
         long scopeEpoch)
     {
+        Self = this;
         GenerationState = generationState;
         Reset(id, slab, bumpSegment, offsetBytes, length, capacity, storageBytes, referenceRoots, scoped, scopeEpoch);
     }
+
+    // A view of values with references locates its record through a ref to
+    // this field; see NativeLeaseView.
+    internal NativeAllocation Self;
 
     internal NativeGeneration GenerationState { get; }
 
