@@ -1025,13 +1025,11 @@ public sealed unsafe partial class NativeArena
     }
 
     [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
     private static void ThrowNestedInitializer() =>
         throw new InvalidOperationException(
             "NativeArena does not permit a nested initializer.");
 
     [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
     private static void ThrowIncompleteInitialization(
         int initializedLength,
         int requiredLength) =>
@@ -1039,7 +1037,6 @@ public sealed unsafe partial class NativeArena
             $"The native lease initializer wrote {initializedLength} of {requiredLength} required elements.");
 
     [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
     private void ThrowBoundaryInUse(string operation) =>
         throw new NativeAllocationInUseException(
             "The arena cannot cross a lifetime boundary during an active callback or initializer.",
@@ -1052,7 +1049,6 @@ public sealed unsafe partial class NativeArena
             _lifecycle);
 
     [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
     private void ThrowDisposed(string operation) =>
         throw new NativeAllocationDisposedException(
             "The native arena is disposed.",
@@ -1065,7 +1061,6 @@ public sealed unsafe partial class NativeArena
             _lifecycle);
 
     [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
     private void ThrowWrongThread(string operation) =>
         throw new NativeAllocationStateException(
             "NativeArena is confined to its construction thread.",
@@ -1078,7 +1073,6 @@ public sealed unsafe partial class NativeArena
             _lifecycle);
 
     [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
     private void ThrowStale(
         ulong generation,
         ulong scopeEpoch,
@@ -1114,7 +1108,6 @@ public sealed unsafe partial class NativeArena
     }
 
     [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
     private static void ThrowByteLengthOverflow() =>
         throw new OverflowException(
             "The arena byte count exceeds native addressable storage.");
@@ -1157,7 +1150,6 @@ public sealed unsafe partial class NativeArena
     }
 
     [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
     private void ThrowEpochExhausted(string operation) =>
         throw new NativeAllocationStateException(
             "NativeArena exhausted its non-reusable lease epoch.",

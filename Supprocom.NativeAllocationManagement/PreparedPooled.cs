@@ -208,7 +208,6 @@ public readonly ref struct PreparedPooled<T>
     }
 
     [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
     private static void ThrowUninitialized(string operation) =>
         throw new NativeAllocationUninitializedException(
             nameof(PreparedPooled<T>),

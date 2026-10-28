@@ -255,25 +255,21 @@ public abstract unsafe class NativePreparedPoolBase
     }
 
     [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
     private static void ThrowLiveLease() =>
         throw new InvalidOperationException(
             "NativePreparedPool cannot dispose while a pooled lease is active.");
 
     [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
     private static void ThrowLiveRetirementState() =>
         throw new InvalidOperationException(
             "NativePreparedPool cannot retire while a lease, initializer, or callback is active.");
 
     [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
     private static void ThrowRetiredDispose() =>
         throw new InvalidOperationException(
             "NativePreparedPool.Dispose cannot release retired storage. Use ReleaseRetiredStorage on the coordinator thread.");
 
     [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
     private static void ThrowInvalidRetiredCleanup(int state) =>
         throw new InvalidOperationException(
             state == 0
@@ -281,7 +277,6 @@ public abstract unsafe class NativePreparedPoolBase
                 : "NativePreparedPool retired storage was already released.");
 
     [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
     private void ThrowDisposed(string operation) =>
         throw new NativeAllocationDisposedException(
             "The native pool is disposed.",
@@ -294,7 +289,6 @@ public abstract unsafe class NativePreparedPoolBase
             _lifecycle);
 
     [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
     private void ThrowWrongThread(string operation) =>
         throw new NativeAllocationStateException(
             "NativePreparedPool is confined to its construction thread.",

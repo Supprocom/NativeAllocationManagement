@@ -302,14 +302,12 @@ public readonly ref struct ArenaLease<T>
     }
 
     [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
     private static void ThrowUninitialized(string operation) =>
         throw new NativeAllocationUninitializedException(
             nameof(ArenaLease<T>),
             operation);
 
     [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
     // This cold helper reports the public caller's source argument.
 #pragma warning disable MA0015
     private static void ThrowSourceLength() =>
@@ -319,7 +317,6 @@ public readonly ref struct ArenaLease<T>
 #pragma warning restore MA0015
 
     [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
     // This cold helper reports the public caller's destination argument.
 #pragma warning disable MA0015
     private static void ThrowDestinationLength() =>

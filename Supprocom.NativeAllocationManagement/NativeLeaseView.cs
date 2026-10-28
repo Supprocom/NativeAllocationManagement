@@ -28,6 +28,10 @@ public readonly ref struct NativeLeaseView<T>
     {
     }
 
+    // The constructors assign fields only in statements, never through a
+    // conditional expression: a branch inside a field assignment leaves the
+    // view's address on the evaluation stack, which keeps the JIT from
+    // holding the view in registers wherever the constructor is inlined.
     internal NativeLeaseView(
         NativeAllocation allocation,
         int length)
@@ -35,14 +39,16 @@ public readonly ref struct NativeLeaseView<T>
         if (!RuntimeHelpers.IsReferenceOrContainsReferences<T>())
         {
             Span<T> values = allocation.AsSpan<T>();
+            int capacity = allocation.Capacity;
             if (length >= 0)
             {
                 values = values[..length];
+                capacity = length;
             }
 
             _reference = ref MemoryMarshal.GetReference(values);
             _length = values.Length;
-            _capacity = length < 0 ? allocation.Capacity : length;
+            _capacity = capacity;
             return;
         }
 
@@ -55,9 +61,15 @@ public readonly ref struct NativeLeaseView<T>
         IntPtr pointer,
         int length)
     {
-        _reference = ref RuntimeHelpers.IsReferenceOrContainsReferences<T>()
-            ? ref Unsafe.NullRef<T>()
-            : ref Unsafe.AsRef<T>((void*)pointer);
+        if (!RuntimeHelpers.IsReferenceOrContainsReferences<T>())
+        {
+            _reference = ref Unsafe.AsRef<T>((void*)pointer);
+        }
+        else
+        {
+            _reference = ref Unsafe.NullRef<T>();
+        }
+
         _length = length;
         _capacity = length;
     }
@@ -85,9 +97,12 @@ public readonly ref struct NativeLeaseView<T>
         {
             if (!RuntimeHelpers.IsReferenceOrContainsReferences<T>())
             {
-                return (uint)index < (uint)_length
-                    ? Unsafe.Add(ref _reference, index)
-                    : ThrowIndex(index, _length);
+                if ((uint)index >= (uint)_length)
+                {
+                    ThrowIndex(index, _length);
+                }
+
+                return Unsafe.Add(ref _reference, index);
             }
 
             return GetRecordValue(ref _reference, _length, index);
@@ -121,9 +136,11 @@ public readonly ref struct NativeLeaseView<T>
     private static int RecordLength(NativeAllocation? record, int length) =>
         length >= 0 || record is null ? length : record.Length;
 
-    // Static, so no view's address is taken and a view argument stays in registers.
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    private static T ThrowIndex(int index, int length)
+    // Static, so no view's address is taken and a view argument stays in
+    // registers. Not NoInlining: the JIT then sees that it never returns and
+    // keeps a caller's loop registers free of the call.
+    [System.Diagnostics.CodeAnalysis.DoesNotReturn]
+    private static void ThrowIndex(int index, int length)
     {
         ValidateIndex(index, length);
         throw new System.Diagnostics.UnreachableException();

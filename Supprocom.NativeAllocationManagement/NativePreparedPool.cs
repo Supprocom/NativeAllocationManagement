@@ -385,7 +385,6 @@ public sealed unsafe class NativePreparedPool<T> : NativePreparedPoolBase, IDisp
     }
 
     [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
     private static void ThrowIncompleteInitialization(
         int initializedLength,
         int requiredLength) =>
@@ -425,7 +424,6 @@ public sealed unsafe class NativePreparedPool<T> : NativePreparedPoolBase, IDisp
     }
 
     [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
     private static void ThrowCapacityExhausted() =>
         throw new InvalidOperationException("Prepared pool capacity is exhausted; use TryRent for expected exhaustion.");
 
@@ -467,19 +465,16 @@ public sealed unsafe class NativePreparedPool<T> : NativePreparedPoolBase, IDisp
     }
 
     [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
     private static void ThrowActiveBorrow() =>
         throw new InvalidOperationException(
             "A pooled lease cannot return during an active callback.");
 
     [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
     private static void ThrowActiveMove() =>
         throw new InvalidOperationException(
             "A pooled lease cannot move during an active callback; the source remains owning.");
 
     [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
     private void ThrowStaleIndex(int slabIndex, string operation) =>
         throw new NativeAllocationReturnedException(
             "The pooled slab index is stale.",
@@ -492,7 +487,6 @@ public sealed unsafe class NativePreparedPool<T> : NativePreparedPoolBase, IDisp
             _lifecycle);
 
     [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
     private void ThrowStaleToken(
         int slabIndex,
         long token,
@@ -510,7 +504,6 @@ public sealed unsafe class NativePreparedPool<T> : NativePreparedPoolBase, IDisp
             _lifecycle);
 
     [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
     private void ThrowDisposed(string operation) =>
         throw new NativeAllocationDisposedException(
             "The native pool is disposed.",
@@ -523,7 +516,6 @@ public sealed unsafe class NativePreparedPool<T> : NativePreparedPoolBase, IDisp
             _lifecycle);
 
     [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
     private void ThrowWrongThread(string operation) =>
         throw new NativeAllocationStateException(
             "NativePreparedPool is confined to its construction thread.",
@@ -536,7 +528,6 @@ public sealed unsafe class NativePreparedPool<T> : NativePreparedPoolBase, IDisp
             _lifecycle);
 
     [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
     private static void ThrowLeaseTokenExhausted() =>
         throw new InvalidOperationException(
             "NativePreparedPool exhausted its lease-token authority.");

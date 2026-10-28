@@ -212,7 +212,6 @@ public readonly ref struct Pooled<T>
     }
 
     [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
     private static void ThrowUninitialized(string operation) =>
         throw new NativeAllocationUninitializedException(
             nameof(Pooled<T>),

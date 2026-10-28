@@ -931,24 +931,33 @@ internal partial class NativeTransferControl<T>
         }
     }
 
+    // Small enough for the JIT to see that it never returns, so the guards
+    // that call it keep their callers' registers; the message is built out of line.
+    [System.Diagnostics.CodeAnalysis.DoesNotReturn]
     private static void ThrowInactive(
+        string operation,
+        int state) =>
+        throw CreateInactiveException(operation, state);
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static Exception CreateInactiveException(
         string operation,
         int state)
     {
         if (state is Disposed or Finalized)
         {
-            throw new ObjectDisposedException(
+            return new ObjectDisposedException(
                 $"NativeTransfer<{typeof(T).Name}>",
                 $"NativeTransfer.{operation} cannot run after disposal.");
         }
 
         if (state is Moving or Moved or Retiring)
         {
-            throw new InvalidOperationException(
+            return new InvalidOperationException(
                 $"NativeTransfer.{operation} cannot run because ownership moved or is moving.");
         }
 
-        throw new InvalidOperationException(
+        return new InvalidOperationException(
             $"NativeTransfer.{operation} cannot run without active ownership.");
     }
 

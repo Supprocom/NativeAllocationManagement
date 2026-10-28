@@ -481,7 +481,7 @@ public sealed class NativeWorkspace<T> : IDisposable
         _peakInitializedLength = length;
     }
 
-    [MethodImpl(MethodImplOptions.NoInlining)]
+    [System.Diagnostics.CodeAnalysis.DoesNotReturn]
     private static void ThrowDisposed()
     {
         throw new ObjectDisposedException(

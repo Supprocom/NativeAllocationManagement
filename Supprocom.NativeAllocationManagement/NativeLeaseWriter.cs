@@ -15,11 +15,14 @@ public readonly ref struct NativeLeaseWriter<T>
         NativeAllocation allocation,
         ref int initializedLength)
     {
+        // Fields are assigned in statements only; see NativeLeaseView.
         _allocation = allocation;
         _initializedLength = ref initializedLength;
-        _directValues = !RuntimeHelpers.IsReferenceOrContainsReferences<T>()
-            ? allocation.AsSpan<T>()
-            : default;
+        if (!RuntimeHelpers.IsReferenceOrContainsReferences<T>())
+        {
+            _directValues = allocation.AsSpan<T>();
+        }
+
         _length = allocation.Length;
     }
 
@@ -42,9 +45,11 @@ public readonly ref struct NativeLeaseWriter<T>
     {
         _allocation = null;
         _initializedLength = ref initializedLength;
-        _directValues = !RuntimeHelpers.IsReferenceOrContainsReferences<T>()
-            ? new Span<T>((void*)pointer, length)
-            : default;
+        if (!RuntimeHelpers.IsReferenceOrContainsReferences<T>())
+        {
+            _directValues = new Span<T>((void*)pointer, length);
+        }
+
         _length = length;
     }
 

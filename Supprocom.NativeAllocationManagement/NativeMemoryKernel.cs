@@ -5494,7 +5494,7 @@ internal sealed partial class NativeOwnerKernel
         return (nuint)unsignedLength * unsignedElementSize;
     }
 
-    [MethodImpl(MethodImplOptions.NoInlining)]
+    [System.Diagnostics.CodeAnalysis.DoesNotReturn]
     private static void ThrowArenaByteLengthOverflow() =>
         throw new OverflowException(
             "The arena allocation byte count overflows native addressable storage.");
@@ -5530,7 +5530,7 @@ internal sealed partial class NativeOwnerKernel
         return checked(value + mask) & ~mask;
     }
 
-    [MethodImpl(MethodImplOptions.NoInlining)]
+    [System.Diagnostics.CodeAnalysis.DoesNotReturn]
     private void ThrowArenaFastInitializerInUse(
         string operation)
     {
@@ -7782,7 +7782,7 @@ internal sealed partial class NativeOwnerKernel
         return true;
     }
 
-    [MethodImpl(MethodImplOptions.NoInlining)]
+    [System.Diagnostics.CodeAnalysis.DoesNotReturn]
     private void ThrowArenaFastLocalOperation(
         NativeArenaAllocation allocation,
         string operation)

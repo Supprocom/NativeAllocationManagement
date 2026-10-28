@@ -986,37 +986,31 @@ public sealed unsafe partial class NativePool<T>
     }
 
     [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
     private static void ThrowActiveBorrow() =>
         throw new InvalidOperationException(
             "A pooled lease cannot return during an active callback.");
 
     [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
     private static void ThrowActiveMove() =>
         throw new InvalidOperationException(
             "A pooled lease cannot move during an active callback; the source remains owning.");
 
     [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
     private static void ThrowLiveLease() =>
         throw new InvalidOperationException(
             "NativePool cannot dispose while a pooled lease is active.");
 
     [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
     private static void ThrowLiveRetirementState() =>
         throw new InvalidOperationException(
             "NativePool cannot retire while a lease, initializer, or callback is active.");
 
     [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
     private static void ThrowRetiredDispose() =>
         throw new InvalidOperationException(
             "NativePool.Dispose cannot release retired storage. Use ReleaseRetiredStorage on the coordinator thread.");
 
     [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
     private static void ThrowInvalidRetiredCleanup(int state) =>
         throw new InvalidOperationException(
             state == 0
@@ -1024,7 +1018,6 @@ public sealed unsafe partial class NativePool<T>
                 : "NativePool retired storage was already released.");
 
     [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
     private void ThrowStaleToken(
         Slab slab,
         long token,
@@ -1040,7 +1033,6 @@ public sealed unsafe partial class NativePool<T>
             _lifecycle);
 
     [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
     private void ThrowDisposed(string operation) =>
         throw new NativeAllocationDisposedException(
             "The native pool is disposed.",
@@ -1053,7 +1045,6 @@ public sealed unsafe partial class NativePool<T>
             _lifecycle);
 
     [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
     private void ThrowWrongThread(string operation) =>
         throw new NativeAllocationStateException(
             "NativePool is confined to its construction thread.",
@@ -1234,13 +1225,11 @@ public sealed unsafe partial class NativePool<T>
     }
 
     [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
     private static void ThrowLeaseTokenExhausted() =>
         throw new InvalidOperationException(
             "NativePool exhausted its lease-token authority.");
 
     [DoesNotReturn]
-    [MethodImpl(MethodImplOptions.NoInlining)]
     private static void ThrowIncompleteInitialization(
         int initializedLength,
         int requiredLength) =>

@@ -712,7 +712,7 @@ internal sealed unsafe class NativeRegionKernel
             allocationId: 0,
             _lifecycle);
 
-    [MethodImpl(MethodImplOptions.NoInlining)]
+    [System.Diagnostics.CodeAnalysis.DoesNotReturn]
     private void ThrowActiveOperation(string operation) =>
         throw new NativeAllocationInUseException(
             "NativeRegion cannot initialize recursively or dispose during an entered initializer or bounded callback.",
@@ -739,7 +739,7 @@ internal sealed unsafe class NativeRegionKernel
         return (nuint)(uint)length * elementSize;
     }
 
-    [MethodImpl(MethodImplOptions.NoInlining)]
+    [System.Diagnostics.CodeAnalysis.DoesNotReturn]
     private static void ThrowByteLengthOverflow() =>
         throw new OverflowException(
             "The Lease byte count exceeds native addressable storage.");
