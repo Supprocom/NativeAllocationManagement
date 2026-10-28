@@ -29,10 +29,6 @@ internal sealed class NativeThreadState
     // NativeRegionKernel: one disposed default-policy region kept for reuse.
     internal NativeRegionKernel? ReusableRegion;
 
-    // NativePoolThreadCaches: this thread's synchronized-pool caches.
-    internal NativePoolThreadCache? RecentPoolCache;
-    internal NativePoolThreadCache?[]? PoolCaches;
-
     // Per element type state, such as parked transfer controls, by slot index.
     private object?[] _typed = new object?[8];
 

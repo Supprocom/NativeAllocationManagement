@@ -270,29 +270,32 @@ internal struct FreeSlotArray
     private int _element;
 }
 
-// The caches of the current thread, most recently used first. They live in
-// the thread state, so a lookup shares its TLS read with the caller's others.
+// The caches of the current thread, most recently used first. Their own
+// thread-statics: every cached rent looks one up, and a thread-state field
+// sits one dependent load further away.
 internal static class NativePoolThreadCaches
 {
     private const int PerThreadLimit = 8;
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static NativePoolThreadCache? Find(long kernelId) =>
-        Find(NativeThreadState.Current, kernelId);
+    [ThreadStatic]
+    private static NativePoolThreadCache? t_recent;
+
+    [ThreadStatic]
+    private static NativePoolThreadCache?[]? t_all;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static NativePoolThreadCache? Find(NativeThreadState thread, long kernelId)
+    internal static NativePoolThreadCache? Find(long kernelId)
     {
-        NativePoolThreadCache? recent = thread.RecentPoolCache;
+        NativePoolThreadCache? recent = t_recent;
         return recent is not null && recent.KernelId == kernelId
             ? recent
-            : FindSlow(thread, kernelId);
+            : FindSlow(kernelId);
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static NativePoolThreadCache? FindSlow(NativeThreadState thread, long kernelId)
+    private static NativePoolThreadCache? FindSlow(long kernelId)
     {
-        NativePoolThreadCache?[]? all = thread.PoolCaches;
+        NativePoolThreadCache?[]? all = t_all;
         if (all is null)
         {
             return null;
@@ -302,7 +305,7 @@ internal static class NativePoolThreadCaches
         {
             if (cache is not null && cache.KernelId == kernelId)
             {
-                thread.RecentPoolCache = cache;
+                t_recent = cache;
                 return cache;
             }
         }
@@ -314,24 +317,22 @@ internal static class NativePoolThreadCaches
     // recently used entry, which the caller detaches from its pool.
     internal static NativePoolThreadCache? Remember(NativePoolThreadCache cache)
     {
-        NativeThreadState thread = NativeThreadState.Current;
-        NativePoolThreadCache?[] all = thread.PoolCaches ??= new NativePoolThreadCache?[PerThreadLimit];
+        NativePoolThreadCache?[] all = t_all ??= new NativePoolThreadCache?[PerThreadLimit];
         NativePoolThreadCache? evicted = all[^1];
         Array.Copy(all, 0, all, 1, all.Length - 1);
         all[0] = cache;
-        thread.RecentPoolCache = cache;
+        t_recent = cache;
         return evicted;
     }
 
     internal static void Forget(NativePoolThreadCache cache)
     {
-        NativeThreadState thread = NativeThreadState.Current;
-        if (ReferenceEquals(thread.RecentPoolCache, cache))
+        if (ReferenceEquals(t_recent, cache))
         {
-            thread.RecentPoolCache = null;
+            t_recent = null;
         }
 
-        NativePoolThreadCache?[]? all = thread.PoolCaches;
+        NativePoolThreadCache?[]? all = t_all;
         if (all is null)
         {
             return;
