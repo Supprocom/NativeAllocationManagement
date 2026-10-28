@@ -4272,7 +4272,8 @@ internal sealed partial class NativeOwnerKernel
             && cache.Enter())
         {
             if (cache.NextId <= cache.LastId
-                && cache.TakeFree(length) is NativeAllocation allocation)
+                && (cache.TakeFree(length) ?? (cache.HasRecordRoom ? TakeRemoteFree(cache, length) : null))
+                    is NativeAllocation allocation)
             {
                 BeginCachedLease(cache, allocation, length);
                 cache.Exit();

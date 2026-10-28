@@ -61,21 +61,23 @@ internal sealed class NativePoolThreadCache
     internal int ActiveOperations;
     internal int Initializing;
 
-    // Transferable leases rented through this cache. Any thread may return one,
-    // so the list has its own short gate; a fold takes it too.
-    private int _transferGate;
+    // Transferable records rented through this cache: on loan, or returned and
+    // waiting in the stash or the remote returns, still in place here. Only
+    // the owner adds or removes entries, in its busy window; a fold reads the
+    // list while the owner is idle, under the remote returns' gate.
     internal NativeAllocation?[] Transfers = new NativeAllocation?[4];
     internal int TransferCount;
 
-    // Transferable leases other threads returned, kept for this thread's next
-    // rents so records flow back to the thread that rents them. Under the transfer gate.
-    // Deep enough for a producer-consumer queue of a few hundred transfers.
-    internal const int RemoteFreeCapacity = 512;
-    internal readonly NativeAllocation?[] RemoteFree = new NativeAllocation?[RemoteFreeCapacity];
+    // Returned transferable records this thread holds for its next rents, its
+    // own returns and those it took from Remote. Their payload has left
+    // PayloadDelta. Owner only.
+    internal NativeAllocation?[] Stash = new NativeAllocation?[4];
+    internal int StashCount;
 
-    // Returned records a reclaim carries out of the transfer gate at once.
-    internal readonly NativeAllocation?[] RemoteBatch = new NativeAllocation?[FreeCapacity];
-    internal int RemoteFreeCount;
+    // Transferable records other threads returned, still counted in
+    // PayloadDelta. The stash, the remote returns and the transfer list grow
+    // together, and both hold only records on the list, so neither overflows.
+    internal readonly NativeRemoteReturns Remote = new(4);
 
     // An arena thread's private chunk of a shared bump segment while armed: it
     // allocates from LaneCursor up to LaneLimit. Chunks double per claim up to
@@ -110,32 +112,6 @@ internal sealed class NativePoolThreadCache
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void Exit() => Volatile.Write(ref Busy, 0);
-
-    // The transfer gate spins: its holders move a few slots and never
-    // allocate, block or throw while they hold it.
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal void EnterTransferGate()
-    {
-        if (Interlocked.CompareExchange(ref _transferGate, 1, 0) != 0)
-        {
-            WaitForTransferGate();
-        }
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal void ExitTransferGate() => Volatile.Write(ref _transferGate, 0);
-
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    private void WaitForTransferGate()
-    {
-        SpinWait spinner = default;
-        do
-        {
-            spinner.SpinOnce();
-        }
-        while (Volatile.Read(ref _transferGate) != 0
-            || Interlocked.CompareExchange(ref _transferGate, 1, 0) != 0);
-    }
 
     internal void WaitUntilIdle()
     {
@@ -244,14 +220,15 @@ internal sealed class NativePoolThreadCache
         RecordCount = last;
     }
 
-    // Under the transfer gate, with room made by the owner.
+    // In the owner's busy window, with room made by the owner.
     internal void AddTransfer(NativeAllocation allocation)
     {
         allocation.CacheSlot = TransferCount;
-        Transfers[TransferCount++] = allocation;
+        Transfers[TransferCount] = allocation;
+        Volatile.Write(ref TransferCount, TransferCount + 1);
     }
 
-    // Under the transfer gate.
+    // In the owner's busy window.
     internal void RemoveTransfer(NativeAllocation allocation)
     {
         int slot = allocation.CacheSlot;
@@ -265,6 +242,91 @@ internal sealed class NativePoolThreadCache
 
         Transfers[last] = null;
         TransferCount = last;
+    }
+
+    // In the owner's busy window: removes and returns a stashed record that
+    // holds the length, the most recent return when it fits within twice the
+    // length (a pipeline rents one size), else the smallest that fits.
+    internal NativeAllocation? TakeStashed(int length)
+    {
+        int newest = StashCount - 1;
+        if (newest < 0)
+        {
+            return null;
+        }
+
+        int best = newest;
+        int bestCapacity = Stash[newest]!.Capacity;
+        if (bestCapacity < length || bestCapacity > 2 * length)
+        {
+            best = -1;
+            bestCapacity = int.MaxValue;
+            for (int index = 0; index <= newest; index++)
+            {
+                int capacity = Stash[index]!.Capacity;
+                if (capacity >= length && capacity < bestCapacity)
+                {
+                    best = index;
+                    bestCapacity = capacity;
+                }
+            }
+
+            if (best < 0)
+            {
+                return null;
+            }
+        }
+
+        NativeAllocation allocation = Stash[best]!;
+        Stash[best] = Stash[newest];
+        Stash[newest] = null;
+        StashCount = newest;
+        return allocation;
+    }
+}
+
+// Transferable records other threads returned to one thread cache, kept for
+// that thread's next rents. Returning threads take this gate instead of the
+// cache's busy window, and the fields sit apart from neighbouring objects, so
+// a return does not take the renting thread's cache line away.
+[System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Explicit, Size = 192)]
+internal sealed class NativeRemoteReturns
+{
+    [System.Runtime.InteropServices.FieldOffset(64)]
+    internal NativeAllocation?[] Items;
+
+    [System.Runtime.InteropServices.FieldOffset(72)]
+    internal int Count;
+
+    [System.Runtime.InteropServices.FieldOffset(76)]
+    private int _gate;
+
+    internal NativeRemoteReturns(int capacity) => Items = new NativeAllocation?[capacity];
+
+    // The gate spins: its holders move a few slots and never allocate, block
+    // or throw while they hold it.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void Enter()
+    {
+        if (Interlocked.CompareExchange(ref _gate, 1, 0) != 0)
+        {
+            Wait();
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void Exit() => Volatile.Write(ref _gate, 0);
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private void Wait()
+    {
+        SpinWait spinner = default;
+        do
+        {
+            spinner.SpinOnce();
+        }
+        while (Volatile.Read(ref _gate) != 0
+            || Interlocked.CompareExchange(ref _gate, 1, 0) != 0);
     }
 }
 
@@ -295,6 +357,9 @@ internal static class NativePoolThreadCaches
             ? recent
             : FindSlow(kernelId);
     }
+
+    // Whether this thread can remember another cache without dropping one.
+    internal static bool HasRoom => t_all is not { } all || all[^1] is null;
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static NativePoolThreadCache? FindSlow(long kernelId)

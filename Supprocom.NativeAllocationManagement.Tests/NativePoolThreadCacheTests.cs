@@ -314,6 +314,142 @@ public sealed class NativePoolThreadCacheTests
     }
 
     [Fact]
+    public void TransfersAnotherThreadReturnsServeTheRentingThreadsNextRents()
+    {
+        Assert.Equal(SegmentsAfterPipelineRounds(1), SegmentsAfterPipelineRounds(20));
+    }
+
+    // A long-lived producer rents a batch of transfers, a long-lived consumer
+    // processes and returns them, and the producer rents the next batch.
+    private static int SegmentsAfterPipelineRounds(int rounds)
+    {
+        using NativeConcurrentPool<int> pool = new();
+        NativeTransfer<int>[] batch = new NativeTransfer<int>[32];
+        using SemaphoreSlim filled = new(0);
+        using SemaphoreSlim drained = new(0);
+        Exception? failure = null;
+        Thread producer = new(() =>
+        {
+            try
+            {
+                for (int round = 0; round < rounds; round++)
+                {
+                    for (int index = 0; index < batch.Length; index++)
+                    {
+                        batch[index] = pool.RentTransferable(16, (round * 100) + index);
+                    }
+
+                    filled.Release();
+                    if (!drained.Wait(Timeout))
+                    {
+                        throw new InvalidOperationException("The consumer did not return the batch.");
+                    }
+                }
+            }
+            catch (Exception exception) when (exception is InvalidOperationException or NativeAllocationException)
+            {
+                failure ??= exception;
+                filled.Release();
+            }
+        });
+        Thread consumer = new(() =>
+        {
+            try
+            {
+                for (int round = 0; round < rounds; round++)
+                {
+                    if (!filled.Wait(Timeout))
+                    {
+                        throw new InvalidOperationException("The producer did not fill the batch.");
+                    }
+
+                    for (int index = 0; index < batch.Length; index++)
+                    {
+                        if (batch[index].Process<int, int, AllEqual>((round * 100) + index) != 16)
+                        {
+                            throw new InvalidOperationException($"Transfer {index} of round {round} held other values.");
+                        }
+
+                        batch[index].Dispose();
+                    }
+
+                    drained.Release();
+                }
+            }
+            catch (Exception exception) when (exception is InvalidOperationException or NativeAllocationException)
+            {
+                failure ??= exception;
+                drained.Release();
+            }
+        });
+        producer.Start();
+        consumer.Start();
+        Assert.True(producer.Join(Timeout));
+        Assert.True(consumer.Join(Timeout));
+        Assert.Null(failure);
+        NativeOwnerStatistics statistics = pool.GetStatistics();
+        Assert.Equal(0, statistics.InitializedPayloadBytes);
+        return statistics.SegmentCount;
+    }
+
+    [Fact]
+    public void ATransferReturnedOnItsRentingThreadServesItsNextRentsOfEitherKind()
+    {
+        int single;
+        using (NativeConcurrentPool<int> reference = new())
+        {
+            using (reference.RentTransferable(16, 0))
+            {
+            }
+
+            single = reference.GetStatistics().SegmentCount;
+        }
+
+        using NativeConcurrentPool<int> pool = new();
+        for (int round = 0; round < 8; round++)
+        {
+            NativeTransfer<int> transfer = (round & 1) == 0
+                ? pool.RentTransferable(16, round)
+                : pool.RentTransferable(16, writer => writer.Fill(round));
+            Assert.Equal(16, transfer.Process<int, int, AllEqual>(round));
+            transfer.Dispose();
+            using ConcurrentPooled<int> lease = pool.Rent(16, round + 1);
+            Assert.Equal(16, lease.Process<int, int, AllEqual>(16, round + 1));
+        }
+
+        NativeOwnerStatistics statistics = pool.GetStatistics();
+        Assert.Equal(single, statistics.SegmentCount);
+        Assert.Equal(0, statistics.InitializedPayloadBytes);
+    }
+
+    [Fact]
+    public void AThreadThatOnlyProcessesATransferKeepsItsOperationThroughARevocation()
+    {
+        using NativeConcurrentPool<int> pool = new();
+        NativeTransfer<int> transfer = pool.RentTransferable(4, 5);
+        BlockingProcessor.Entered.Reset();
+        BlockingProcessor.Release.Reset();
+        int result = 0;
+        Thread consumer = new(() =>
+        {
+            result = transfer.Process<int, int, BlockingProcessor>(1);
+            transfer.Dispose();
+        });
+        consumer.Start();
+        Assert.True(BlockingProcessor.Entered.Wait(Timeout));
+
+        Assert.Equal(1, pool.CurrentGenerationActiveOperationsForTest);
+        Assert.Throws<NativeAllocationInUseException>(pool.ReleaseLeasesToNativeMemory);
+        BlockingProcessor.Release.Set();
+        Assert.True(consumer.Join(Timeout));
+
+        Assert.Equal(6, result);
+        Assert.Equal(0, pool.CurrentGenerationActiveOperationsForTest);
+        Assert.Equal(0, pool.GetStatistics().InitializedPayloadBytes);
+        pool.ReleaseLeasesToNativeMemory();
+    }
+
+    [Fact]
     public void CachedRentsProcessesAndReturnsAllocateNothingAfterWarmup()
     {
         using NativeConcurrentPool<int> pool = new();

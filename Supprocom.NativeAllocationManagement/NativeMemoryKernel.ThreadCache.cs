@@ -170,14 +170,28 @@ internal sealed partial class NativeOwnerKernel
             }
         }
 
-        if (Volatile.Read(ref cache.RemoteFreeCount) == 0)
+        for (int index = 0; index < cache.StashCount; index++)
+        {
+            if (cache.Stash[index]!.Capacity >= length)
+            {
+                return true;
+            }
+        }
+
+        NativeRemoteReturns remote = cache.Remote;
+        if (Volatile.Read(ref remote.Count) == 0)
         {
             return false;
         }
 
-        cache.EnterTransferGate();
-        bool fits = FindRemoteFreeFit(cache, length) >= 0;
-        cache.ExitTransferGate();
+        bool fits = false;
+        remote.Enter();
+        for (int index = 0; index < remote.Count && !fits; index++)
+        {
+            fits = remote.Items[index]!.Capacity >= length;
+        }
+
+        remote.Exit();
         return fits;
     }
 
@@ -199,7 +213,9 @@ internal sealed partial class NativeOwnerKernel
         foreach (ref readonly NativePoolThreadCache other in _threadCaches.AsSpan(0, _threadCacheCount))
         {
             if (!ReferenceEquals(other, cache)
-                && (Volatile.Read(ref other.FreeCount) != 0 || Volatile.Read(ref other.RemoteFreeCount) != 0))
+                && (Volatile.Read(ref other.FreeCount) != 0
+                    || Volatile.Read(ref other.StashCount) != 0
+                    || Volatile.Read(ref other.Remote.Count) != 0))
             {
                 return true;
             }
@@ -209,82 +225,63 @@ internal sealed partial class NativeOwnerKernel
     }
 
     // In the owner's busy window or under the owner lock, with room for one
-    // more record: takes the smallest record other threads returned that
-    // holds the length.
+    // more record: takes a returned transferable record that holds the length
+    // into the leased set.
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static NativeAllocation? TakeRemoteFree(NativePoolThreadCache cache, int length)
     {
-        if (Volatile.Read(ref cache.RemoteFreeCount) == 0)
+        if (TakeReturnedTransfer(cache, length) is not NativeAllocation allocation)
         {
             return null;
         }
 
-        cache.EnterTransferGate();
-        int best = FindRemoteFreeFit(cache, length);
-        if (best < 0)
-        {
-            cache.ExitTransferGate();
-            return null;
-        }
-
-        NativeAllocation allocation = cache.RemoteFree[best]!;
-        int last = --cache.RemoteFreeCount;
-        cache.RemoteFree[best] = cache.RemoteFree[last];
-        cache.RemoteFree[last] = null;
-        // While the cache has room, bring more of them along: in a pipeline
-        // every return is remote, and each one carried now spares a later rent
-        // the gate and the slow path.
-        int extra = Math.Min(
-            Math.Min(NativePoolThreadCache.FreeCapacity - cache.FreeCount, cache.Records.Length - cache.RecordCount - 1),
-            cache.RemoteFreeCount);
-        for (int index = 0; index < extra; index++)
-        {
-            int newest = --cache.RemoteFreeCount;
-            cache.RemoteBatch[index] = cache.RemoteFree[newest];
-            cache.RemoteFree[newest] = null;
-        }
-
-        cache.ExitTransferGate();
+        cache.RemoveTransfer(allocation);
         allocation.CacheOwner = cache;
         cache.AddRecord(allocation);
-        cache.PayloadDelta -= (long)allocation.StorageBytes;
-        for (int index = 0; index < extra; index++)
-        {
-            NativeAllocation returned = cache.RemoteBatch[index]!;
-            cache.RemoteBatch[index] = null;
-            returned.CacheOwner = cache;
-            cache.AddRecord(returned);
-            cache.AddFree(returned);
-            cache.PayloadDelta -= (long)returned.StorageBytes;
-        }
-
         return allocation;
     }
 
-    // Under the transfer gate. The most recent return usually fits: a
-    // pipeline rents and returns one size.
-    private static int FindRemoteFreeFit(NativePoolThreadCache cache, int length)
+    // In the owner's busy window or under the owner lock: a returned
+    // transferable record from the stash, which takes in what other threads
+    // returned when it holds none that fits. The record stays on the transfer list.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static NativeAllocation? TakeReturnedTransfer(NativePoolThreadCache cache, int length) =>
+        cache.TakeStashed(length)
+        ?? (Volatile.Read(ref cache.Remote.Count) != 0 ? TakeRemoteReturns(cache, length) : null);
+
+    // In a pipeline every return is remote: the whole batch moves to the stash
+    // in one short gate, by swapping arrays when the stash is empty.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static NativeAllocation? TakeRemoteReturns(NativePoolThreadCache cache, int length)
     {
-        int newest = cache.RemoteFreeCount - 1;
-        if (newest >= 0 && cache.RemoteFree[newest]!.Slab!.Capacity is int newestCapacity
-            && newestCapacity >= length && newestCapacity <= 2 * length)
+        NativeRemoteReturns remote = cache.Remote;
+        int first = cache.StashCount;
+        remote.Enter();
+        int count = remote.Count;
+        if (first == 0)
         {
-            return newest;
+            NativeAllocation?[] returned = remote.Items;
+            remote.Items = cache.Stash;
+            cache.Stash = returned;
+        }
+        else
+        {
+            Array.Copy(remote.Items, 0, cache.Stash, first, count);
+            Array.Clear(remote.Items, 0, count);
         }
 
-        int best = -1;
-        int bestCapacity = int.MaxValue;
-        for (int index = 0; index < cache.RemoteFreeCount; index++)
+        Volatile.Write(ref remote.Count, 0);
+        remote.Exit();
+        int last = first + count;
+        cache.StashCount = last;
+        long payload = cache.PayloadDelta;
+        for (int index = first; index < last; index++)
         {
-            int capacity = cache.RemoteFree[index]!.Slab!.Capacity;
-            if (capacity >= length && capacity < bestCapacity)
-            {
-                best = index;
-                bestCapacity = capacity;
-            }
+            payload -= (long)cache.Stash[index]!.StorageBytes;
         }
 
-        return best;
+        cache.PayloadDelta = payload;
+        return cache.TakeStashed(length);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -343,26 +340,52 @@ internal sealed partial class NativeOwnerKernel
         if (length > 0
             && ThreadCacheEligible
             && !NativeMemoryTestHooks.FaultInjectionPending
-            && NativePoolThreadCaches.Find(Id) is NativePoolThreadCache cache
-            && cache.Enter())
+            && NativePoolThreadCaches.Find(Id) is NativePoolThreadCache cache)
         {
-            if (cache.NextId <= cache.LastId
-                && cache.TakeFree(length) is NativeAllocation allocation)
+            if (transferable)
             {
-                if (!transferable
-                    && (!fill || (nuint)length * (nuint)_storageElementSize <= InWindowFillBytes))
-                {
-                    long allocationId = PublishCachedLease(cache, allocation, length, value, fill);
-                    cache.Exit();
-                    return new NativePoolLease(allocationId, allocation);
-                }
-
-                BeginCachedLease(cache, allocation, length);
-                cache.Exit();
-                return FillCached(cache, allocation, value, fill, transferable);
+                ReserveTransfer(cache);
             }
 
-            cache.Exit();
+            if (cache.Enter())
+            {
+                if (cache.NextId <= cache.LastId)
+                {
+                    bool inWindow = !fill || (nuint)length * (nuint)_storageElementSize <= InWindowFillBytes;
+
+                    // A returned transferable record serves the next
+                    // transferable rent in place on the transfer list.
+                    if (transferable && inWindow && TakeReturnedTransfer(cache, length) is NativeAllocation returned)
+                    {
+                        long returnedId = PublishCachedLease(cache, returned, length, value, fill);
+                        returned.TransferOwner = cache;
+                        cache.Exit();
+                        return new NativePoolLease(returnedId, returned);
+                    }
+
+                    if ((cache.TakeFree(length) ?? (cache.HasRecordRoom ? TakeRemoteFree(cache, length) : null))
+                        is NativeAllocation allocation)
+                    {
+                        if (inWindow)
+                        {
+                            long allocationId = PublishCachedLease(cache, allocation, length, value, fill);
+                            if (transferable)
+                            {
+                                MoveToTransfers(cache, allocation);
+                            }
+
+                            cache.Exit();
+                            return new NativePoolLease(allocationId, allocation);
+                        }
+
+                        BeginCachedLease(cache, allocation, length);
+                        cache.Exit();
+                        return FillCached(cache, allocation, value, fill, transferable);
+                    }
+                }
+
+                cache.Exit();
+            }
         }
 
         if (RuntimeHelpers.IsReferenceOrContainsReferences<T>())
@@ -484,16 +507,9 @@ internal sealed partial class NativeOwnerKernel
     [MethodImpl(MethodImplOptions.NoInlining)]
     private void CompleteCachedInitialization(NativePoolThreadCache cache, NativeAllocation allocation, bool transferable)
     {
-        // Only this thread adds transfers; other threads and folds only remove
-        // them, so a list with room now keeps it. Growing copies the list under
-        // its gate into an array allocated outside it.
-        if (transferable && Volatile.Read(ref cache.TransferCount) == cache.Transfers.Length)
+        if (transferable)
         {
-            NativeAllocation?[] grown = new NativeAllocation?[cache.Transfers.Length * 2];
-            cache.EnterTransferGate();
-            Array.Copy(cache.Transfers, grown, cache.TransferCount);
-            cache.Transfers = grown;
-            cache.ExitTransferGate();
+            ReserveTransfer(cache);
         }
 
         if (cache.Enter())
@@ -509,12 +525,7 @@ internal sealed partial class NativeOwnerKernel
 
                 if (transferable)
                 {
-                    cache.RemoveRecord(allocation);
-                    allocation.CacheOwner = null;
-                    cache.EnterTransferGate();
-                    cache.AddTransfer(allocation);
-                    allocation.TransferOwner = cache;
-                    cache.ExitTransferGate();
+                    MoveToTransfers(cache, allocation);
                 }
 
                 allocation.InitializedLength = 0;
@@ -537,6 +548,49 @@ internal sealed partial class NativeOwnerKernel
         // A fold moved the record and its initializer count to the generation.
         WaitForThreadCacheFold();
         CompleteInitialization(allocation.GenerationState, allocation, scoped: false);
+    }
+
+    // Only this thread changes its transfer list and a fold only empties it,
+    // so a list with room now keeps it. Growing allocates outside any window.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void ReserveTransfer(NativePoolThreadCache cache)
+    {
+        if (Volatile.Read(ref cache.TransferCount) == cache.Transfers.Length)
+        {
+            GrowTransfers(cache);
+        }
+    }
+
+    // The stash and the remote returns grow with the list, so they always
+    // have room for every record on it. A fold may read all three, so they
+    // change under the remote returns' gate.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void GrowTransfers(NativePoolThreadCache cache)
+    {
+        int length = cache.Transfers.Length * 2;
+        NativeAllocation?[] transfers = new NativeAllocation?[length];
+        NativeAllocation?[] stash = new NativeAllocation?[length];
+        NativeAllocation?[] returned = new NativeAllocation?[length];
+        NativeRemoteReturns remote = cache.Remote;
+        remote.Enter();
+        Array.Copy(cache.Transfers, transfers, cache.TransferCount);
+        Array.Copy(cache.Stash, stash, cache.StashCount);
+        Array.Copy(remote.Items, returned, remote.Count);
+        cache.Transfers = transfers;
+        cache.Stash = stash;
+        remote.Items = returned;
+        remote.Exit();
+    }
+
+    // In the owner's busy window, after ReserveTransfer: a transferable lease
+    // leaves the owner-only leased set for the transfer list.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void MoveToTransfers(NativePoolThreadCache cache, NativeAllocation allocation)
+    {
+        cache.RemoveRecord(allocation);
+        allocation.CacheOwner = null;
+        cache.AddTransfer(allocation);
+        allocation.TransferOwner = cache;
     }
 
     private void AbortCachedInitialization(NativePoolThreadCache cache, NativeAllocation allocation)
@@ -758,7 +812,8 @@ internal sealed partial class NativeOwnerKernel
     // admission already arbitrates borrows on several threads and keeps
     // disposal and moves out while any runs; the record's admission would only
     // repeat it. The generation's count goes to the operating thread's cache
-    // instead of the shared generation counter.
+    // instead of the shared generation counter; a thread without one gets one
+    // here, so its later operations take the inline path.
     private bool TryEnterTransferOperation(
         NativeGeneration generation,
         NativeAllocation allocation,
@@ -767,8 +822,7 @@ internal sealed partial class NativeOwnerKernel
         string operation,
         out NativeOperationToken token)
     {
-        NativePoolThreadCache? cache = NativePoolThreadCaches.Find(Id);
-        if (cache is not null && cache.Enter())
+        if (EnterOperationCache() is NativePoolThreadCache cache)
         {
             if (ReferenceEquals(cache.Generation, generation)
                 && generation.Number == generationNumber
@@ -823,6 +877,64 @@ internal sealed partial class NativeOwnerKernel
         cache = null;
         epoch = 0;
         return false;
+    }
+
+    // This thread's cache in its busy window, armed for operations if need be.
+    private NativePoolThreadCache? EnterOperationCache()
+    {
+        NativePoolThreadCache? cache = NativePoolThreadCaches.Find(Id);
+        if (cache is not null && cache.Enter())
+        {
+            return cache;
+        }
+
+        cache = ArmOperationCache();
+        return cache is not null && cache.Enter() ? cache : null;
+    }
+
+    // A thread that operates on this pool's transferable leases without renting
+    // from it, such as the consuming end of a pipeline, gets an empty cache, so
+    // its operations count there instead of in the generation's shared
+    // counters. A revoked cache re-arms the same way. Null when the pool is
+    // not active, holds its limit of caches, or the thread would have to drop
+    // another pool's cache.
+    private NativePoolThreadCache? ArmOperationCache()
+    {
+        NativePoolThreadCache? cache = NativePoolThreadCaches.Find(Id);
+        if (NativeMemoryTestHooks.FaultInjectionPending
+            || cache is null
+                && (!NativePoolThreadCaches.HasRoom || Volatile.Read(ref _threadCacheCount) == ThreadCacheLimit))
+        {
+            return null;
+        }
+
+        lock (_gate)
+        {
+            if (_lifecycle != NativeOwnerLifecycle.Active || _current is not NativeGeneration generation)
+            {
+                return null;
+            }
+
+            if (cache is null)
+            {
+                if (_threadCacheCount == ThreadCacheLimit)
+                {
+                    return null;
+                }
+
+                cache = CreateThreadCacheLocked(out NativePoolThreadCache? evicted);
+                System.Diagnostics.Debug.Assert(evicted is null, "The thread had room for another cache.");
+            }
+
+            if (cache.Generation is not null && !ReferenceEquals(cache.Generation, generation))
+            {
+                FoldThreadCacheLocked(cache);
+            }
+
+            cache.Generation = generation;
+            Volatile.Write(ref cache.Revoked, 0);
+            return cache;
+        }
     }
 
     // An operation on an arena scratch range from a thread whose cache holds a
@@ -911,11 +1023,12 @@ internal sealed partial class NativeOwnerKernel
     }
 
     // Returns a transferable lease from any thread. A lease still on its renting
-    // cache's transfer list leaves the list under that list's gate; its record
-    // and slab then go back to the renting thread, into the returning thread's
-    // cache, or to the generation. A lease a fold moved to the generation takes
-    // the locked path. Its transfer control already turned away new borrows and
-    // found none running, so the record's admission needs no closing here.
+    // cache's transfer list stays there for that thread's next rents: the
+    // renting thread stashes it in its busy window, any other thread adds it to
+    // the cache's remote returns under their gate. A lease a fold moved to the
+    // generation takes the locked path. Its transfer control already turned
+    // away new borrows and found none running, so the record's admission needs
+    // no closing here.
     internal void ReturnTransferLease(
         NativeAllocation allocation,
         long generationNumber,
@@ -924,80 +1037,57 @@ internal sealed partial class NativeOwnerKernel
     {
         if (allocation.TransferOwner is NativePoolThreadCache owner)
         {
-            NativePoolThreadCache? local = NativePoolThreadCaches.Find(Id);
-            bool remote = !ReferenceEquals(local, owner);
-            owner.EnterTransferGate();
-            if (ReferenceEquals(allocation.TransferOwner, owner))
+            if (ReferenceEquals(NativePoolThreadCaches.Find(Id), owner) && owner.Enter())
             {
-                if (allocation.Id != allocationId
-                    || allocation.Lifecycle != NativeAllocationLifecycle.Active
-                    || allocation.GenerationState.Number != generationNumber)
+                // No fold runs in the busy window, and only the lease's holder
+                // returns it.
+                if (ReferenceEquals(allocation.TransferOwner, owner))
                 {
-                    owner.ExitTransferGate();
+                    if (IsCurrentTransfer(allocation, generationNumber, allocationId))
+                    {
+                        allocation.TransferOwner = null;
+                        allocation.Lifecycle = NativeAllocationLifecycle.Returned;
+                        owner.PayloadDelta -= (long)allocation.StorageBytes;
+                        owner.Stash[owner.StashCount++] = allocation;
+                    }
+
+                    owner.Exit();
                     return;
                 }
 
-                owner.RemoveTransfer(allocation);
-                allocation.TransferOwner = null;
-                allocation.Lifecycle = NativeAllocationLifecycle.Returned;
-                if (remote && owner.RemoteFreeCount < NativePoolThreadCache.RemoteFreeCapacity)
-                {
-                    // The renting thread takes it back on a later rent; its
-                    // payload leaves that thread's count then.
-                    owner.RemoteFree[owner.RemoteFreeCount++] = allocation;
-                    owner.ExitTransferGate();
-                    return;
-                }
-
-                owner.ExitTransferGate();
-                RecycleReturnedTransfer(allocation, local);
-                return;
+                owner.Exit();
             }
+            else
+            {
+                NativeRemoteReturns remote = owner.Remote;
+                remote.Enter();
+                if (ReferenceEquals(allocation.TransferOwner, owner))
+                {
+                    if (IsCurrentTransfer(allocation, generationNumber, allocationId))
+                    {
+                        // Its payload leaves the renting thread's count when
+                        // that thread takes the record back.
+                        allocation.TransferOwner = null;
+                        allocation.Lifecycle = NativeAllocationLifecycle.Returned;
+                        remote.Items[remote.Count] = allocation;
+                        Volatile.Write(ref remote.Count, remote.Count + 1);
+                    }
 
-            owner.ExitTransferGate();
+                    remote.Exit();
+                    return;
+                }
+
+                remote.Exit();
+            }
         }
 
         ReturnLease(generationNumber, allocationId, operation);
     }
 
-    // The returned record is in no list yet; a transition that runs now treats
-    // its slab as idle, which it is.
-    private void RecycleReturnedTransfer(NativeAllocation allocation, NativePoolThreadCache? cache)
-    {
-        NativeGeneration generation = allocation.GenerationState;
-        long payloadBytes = (long)allocation.StorageBytes;
-        if (cache is not null
-            && !NativeMemoryTestHooks.FaultInjectionPending
-            && cache.Enter())
-        {
-            if (ReferenceEquals(cache.Generation, generation)
-                && cache.FreeCount < NativePoolThreadCache.FreeCapacity
-                && cache.HasRecordRoom)
-            {
-                allocation.CacheOwner = cache;
-                cache.AddRecord(allocation);
-                cache.AddFree(allocation);
-                cache.PayloadDelta -= payloadBytes;
-                cache.Exit();
-                return;
-            }
-
-            cache.Exit();
-        }
-
-        lock (_gate)
-        {
-            if (ReferenceEquals(generation, _current))
-            {
-                generation.ReusableAllocations.Add(allocation);
-                generation.AddAvailableSlabOrdered(allocation.Slab!);
-                generation.HotPoolAllocation = null;
-            }
-
-            PublishThreadCachePeak(generation);
-            RecordPayloadReturn(generation, payloadBytes, scoped: false);
-        }
-    }
+    private static bool IsCurrentTransfer(NativeAllocation allocation, long generationNumber, long allocationId) =>
+        allocation.Id == allocationId
+        && allocation.Lifecycle == NativeAllocationLifecycle.Active
+        && allocation.GenerationState.Number == generationNumber;
 
     // The generation's payload is about to change on the locked path. This
     // thread's cached high-water mark was reached against the payload before
@@ -1237,44 +1327,49 @@ internal sealed partial class NativeOwnerKernel
         cache.RecordCount = 0;
 
         // While the owner is idle, other threads only move its transfers to the
-        // remote-free list or take them off, so the two counts together cannot
-        // grow: room made now holds, and nothing allocates under the gate.
-        cache.EnterTransferGate();
-        int transferBound = cache.TransferCount + cache.RemoteFreeCount;
-        cache.ExitTransferGate();
+        // remote returns, which stay on the transfer list: its length bounds
+        // every record below, so nothing allocates under the gate.
+        int transferBound = cache.TransferCount;
         generation.Allocations.EnsureCapacity(checked(generation.Allocations.Count + transferBound));
         generation.ReusableAllocations.EnsureCapacity(checked(generation.ReusableAllocations.Count + transferBound));
         generation.AvailableSlabs.EnsureCapacity(checked(generation.AvailableSlabs.Count + transferBound));
-        cache.EnterTransferGate();
+        NativeRemoteReturns remote = cache.Remote;
+        remote.Enter();
         try
         {
             for (int index = 0; index < cache.TransferCount; index++)
             {
                 NativeAllocation allocation = cache.Transfers[index]!;
                 cache.Transfers[index] = null;
-                allocation.TransferOwner = null;
-                generation.Allocations.Add(allocation.Id, allocation);
-            }
-
-            cache.TransferCount = 0;
-            for (int index = 0; index < cache.RemoteFreeCount; index++)
-            {
-                NativeAllocation allocation = cache.RemoteFree[index]!;
-                cache.RemoteFree[index] = null;
-                cache.PayloadDelta -= (long)allocation.StorageBytes;
-                if (current)
+                if (ReferenceEquals(allocation.TransferOwner, cache))
                 {
-                    generation.ReusableAllocations.Add(allocation);
-                    generation.AddAvailableSlabOrdered(allocation.Slab!);
-                    generation.HotPoolAllocation = null;
+                    allocation.TransferOwner = null;
+                    generation.Allocations.Add(allocation.Id, allocation);
                 }
             }
 
-            cache.RemoteFreeCount = 0;
+            cache.TransferCount = 0;
+            for (int index = 0; index < cache.StashCount; index++)
+            {
+                NativeAllocation allocation = cache.Stash[index]!;
+                cache.Stash[index] = null;
+                ReuseFoldedTransfer(generation, allocation, current);
+            }
+
+            cache.StashCount = 0;
+            for (int index = 0; index < remote.Count; index++)
+            {
+                NativeAllocation allocation = remote.Items[index]!;
+                remote.Items[index] = null;
+                cache.PayloadDelta -= (long)allocation.StorageBytes;
+                ReuseFoldedTransfer(generation, allocation, current);
+            }
+
+            Volatile.Write(ref remote.Count, 0);
         }
         finally
         {
-            cache.ExitTransferGate();
+            remote.Exit();
         }
 
         long delta = cache.PayloadDelta;
@@ -1317,6 +1412,16 @@ internal sealed partial class NativeOwnerKernel
         cache.Generation = null;
         Volatile.Write(ref cache.FoldEpoch, cache.FoldEpoch + 1);
         Volatile.Write(ref cache.Revoked, 1);
+    }
+
+    private static void ReuseFoldedTransfer(NativeGeneration generation, NativeAllocation allocation, bool current)
+    {
+        if (current)
+        {
+            generation.ReusableAllocations.Add(allocation);
+            generation.AddAvailableSlabOrdered(allocation.Slab!);
+            generation.HotPoolAllocation = null;
+        }
     }
 
     // Ordinary unmanaged scratch on a thread other than the arena's own fast
