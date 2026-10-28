@@ -2225,7 +2225,7 @@ public sealed class PackageSmokeTests
 
                         try
                         {
-                            _ = borrowed.Length;
+                            _ = borrowed.Read(static view => view.Length);
                             return 13;
                         }
                         catch (NativeAllocationReturnedException)
@@ -2248,7 +2248,7 @@ public sealed class PackageSmokeTests
                         pool.ReturnMemoryToNativeMemory();
                         try
                         {
-                            _ = stale.Length;
+                            _ = stale.Read(static view => view.Length);
                             return 10;
                         }
                         catch (NativeAllocationReturnedException)

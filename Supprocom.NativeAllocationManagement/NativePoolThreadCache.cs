@@ -33,6 +33,9 @@ internal sealed class NativePoolThreadCache
     internal readonly long KernelId;
     internal readonly WeakReference<NativeOwnerKernel> Kernel;
     internal readonly WeakReference<Thread> OwnerThread;
+    // Caches are created on their owner thread. A revocation from that thread
+    // needs no process-wide barrier.
+    internal readonly int OwnerThreadId;
 
     // The generation this cache serves while armed; null once folded.
     internal NativeGeneration? Generation;
@@ -96,6 +99,7 @@ internal sealed class NativePoolThreadCache
         KernelId = kernel.Id;
         Kernel = new WeakReference<NativeOwnerKernel>(kernel);
         OwnerThread = new WeakReference<Thread>(owner);
+        OwnerThreadId = NativeThreadIdentity.Current;
     }
 
     internal bool IsOwnerAlive =>

@@ -1298,13 +1298,17 @@ internal sealed partial class NativeOwnerKernel
             return;
         }
 
+        // The barrier makes another thread's busy window visible; the calling
+        // thread is never inside its own cache's window here, so revoking only
+        // its own cache (the single-threaded case) needs none.
         bool armed = false;
+        int current = NativeThreadIdentity.Current;
         foreach (ref readonly NativePoolThreadCache cache in _threadCaches.AsSpan(0, count))
         {
             if (Volatile.Read(ref cache.Revoked) == 0)
             {
                 Volatile.Write(ref cache.Revoked, 1);
-                armed = true;
+                armed |= cache.OwnerThreadId != current;
             }
         }
 
@@ -1330,7 +1334,10 @@ internal sealed partial class NativeOwnerKernel
         if (Volatile.Read(ref cache.Revoked) == 0)
         {
             Volatile.Write(ref cache.Revoked, 1);
-            Interlocked.MemoryBarrierProcessWide();
+            if (cache.OwnerThreadId != NativeThreadIdentity.Current)
+            {
+                Interlocked.MemoryBarrierProcessWide();
+            }
         }
 
         cache.WaitUntilIdle();

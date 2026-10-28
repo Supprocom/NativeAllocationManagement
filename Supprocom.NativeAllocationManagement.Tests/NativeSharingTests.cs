@@ -809,6 +809,122 @@ public sealed class NativeSharingTests
         }
     }
 
+    [Fact]
+    public void AWeakReadSeesThePayloadWhileStrongOwnershipLastsWithoutUpgrading()
+    {
+        NativeMemoryBudget budget = new(64);
+        NativeShared<int> owner = Create(budget, 4, 2, 1);
+        Assert.True(owner.TryDowngrade(out NativeWeak<int> weak, out _));
+        Assert.True(weak.TryProcess<int, int, FirstPlus>(1, out int processed));
+        Assert.Equal(43, processed);
+        Assert.True(weak.TryRead(static view => view[0], out int read));
+        Assert.Equal(42, read);
+        NativeSharingStatistics during = weak.CaptureSnapshot();
+        Assert.Equal(0, during.SuccessfulUpgradeCount);
+        Assert.Equal(1, during.StrongBindingCount);
+        Assert.Equal(0, during.ActiveReadCount);
+
+        owner.Dispose();
+        Assert.False(weak.TryProcess<int, int, FirstPlus>(1, out processed));
+        Assert.Equal(0, processed);
+        Assert.False(weak.TryRead(static view => view[0], out read));
+        Assert.Equal(1, weak.CaptureSnapshot().PayloadReturnCount);
+        Assert.Equal(0, budget.CaptureStatistics().CommittedBytes);
+        weak.Dispose();
+    }
+
+    [Fact]
+    public void AWeakReadHoldsThePayloadThroughTheLastStrongRelease()
+    {
+        NativeMemoryBudget budget = new(64);
+        NativeShared<int> owner = Create(budget, 4, 2, 1);
+        Assert.True(owner.TryDowngrade(out NativeWeak<int> weak, out _));
+        NativeWeak<int> observer = weak;
+        Assert.True(weak.TryRead(view =>
+        {
+            owner.Dispose();
+            Assert.True(observer.IsExpired);
+            NativeSharingStatistics entered = observer.CaptureSnapshot();
+            Assert.Equal(1, entered.ActiveReadCount);
+            Assert.False(entered.PayloadReleased);
+            Assert.Equal(16, budget.CaptureStatistics().CommittedBytes);
+            return view[0];
+        }, out int value));
+        Assert.Equal(42, value);
+        NativeSharingStatistics returned = weak.CaptureSnapshot();
+        Assert.True(returned.PayloadReleased);
+        Assert.Equal(0, returned.ActiveReadCount);
+        Assert.Equal(1, returned.PayloadReturnCount);
+        Assert.Equal(0, budget.CaptureStatistics().CommittedBytes);
+        weak.Dispose();
+    }
+
+    [Fact]
+    public void AReleasedWeakObserverCannotRead()
+    {
+        NativeMemoryBudget budget = new(64);
+        NativeShared<int> owner = Create(budget, 4, 2, 1);
+        Assert.True(owner.TryDowngrade(out NativeWeak<int> weak, out _));
+        NativeWeak<int> stale = weak;
+        weak.Dispose();
+        Assert.Throws<InvalidOperationException>(() => stale.TryRead(static view => view[0], out _));
+        Assert.Equal(0, owner.CaptureSnapshot().ActiveReadCount);
+        owner.Dispose();
+        Assert.Equal(0, budget.CaptureStatistics().CommittedBytes);
+    }
+
+    [Fact]
+    public void AFailedWeakReadLeavesAndTheLastReleaseStillReturnsThePayload()
+    {
+        NativeMemoryBudget budget = new(64);
+        NativeShared<int> owner = Create(budget, 4, 2, 1);
+        Assert.True(owner.TryDowngrade(out NativeWeak<int> weak, out _));
+        Assert.Throws<FormatException>(() => weak.TryRead<int>(static _ => throw new FormatException(), out _));
+        Assert.Equal(0, weak.CaptureSnapshot().ActiveReadCount);
+        owner.Dispose();
+        Assert.Equal(1, weak.CaptureSnapshot().PayloadReturnCount);
+        Assert.Equal(0, budget.CaptureStatistics().CommittedBytes);
+        weak.Dispose();
+    }
+
+    [Fact]
+    public void WeakReadersRacingTheLastStrongReleaseNeverSeeReturnedStorage()
+    {
+        for (int round = 0; round < 200; round++)
+        {
+            NativeMemoryBudget budget = new(64);
+            NativeShared<int> owner = Create(budget, 4, 2, 4);
+            NativeWeak<int>[] observers = new NativeWeak<int>[3];
+            foreach (ref NativeWeak<int> observer in observers.AsSpan())
+            {
+                Assert.True(owner.TryDowngrade(out observer, out _));
+            }
+
+            using Barrier start = new(observers.Length + 1);
+            int wrong = 0;
+            Thread[] readers = Array.ConvertAll(observers, observer => new Thread(() =>
+            {
+                start.SignalAndWait();
+                while (observer.TryProcess<int, int, FirstPlus>(0, out int value))
+                {
+                    if (value != 42) Interlocked.Increment(ref wrong);
+                }
+            }));
+            foreach (Thread reader in readers) reader.Start();
+
+            start.SignalAndWait();
+            Thread.SpinWait(200 * (round % 7));
+            owner.Dispose();
+            foreach (Thread reader in readers) Assert.True(reader.Join(TimeSpan.FromSeconds(10)));
+            Assert.Equal(0, wrong);
+            NativeSharingStatistics returned = observers[0].CaptureSnapshot();
+            Assert.Equal(1, returned.PayloadReturnCount);
+            Assert.Equal(0, returned.ActiveReadCount);
+            Assert.Equal(0, budget.CaptureStatistics().CommittedBytes);
+            foreach (NativeWeak<int> observer in observers) observer.Dispose();
+        }
+    }
+
     private readonly struct FirstPlus : INativeReadOnlySpanProcessor<int, int, int>
     {
         public static int Invoke(scoped ReadOnlySpan<int> values, scoped in int state) => values[0] + state;

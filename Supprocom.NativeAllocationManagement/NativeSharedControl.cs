@@ -351,6 +351,57 @@ internal sealed class NativeSharedControl<T> where T : unmanaged
         }
     }
 
+    // A read through a weak observer, without acquiring a strong binding: the
+    // reader counts itself like a strong reader, then checks that ownership
+    // has not expired and that its observer is current, so release either
+    // sees the reader or the reader sees expiry. The payload reference is read
+    // without the gate; a reference recycled after release is never used,
+    // because the control is expired by then and a release cannot restart.
+    // Returns null when the payload has expired.
+    internal NativeTransferControl<T>? TryEnterWeakRead(int slot, long version)
+    {
+        WeakReference<NativeTransferControl<T>>? reference = Volatile.Read(ref _payload);
+        if (reference is null || !reference.TryGetTarget(out NativeTransferControl<T>? payload))
+        {
+            return null;
+        }
+
+        ref int readers = ref ReaderCount(slot);
+        Interlocked.Increment(ref readers);
+        if (!Volatile.Read(ref _expired) && Volatile.Read(ref _weak).IsActiveConcurrent(slot, version))
+        {
+            return payload;
+        }
+
+        bool expired = Volatile.Read(ref _expired);
+        LeaveRead(payload, ref readers, version);
+        if (!expired)
+        {
+            throw new InvalidOperationException("This weak observer is stale or released.");
+        }
+
+        return null;
+    }
+
+    internal void ExitWeakRead(NativeTransferControl<T> payload, int slot, long version) =>
+        LeaveRead(payload, ref ReaderCount(slot), version);
+
+    // Only a failed callback comes here; see NativeShared<T>.Read.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    internal void ExitFailedRead(NativeTransferControl<T> payload, int slot, long version, bool weak, Exception callbackFailure)
+    {
+        try
+        {
+            if (weak) ExitWeakRead(payload, slot, version);
+            else ExitRead(payload, slot, version);
+        }
+        catch (Exception cleanupFailure)
+        {
+            throw new AggregateException("The shared callback and payload return both failed.", callbackFailure, cleanupFailure);
+        }
+        finally { GC.KeepAlive(payload); }
+    }
+
     internal void ExitRead(NativeTransferControl<T> payload, int slot, long version)
     {
         ref int readers = ref ReaderCount(slot);

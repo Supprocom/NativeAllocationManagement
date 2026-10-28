@@ -105,7 +105,7 @@ public readonly struct NativeShared<T> : IDisposable where T : unmanaged
         NativeSharedControl<T> control = Control;
         control.EnterRead(payload, _slot, _version);
         try { action(payload.GetView(_offset, _length)); }
-        catch (Exception failure) { EndFailedRead(control, payload, _slot, _version, failure); throw; }
+        catch (Exception failure) { control.ExitFailedRead(payload, _slot, _version, weak: false, failure); throw; }
         control.ExitRead(payload, _slot, _version);
         GC.KeepAlive(payload);
     }
@@ -119,7 +119,7 @@ public readonly struct NativeShared<T> : IDisposable where T : unmanaged
         control.EnterRead(payload, _slot, _version);
         TResult result;
         try { result = action(payload.GetView(_offset, _length)); }
-        catch (Exception failure) { EndFailedRead(control, payload, _slot, _version, failure); throw; }
+        catch (Exception failure) { control.ExitFailedRead(payload, _slot, _version, weak: false, failure); throw; }
         control.ExitRead(payload, _slot, _version);
         GC.KeepAlive(payload);
         return result;
@@ -138,23 +138,10 @@ public readonly struct NativeShared<T> : IDisposable where T : unmanaged
         control.EnterRead(payload, _slot, _version);
         TResult result;
         try { result = TProcessor.Invoke(payload.GetView(_offset, _length).AsSpan(), in state); }
-        catch (Exception failure) { EndFailedRead(control, payload, _slot, _version, failure); throw; }
+        catch (Exception failure) { control.ExitFailedRead(payload, _slot, _version, weak: false, failure); throw; }
         control.ExitRead(payload, _slot, _version);
         GC.KeepAlive(payload);
         return result;
-    }
-
-    // The callbacks leave their read inline after a normal return; only a
-    // failed callback takes this path, so no finally runs on every read.
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    private static void EndFailedRead(NativeSharedControl<T> control, NativeTransferControl<T> payload, int slot, long version, Exception callbackFailure)
-    {
-        try { control.ExitRead(payload, slot, version); }
-        catch (Exception cleanupFailure)
-        {
-            throw new AggregateException("The shared callback and payload return both failed.", callbackFailure, cleanupFailure);
-        }
-        finally { GC.KeepAlive(payload); }
     }
 
     /// <summary>Explicitly copies this slice into independent unique ownership after full overlap admission.</summary>
@@ -235,6 +222,60 @@ public readonly struct NativeWeak<T> : IDisposable where T : unmanaged
         Control.TryUpgrade(_slot, _version, _offset, _length, out shared, out reason);
     /// <summary>Releases this prepared observer once; aliases cannot release a reused observer slot.</summary>
     public void Dispose() => Control.ReleaseWeak(_slot, _version);
+
+    /// <summary>Runs one compile-time read-only processor over the payload while strong ownership lasts, without acquiring a strong binding.</summary>
+    /// <param name="state">Explicit state passed to the processor.</param>
+    /// <param name="result">The processor result; default when the payload has expired.</param>
+    /// <returns>False when strong ownership has expired; the processor did not run.</returns>
+    /// <remarks>
+    /// Equivalent to <see cref="TryUpgrade"/>, a read and disposing the strong binding, without taking the
+    /// sharing control's gate or a strong slot: the read holds the payload like a strong reader until the
+    /// processor returns. It does not count as an upgrade in <see cref="CaptureSnapshot"/>.
+    /// </remarks>
+    /// <typeparam name="TState">The caller state type.</typeparam>
+    /// <typeparam name="TResult">The result type, which cannot contain the borrowed span.</typeparam>
+    /// <typeparam name="TProcessor">The processor; its static member is called without a delegate.</typeparam>
+    public bool TryProcess<TState, TResult, TProcessor>(scoped in TState state, [System.Diagnostics.CodeAnalysis.MaybeNullWhen(false)] out TResult result)
+        where TState : allows ref struct
+        where TProcessor : struct, INativeReadOnlySpanProcessor<T, TState, TResult>
+    {
+        NativeSharedControl<T> control = Control;
+        NativeTransferControl<T>? payload = control.TryEnterWeakRead(_slot, _version);
+        if (payload is null)
+        {
+            result = default;
+            return false;
+        }
+
+        try { result = TProcessor.Invoke(payload.GetView(_offset, _length).AsSpan(), in state); }
+        catch (Exception failure) { control.ExitFailedRead(payload, _slot, _version, weak: true, failure); throw; }
+        control.ExitWeakRead(payload, _slot, _version);
+        GC.KeepAlive(payload);
+        return true;
+    }
+
+    /// <summary>Computes a result in one read-only callback over the payload while strong ownership lasts, without acquiring a strong binding.</summary>
+    /// <param name="action">The bounded callback.</param>
+    /// <param name="result">The callback result; default when the payload has expired.</param>
+    /// <returns>False when strong ownership has expired; the callback did not run.</returns>
+    /// <remarks>See <see cref="TryProcess{TState, TResult, TProcessor}"/>.</remarks>
+    public bool TryRead<TResult>(NativeReadOnlyLeaseFunc<T, TResult> action, [System.Diagnostics.CodeAnalysis.MaybeNullWhen(false)] out TResult result)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        NativeSharedControl<T> control = Control;
+        NativeTransferControl<T>? payload = control.TryEnterWeakRead(_slot, _version);
+        if (payload is null)
+        {
+            result = default;
+            return false;
+        }
+
+        try { result = action(payload.GetView(_offset, _length)); }
+        catch (Exception failure) { control.ExitFailedRead(payload, _slot, _version, weak: true, failure); throw; }
+        control.ExitWeakRead(payload, _slot, _version);
+        GC.KeepAlive(payload);
+        return true;
+    }
 
     private NativeSharedControl<T> Control => _control
         ?? throw new NativeAllocationUninitializedException(nameof(NativeWeak<T>), "observer operation");

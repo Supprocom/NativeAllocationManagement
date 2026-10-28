@@ -5,3 +5,5 @@ static Supprocom.NativeAllocationManagement.NativeTransferPoolExtensions.RentTra
 Supprocom.NativeAllocationManagement.NativeConcurrentArena.Scratch<T>(int length, T value) -> Supprocom.NativeAllocationManagement.ConcurrentArenaLease<T>
 Supprocom.NativeAllocationManagement.NativeConcurrentArena.ScratchUninitialized<T>(int length) -> Supprocom.NativeAllocationManagement.ConcurrentArenaLease<T>
 Supprocom.NativeAllocationManagement.ConcurrentArenaLease<T>.Process<TState, TResult, TProcessor>(scoped in TState state) -> TResult
+Supprocom.NativeAllocationManagement.NativeWeak<T>.TryProcess<TState, TResult, TProcessor>(scoped in TState state, out TResult result) -> bool
+Supprocom.NativeAllocationManagement.NativeWeak<T>.TryRead<TResult>(Supprocom.NativeAllocationManagement.NativeReadOnlyLeaseFunc<T, TResult>! action, out TResult result) -> bool
