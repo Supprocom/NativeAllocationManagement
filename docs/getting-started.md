@@ -607,6 +607,20 @@ generation contract. Use them only for concurrent access, managed-reference root
 explicit memory-return transitions. Only the pool provides separately returned transfer
 ownership.
 
+Each thread that rents from a `NativeConcurrentPool<T>` of unmanaged values keeps up
+to four of the pool's returned leases for its own next rents, so threads sharing a
+pool do not contend for its lock. Statistics, snapshots, trims, lease release, memory
+return and disposal first take those leases back, so they always see the pool's
+exact state. A thread's kept leases count as retained memory until the next trim; the
+pool grows only when no thread keeps an idle lease that fits. Transferable leases
+returned on another thread go back to the thread that rented them. Scoped leases and
+leases that hold managed references are not kept per thread.
+
+Threads can scratch from one `NativeConcurrentArena` at the same time. Each thread
+other than the one that created the arena takes chunks of the arena's segments and
+allocates unmanaged scratch from them without a lock. Statistics, trims, lease release,
+memory return and disposal first give back the unused end of each chunk.
+
 Construction normally publishes an active generation. Passing
 `doNotLeaseOnDeclaration: true` defers that generation. The configured reservation
 remains private until `LeaseFromMemory()` succeeds.

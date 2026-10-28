@@ -23,12 +23,16 @@ event or outstanding extent.
 
 OutstandingNativeBytes covers known NAM-owned native extents, including tracked
 headers/alignment. It excludes provider-owned mapping capacity and opaque native
-allocator overhead. PeakOutstandingNativeBytes records actual high-water usage,
+allocator overhead. PeakOutstandingNativeBytes records high-water usage,
 including intermediate growth. DetachedNativeBytes and RetiredNativeBytes are
 overlapping subsets, not additional allocations to add to outstanding bytes.
-RetainedNativeBytes is outstanding minus detached. These gauges remain exact;
-completed event and byte histories saturate with HistoryOverflowed rather than
-wrapping or throwing after work has completed.
+RetainedNativeBytes is outstanding minus detached. Each thread keeps its own running
+change to outstanding bytes, so threads that allocate at once do not contend for one
+counter. A capture adds every thread's change, so it is exact whenever no other
+thread is allocating or freeing at that moment. The peak is exact while one thread
+allocates; when several threads allocate at once, it can miss up to 256 KiB per
+other thread. Completed event and byte histories saturate with HistoryOverflowed
+rather than wrapping or throwing after work has completed.
 
 BumpTraversalVisitCount is actual segment search work. ReusedNativeSegmentCount
 counts backing reuse, not physical acquisition. ReclaimedRangeReuseCount/Bytes are
