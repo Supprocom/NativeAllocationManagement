@@ -37,13 +37,16 @@ internal sealed class NativePoolThreadCache
     // entry now belongs to the generation.
     internal int FoldEpoch;
 
-    // Returned records, each still holding its slab.
-    internal readonly NativeAllocation?[] Free = new NativeAllocation?[FreeCapacity];
-    internal int FreeCount;
+    // Every record this cache holds, returned or leased; a record's CacheSlot
+    // is its index here. Rents and returns move only slot numbers.
+    internal NativeAllocation?[] Records = new NativeAllocation?[8];
+    internal int RecordCount;
 
-    // Records rented through this cache and not yet returned.
-    internal NativeAllocation?[] Leased = new NativeAllocation?[4];
-    internal int LeasedCount;
+    // The slots of returned records, each still holding its slab, and the
+    // capacities of those slabs.
+    internal FreeSlotArray FreeSlots;
+    internal FreeSlotArray FreeCapacities;
+    internal int FreeCount;
 
     // Allocation identities reserved for this thread: NextId through LastId.
     internal long NextId = 1;
@@ -113,6 +116,8 @@ internal sealed class NativePoolThreadCache
         }
     }
 
+    internal bool HasRecordRoom => RecordCount < Records.Length;
+
     // Takes the smallest free record whose slab holds the length, like the
     // generation's own smallest-available-slab choice.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -123,7 +128,7 @@ internal sealed class NativePoolThreadCache
         int bestCapacity = int.MaxValue;
         for (int index = count - 1; index >= 0; index--)
         {
-            int capacity = Free[index]!.Slab!.Capacity;
+            int capacity = FreeCapacities[index];
             if (capacity >= length && capacity < bestCapacity)
             {
                 best = index;
@@ -136,33 +141,77 @@ internal sealed class NativePoolThreadCache
             return null;
         }
 
-        NativeAllocation allocation = Free[best]!;
+        int slot = FreeSlots[best];
         if (best != --count)
         {
-            Free[best] = Free[count];
+            FreeSlots[best] = FreeSlots[count];
+            FreeCapacities[best] = FreeCapacities[count];
         }
 
-        Free[count] = null;
         FreeCount = count;
+        return Records[slot];
+    }
+
+    // Marks a record this cache holds as returned. The caller checked for room.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void AddFree(NativeAllocation allocation)
+    {
+        int count = FreeCount;
+        FreeSlots[count] = allocation.CacheSlot;
+        FreeCapacities[count] = allocation.Capacity;
+        FreeCount = count + 1;
+    }
+
+    // Removes the free record that has waited longest from the cache.
+    internal NativeAllocation TakeOldestFree()
+    {
+        int slot = FreeSlots[0];
+        int last = --FreeCount;
+        FreeSlots[0] = FreeSlots[last];
+        FreeCapacities[0] = FreeCapacities[last];
+        NativeAllocation allocation = Records[slot]!;
+        RemoveRecord(allocation);
         return allocation;
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal void AddLeased(NativeAllocation allocation)
+    // Grows the record set before a record joins it, outside any busy window.
+    internal void ReserveRecord()
     {
-        int count = LeasedCount;
-        allocation.CacheSlot = count;
-        Leased[count] = allocation;
-        LeasedCount = count + 1;
+        if (RecordCount == Records.Length)
+        {
+            Array.Resize(ref Records, Records.Length * 2);
+        }
     }
 
-    // Grows the leased set before a rent changes any state.
-    internal void ReserveLeased()
+    // The caller made room.
+    internal void AddRecord(NativeAllocation allocation)
     {
-        if (LeasedCount == Leased.Length)
+        int count = RecordCount;
+        allocation.CacheSlot = count;
+        Records[count] = allocation;
+        RecordCount = count + 1;
+    }
+
+    internal void RemoveRecord(NativeAllocation allocation)
+    {
+        int slot = allocation.CacheSlot;
+        int last = RecordCount - 1;
+        if (slot != last)
         {
-            Array.Resize(ref Leased, Leased.Length * 2);
+            NativeAllocation moved = Records[last]!;
+            Records[slot] = moved;
+            moved.CacheSlot = slot;
+            for (int index = 0; index < FreeCount; index++)
+            {
+                if (FreeSlots[index] == last)
+                {
+                    FreeSlots[index] = slot;
+                }
+            }
         }
+
+        Records[last] = null;
+        RecordCount = last;
     }
 
     // Under TransferGate.
@@ -192,22 +241,12 @@ internal sealed class NativePoolThreadCache
         Transfers[last] = null;
         TransferCount = last;
     }
+}
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal void RemoveLeased(NativeAllocation allocation)
-    {
-        int slot = allocation.CacheSlot;
-        int last = LeasedCount - 1;
-        if (slot != last)
-        {
-            NativeAllocation moved = Leased[last]!;
-            Leased[slot] = moved;
-            moved.CacheSlot = slot;
-        }
-
-        Leased[last] = null;
-        LeasedCount = last;
-    }
+[InlineArray(NativePoolThreadCache.FreeCapacity)]
+internal struct FreeSlotArray
+{
+    private int _element;
 }
 
 // The caches of the current thread, most recently used first.

@@ -405,4 +405,122 @@ public sealed class NativePoolThreadCacheTests
             return count;
         }
     }
+
+    [Fact]
+    public void AProcessorRunningDuringRevocationExitsThroughTheGeneration()
+    {
+        using NativeConcurrentPool<int> pool = new();
+        BlockingProcessor.Entered.Reset();
+        BlockingProcessor.Release.Reset();
+        int result = 0;
+        Thread owner = new(() =>
+        {
+            using ConcurrentPooled<int> lease = pool.Rent(4, static writer => writer.Fill(5));
+            result = lease.Process<int, int, BlockingProcessor>(3, 1);
+        });
+        owner.Start();
+        Assert.True(BlockingProcessor.Entered.Wait(Timeout));
+
+        Assert.Equal(1, pool.CurrentGenerationActiveOperationsForTest);
+        Assert.Throws<NativeAllocationInUseException>(pool.ReleaseLeasesToNativeMemory);
+        BlockingProcessor.Release.Set();
+        Assert.True(owner.Join(Timeout));
+
+        Assert.Equal(6, result);
+        Assert.Equal(0, pool.CurrentGenerationActiveOperationsForTest);
+        Assert.Equal(0, pool.GetStatistics().InitializedPayloadBytes);
+        pool.ReleaseLeasesToNativeMemory();
+    }
+
+    [Fact]
+    public void CachedLeaseOperationsCheckPrefixesAndStaleHandles()
+    {
+        using NativeConcurrentPool<int> pool = new();
+        ConcurrentPooled<int> lease = pool.Rent(4, static writer => writer.Fill(2));
+        Assert.Equal(4, lease.Length);
+        Assert.True(lease.Capacity >= 4);
+        Assert.Equal(4, lease.Process<int, int, SumProcessor>(2, 0));
+        bool negative = false;
+        bool tooLong = false;
+        try
+        {
+            _ = lease.Process<int, int, SumProcessor>(-1, 0);
+        }
+        catch (ArgumentOutOfRangeException exception) when (string.Equals(exception.ParamName, "length", StringComparison.Ordinal))
+        {
+            negative = true;
+        }
+
+        try
+        {
+            _ = lease.Process<int, int, SumProcessor>(5, 0);
+        }
+        catch (ArgumentOutOfRangeException exception) when (string.Equals(exception.ParamName, "length", StringComparison.Ordinal))
+        {
+            tooLong = true;
+        }
+
+        Assert.True(negative);
+        Assert.True(tooLong);
+        Assert.Equal(0, pool.CurrentGenerationActiveOperationsForTest);
+        lease.Dispose();
+        bool stale = false;
+        try
+        {
+            _ = lease.Process<int, int, SumProcessor>(2, 0);
+        }
+        catch (NativeAllocationException)
+        {
+            stale = true;
+        }
+
+        Assert.True(stale);
+        Assert.Equal(0, pool.GetStatistics().InitializedPayloadBytes);
+    }
+
+    [Fact]
+    public void AnOperationOutlivesARevocationAndRearmFromItsOwnCallback()
+    {
+        using NativeConcurrentPool<int> pool = new();
+        ConcurrentPooled<int> lease = pool.Rent(2, static writer => writer.Fill(1));
+        int nested = 0;
+        lease.Access(_ =>
+        {
+            Assert.Equal(1, pool.CurrentGenerationActiveOperationsForTest);
+            using ConcurrentPooled<int> again = pool.Rent(2, static writer => writer.Fill(3));
+            nested = again.Read(static view => view[1]);
+        });
+        Assert.Equal(3, nested);
+        Assert.Equal(0, pool.CurrentGenerationActiveOperationsForTest);
+        Assert.Equal(1, lease.Read(static view => view[1]));
+        lease.Dispose();
+        Assert.Equal(0, pool.GetStatistics().InitializedPayloadBytes);
+    }
+
+    private struct SumProcessor : INativeSpanProcessor<int, int, int>
+    {
+        public static int Invoke(Span<int> span, in int add)
+        {
+            int sum = add;
+            foreach (ref int value in span)
+            {
+                sum += value;
+            }
+
+            return sum;
+        }
+    }
+
+    private struct BlockingProcessor : INativeSpanProcessor<int, int, int>
+    {
+        internal static readonly ManualResetEventSlim Entered = new(false);
+        internal static readonly ManualResetEventSlim Release = new(false);
+
+        public static int Invoke(Span<int> span, in int add)
+        {
+            Entered.Set();
+            Assert.True(Release.Wait(Timeout));
+            return span[^1] + add;
+        }
+    }
 }

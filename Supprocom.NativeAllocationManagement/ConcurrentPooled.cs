@@ -1,3 +1,6 @@
+using System.Diagnostics.CodeAnalysis;
+using System.Runtime.CompilerServices;
+
 namespace Supprocom.NativeAllocationManagement;
 
 /// <summary>A synchronized generation-bound typed lease.</summary>
@@ -38,14 +41,54 @@ public readonly ref struct ConcurrentPooled<T>
         EnterOperation(operation);
 
     /// <summary>Gets the logical element count.</summary>
-    public int Length => GetMetadata(nameof(Length)).Length;
+    public int Length
+    {
+        get
+        {
+            if (TryEnterCached(out NativePoolThreadCache? cache, out int epoch))
+            {
+                int length = _allocationState!.Length;
+                ExitCached(cache, epoch);
+                return length;
+            }
+
+            return GetMetadata(nameof(Length)).Length;
+        }
+    }
 
     /// <summary>Gets the physical element capacity.</summary>
-    public int Capacity => GetMetadata(nameof(Capacity)).Capacity;
+    public int Capacity
+    {
+        get
+        {
+            if (TryEnterCached(out NativePoolThreadCache? cache, out int epoch))
+            {
+                int capacity = _allocationState!.Capacity;
+                ExitCached(cache, epoch);
+                return capacity;
+            }
+
+            return GetMetadata(nameof(Capacity)).Capacity;
+        }
+    }
 
     /// <summary>Clears the logical range.</summary>
     public void Clear()
     {
+        if (TryEnterCached(out NativePoolThreadCache? cache, out int epoch))
+        {
+            try
+            {
+                new NativeLeaseView<T>(_allocationState!).Clear();
+            }
+            finally
+            {
+                ExitCached(cache, epoch);
+            }
+
+            return;
+        }
+
         NativeOperationToken token = EnterOperation(nameof(Clear));
         try
         {
@@ -60,6 +103,20 @@ public readonly ref struct ConcurrentPooled<T>
     /// <summary>Copies one exact bounded source.</summary>
     public void CopyFrom(scoped ReadOnlySpan<T> source)
     {
+        if (TryEnterCached(out NativePoolThreadCache? cache, out int epoch))
+        {
+            try
+            {
+                new NativeLeaseView<T>(_allocationState!).CopyFrom(source);
+            }
+            finally
+            {
+                ExitCached(cache, epoch);
+            }
+
+            return;
+        }
+
         NativeOperationToken token = EnterOperation(nameof(CopyFrom));
         try
         {
@@ -74,6 +131,20 @@ public readonly ref struct ConcurrentPooled<T>
     /// <summary>Copies the logical range into one bounded destination.</summary>
     public void CopyTo(scoped Span<T> destination)
     {
+        if (TryEnterCached(out NativePoolThreadCache? cache, out int epoch))
+        {
+            try
+            {
+                new NativeLeaseView<T>(_allocationState!).CopyTo(destination);
+            }
+            finally
+            {
+                ExitCached(cache, epoch);
+            }
+
+            return;
+        }
+
         NativeOperationToken token = EnterOperation(nameof(CopyTo));
         try
         {
@@ -89,6 +160,20 @@ public readonly ref struct ConcurrentPooled<T>
     public void Access(NativeLeaseAction<T> action)
     {
         ArgumentNullException.ThrowIfNull(action);
+        if (TryEnterCached(out NativePoolThreadCache? cache, out int epoch))
+        {
+            try
+            {
+                action(new NativeLeaseView<T>(_allocationState!));
+            }
+            finally
+            {
+                ExitCached(cache, epoch);
+            }
+
+            return;
+        }
+
         NativeOperationToken token = EnterOperation(nameof(Access));
         try
         {
@@ -104,6 +189,18 @@ public readonly ref struct ConcurrentPooled<T>
     public TResult Read<TResult>(NativeLeaseFunc<T, TResult> action)
     {
         ArgumentNullException.ThrowIfNull(action);
+        if (TryEnterCached(out NativePoolThreadCache? cache, out int epoch))
+        {
+            try
+            {
+                return action(new NativeLeaseView<T>(_allocationState!));
+            }
+            finally
+            {
+                ExitCached(cache, epoch);
+            }
+        }
+
         NativeOperationToken token = EnterOperation(nameof(Read));
         try
         {
@@ -123,6 +220,19 @@ public readonly ref struct ConcurrentPooled<T>
         where TState : allows ref struct
     {
         ArgumentNullException.ThrowIfNull(callback);
+        if (TryEnterCached(out NativePoolThreadCache? cache, out int epoch))
+        {
+            try
+            {
+                CheckPrefix(length);
+                return callback(new NativeLeaseView<T>(_allocationState!, length), state);
+            }
+            finally
+            {
+                ExitCached(cache, epoch);
+            }
+        }
+
         NativeOperationToken token = EnterOperation(nameof(Process));
         try
         {
@@ -147,6 +257,19 @@ public readonly ref struct ConcurrentPooled<T>
         where TState : allows ref struct
         where TProcessor : struct, INativeSpanProcessor<T, TState, TResult>
     {
+        if (TryEnterCached(out NativePoolThreadCache? cache, out int epoch))
+        {
+            try
+            {
+                CheckPrefix(length);
+                return TProcessor.Invoke(NativeOwnerKernel.CachedSpan<T>(_allocationState!, length), in state);
+            }
+            finally
+            {
+                ExitCached(cache, epoch);
+            }
+        }
+
         NativeOperationToken token = EnterOperation(nameof(Process));
         try
         {
@@ -159,12 +282,62 @@ public readonly ref struct ConcurrentPooled<T>
     }
 
     /// <summary>Returns this synchronized lease exactly once.</summary>
-    public void Dispose() =>
+    public void Dispose()
+    {
+        if (_allocationState?.CacheOwner is NativePoolThreadCache cache
+            && NativeOwnerKernel.TryReturnCachedLease(cache, _generationState!, _allocationState, _generation, _allocationId))
+        {
+            return;
+        }
+
         GetKernel(nameof(Dispose)).ReturnLease(
             GetGenerationState(nameof(Dispose)),
             GetAllocationState(nameof(Dispose)),
             _generation,
             _allocationId);
+    }
+
+    // This thread's cached lease enters and exits its operations without an
+    // operation token; any other lease takes the kernel's admission path.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private bool TryEnterCached([NotNullWhen(true)] out NativePoolThreadCache? cache, out int epoch)
+    {
+        NativeAllocation? allocation = _allocationState;
+        if (allocation?.CacheOwner is NativePoolThreadCache owner
+            && NativeOwnerKernel.TryEnterCachedLeaseOperation(owner, _generationState!, allocation, _generation, _allocationId, out epoch))
+        {
+            cache = owner;
+            return true;
+        }
+
+        cache = null;
+        epoch = 0;
+        return false;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void ExitCached(NativePoolThreadCache cache, int epoch) =>
+        _kernel!.ExitCachedLeaseOperation(_generationState!, _allocationState!, cache, epoch);
+
+    // The same checks as an operation token's prefix view.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void CheckPrefix(int length)
+    {
+        if ((uint)length > (uint)_allocationState!.Length)
+        {
+            ThrowPrefixLength(length);
+        }
+    }
+
+    [DoesNotReturn]
+    private static void ThrowPrefixLength(int length)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(length);
+        throw new ArgumentOutOfRangeException(
+            nameof(length),
+            length,
+            "The prefix length exceeds the lease length.");
+    }
 
     private NativeOwnerKernel GetKernel(string operation) =>
         _kernel

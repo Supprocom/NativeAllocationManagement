@@ -498,6 +498,10 @@ internal static class NativeMemoryTestHooks
     private static Action<string, NativeGenerationOwner>? _operationEnteredWithGenerationOwner;
     private static int _operationHooksEnabled;
 
+    // Set when a test arms any fault or hook and cleared only by Reset, so the
+    // reuse caches check one flag while no test injects anything.
+    private static int _faultsArmed;
+
     internal static void Reset()
     {
         NativeMemoryAccounting.ResetForTests();
@@ -517,6 +521,7 @@ internal static class NativeMemoryTestHooks
         Volatile.Write(ref _operationEnteredWithAllocation, null);
         Volatile.Write(ref _operationEnteredWithGenerationOwner, null);
         Volatile.Write(ref _operationHooksEnabled, 0);
+        Volatile.Write(ref _faultsArmed, 0);
     }
 
     internal static long CurrentMetricsEpoch => NativeMemoryAccounting.CurrentMetricsEpoch;
@@ -538,7 +543,11 @@ internal static class NativeMemoryTestHooks
         }
     }
 
-    internal static void FailNextAllocation() => Interlocked.Increment(ref _forcedFailures);
+    internal static void FailNextAllocation()
+    {
+        Volatile.Write(ref _faultsArmed, 1);
+        Interlocked.Increment(ref _forcedFailures);
+    }
 
     internal static bool ConsumeForcedFailure()
     {
@@ -579,6 +588,7 @@ internal static class NativeMemoryTestHooks
     internal static void FailAtCommitBoundary(int boundary)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(boundary);
+        Volatile.Write(ref _faultsArmed, 1);
         Volatile.Write(ref _forcedCommitBoundary, boundary);
     }
 
@@ -604,6 +614,7 @@ internal static class NativeMemoryTestHooks
         int boundary)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(boundary);
+        Volatile.Write(ref _faultsArmed, 1);
         Volatile.Write(
             ref _forcedManagedPublicationBoundary,
             boundary);
@@ -699,6 +710,10 @@ internal static class NativeMemoryTestHooks
     // Storage reuse caches skip physical allocation and return; they stand down
     // while a test injects a failure into either path.
     internal static bool FaultInjectionPending =>
+        Volatile.Read(ref _faultsArmed) != 0
+        && AnyFaultPending;
+
+    private static bool AnyFaultPending =>
         Volatile.Read(ref _forcedFailures) != 0
         || Volatile.Read(ref _forcedManagedPublicationBoundary) != 0
         || HasForcedCommitBoundary
@@ -782,6 +797,11 @@ internal static class NativeMemoryTestHooks
             || Volatile.Read(ref _beforeOperationEntryWithKernel) is not null
             || Volatile.Read(ref _operationEnteredWithAllocation) is not null
             || Volatile.Read(ref _operationEnteredWithGenerationOwner) is not null;
+        if (enabled)
+        {
+            Volatile.Write(ref _faultsArmed, 1);
+        }
+
         Volatile.Write(ref _operationHooksEnabled, enabled ? 1 : 0);
     }
 
@@ -1509,7 +1529,26 @@ internal sealed class NativeAllocation
 
     internal void ExitOwnerOperation() => _operationAdmission--;
 
-    internal void SetSlabForCache(NativeSlab slab) => Slab = slab;
+    // A thread-cached lease's storage address, set when its cache rents it.
+    // The lease's admitted operations keep the slab alive while they use it.
+    internal nint CachedAddress;
+
+    internal bool HasNoOwnerOperations => _operationAdmission == 0;
+
+    // Re-rents a record its thread cache already holds: the slab, offset,
+    // capacity, reference roots and scope flag are those of its last cached rent.
+    internal void ResetCached(long id, int length, nuint storageBytes, long scopeEpoch, nint address)
+    {
+        Volatile.Write(ref _id, 0);
+        Length = length;
+        StorageBytes = storageBytes;
+        CachedAddress = address;
+        Volatile.Write(ref _scopeEpoch, scopeEpoch);
+        Lifecycle = NativeAllocationLifecycle.Initializing;
+        NativeOperationAdmission.Reset(ref _operationAdmission);
+        InitializedLength = 0;
+        Volatile.Write(ref _id, id);
+    }
 
     internal void Reset(
         long id,
@@ -4177,6 +4216,34 @@ internal sealed partial class NativeOwnerKernel
         bool transferable = false)
     {
         ArgumentNullException.ThrowIfNull(initializer);
+        if (!scoped
+            && length > 0
+            && ThreadCacheEligible
+            && !NativeMemoryTestHooks.FaultInjectionPending
+            && NativePoolThreadCaches.Find(Id) is NativePoolThreadCache cache
+            && cache.Enter())
+        {
+            if (cache.NextId <= cache.LastId
+                && cache.TakeFree(length) is NativeAllocation allocation)
+            {
+                BeginCachedLease(cache, allocation, length);
+                cache.Exit();
+                return InitializeCached(cache, allocation, initializer, transferable);
+            }
+
+            cache.Exit();
+        }
+
+        return RentInitializedSlow(length, scoped, initializer, transferable);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private NativePoolLease RentInitializedSlow<T>(
+        int length,
+        bool scoped,
+        NativeLeaseInitializer<T> initializer,
+        bool transferable)
+    {
         if (!scoped && length > 0 && ThreadCacheEligible)
         {
             if (!NativeMemoryTestHooks.FaultInjectionPending)

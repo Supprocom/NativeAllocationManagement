@@ -23,6 +23,18 @@ public readonly ref struct NativeLeaseWriter<T>
         _length = allocation.Length;
     }
 
+    // A thread-cached lease of values without references: its span is known.
+    internal NativeLeaseWriter(
+        NativeAllocation allocation,
+        Span<T> directValues,
+        ref int initializedLength)
+    {
+        _allocation = allocation;
+        _initializedLength = ref initializedLength;
+        _directValues = directValues;
+        _length = directValues.Length;
+    }
+
     internal unsafe NativeLeaseWriter(
         IntPtr pointer,
         int length,
