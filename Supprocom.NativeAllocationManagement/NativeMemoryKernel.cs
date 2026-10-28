@@ -2304,7 +2304,7 @@ internal sealed class NativeArenaTransferBatchState
     }
 }
 
-internal sealed class NativeGenerationOwner
+internal sealed class NativeGenerationOwner : INativeFinalizationTarget
 {
     private readonly Lock _gate = new();
     private List<NativeSegment>? _segments = [];
@@ -2321,7 +2321,12 @@ internal sealed class NativeGenerationOwner
         _metricsEpoch = NativeMemoryAccounting.CurrentMetricsEpoch;
         _traceBudget = budget is { TraceEnabled: true } ? budget : null;
         _ownerId = ownerId;
+        // A generation per release: its emergency finalizer is a guard from
+        // the thread, not a finalizable allocation; see NativeFinalizationGuard.
+        _guard = NativeFinalizationGuard.Rent(NativeThreadState.Current, this);
     }
+
+    private NativeFinalizationGuard? _guard;
 
     internal long Generation { get; }
 
@@ -2420,8 +2425,13 @@ internal sealed class NativeGenerationOwner
             NativeMemoryTraceKind.GenerationDetached, _ownerId, Generation, detachedBytes);
     }
 
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA1816", Justification = "Explicit generation release disarms the emergency finalizer.")]
-    internal void ReleaseToNative()
+    internal void ReleaseToNative() => Release(fromFinalizer: false);
+
+    // A guard that is being finalized is no longer registered: it is never
+    // handed back for another owner.
+    void INativeFinalizationTarget.FinalizeNativeStorage() => Release(fromFinalizer: true);
+
+    private void Release(bool fromFinalizer)
     {
         nuint releasedBytes = 0;
         NativeMemoryBudget? traceBudget;
@@ -2454,19 +2464,11 @@ internal sealed class NativeGenerationOwner
 
         traceBudget?.RecordGenerationTransition(
             NativeMemoryTraceKind.GenerationReleased, _ownerId, Generation, releasedBytes);
-        GC.SuppressFinalize(this);
-    }
-
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "MA0055", Justification = "Emergency native-memory cleanup supplements mandatory deterministic disposal.")]
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "An emergency finalizer must never let cleanup exceptions terminate the process.")]
-    ~NativeGenerationOwner()
-    {
-        try
+        NativeFinalizationGuard? guard = _guard;
+        _guard = null;
+        if (!fromFinalizer)
         {
-            ReleaseToNative();
-        }
-        catch
-        {
+            guard?.Release(NativeThreadState.Current);
         }
     }
 }
