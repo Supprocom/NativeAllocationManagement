@@ -1537,6 +1537,7 @@ internal sealed class NativeAllocation
 
     // Re-rents a record its thread cache already holds: the slab, offset,
     // capacity, reference roots and scope flag are those of its last cached rent.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void ResetCached(long id, int length, nuint storageBytes, long scopeEpoch, nint address)
     {
         Volatile.Write(ref _id, 0);

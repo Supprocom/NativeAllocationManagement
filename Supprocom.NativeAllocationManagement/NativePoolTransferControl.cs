@@ -11,12 +11,7 @@ internal sealed class NativePoolTransferControl<T> : NativeTransferControl<T>
     where T : unmanaged
 {
     private const int ParkCapacity = 4;
-
-    [ThreadStatic]
-    private static NativePoolTransferControl<T>?[]? t_parked;
-
-    [ThreadStatic]
-    private static int t_parkedCount;
+    private static readonly int s_parkedSlot = NativeThreadState.AllocateTypedSlot();
 
     private long _lifetimeFirstVersion = 1;
 
@@ -34,13 +29,10 @@ internal sealed class NativePoolTransferControl<T> : NativeTransferControl<T>
         NativePoolLease lease,
         string operation)
     {
-        int count = t_parkedCount;
-        if (count != 0)
+        ParkedControls? parked = NativeThreadState.Current.GetTyped<ParkedControls>(s_parkedSlot);
+        if (parked is { Count: > 0 })
         {
-            NativePoolTransferControl<T>?[] parked = t_parked!;
-            NativePoolTransferControl<T> reused = parked[--count]!;
-            parked[count] = null;
-            t_parkedCount = count;
+            NativePoolTransferControl<T> reused = parked.Pop();
             long first = reused.CurrentAuthorityVersion + 1;
             Volatile.Write(ref reused._lifetimeFirstVersion, first);
             reused.BeginKernelLifetime(kernel, lease.AllocationState, lease.Generation, lease.AllocationId, first);
@@ -73,12 +65,11 @@ internal sealed class NativePoolTransferControl<T> : NativeTransferControl<T>
 
         ReturnStorage("NativeTransfer.Dispose");
         PublishControlState(Disposed);
-        NativePoolTransferControl<T>?[] parked = t_parked ??= new NativePoolTransferControl<T>?[ParkCapacity];
-        int count = t_parkedCount;
-        if (count < ParkCapacity)
+        NativeThreadState thread = NativeThreadState.Current;
+        ParkedControls parked = thread.GetTyped<ParkedControls>(s_parkedSlot) ?? CreateParkedControls(thread);
+        if (parked.Count < ParkCapacity)
         {
-            parked[count] = this;
-            t_parkedCount = count + 1;
+            parked.Push(this);
         }
         else
         {
@@ -86,6 +77,30 @@ internal sealed class NativePoolTransferControl<T> : NativeTransferControl<T>
         }
 
         return true;
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static ParkedControls CreateParkedControls(NativeThreadState thread)
+    {
+        ParkedControls parked = new();
+        thread.SetTyped(s_parkedSlot, parked);
+        return parked;
+    }
+
+    private sealed class ParkedControls
+    {
+        private readonly NativePoolTransferControl<T>?[] _items = new NativePoolTransferControl<T>?[ParkCapacity];
+
+        internal int Count;
+
+        internal void Push(NativePoolTransferControl<T> control) => _items[Count++] = control;
+
+        internal NativePoolTransferControl<T> Pop()
+        {
+            NativePoolTransferControl<T> control = _items[--Count]!;
+            _items[Count] = null;
+            return control;
+        }
     }
 
     internal override NativeTransferStatistics CaptureSnapshot(long bindingVersion)

@@ -140,6 +140,22 @@ public sealed class NativeConcurrentPool<T> : IDisposable
         return new ConcurrentPooled<T>(_kernel, lease);
     }
 
+    /// <summary>Fills and publishes one synchronized lease without an initializer callback.</summary>
+    /// <param name="length">The complete initialized element count.</param>
+    /// <param name="value">The value written to every element before publication.</param>
+    public ConcurrentPooled<T> Rent(int length, T value) =>
+        new(_kernel, _kernel.RentFilled(length, value, fill: true));
+
+    /// <summary>Rents one synchronized lease without writing its elements.</summary>
+    /// <param name="length">The element count.</param>
+    /// <remarks>
+    /// Elements without references are unspecified: they may hold values an earlier lease in this process wrote.
+    /// Write every element before reading it, or use <see cref="Rent(int, T)"/>. Elements that are or contain
+    /// references start as their default value.
+    /// </remarks>
+    public ConcurrentPooled<T> RentUninitialized(int length) =>
+        new(_kernel, _kernel.RentFilled(length, default(T)!, fill: System.Runtime.CompilerServices.RuntimeHelpers.IsReferenceOrContainsReferences<T>()));
+
     /// <summary>Initializes one synchronized scoped lease.</summary>
     public ConcurrentPooled<T> LeaseScoped(
         int length,

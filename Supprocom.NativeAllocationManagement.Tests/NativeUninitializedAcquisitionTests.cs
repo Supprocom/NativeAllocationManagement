@@ -78,6 +78,8 @@ public sealed partial class NativeUninitializedAcquisitionTests
     [InlineData("using NativePool<int> pool = new(4); Pooled<int> lease = RENT(4); lease.AsSpan()[0] = 1;", "NAM1003")]
     [InlineData("using NativePool<int> pool = new(4); Span<int> s = RENT(4).AsSpan();", "NAM1013")]
     [InlineData("NativePool<int> pool = new(4); pool.Dispose(); using Pooled<int> lease = RENT(4);", "NAM1009")]
+    [InlineData("using NativeConcurrentPool<int> pool = new(4); using ConcurrentPooled<int> lease = RENT(4); lease.Clear();", "")]
+    [InlineData("using NativeConcurrentPool<int> pool = new(4); ConcurrentPooled<int> lease = RENT(4); lease.Clear();", "NAM1003")]
     public async Task UninitializedAcquisitionHasTheFilledFormsDiagnostics(string body, string expected)
     {
         ArgumentNullException.ThrowIfNull(body);

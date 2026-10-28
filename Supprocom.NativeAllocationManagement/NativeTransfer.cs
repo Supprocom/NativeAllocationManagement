@@ -24,6 +24,25 @@ public static class NativeTransferPoolExtensions
             lease,
             "NativeConcurrentPool.RentTransferable");
     }
+
+    /// <summary>Rents a range filled with one value for destructive ownership transfer, without an initializer callback.</summary>
+    /// <param name="pool">The synchronized pool.</param>
+    /// <param name="length">The complete initialized element count.</param>
+    /// <param name="value">The value written to every element before publication.</param>
+    public static NativeTransfer<T> RentTransferable<T>(
+        this NativeConcurrentPool<T> pool,
+        int length,
+        T value)
+        where T : unmanaged
+    {
+        ArgumentNullException.ThrowIfNull(pool);
+        NativeOwnerKernel kernel = pool.KernelForTransfer;
+        NativePoolLease lease = kernel.RentFilled(length, value, fill: true, transferable: true);
+        return NativePoolTransferControl<T>.Publish(
+            kernel,
+            lease,
+            "NativeConcurrentPool.RentTransferable");
+    }
 }
 
 /// <summary>A heap-storable value capability with destructive unique ownership.</summary>

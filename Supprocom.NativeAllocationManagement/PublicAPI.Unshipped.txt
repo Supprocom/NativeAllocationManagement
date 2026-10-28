@@ -1,1 +1,4 @@
 #nullable enable
+Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>.Rent(int length, T value) -> Supprocom.NativeAllocationManagement.ConcurrentPooled<T>
+Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>.RentUninitialized(int length) -> Supprocom.NativeAllocationManagement.ConcurrentPooled<T>
+static Supprocom.NativeAllocationManagement.NativeTransferPoolExtensions.RentTransferable<T>(this Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>! pool, int length, T value) -> Supprocom.NativeAllocationManagement.NativeTransfer<T>

@@ -302,6 +302,100 @@ internal sealed partial class NativeOwnerKernel
         }
     }
 
+    // Rents a lease filled with one value, or left unwritten, without an
+    // initializer callback: a cached record is filled in place and published;
+    // anything else takes the initializer path with an equivalent fill.
+    // Elements that are or contain references are always written.
+    internal NativePoolLease RentFilled<T>(int length, T value, bool fill, bool transferable = false)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(length);
+        if (length > 0
+            && ThreadCacheEligible
+            && !NativeMemoryTestHooks.FaultInjectionPending
+            && NativePoolThreadCaches.Find(Id) is NativePoolThreadCache cache
+            && cache.Enter())
+        {
+            if (cache.NextId <= cache.LastId
+                && cache.TakeFree(length) is NativeAllocation allocation)
+            {
+                if (!transferable
+                    && (!fill || (nuint)length * (nuint)_storageElementSize <= InWindowFillBytes))
+                {
+                    long allocationId = PublishCachedLease(cache, allocation, length, value, fill);
+                    cache.Exit();
+                    return new NativePoolLease(allocationId, allocation);
+                }
+
+                BeginCachedLease(cache, allocation, length);
+                cache.Exit();
+                return FillCached(cache, allocation, value, fill, transferable);
+            }
+
+            cache.Exit();
+        }
+
+        return RentInitialized(length, scoped: false, FillInitializer(value), transferable);
+    }
+
+    // A fill this small finishes inside the rent's busy window, so a revoking
+    // thread waits at most that long.
+    private const nuint InWindowFillBytes = 16 * 1024;
+
+    // Begins, fills and publishes a cached lease in one busy window: no
+    // initializer runs, so the lease never shows as initializing.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private long PublishCachedLease<T>(NativePoolThreadCache cache, NativeAllocation allocation, int length, T value, bool fill)
+    {
+        NativeSlab slab = allocation.Slab!;
+        long allocationId = cache.NextId++;
+        nuint storageBytes = (nuint)length * (nuint)_storageElementSize;
+        allocation.ResetCached(allocationId, length, storageBytes, cache.Generation!.ScopeEpoch, slab.Segment.Pointer);
+        if (slab.HasBeenUsed)
+        {
+            NativeMemoryAccounting.RecordReusedNativeSegment();
+        }
+
+        slab.HasBeenUsed = true;
+        if (fill)
+        {
+            CachedSpan<T>(allocation, length).Fill(value);
+        }
+
+        long payload = cache.PayloadDelta + (long)storageBytes;
+        cache.PayloadDelta = payload;
+        if (payload > cache.MaxPayloadDelta)
+        {
+            cache.MaxPayloadDelta = payload;
+        }
+
+        allocation.Lifecycle = NativeAllocationLifecycle.Active;
+        return allocationId;
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static NativeLeaseInitializer<T> FillInitializer<T>(T value) =>
+        writer => writer.Fill(value);
+
+    // A fill runs no user code and cannot fail, so there is nothing to abort.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private NativePoolLease FillCached<T>(NativePoolThreadCache cache, NativeAllocation allocation, T value, bool fill, bool transferable)
+    {
+        long allocationId = allocation.Id;
+        int length = allocation.Length;
+        if (fill)
+        {
+            CachedSpan<T>(allocation, length).Fill(value);
+        }
+
+        allocation.InitializedLength = length;
+        if (transferable || !TryCompleteCachedInitialization(cache, allocation))
+        {
+            CompleteCachedInitialization(cache, allocation, transferable);
+        }
+
+        return new NativePoolLease(allocationId, allocation);
+    }
+
     // Publishes a fully initialized lease that is still in this thread's cache.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool TryCompleteCachedInitialization(NativePoolThreadCache cache, NativeAllocation allocation)
@@ -770,7 +864,8 @@ internal sealed partial class NativeOwnerKernel
     {
         if (allocation.TransferOwner is NativePoolThreadCache owner)
         {
-            bool remote = !ReferenceEquals(NativePoolThreadCaches.Find(Id), owner);
+            NativePoolThreadCache? local = NativePoolThreadCaches.Find(Id);
+            bool remote = !ReferenceEquals(local, owner);
             owner.EnterTransferGate();
             if (ReferenceEquals(allocation.TransferOwner, owner))
             {
@@ -795,7 +890,7 @@ internal sealed partial class NativeOwnerKernel
                 }
 
                 owner.ExitTransferGate();
-                RecycleReturnedTransfer(allocation);
+                RecycleReturnedTransfer(allocation, local);
                 return;
             }
 
@@ -807,11 +902,10 @@ internal sealed partial class NativeOwnerKernel
 
     // The returned record is in no list yet; a transition that runs now treats
     // its slab as idle, which it is.
-    private void RecycleReturnedTransfer(NativeAllocation allocation)
+    private void RecycleReturnedTransfer(NativeAllocation allocation, NativePoolThreadCache? cache)
     {
         NativeGeneration generation = allocation.GenerationState;
         long payloadBytes = (long)allocation.StorageBytes;
-        NativePoolThreadCache? cache = NativePoolThreadCaches.Find(Id);
         if (cache is not null
             && !NativeMemoryTestHooks.FaultInjectionPending
             && cache.Enter())
