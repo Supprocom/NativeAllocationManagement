@@ -53,13 +53,30 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
             && !NativeMemoryTestHooks.FaultInjectionPending
             && (thread.GetTyped<ParkedControls>(s_parkedSlot) is { Count: > 0 } stack
                 ? stack.TakeCurrent(thread, byteLength)
-                : SharedPartition.TryTake(s_shared, byteLength)) is NativeBuilderControl<T> parked)
+                : TakeFromOtherThreads(thread, byteLength)) is NativeBuilderControl<T> parked)
         {
             parked.BeginLifetime(parked.TakeSpare(thread, byteLength, ownerId), ownerId);
             return parked;
         }
 
         return AcquireNew(byteLength, budget, ownerId);
+    }
+
+    // An empty stack takes a whole magazine of another thread's returns, then
+    // the single-control overflow.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static NativeBuilderControl<T>? TakeFromOtherThreads(NativeThreadState thread, nuint byteLength)
+    {
+        if (Depot.HasFull && !DepotDisabledForTest)
+        {
+            ParkedControls stack = thread.GetTyped<ParkedControls>(s_parkedSlot) ?? CreateParkedControls(thread);
+            if (stack.Count == 0 && Depot.TryRefill(thread, stack))
+            {
+                return stack.TakeCurrent(thread, byteLength);
+            }
+        }
+
+        return SharedPartition.TryTake(s_shared, byteLength);
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
@@ -241,7 +258,8 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
 
         NativeThreadState thread = NativeThreadState.Current;
         ParkedControls stack = thread.GetTyped<ParkedControls>(s_parkedSlot) ?? CreateParkedControls(thread);
-        if (stack.HasRoom(thread, block.ByteLength))
+        if (stack.HasRoom(thread, block.ByteLength)
+            || (!DepotDisabledForTest && Depot.TrySpill(stack) && stack.HasRoom(thread, block.ByteLength)))
         {
             BecomeParked(thread, block);
             stack.Push(this, block.ByteLength);
@@ -260,6 +278,11 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
     // Runs after a control became visible to other threads and before the
     // returning call completes, so a test can reuse it inside that window.
     internal static Action? AfterSharedHandOffForTest { get; set; }
+
+    // Lets a test thread exercise the single-control overflow and per-thread
+    // ceiling without the magazine depot.
+    [ThreadStatic]
+    internal static bool DepotDisabledForTest;
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static ParkedControls CreateParkedControls(NativeThreadState thread)
@@ -331,16 +354,151 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
         PublishControlState(Building);
     }
 
+    // Full thread stacks travel between threads whole: a thread whose stack is
+    // full hands all of it to the depot as one magazine, and a thread whose
+    // stack is empty takes one back, so a producer-consumer pipeline pays one
+    // lock per stack of controls instead of one per control. Magazines already
+    // hold parked controls, which published Disposed before they became visible.
+    private static class Depot
+    {
+        private const int MagazineLimit = 32;
+        private const nuint LimitBytes = 512 * 1024;
+        private static readonly Lock s_gate = new();
+        private static readonly Magazine?[] s_full = new Magazine?[MagazineLimit];
+        private static readonly Magazine?[] s_empty = new Magazine?[MagazineLimit];
+        private static int s_fullCount;
+        private static int s_emptyCount;
+        private static nuint s_bytes;
+        private static int s_epoch = NativeStorageReuse.SharedEpoch;
+
+        internal static bool HasFull => Volatile.Read(ref s_fullCount) != 0;
+
+        internal static bool TrySpill(ParkedControls stack)
+        {
+            if (stack.Count == 0 || Volatile.Read(ref s_fullCount) == MagazineLimit)
+            {
+                return false;
+            }
+
+            lock (s_gate)
+            {
+                DiscardIfStale();
+                if (s_fullCount == MagazineLimit || s_bytes + stack.Bytes > LimitBytes)
+                {
+                    return false;
+                }
+
+                Magazine magazine = s_emptyCount != 0 ? s_empty[--s_emptyCount]! : new Magazine();
+                s_empty[s_emptyCount] = null;
+                s_bytes += stack.MoveTo(magazine);
+                s_full[s_fullCount] = magazine;
+                Volatile.Write(ref s_fullCount, s_fullCount + 1);
+                return true;
+            }
+        }
+
+        internal static bool TryRefill(NativeThreadState thread, ParkedControls stack)
+        {
+            lock (s_gate)
+            {
+                DiscardIfStale();
+                if (s_fullCount == 0)
+                {
+                    return false;
+                }
+
+                int last = s_fullCount - 1;
+                Magazine magazine = s_full[last]!;
+                s_full[last] = null;
+                Volatile.Write(ref s_fullCount, last);
+                s_bytes -= magazine.Bytes;
+                stack.TakeFrom(thread, magazine);
+                if (s_emptyCount != MagazineLimit)
+                {
+                    s_empty[s_emptyCount++] = magazine;
+                }
+
+                return true;
+            }
+        }
+
+        private static void DiscardIfStale()
+        {
+            int epoch = NativeStorageReuse.SharedEpoch;
+            if (s_epoch == epoch)
+            {
+                return;
+            }
+
+            foreach (ref Magazine? magazine in s_full.AsSpan(0, s_fullCount))
+            {
+                magazine!.Discard();
+                magazine = null;
+            }
+
+            s_bytes = 0;
+            s_epoch = epoch;
+            Volatile.Write(ref s_fullCount, 0);
+        }
+    }
+
+    private sealed class Magazine
+    {
+        internal readonly NativeBuilderControl<T>?[] Items = new NativeBuilderControl<T>?[ParkedControls.Capacity];
+        internal int Count;
+        internal nuint Bytes;
+
+        internal void Discard()
+        {
+            foreach (ref NativeBuilderControl<T>? control in Items.AsSpan(0, Count))
+            {
+                control!.DiscardSpare();
+                control = null;
+            }
+
+            Count = 0;
+            Bytes = 0;
+        }
+    }
+
     // Parked controls of one element type on one thread: at most eight, holding
     // at most ParkLimitBytes of spare blocks together.
     private sealed class ParkedControls
     {
-        private const int Capacity = 8;
+        internal const int Capacity = 8;
         private readonly NativeBuilderControl<T>?[] _items = new NativeBuilderControl<T>?[Capacity];
         private nuint _bytes;
         private int _epoch;
 
         internal int Count;
+
+        internal nuint Bytes => _bytes;
+
+        // Empties this stack into an empty magazine; returns the bytes moved.
+        // Called after HasRoom, which already discarded a stack from an older epoch.
+        internal nuint MoveTo(Magazine magazine)
+        {
+            Array.Copy(_items, magazine.Items, Count);
+            Array.Clear(_items, 0, Count);
+            magazine.Count = Count;
+            magazine.Bytes = _bytes;
+            nuint moved = _bytes;
+            Count = 0;
+            _bytes = 0;
+            return moved;
+        }
+
+        // Fills this empty stack from a magazine and leaves the magazine empty.
+        internal void TakeFrom(NativeThreadState thread, Magazine magazine)
+        {
+            _epoch = thread.ReuseEpoch;
+            Array.Copy(magazine.Items, _items, magazine.Count);
+            Array.Clear(magazine.Items, 0, magazine.Count);
+            Count = magazine.Count;
+            _bytes = magazine.Bytes;
+            magazine.Count = 0;
+            magazine.Bytes = 0;
+        }
 
         internal ParkedControls(NativeThreadState thread) => _epoch = thread.ReuseEpoch;
 

@@ -94,17 +94,65 @@ public sealed class NativeBuilderReuseTests
     public void ParkedBlocksStayWithinThePerThreadByteCeiling()
     {
         NativeMemoryTestHooks.Reset();
-        NativeTransfer<byte> large = NativeTransfer<byte>.Create(60 * 1024, 1);
-        NativeTransfer<byte> small = NativeTransfer<byte>.Create(8 * 1024, 2);
-        object smallControl = small.ControlForTest!;
-        large.Dispose();
-        small.Dispose();
-        // The large block parked first; the small one would exceed 64 KiB, so it was freed.
-        NativeTransfer<byte> next = NativeTransfer<byte>.Create(8 * 1024, 3);
-        Assert.NotSame(smallControl, next.ControlForTest);
-        next.Dispose();
+        NativeBuilderControl<byte>.DepotDisabledForTest = true;
+        try
+        {
+            NativeTransfer<byte> large = NativeTransfer<byte>.Create(60 * 1024, 1);
+            NativeTransfer<byte> small = NativeTransfer<byte>.Create(8 * 1024, 2);
+            object smallControl = small.ControlForTest!;
+            large.Dispose();
+            small.Dispose();
+            // The large block parked first; the small one would exceed 64 KiB, so it was freed.
+            NativeTransfer<byte> next = NativeTransfer<byte>.Create(8 * 1024, 3);
+            Assert.NotSame(smallControl, next.ControlForTest);
+            next.Dispose();
+            Assert.Equal(0, NativeMemoryTestHooks.Snapshot().OutstandingNativeBytes);
+        }
+        finally
+        {
+            NativeBuilderControl<byte>.DepotDisabledForTest = false;
+        }
+    }
+
+    [Fact]
+    public void AFullStackTravelsToAnotherThreadAsOneMagazine()
+    {
+        NativeMemoryTestHooks.Reset();
+        // An element type no other test uses keeps the shared depot to this test.
+        NativeTransfer<MagazineProbe>[] first = new NativeTransfer<MagazineProbe>[9];
+        for (int index = 0; index < first.Length; index++)
+        {
+            first[index] = NativeTransfer<MagazineProbe>.Create(2, new MagazineProbe(index));
+        }
+
+        HashSet<object> controls = [.. first.Select(static transfer => transfer.ControlForTest!)];
+        RunOnNewThread(() =>
+        {
+            // Eight fill the stack; the ninth sends those eight to the depot.
+            foreach (NativeTransfer<MagazineProbe> transfer in first)
+            {
+                transfer.Dispose();
+            }
+        });
+
+        NativeTransfer<MagazineProbe>[] second = new NativeTransfer<MagazineProbe>[8];
+        for (int index = 0; index < second.Length; index++)
+        {
+            second[index] = NativeTransfer<MagazineProbe>.Create(2, new MagazineProbe(100 + index));
+        }
+
+        Assert.Equal(8, second.Count(transfer => controls.Contains(transfer.ControlForTest!)));
+        for (int index = 0; index < second.Length; index++)
+        {
+            Assert.Equal(100 + index, second[index].Read(static view => view[1].Value));
+            Assert.ThrowsAny<InvalidOperationException>(() => first[index].Read(static view => view[0].Value));
+            second[index].Dispose();
+        }
+
         Assert.Equal(0, NativeMemoryTestHooks.Snapshot().OutstandingNativeBytes);
     }
+
+    private readonly record struct MagazineProbe(int Value);
 
     [Fact]
     public void TransfersReturnedOnAnotherThreadServeTheCreatingThread()
@@ -146,6 +194,8 @@ public sealed class NativeBuilderReuseTests
     [Fact]
     public void DisposeLeavesAControlAloneOnceAnotherThreadReusedIt()
     {
+        // Without the depot, a full stack sends the next return to a shared partition.
+        NativeBuilderControl<int>.DepotDisabledForTest = true;
         // Fill this thread's stack so the next return overflows into a shared partition.
         NativeTransfer<int>[] fillers = new NativeTransfer<int>[8];
         for (int index = 0; index < fillers.Length; index++)
@@ -161,7 +211,11 @@ public sealed class NativeBuilderReuseTests
         }
 
         NativeTransfer<int>? reused = null;
-        NativeBuilderControl<int>.AfterSharedHandOffForTest = () => RunOnNewThread(() => reused = NativeTransfer<int>.Create(4, 7));
+        NativeBuilderControl<int>.AfterSharedHandOffForTest = () => RunOnNewThread(() =>
+        {
+            NativeBuilderControl<int>.DepotDisabledForTest = true;
+            reused = NativeTransfer<int>.Create(4, 7);
+        });
         try
         {
             overflow.Dispose();
@@ -169,6 +223,7 @@ public sealed class NativeBuilderReuseTests
         finally
         {
             NativeBuilderControl<int>.AfterSharedHandOffForTest = null;
+            NativeBuilderControl<int>.DepotDisabledForTest = false;
         }
 
         NativeTransfer<int> current = reused!.Value;
