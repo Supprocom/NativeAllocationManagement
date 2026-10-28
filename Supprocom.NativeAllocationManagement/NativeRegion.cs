@@ -96,10 +96,14 @@ public readonly ref struct NativeRegion
     /// <summary>Invalidates all Local handles and ends the Region lifetime.</summary>
     public void Dispose()
     {
-        NativeRegionKernel kernel = _kernel
-            ?? throw new NativeAllocationUninitializedException(
-                nameof(NativeRegion),
-                nameof(Dispose));
+        // Small enough that a using statement's finally runs inline instead
+        // of as a funclet call: the failure is thrown out of line.
+        NativeRegionKernel? kernel = _kernel;
+        if (kernel is null)
+        {
+            ThrowUninitializedDispose();
+        }
+
         // A later region may reuse this kernel; disposal of an earlier lifetime
         // is already complete.
         if (kernel.Generation == _generation)
@@ -107,6 +111,12 @@ public readonly ref struct NativeRegion
             kernel.Dispose();
         }
     }
+
+    [System.Diagnostics.CodeAnalysis.DoesNotReturn]
+    private static void ThrowUninitializedDispose() =>
+        throw new NativeAllocationUninitializedException(
+            nameof(NativeRegion),
+            nameof(Dispose));
 
     private NativeRegionKernel GetKernel(string operation)
     {

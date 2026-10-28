@@ -295,19 +295,31 @@ public readonly ref struct ConcurrentPooled<T>
     }
 
     /// <summary>Returns this synchronized lease exactly once.</summary>
-    public void Dispose()
+    public void Dispose() =>
+        Return(_kernel, _generationState, _allocationState, _generation, _allocationId);
+
+    // One call, so the finally of a using statement over the lease stays small
+    // enough for the JIT to run inline rather than as a funclet.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void Return(
+        NativeOwnerKernel? kernel,
+        NativeGeneration? generation,
+        NativeAllocation? allocation,
+        long generationNumber,
+        long allocationId)
     {
-        if (_allocationState?.CacheOwner is NativePoolThreadCache cache
-            && NativeOwnerKernel.TryReturnCachedLease(cache, _generationState!, _allocationState, _generation, _allocationId))
+        if (allocation?.CacheOwner is NativePoolThreadCache cache
+            && NativeOwnerKernel.TryReturnCachedLease(cache, generation!, allocation, generationNumber, allocationId))
         {
             return;
         }
 
-        GetKernel(nameof(Dispose)).ReturnLease(
-            GetGenerationState(nameof(Dispose)),
-            GetAllocationState(nameof(Dispose)),
-            _generation,
-            _allocationId);
+        if (kernel is null || generation is null || allocation is null)
+        {
+            throw new NativeAllocationUninitializedException(nameof(ConcurrentPooled<T>), nameof(Dispose));
+        }
+
+        kernel.ReturnLease(generation, allocation, generationNumber, allocationId);
     }
 
     // This thread's cached lease enters and exits its operations without an

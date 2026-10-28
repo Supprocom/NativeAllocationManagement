@@ -396,6 +396,9 @@ internal sealed unsafe class NativeRegionKernel
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA1816", Justification = "Internal region-kernel disposal disarms its emergency finalizer; the outer owner exposes disposal.")]
     // Only NativeRegion.Dispose calls this, and the ref struct cannot leave its
     // construction thread, so disposal needs no thread check.
+    // Out of line, so the finally of a using statement over a NativeRegion
+    // stays small enough for the JIT to run inline rather than as a funclet.
+    [MethodImpl(MethodImplOptions.NoInlining)]
     internal void Dispose()
     {
         if (_lifecycle == NativeOwnerLifecycle.Disposed)
