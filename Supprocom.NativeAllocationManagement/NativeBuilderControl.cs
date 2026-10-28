@@ -170,13 +170,37 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
         };
     }
 
+    private static bool CanPark(NativeBlock block) =>
+        block.Budget is null
+        && block.ByteLength <= ParkLimitBytes
+        && !NativeMemoryTestHooks.FaultInjectionPending;
+
+    // A shared payload returns by parking, as a disposed transfer does. Its
+    // sharing control records the return first and stays with its bindings.
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA1816", Justification = "A control that cannot park disarms its acquisition-time finalizer after its storage returned.")]
+    private protected override bool TryParkSharedPayload()
+    {
+        if (!CanPark(OwnedBlock))
+        {
+            return false;
+        }
+
+        Control.RecordPayloadReturn();
+        EndSharing();
+        if (!TryPark())
+        {
+            ReturnStorage("NativeTransfer.Dispose");
+            PublishControlState(Disposed);
+            GC.SuppressFinalize(this);
+        }
+
+        return true;
+    }
+
     private bool TryPark()
     {
         NativeBlock block = OwnedBlock;
-        if (block.Budget is not null
-            || block.ByteLength > ParkLimitBytes
-            || IsSharing
-            || NativeMemoryTestHooks.FaultInjectionPending)
+        if (!CanPark(block) || IsSharing)
         {
             return false;
         }

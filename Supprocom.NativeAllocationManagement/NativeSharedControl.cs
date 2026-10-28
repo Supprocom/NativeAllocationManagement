@@ -45,9 +45,43 @@ internal sealed class NativeSharedControl<T> where T : unmanaged
         _initializedBytes = (long)length * Unsafe.SizeOf<T>();
     }
 
+    // Weak references to returned payloads, recycled on the thread that
+    // returned them so that preparing weak bindings allocates no GC handle.
+    private const int PayloadReferencePoolCapacity = 4;
+
+    [ThreadStatic]
+    private static WeakReference<NativeTransferControl<T>>?[]? t_payloadReferences;
+
+    [ThreadStatic]
+    private static int t_payloadReferenceCount;
+
     internal void PreparePayloadReference(NativeTransferControl<T> payload)
     {
-        if (_preparation.WeakBindingCount != 0) _payload = new(payload);
+        if (_preparation.WeakBindingCount == 0) return;
+        int count = t_payloadReferenceCount;
+        if (count != 0)
+        {
+            WeakReference<NativeTransferControl<T>>?[] pool = t_payloadReferences!;
+            WeakReference<NativeTransferControl<T>> reference = pool[--count]!;
+            pool[count] = null;
+            t_payloadReferenceCount = count;
+            reference.SetTarget(payload);
+            _payload = reference;
+            return;
+        }
+
+        _payload = new(payload);
+    }
+
+    // Under the gate, after the last use of the reference: every reader
+    // takes the gate to read _payload.
+    private static void RecyclePayloadReference(WeakReference<NativeTransferControl<T>> reference)
+    {
+        int count = t_payloadReferenceCount;
+        if (count == PayloadReferencePoolCapacity) return;
+        reference.SetTarget(null!);
+        (t_payloadReferences ??= new WeakReference<NativeTransferControl<T>>?[PayloadReferencePoolCapacity])[count] = reference;
+        t_payloadReferenceCount = count + 1;
     }
 
     internal void ConfigureStorage(nuint ownedBytes, nuint borrowedBytes, NativeMemoryBudget? budget, long allocationOrdinal)
@@ -58,16 +92,15 @@ internal sealed class NativeSharedControl<T> where T : unmanaged
         if (budget is { TraceEnabled: true }) _tracedBudget = new(budget);
     }
 
+    // No other thread can reach this control before its first binding is
+    // returned, so the first publication needs no gate.
     internal NativeShared<T> PublishInitial(NativeTransferControl<T> payload, int length)
     {
-        lock (_gate)
-        {
-            if (!_strong.TryAcquire(out int slot, out long version))
-                throw new InvalidOperationException("Sharing preparation has no initial strong binding.");
-            _peakStrong = 1;
-            Trace(NativeMemoryTraceKind.Shared);
-            return new(payload, slot, version, 0, length);
-        }
+        if (!_strong.TryAcquire(out int slot, out long version))
+            throw new InvalidOperationException("Sharing preparation has no initial strong binding.");
+        _peakStrong = 1;
+        Trace(NativeMemoryTraceKind.Shared);
+        return new(payload, this, slot, version, 0, length);
     }
 
     internal bool TryShare(NativeTransferControl<T> payload, int slot, long version, int offset, int length,
@@ -85,7 +118,7 @@ internal sealed class NativeSharedControl<T> where T : unmanaged
             }
             _peakStrong = Math.Max(_peakStrong, _strong.Occupied);
             Increment(ref _shares);
-            share = new(payload, acquired, acquiredVersion, offset, length);
+            share = new(payload, this, acquired, acquiredVersion, offset, length);
             reason = NativeSharingExhaustionReason.None;
             Trace(NativeMemoryTraceKind.Shared);
             return true;
@@ -139,7 +172,7 @@ internal sealed class NativeSharedControl<T> where T : unmanaged
             }
             _peakStrong = Math.Max(_peakStrong, _strong.Occupied);
             Increment(ref _upgrades);
-            shared = new(payload, acquired, acquiredVersion, offset, length);
+            shared = new(payload, this, acquired, acquiredVersion, offset, length);
             reason = NativeSharingExhaustionReason.None;
             Trace(NativeMemoryTraceKind.WeakUpgraded);
             return true;
@@ -271,7 +304,11 @@ internal sealed class NativeSharedControl<T> where T : unmanaged
             {
                 _ownedBytes = 0;
                 _borrowedBytes = 0;
-                _payload = null;
+                if (_payload is not null)
+                {
+                    RecyclePayloadReference(_payload);
+                    _payload = null;
+                }
             }
         }
     }

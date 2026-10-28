@@ -10,25 +10,29 @@ namespace Supprocom.NativeAllocationManagement;
 public readonly struct NativeShared<T> : IDisposable where T : unmanaged
 {
     private readonly NativeTransferControl<T>? _payload;
+    // The binding's own sharing control: a payload control can serve a later
+    // lifetime after its shared payload returned, and stale bindings must
+    // still reach the control that rejects them.
+    private readonly NativeSharedControl<T>? _control;
     private readonly int _slot;
     private readonly long _version;
     private readonly int _offset;
     private readonly int _length;
 
-    internal NativeShared(NativeTransferControl<T> payload, int slot, long version, int offset, int length)
+    internal NativeShared(NativeTransferControl<T> payload, NativeSharedControl<T> control, int slot, long version, int offset, int length)
     {
-        _payload = payload; _slot = slot; _version = version; _offset = offset; _length = length;
+        _payload = payload; _control = control; _slot = slot; _version = version; _offset = offset; _length = length;
     }
 
     /// <summary>Gets the non-reusable payload identity, not an address.</summary>
-    public long Id => Payload.Control.Id;
+    public long Id => Control.Id;
     /// <summary>Gets this binding's immutable logical range length, not its retained backing cost.</summary>
     public int Length => _length;
     /// <summary>Gets a consistent observation even after this binding has released its authority.</summary>
-    public NativeSharingStatistics CaptureSnapshot() => Payload.Control.CaptureSnapshot();
+    public NativeSharingStatistics CaptureSnapshot() => Control.CaptureSnapshot();
 
     /// <summary>Retries failed payload cleanup without reopening ownership; false means a surviving binding or entered read still prevents return.</summary>
-    public bool TryCompletePayloadReturn() => Payload.Control.TryCompletePayloadReturn(Payload);
+    public bool TryCompletePayloadReturn() => Control.TryCompletePayloadReturn(Payload);
 
     /// <summary>Prepares all sharing metadata, consumes unique ownership, and publishes initialized read-only storage.</summary>
     /// <remarks>Invalid preparation and metadata failure precede consumption; failures after destructive movement consume the source and return its storage.</remarks>
@@ -43,10 +47,24 @@ public readonly struct NativeShared<T> : IDisposable where T : unmanaged
         NativeSharedControl<T> control = new(preparation, observed.Id, length);
         NativeTransferControl<T> payload = observed.CustodyForSharing;
         control.PreparePayloadReference(payload);
-        NativeTransfer<T> moved = NativeTransfer<T>.Move(ref source);
+        NativeTransfer<T>? moved = null;
+        if (!NativeMemoryTestHooks.FaultInjectionPending
+            && payload.TryPinDirectForSharing(observed.SharingAuthorityVersion, control))
+        {
+            source = null;
+        }
+        else
+        {
+            moved = NativeTransfer<T>.Move(ref source);
+        }
+
         try
         {
-            payload.InitializeSharing(moved.SharingAuthorityVersion, control);
+            if (moved is NativeTransfer<T> unique)
+            {
+                payload.InitializeSharing(unique.SharingAuthorityVersion, control);
+            }
+
             NativeMemoryTestHooks.CheckManagedPublicationBoundary("NativeShared.Create", 2, "the initial strong binding");
             return control.PublishInitial(payload, length);
         }
@@ -63,7 +81,7 @@ public readonly struct NativeShared<T> : IDisposable where T : unmanaged
 
     /// <summary>Acquires one independent strong binding, returning false only for prepared slot exhaustion.</summary>
     public bool TryShare(out NativeShared<T> share, out NativeSharingExhaustionReason reason) =>
-        Payload.Control.TryShare(Payload, _slot, _version, _offset, _length, out share, out reason);
+        Control.TryShare(Payload, _slot, _version, _offset, _length, out share, out reason);
 
     /// <summary>Acquires a read-only slice while retaining the complete original backing extent.</summary>
     public bool TrySlice(int offset, int length, out NativeShared<T> slice, out NativeSharingExhaustionReason reason)
@@ -72,23 +90,24 @@ public readonly struct NativeShared<T> : IDisposable where T : unmanaged
         ArgumentOutOfRangeException.ThrowIfNegative(length);
         if (offset > _length || length > _length - offset)
             throw new ArgumentOutOfRangeException(nameof(length), "The slice exceeds this binding's logical range.");
-        return Payload.Control.TryShare(Payload, _slot, _version, checked(_offset + offset), length, out slice, out reason);
+        return Control.TryShare(Payload, _slot, _version, checked(_offset + offset), length, out slice, out reason);
     }
 
     /// <summary>Acquires one weak observer without retaining the payload or its pooled owner.</summary>
     public bool TryDowngrade(out NativeWeak<T> weak, out NativeSharingExhaustionReason reason) =>
-        Payload.Control.TryDowngrade(_slot, _version, _offset, _length, out weak, out reason);
+        Control.TryDowngrade(_slot, _version, _offset, _length, out weak, out reason);
 
     /// <summary>Runs one entered synchronous read-only bounded callback.</summary>
     public void Access(NativeReadOnlyLeaseAction<T> action)
     {
         ArgumentNullException.ThrowIfNull(action);
         NativeTransferControl<T> payload = Payload;
-        payload.Control.EnterRead(payload, _slot, _version);
+        NativeSharedControl<T> control = Control;
+        control.EnterRead(payload, _slot, _version);
         Exception? callbackFailure = null;
         try { action(payload.GetView(_offset, _length)); }
         catch (Exception failure) { callbackFailure = failure; throw; }
-        finally { EndRead(payload, callbackFailure); }
+        finally { EndRead(control, payload, callbackFailure); }
     }
 
     /// <summary>Computes a non-ref-struct result in one entered synchronous read-only callback.</summary>
@@ -96,11 +115,12 @@ public readonly struct NativeShared<T> : IDisposable where T : unmanaged
     {
         ArgumentNullException.ThrowIfNull(action);
         NativeTransferControl<T> payload = Payload;
-        payload.Control.EnterRead(payload, _slot, _version);
+        NativeSharedControl<T> control = Control;
+        control.EnterRead(payload, _slot, _version);
         Exception? callbackFailure = null;
         try { return action(payload.GetView(_offset, _length)); }
         catch (Exception failure) { callbackFailure = failure; throw; }
-        finally { EndRead(payload, callbackFailure); }
+        finally { EndRead(control, payload, callbackFailure); }
     }
 
     /// <summary>Runs one compile-time read-only processor in one entered synchronous read.</summary>
@@ -112,16 +132,17 @@ public readonly struct NativeShared<T> : IDisposable where T : unmanaged
         where TProcessor : struct, INativeReadOnlySpanProcessor<T, TState, TResult>
     {
         NativeTransferControl<T> payload = Payload;
-        payload.Control.EnterRead(payload, _slot, _version);
+        NativeSharedControl<T> control = Control;
+        control.EnterRead(payload, _slot, _version);
         Exception? callbackFailure = null;
         try { return TProcessor.Invoke(payload.GetView(_offset, _length).AsSpan(), in state); }
         catch (Exception failure) { callbackFailure = failure; throw; }
-        finally { EndRead(payload, callbackFailure); }
+        finally { EndRead(control, payload, callbackFailure); }
     }
 
-    private static void EndRead(NativeTransferControl<T> payload, Exception? callbackFailure)
+    private static void EndRead(NativeSharedControl<T> control, NativeTransferControl<T> payload, Exception? callbackFailure)
     {
-        try { payload.Control.ExitRead(payload); }
+        try { control.ExitRead(payload); }
         catch (Exception cleanupFailure) when (callbackFailure is not null)
         {
             throw new AggregateException("The shared callback and payload return both failed.", callbackFailure, cleanupFailure);
@@ -136,14 +157,14 @@ public readonly struct NativeShared<T> : IDisposable where T : unmanaged
         ArgumentNullException.ThrowIfNull(budget);
         detached = default;
         NativeTransferControl<T> payload = Payload;
-        payload.Control.EnterRead(payload, _slot, _version);
+        Control.EnterRead(payload, _slot, _version);
         try
         {
             long ownerId = NativeOwnerIdentity.Next();
             nuint bytes = checked((nuint)_length * (nuint)Unsafe.SizeOf<T>());
             if (!budget.TryReserve(bytes, out _, ownerId))
             {
-                payload.Control.RecordDetachRefusal();
+                Control.RecordDetachRefusal();
                 return false;
             }
             NativeBlock block = NativeBlockAllocator.Allocate(bytes, nameof(NativeShared<T>),
@@ -157,20 +178,23 @@ public readonly struct NativeShared<T> : IDisposable where T : unmanaged
                     unsafe { payload.GetView(_offset, _length).CopyTo(new Span<T>((void*)block.Pointer, _length)); }
                     detached = destination;
                     published = true;
-                    payload.Control.RecordDetach();
+                    Control.RecordDetach();
                     return true;
                 }
                 catch { published = true; destination.Dispose(); throw; }
             }
             finally { if (!published) NativeBlockAllocator.Free(block); }
         }
-        finally { payload.Control.ExitRead(payload); GC.KeepAlive(payload); }
+        finally { Control.ExitRead(payload); GC.KeepAlive(payload); }
     }
 
     /// <summary>Releases this independently acquired binding once; aliases cannot decrement ownership twice.</summary>
-    public void Dispose() => Payload.Control.ReleaseStrong(Payload, _slot, _version);
+    public void Dispose() => Control.ReleaseStrong(Payload, _slot, _version);
 
     private NativeTransferControl<T> Payload => _payload
+        ?? throw new NativeAllocationUninitializedException(nameof(NativeShared<T>), "ownership operation");
+
+    private NativeSharedControl<T> Control => _control
         ?? throw new NativeAllocationUninitializedException(nameof(NativeShared<T>), "ownership operation");
 }
 

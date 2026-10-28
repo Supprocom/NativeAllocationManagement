@@ -6,6 +6,40 @@ internal partial class NativeTransferControl<T> where T : unmanaged
 {
     internal NativeSharedControl<T> Control => _sharingControl!;
 
+    // A direct payload consumes its unique binding and pins in one state
+    // transition: the move that NativeShared.Create would publish and the pin
+    // that follows it end in the same state. False changes nothing, and the
+    // caller takes the move and pin path, which reports the reason.
+    internal bool TryPinDirectForSharing(long authorityVersion, NativeSharedControl<T> control)
+    {
+        if (_kernel is not null || Interlocked.CompareExchange(ref _state, Moving, Active) != Active)
+        {
+            return false;
+        }
+
+        if (Volatile.Read(ref _authorityVersion) != authorityVersion)
+        {
+            Volatile.Write(ref _state, Active);
+            return false;
+        }
+
+        if (NativeOperationAdmission.Close(ref _operationAdmission) != 0)
+        {
+            NativeOperationAdmission.Open(ref _operationAdmission);
+            Volatile.Write(ref _state, Active);
+            return false;
+        }
+
+        Volatile.Write(ref _authorityVersion, checked(authorityVersion + 1));
+        NativeMemoryBudget? budget = _block.Budget;
+        TraceOwnership(budget, NativeMemoryTraceKind.Moved);
+        _sharingControl = control;
+        nuint ownedBytes = _block.ByteLength;
+        Volatile.Write(ref _state, Shared);
+        control.ConfigureStorage(ownedBytes, 0, budget, ownedBytes == 0 ? 0 : 1);
+        return true;
+    }
+
     internal unsafe void InitializeSharing(long authorityVersion, NativeSharedControl<T> control)
     {
         _sharingControl = control;
@@ -69,7 +103,9 @@ internal partial class NativeTransferControl<T> where T : unmanaged
     internal unsafe NativeReadOnlyLeaseView<T> GetView(int offset, int length) =>
         new(new ReadOnlySpan<T>((void*)_block.Pointer, checked(offset + length)).Slice(offset, length));
 
-    internal void ReturnSharedPayload()
+    // The finalizer thread passes false: a control parked there would never
+    // serve another value.
+    internal void ReturnSharedPayload(bool mayPark = true)
     {
         if (StorageHasBeenReturned)
         {
@@ -98,6 +134,11 @@ internal partial class NativeTransferControl<T> where T : unmanaged
             else
             {
                 ReleaseSharingPin();
+                if (mayPark && TryParkSharedPayload())
+                {
+                    return;
+                }
+
                 ReturnStorage("NativeTransfer.Dispose");
                 Volatile.Write(ref _state, Disposed);
             }
@@ -122,6 +163,14 @@ internal partial class NativeTransferControl<T> where T : unmanaged
             throw;
         }
     }
+
+    // A reusable control returns its shared payload by parking for a later
+    // lifetime; see NativeBuilderControl. False leaves the ordinary return.
+    private protected virtual bool TryParkSharedPayload() => false;
+
+    // The sharing control recorded the payload return; this lifetime's
+    // sharing ends. Its bindings hold that control, not this one.
+    private protected void EndSharing() => _sharingControl = null;
 
     private void ReleaseSharingPin()
     {
@@ -155,7 +204,7 @@ internal partial class NativeTransferControl<T> where T : unmanaged
         try
         {
             NativeMemoryTestHooks.NotifyBeforeOperationEntry("NativeShared.Finalize");
-            if (Control.BeginAbandonedRelease()) ReturnSharedPayload();
+            if (Control.BeginAbandonedRelease()) ReturnSharedPayload(mayPark: false);
         }
         catch { GC.ReRegisterForFinalize(this); }
     }
