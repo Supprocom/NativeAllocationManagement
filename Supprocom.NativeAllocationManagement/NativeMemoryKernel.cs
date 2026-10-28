@@ -5017,8 +5017,10 @@ internal sealed partial class NativeOwnerKernel
         NativeBumpSegment? segment = previousSegment;
         nuint aligned = segment is null
             ? 0
-            : AlignArenaBumpCursor(
+            : AlignArenaRange(
                 _arenaFastCursor,
+                segment.HighCursor,
+                byteLength,
                 alignment);
         if (segment is null
             || aligned > segment.HighCursor
@@ -5490,6 +5492,28 @@ internal sealed partial class NativeOwnerKernel
     private static void ThrowArenaByteLengthOverflow() =>
         throw new OverflowException(
             "The arena allocation byte count overflows native addressable storage.");
+
+    // A range of 1 KiB or more takes a vector-aligned offset when it fits
+    // below the limit (segments are cache-line aligned); otherwise the element
+    // alignment decides, as for every range. See NativeVectorAlignment.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static nuint AlignArenaRange(
+        nuint cursor,
+        nuint limit,
+        nuint byteLength,
+        nuint alignment)
+    {
+        if (byteLength >= NativeVectorAlignment.MinimumBytes)
+        {
+            nuint vector = AlignArenaBumpCursor(cursor, NativeVectorAlignment.For(byteLength, alignment));
+            if (vector <= limit && byteLength <= limit - vector)
+            {
+                return vector;
+            }
+        }
+
+        return AlignArenaBumpCursor(cursor, alignment);
+    }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static nuint AlignArenaBumpCursor(

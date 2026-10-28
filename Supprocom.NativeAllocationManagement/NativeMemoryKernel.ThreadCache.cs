@@ -1402,7 +1402,7 @@ internal sealed partial class NativeOwnerKernel
             if (segment is not null)
             {
                 nuint cursor = cache.LaneCursor;
-                nuint aligned = AlignArenaBumpCursor(cursor, alignment);
+                nuint aligned = AlignArenaRange(cursor, cache.LaneLimit, byteLength, alignment);
                 if (aligned <= cache.LaneLimit && byteLength <= cache.LaneLimit - aligned)
                 {
                     cache.LaneCursor = aligned + byteLength;
@@ -1472,7 +1472,7 @@ internal sealed partial class NativeOwnerKernel
         if (lane is not null)
         {
             nuint cursor = cache.LaneCursor;
-            nuint aligned = AlignArenaBumpCursor(cursor, alignment);
+            nuint aligned = AlignArenaRange(cursor, cache.LaneLimit, byteLength, alignment);
             if (aligned <= cache.LaneLimit && byteLength <= cache.LaneLimit - aligned)
             {
                 cache.LaneCursor = aligned + byteLength;
