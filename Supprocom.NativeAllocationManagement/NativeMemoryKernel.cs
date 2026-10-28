@@ -4133,7 +4133,7 @@ internal sealed partial class NativeOwnerKernel
 
     internal bool IsArenaFastThread =>
         _kind == NativeOwnerKind.Arena
-        && Environment.CurrentManagedThreadId
+        && NativeThreadIdentity.Current
             == _arenaFastThreadId;
 
     internal bool CanUseArenaFastLocalOperation =>
@@ -4625,6 +4625,54 @@ internal sealed partial class NativeOwnerKernel
             scoped,
             containsReferences,
             initializer);
+    }
+
+    // The creating thread's range filled with one value, or left unwritten,
+    // without an initializer callback.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal unsafe NativeArenaAllocation LeaseArenaBumpFilled<T>(
+        int length,
+        int elementSize,
+        nuint alignment,
+        T value,
+        bool fill)
+        where T : unmanaged
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(length);
+        nuint byteLength = CalculateArenaByteLength(
+            length,
+            elementSize);
+        NativeGeneration generation = BeginArenaBumpReservation(
+            "Scratch");
+        NativeArenaAllocation allocation =
+            ReserveArenaBumpRangeSafe(
+                generation,
+                length,
+                byteLength,
+                alignment);
+        try
+        {
+            _ = checked(Volatile.Read(ref generation.InitializedPayloadBytes) + checked((long)byteLength));
+            if (fill)
+            {
+                new Span<T>((void*)allocation.Pointer, length).Fill(value);
+            }
+
+            RecordInitialization(generation, checked((long)byteLength), scoped: false);
+        }
+        catch
+        {
+            RollBackArenaBumpReservation(
+                generation,
+                allocation);
+            throw;
+        }
+        finally
+        {
+            FinishArenaBumpInitialization();
+        }
+
+        return allocation;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

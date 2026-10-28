@@ -373,7 +373,7 @@ internal sealed partial class NativeOwnerKernel
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static NativeLeaseInitializer<T> FillInitializer<T>(T value) =>
+    internal static NativeLeaseInitializer<T> FillInitializer<T>(T value) =>
         writer => writer.Fill(value);
 
     // A fill runs no user code and cannot fail, so there is nothing to abort.
@@ -783,10 +783,20 @@ internal sealed partial class NativeOwnerKernel
     internal bool TryEnterArenaLaneOperation(
         NativeArenaAllocation allocation,
         [NotNullWhen(true)] out NativePoolThreadCache? cache,
+        out int epoch) =>
+        TryEnterArenaLaneOperation(null, allocation, out cache, out epoch);
+
+    // A lease that kept its scratching thread's cache passes it and skips the
+    // lookup; a cache the thread has since dropped is revoked and refuses.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal bool TryEnterArenaLaneOperation(
+        NativePoolThreadCache? known,
+        NativeArenaAllocation allocation,
+        [NotNullWhen(true)] out NativePoolThreadCache? cache,
         out int epoch)
     {
         if (!NativeMemoryTestHooks.OperationHooksEnabled
-            && NativePoolThreadCaches.Find(Id) is NativePoolThreadCache found
+            && (known ?? NativePoolThreadCaches.Find(Id)) is NativePoolThreadCache found
             && found.Enter())
         {
             if (ReferenceEquals(found.Generation, allocation.GenerationState)
@@ -1306,6 +1316,85 @@ internal sealed partial class NativeOwnerKernel
         }
 
         allocation = new NativeArenaAllocation(reservation.Generation, pointer, reservation.OriginalCursor, length);
+        return true;
+    }
+
+    // A lane range filled with one value, or left unwritten, without an
+    // initializer callback; see TryLeaseArenaLaneInitialized.
+    internal unsafe bool TryLeaseArenaLaneFilled<T>(
+        int length,
+        int elementSize,
+        nuint alignment,
+        T value,
+        bool fill,
+        out NativeArenaAllocation allocation,
+        out NativePoolThreadCache? laneCache)
+        where T : unmanaged
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(length);
+        allocation = default;
+        laneCache = null;
+        nuint byteLength = CalculateArenaByteLength(length, elementSize);
+        if (byteLength == 0 || NativeMemoryTestHooks.FaultInjectionPending)
+        {
+            return false;
+        }
+
+        NativePoolThreadCache? cache = NativePoolThreadCaches.Find(Id);
+        // A lane with room takes, fills and publishes the range in one busy
+        // window: no initializer runs, and a small fill delays a revocation
+        // no longer than an operation does.
+        if (cache is not null
+            && (!fill || byteLength <= InWindowFillBytes)
+            && cache.Enter())
+        {
+            NativeBumpSegment? segment = cache.LaneSegment;
+            if (segment is not null)
+            {
+                nuint cursor = cache.LaneCursor;
+                nuint aligned = AlignArenaBumpCursor(cursor, alignment);
+                if (aligned <= cache.LaneLimit && byteLength <= cache.LaneLimit - aligned)
+                {
+                    cache.LaneCursor = aligned + byteLength;
+                    IntPtr direct = AddPointer(segment.Segment.Pointer, aligned);
+                    if (fill)
+                    {
+                        new Span<T>((void*)direct, length).Fill(value);
+                    }
+
+                    long payload = cache.PayloadDelta + (long)byteLength;
+                    cache.PayloadDelta = payload;
+                    if (payload > cache.MaxPayloadDelta)
+                    {
+                        cache.MaxPayloadDelta = payload;
+                    }
+
+                    NativeGeneration generation = cache.Generation!;
+                    cache.Exit();
+                    allocation = new NativeArenaAllocation(generation, direct, cursor, length);
+                    laneCache = cache;
+                    return true;
+                }
+            }
+
+            cache.Exit();
+        }
+
+        if (!TryReserveArenaLane(cache, byteLength, alignment, out ArenaLaneReservation reservation)
+            && !ClaimArenaLane(ref cache, byteLength, alignment, out reservation))
+        {
+            return false;
+        }
+
+        IntPtr pointer = AddPointer(reservation.Segment.Segment.Pointer, reservation.Offset);
+        if (fill)
+        {
+            new Span<T>((void*)pointer, length).Fill(value);
+        }
+
+        CompleteArenaLane(cache, reservation, checked((long)byteLength));
+        allocation = new NativeArenaAllocation(reservation.Generation, pointer, reservation.OriginalCursor, length);
+        laneCache = cache;
         return true;
     }
 

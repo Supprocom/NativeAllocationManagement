@@ -141,6 +141,48 @@ public sealed class NativeConcurrentArena : IDisposable
         return new ConcurrentArenaLease<T>(_kernel, allocation);
     }
 
+    /// <summary>Fills an ordinary range with one value before publication, without an initializer callback.</summary>
+    /// <param name="length">The complete initialized element count.</param>
+    /// <param name="value">The value written to every element before publication.</param>
+    public ConcurrentArenaLease<T> Scratch<T>(int length, T value)
+        where T : unmanaged =>
+        ScratchFilled(length, value, fill: true);
+
+    /// <summary>Publishes an ordinary range without writing its elements.</summary>
+    /// <param name="length">The element count.</param>
+    /// <remarks>The contents are unspecified: they may hold values an earlier lease in this process wrote. Write every element before reading it, or use <see cref="Scratch{T}(int, T)"/> for a filled range.</remarks>
+    public ConcurrentArenaLease<T> ScratchUninitialized<T>(int length)
+        where T : unmanaged =>
+        ScratchFilled(length, default(T), fill: false);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private ConcurrentArenaLease<T> ScratchFilled<T>(int length, T value, bool fill)
+        where T : unmanaged
+    {
+        int elementSize = Unsafe.SizeOf<T>();
+        nuint alignment = CalculateArenaAlignment(elementSize);
+        if (_kernel.IsArenaFastThread)
+        {
+            return new ConcurrentArenaLease<T>(
+                _kernel,
+                _kernel.LeaseArenaBumpFilled(length, elementSize, alignment, value, fill));
+        }
+
+        if (_kernel.TryLeaseArenaLaneFilled(length, elementSize, alignment, value, fill, out NativeArenaAllocation lane, out NativePoolThreadCache? laneCache))
+        {
+            return new ConcurrentArenaLease<T>(_kernel, lane, laneCache);
+        }
+
+        NativeRegionAllocation allocation = _kernel.LeaseBumpInitialized(
+            length,
+            elementSize,
+            alignment,
+            scoped: false,
+            containsReferences: false,
+            NativeOwnerKernel.FillInitializer(value));
+        return new ConcurrentArenaLease<T>(_kernel, allocation);
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static nuint CalculateArenaAlignment(int elementSize) =>
         elementSize >= IntPtr.Size
@@ -261,6 +303,9 @@ public readonly ref struct ConcurrentArenaLease<T>
     private readonly int _length;
     private readonly int _capacity;
     private readonly long _scopeEpoch;
+    // The scratching thread's cache, for a range from its lane: the lease is a
+    // ref struct, so its operations run on that thread and skip the lookup.
+    private readonly NativePoolThreadCache? _laneCache;
 
     internal ConcurrentArenaLease(
         NativeOwnerKernel kernel,
@@ -289,6 +334,13 @@ public readonly ref struct ConcurrentArenaLease<T>
         _capacity = allocation.Capacity;
         _scopeEpoch = allocation.ScopeEpoch;
     }
+
+    internal ConcurrentArenaLease(
+        NativeOwnerKernel kernel,
+        NativeArenaAllocation allocation,
+        NativePoolThreadCache? laneCache)
+        : this(kernel, allocation) =>
+        _laneCache = laneCache;
 
     internal NativeOwnerKernel KernelForComposite =>
         GetKernel("NativeLeaseOperations.Access");
@@ -539,6 +591,56 @@ public readonly ref struct ConcurrentArenaLease<T>
         }
     }
 
+    /// <summary>Runs one compile-time processor over the logical range, without a delegate.</summary>
+    /// <typeparam name="TState">The caller state type.</typeparam>
+    /// <typeparam name="TResult">The result type, which cannot contain the borrowed span.</typeparam>
+    /// <typeparam name="TProcessor">The processor; its static member is called without a delegate.</typeparam>
+    /// <remarks>Ranges of elements that are or contain references have no span view; use <see cref="Access"/> or <see cref="Read{TResult}"/>.</remarks>
+    public TResult Process<TState, TResult, TProcessor>(scoped in TState state)
+        where TState : allows ref struct
+        where TProcessor : struct, INativeSpanProcessor<T, TState, TResult>
+    {
+        NativeOwnerKernel kernel = GetKernel(nameof(Process));
+        if (IsArenaFast
+            && kernel.CanUseArenaFastLocalOperation)
+        {
+            NativeArenaLocalOperationToken localToken =
+                kernel.EnterArenaFastLocalOperation(
+                    CreateArenaAllocation(),
+                    nameof(Process));
+            try
+            {
+                return TProcessor.Invoke(new NativeLeaseView<T>(GetArenaPointer(), _length).AsSpan(), in state);
+            }
+            finally
+            {
+                localToken.Dispose();
+            }
+        }
+
+        if (TryEnterLane(kernel, out NativePoolThreadCache? cache, out int epoch))
+        {
+            try
+            {
+                return TProcessor.Invoke(new NativeLeaseView<T>(GetArenaPointer(), _length).AsSpan(), in state);
+            }
+            finally
+            {
+                kernel.ExitCacheCountedOperation(_generationState!, cache, epoch);
+            }
+        }
+
+        NativeArenaOperationToken token = EnterOperation(nameof(Process));
+        try
+        {
+            return TProcessor.Invoke(token.GetView<T>().AsSpan(), in state);
+        }
+        finally
+        {
+            token.Dispose();
+        }
+    }
+
     private NativeOwnerKernel GetKernel(string operation) =>
         _kernel ?? throw new NativeAllocationUninitializedException(nameof(ConcurrentArenaLease<T>), operation);
 
@@ -607,7 +709,7 @@ public readonly ref struct ConcurrentArenaLease<T>
     {
         if (IsArenaFast && !RuntimeHelpers.IsReferenceOrContainsReferences<T>())
         {
-            return kernel.TryEnterArenaLaneOperation(CreateArenaAllocation(), out cache, out epoch);
+            return kernel.TryEnterArenaLaneOperation(_laneCache, CreateArenaAllocation(), out cache, out epoch);
         }
 
         cache = null;

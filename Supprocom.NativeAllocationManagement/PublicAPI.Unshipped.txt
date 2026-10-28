@@ -2,3 +2,6 @@
 Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>.Rent(int length, T value) -> Supprocom.NativeAllocationManagement.ConcurrentPooled<T>
 Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>.RentUninitialized(int length) -> Supprocom.NativeAllocationManagement.ConcurrentPooled<T>
 static Supprocom.NativeAllocationManagement.NativeTransferPoolExtensions.RentTransferable<T>(this Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>! pool, int length, T value) -> Supprocom.NativeAllocationManagement.NativeTransfer<T>
+Supprocom.NativeAllocationManagement.NativeConcurrentArena.Scratch<T>(int length, T value) -> Supprocom.NativeAllocationManagement.ConcurrentArenaLease<T>
+Supprocom.NativeAllocationManagement.NativeConcurrentArena.ScratchUninitialized<T>(int length) -> Supprocom.NativeAllocationManagement.ConcurrentArenaLease<T>
+Supprocom.NativeAllocationManagement.ConcurrentArenaLease<T>.Process<TState, TResult, TProcessor>(scoped in TState state) -> TResult
