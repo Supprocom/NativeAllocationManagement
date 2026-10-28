@@ -107,7 +107,7 @@ public readonly struct NativeShared<T> : IDisposable where T : unmanaged
         Exception? callbackFailure = null;
         try { action(payload.GetView(_offset, _length)); }
         catch (Exception failure) { callbackFailure = failure; throw; }
-        finally { EndRead(control, payload, _version, callbackFailure); }
+        finally { EndRead(control, payload, _slot, _version, callbackFailure); }
     }
 
     /// <summary>Computes a non-ref-struct result in one entered synchronous read-only callback.</summary>
@@ -120,7 +120,7 @@ public readonly struct NativeShared<T> : IDisposable where T : unmanaged
         Exception? callbackFailure = null;
         try { return action(payload.GetView(_offset, _length)); }
         catch (Exception failure) { callbackFailure = failure; throw; }
-        finally { EndRead(control, payload, _version, callbackFailure); }
+        finally { EndRead(control, payload, _slot, _version, callbackFailure); }
     }
 
     /// <summary>Runs one compile-time read-only processor in one entered synchronous read.</summary>
@@ -137,12 +137,12 @@ public readonly struct NativeShared<T> : IDisposable where T : unmanaged
         Exception? callbackFailure = null;
         try { return TProcessor.Invoke(payload.GetView(_offset, _length).AsSpan(), in state); }
         catch (Exception failure) { callbackFailure = failure; throw; }
-        finally { EndRead(control, payload, _version, callbackFailure); }
+        finally { EndRead(control, payload, _slot, _version, callbackFailure); }
     }
 
-    private static void EndRead(NativeSharedControl<T> control, NativeTransferControl<T> payload, long version, Exception? callbackFailure)
+    private static void EndRead(NativeSharedControl<T> control, NativeTransferControl<T> payload, int slot, long version, Exception? callbackFailure)
     {
-        try { control.ExitRead(payload, version); }
+        try { control.ExitRead(payload, slot, version); }
         catch (Exception cleanupFailure) when (callbackFailure is not null)
         {
             throw new AggregateException("The shared callback and payload return both failed.", callbackFailure, cleanupFailure);
@@ -185,7 +185,7 @@ public readonly struct NativeShared<T> : IDisposable where T : unmanaged
             }
             finally { if (!published) NativeBlockAllocator.Free(block); }
         }
-        finally { Control.ExitRead(payload, _version); GC.KeepAlive(payload); }
+        finally { Control.ExitRead(payload, _slot, _version); GC.KeepAlive(payload); }
     }
 
     /// <summary>Releases this independently acquired binding once; aliases cannot decrement ownership twice.</summary>

@@ -710,6 +710,56 @@ public sealed class NativeSharingTests
     }
 
     [Fact]
+    public async Task ReadersThroughDifferentBindingsHoldTheReleaseUntilTheLastLeaves()
+    {
+        // Each binding counts its readers in its own stripe; the release waits
+        // for the sum.
+        NativeMemoryBudget budget = new(16);
+        NativeShared<int> first = Create(budget, 4, 2, 1);
+        Assert.True(first.TryShare(out NativeShared<int> second, out _));
+        Assert.True(first.TryDowngrade(out NativeWeak<int> weak, out _));
+        using ManualResetEventSlim firstEntered = new(false);
+        using ManualResetEventSlim secondEntered = new(false);
+        using ManualResetEventSlim finishFirst = new(false);
+        using ManualResetEventSlim finishSecond = new(false);
+        Task firstReader = Task.Run(() => first.Access(view =>
+        {
+            firstEntered.Set();
+            Assert.True(finishFirst.Wait(TimeSpan.FromSeconds(20)));
+            Assert.Equal(42, view[0]);
+        }));
+        Task secondReader = Task.Run(() => second.Access(view =>
+        {
+            secondEntered.Set();
+            Assert.True(finishSecond.Wait(TimeSpan.FromSeconds(20)));
+            Assert.Equal(42, view[0]);
+        }));
+        try
+        {
+            Assert.True(firstEntered.Wait(TimeSpan.FromSeconds(20)));
+            Assert.True(secondEntered.Wait(TimeSpan.FromSeconds(20)));
+            first.Dispose();
+            second.Dispose();
+            Assert.True(weak.IsExpired);
+            Assert.Equal(2, weak.CaptureSnapshot().ActiveReadCount);
+            finishSecond.Set();
+            await secondReader.WaitAsync(TimeSpan.FromSeconds(20));
+            Assert.Equal(1, weak.CaptureSnapshot().ActiveReadCount);
+            Assert.Equal(16, budget.CaptureStatistics().CommittedBytes);
+        }
+        finally
+        {
+            finishFirst.Set();
+            finishSecond.Set();
+        }
+
+        await firstReader.WaitAsync(TimeSpan.FromSeconds(20));
+        Assert.Equal(0, budget.CaptureStatistics().CommittedBytes);
+        Assert.Equal(1, weak.CaptureSnapshot().PayloadReturnCount);
+        weak.Dispose();
+    }
+
+    [Fact]
     public void LockFreeReadersRacingTheLastReleaseReturnThePayloadOnce()
     {
         for (int round = 0; round < 200; round++)

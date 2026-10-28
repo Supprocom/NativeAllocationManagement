@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace Supprocom.NativeAllocationManagement;
 
@@ -37,7 +38,14 @@ internal sealed class NativeSharedControl<T> where T : unmanaged
     private bool _expired;
     private bool _released;
     private bool _releaseStarted;
+    // With several strong bindings, readers count themselves in a stripe chosen
+    // by their binding slot, each on its own cache line, so threads reading
+    // through their own bindings do not take one line from each other; the
+    // reader count is the sum. With one, the count is this field.
+    private const int MaxReaderStripes = 8;
     private int _activeReads;
+    private readonly ReaderStripe[]? _readers;
+    private readonly int _readerMask;
     private int _peakStrong;
     private int _peakWeak;
     private long _ownedBytes;
@@ -66,6 +74,13 @@ internal sealed class NativeSharedControl<T> where T : unmanaged
         _weakBank = preparation.WeakBindingCount == 0 ? NativeSharingBindingBank.Empty : new(preparation.WeakBindingCount);
         _strong = _strongBank;
         _weak = _weakBank;
+        int stripes = (int)System.Numerics.BitOperations.RoundUpToPowerOf2(
+            (uint)Math.Clamp(preparation.StrongBindingCount, 1, MaxReaderStripes));
+        if (stripes > 1)
+        {
+            _readers = new ReaderStripe[stripes];
+            _readerMask = stripes - 1;
+        }
         NativeMemoryAccounting.PrepareThread();
         Id = NativeOwnerIdentity.Next(thread);
         OwnerId = ownerId;
@@ -326,27 +341,59 @@ internal sealed class NativeSharedControl<T> where T : unmanaged
     // waits for the last reader, whose exit then completes it.
     internal void EnterRead(NativeTransferControl<T> payload, int slot, long version)
     {
-        Interlocked.Increment(ref _activeReads);
+        ref int readers = ref ReaderCount(slot);
+        Interlocked.Increment(ref readers);
         if (Volatile.Read(ref _expired) || !Volatile.Read(ref _strong).IsActiveConcurrent(slot, version))
         {
             // A release that saw this refused reader is completed here.
-            LeaveRead(payload, version);
+            LeaveRead(payload, ref readers, version);
             throw new InvalidOperationException("This strong binding is stale, released or expired.");
         }
     }
 
-    internal void ExitRead(NativeTransferControl<T> payload, long version)
+    internal void ExitRead(NativeTransferControl<T> payload, int slot, long version)
     {
-        if (Volatile.Read(ref _activeReads) == 0) throw new InvalidOperationException("The shared payload has no entered read.");
-        LeaveRead(payload, version);
+        ref int readers = ref ReaderCount(slot);
+        if (Volatile.Read(ref readers) == 0) throw new InvalidOperationException("The shared payload has no entered read.");
+        LeaveRead(payload, ref readers, version);
+    }
+
+    // Any slot maps into the stripes, so no bounds check reads the array header.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private ref int ReaderCount(int slot) =>
+        ref _readerMask == 0
+            ? ref _activeReads
+            : ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_readers!), slot & _readerMask).Count;
+
+    private int ActiveReads
+    {
+        get
+        {
+            if (_readerMask == 0)
+            {
+                return Volatile.Read(ref _activeReads);
+            }
+
+            ref ReaderStripe stripe = ref MemoryMarshal.GetArrayDataReference(_readers!);
+            int active = Volatile.Read(ref stripe.Count);
+            for (int index = 1; index <= _readerMask; index++)
+            {
+                active += Volatile.Read(ref Unsafe.Add(ref stripe, index).Count);
+            }
+
+            return active;
+        }
     }
 
     // The last reader to leave an expired control completes its release. A
     // reader of an earlier lifetime of a reused control does not hold this
     // lifetime's payload: it releases only the payload recorded at expiry.
-    private void LeaveRead(NativeTransferControl<T> payload, long version)
+    // The decrement is a full fence, so a reader leaving after expiry sees
+    // every other stripe; two that both see none left both reach the gate,
+    // where only one begins the release.
+    private void LeaveRead(NativeTransferControl<T> payload, ref int readers, long version)
     {
-        if (Interlocked.Decrement(ref _activeReads) != 0 || !Volatile.Read(ref _expired))
+        if (Interlocked.Decrement(ref readers) != 0 || !Volatile.Read(ref _expired) || ActiveReads != 0)
         {
             return;
         }
@@ -410,7 +457,7 @@ internal sealed class NativeSharedControl<T> where T : unmanaged
         // Order the expiry written before this call ahead of the reader count
         // (see EnterRead).
         Interlocked.MemoryBarrier();
-        if (!_expired || Volatile.Read(ref _activeReads) != 0 || _released || _releaseStarted) return false;
+        if (!_expired || ActiveReads != 0 || _released || _releaseStarted) return false;
         _releaseStarted = true;
         return true;
     }
@@ -444,7 +491,7 @@ internal sealed class NativeSharedControl<T> where T : unmanaged
                 && _tracedBudget is null
                 && _strongBank.Occupied == 0
                 && _weakBank.Occupied == 0
-                && Volatile.Read(ref _activeReads) == 0
+                && ActiveReads == 0
                 && !NativeMemoryTestHooks.FaultInjectionPending;
             try { Trace(NativeMemoryTraceKind.PayloadReturned); }
             finally
@@ -623,7 +670,7 @@ internal sealed class NativeSharedControl<T> where T : unmanaged
             }
 
             return new(Id, OwnerId, _preparation, _strong.Occupied, _weak.Occupied,
-                Volatile.Read(ref _activeReads), _peakStrong, _peakWeak, _expired, _released, _ownedBytes,
+                ActiveReads, _peakStrong, _peakWeak, _expired, _released, _ownedBytes,
                 _borrowedBytes, _released ? 0 : _initializedBytes,
                 checked(_strong.ElementBytes + _weak.ElementBytes), _shares, _weakCreations,
                 _upgrades, _strongRefusals, _weakRefusals, _expiredUpgrades, _payloadReturns,
@@ -681,3 +728,15 @@ internal sealed class NativeSharedControl<T> where T : unmanaged
             budget.RecordOwnershipTransition(kind, OwnerId, Id, checked((nuint)_ownedBytes), _allocationOrdinal);
     }
 }
+
+// One stripe of a sharing control's reader count. Count sits 48 bytes in, so
+// the first stripe's count is a full cache line away from the array header and
+// every count is a line from the next. Not nested: a type nested in a generic
+// class is generic, and generic types cannot have explicit layout.
+[StructLayout(LayoutKind.Explicit, Size = 64)]
+internal struct ReaderStripe
+{
+    [FieldOffset(48)]
+    internal int Count;
+}
+
