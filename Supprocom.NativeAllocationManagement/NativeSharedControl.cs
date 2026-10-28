@@ -3,13 +3,32 @@ using System.Runtime.CompilerServices;
 namespace Supprocom.NativeAllocationManagement;
 
 // Weak observation holds this bounded value/slot state, not the payload or allocator.
+//
+// A control whose payload returned with no weak observer or entered reader left
+// parks on the returning thread, and that thread's next NativeShared.Create
+// with the same preparation reuses it, banks and weak reference included.
+// Reuse raises every slot version to a common floor, so bindings of earlier
+// lifetimes fail validation and their snapshots report the payload returned.
+// Release always returns the payload this control recorded at expiry, never a
+// reader's: a stale reader can only complete the current lifetime's release.
 internal sealed class NativeSharedControl<T> where T : unmanaged
 {
-    private readonly Lock _gate = new();
+    private const int ParkCapacity = 4;
+    private static readonly int s_parkedSlot = NativeThreadState.AllocateTypedSlot();
+
+    // A spin gate, not a Lock: holders update a few fields, never block or run
+    // user code, and the control needs no second object.
+    private int _gate;
     private NativeSharingBindingBank _strong;
     private NativeSharingBindingBank _weak;
+    // The banks themselves: expiry drops _strong/_weak, reuse restores these.
+    private readonly NativeSharingBindingBank _strongBank;
+    private readonly NativeSharingBindingBank _weakBank;
     private readonly NativeSharingPreparation _preparation;
     private WeakReference<NativeTransferControl<T>>? _payload;
+    private WeakReference<NativeTransferControl<T>>? _payloadReference;
+    private NativeTransferControl<T>? _releasingPayload;
+    private long _lifetimeFloor;
     private WeakReference<NativeMemoryBudget>? _tracedBudget;
     private bool _expired;
     private bool _released;
@@ -20,7 +39,7 @@ internal sealed class NativeSharedControl<T> where T : unmanaged
     private long _ownedBytes;
     private long _borrowedBytes;
     private long _allocationOrdinal;
-    private readonly long _initializedBytes;
+    private long _initializedBytes;
     private long _shares;
     private long _weakCreations;
     private long _upgrades;
@@ -33,17 +52,88 @@ internal sealed class NativeSharedControl<T> where T : unmanaged
     private long _returnFailures;
     private bool _historyOverflowed;
 
-    internal long Id { get; } = NativeOwnerIdentity.Next();
-    internal long OwnerId { get; }
+    internal long Id { get; private set; }
+    internal long OwnerId { get; private set; }
 
-    internal NativeSharedControl(NativeSharingPreparation preparation, long ownerId, int length)
+    private NativeSharedControl(NativeThreadState thread, NativeSharingPreparation preparation, long ownerId, int length)
     {
         _preparation = preparation;
-        _strong = new NativeSharingBindingBank(preparation.StrongBindingCount);
-        _weak = preparation.WeakBindingCount == 0 ? NativeSharingBindingBank.Empty : new(preparation.WeakBindingCount);
+        _strongBank = new NativeSharingBindingBank(preparation.StrongBindingCount);
+        _weakBank = preparation.WeakBindingCount == 0 ? NativeSharingBindingBank.Empty : new(preparation.WeakBindingCount);
+        _strong = _strongBank;
+        _weak = _weakBank;
+        NativeMemoryAccounting.PrepareThread();
+        Id = NativeOwnerIdentity.Next(thread);
         OwnerId = ownerId;
         _initializedBytes = (long)length * Unsafe.SizeOf<T>();
     }
+
+    internal static NativeSharedControl<T> Acquire(NativeSharingPreparation preparation, long ownerId, int length)
+    {
+        NativeThreadState thread = NativeThreadState.Current;
+        if (!NativeMemoryTestHooks.FaultInjectionPending
+            && thread.GetTyped<ParkedControls>(s_parkedSlot) is { Count: > 0 } stack
+            && stack.TryTake(thread, preparation) is { } parked)
+        {
+            parked.BeginLifetime(thread, ownerId, length);
+            return parked;
+        }
+
+        return new NativeSharedControl<T>(thread, preparation, ownerId, length);
+    }
+
+    // No binding of this lifetime exists yet, but stale bindings of earlier ones
+    // still reach this control: the reset runs under the gate, so their gated
+    // decisions see either the returned lifetime or the new one, never a mix.
+    private void BeginLifetime(NativeThreadState thread, long ownerId, int length)
+    {
+        NativeMemoryAccounting.PrepareThread();
+        long id = NativeOwnerIdentity.Next(thread);
+        EnterGate();
+        try
+        {
+            Reset(id, ownerId, length);
+        }
+        finally { ExitGate(); }
+    }
+
+    private void Reset(long id, long ownerId, int length)
+    {
+        Id = id;
+        OwnerId = ownerId;
+        _initializedBytes = (long)length * Unsafe.SizeOf<T>();
+        _tracedBudget = null;
+        _releasingPayload = null;
+        _peakStrong = 0;
+        _peakWeak = 0;
+        _ownedBytes = 0;
+        _borrowedBytes = 0;
+        _allocationOrdinal = 0;
+        _shares = 0;
+        _weakCreations = 0;
+        _upgrades = 0;
+        _strongRefusals = 0;
+        _weakRefusals = 0;
+        _expiredUpgrades = 0;
+        _payloadReturns = 0;
+        _detaches = 0;
+        _detachRefusals = 0;
+        _returnFailures = 0;
+        _historyOverflowed = false;
+        long floor = Math.Max(_strongBank.MaxVersion, _weakBank.MaxVersion);
+        _strongBank.RaiseVersions(floor);
+        _weakBank.RaiseVersions(floor);
+        Volatile.Write(ref _lifetimeFloor, floor);
+        _strong = _strongBank;
+        _weak = _weakBank;
+        _releaseStarted = false;
+        _released = false;
+        Volatile.Write(ref _expired, false);
+    }
+
+    // A binding version at or below the floor belongs to an earlier lifetime,
+    // whose payload has returned.
+    internal bool IsEarlierLifetime(long version) => version <= Volatile.Read(ref _lifetimeFloor);
 
     // Weak references to returned payloads, recycled on the thread that
     // returned them so that preparing weak bindings allocates no GC handle.
@@ -58,6 +148,13 @@ internal sealed class NativeSharedControl<T> where T : unmanaged
     internal void PreparePayloadReference(NativeTransferControl<T> payload)
     {
         if (_preparation.WeakBindingCount == 0) return;
+        if (_payloadReference is { } own)
+        {
+            own.SetTarget(payload);
+            _payload = own;
+            return;
+        }
+
         int count = t_payloadReferenceCount;
         if (count != 0)
         {
@@ -67,10 +164,12 @@ internal sealed class NativeSharedControl<T> where T : unmanaged
             t_payloadReferenceCount = count;
             reference.SetTarget(payload);
             _payload = reference;
+            _payloadReference = reference;
             return;
         }
 
         _payload = new(payload);
+        _payloadReference = _payload;
     }
 
     // Under the gate, after the last use of the reference: every reader
@@ -106,7 +205,8 @@ internal sealed class NativeSharedControl<T> where T : unmanaged
     internal bool TryShare(NativeTransferControl<T> payload, int slot, long version, int offset, int length,
         out NativeShared<T> share, out NativeSharingExhaustionReason reason)
     {
-        lock (_gate)
+        EnterGate();
+        try
         {
             ValidateStrong(slot, version);
             share = default;
@@ -123,12 +223,14 @@ internal sealed class NativeSharedControl<T> where T : unmanaged
             Trace(NativeMemoryTraceKind.Shared);
             return true;
         }
+        finally { ExitGate(); }
     }
 
     internal bool TryDowngrade(int slot, long version, int offset, int length,
         out NativeWeak<T> weak, out NativeSharingExhaustionReason reason)
     {
-        lock (_gate)
+        EnterGate();
+        try
         {
             ValidateStrong(slot, version);
             weak = default;
@@ -145,12 +247,14 @@ internal sealed class NativeSharedControl<T> where T : unmanaged
             Trace(NativeMemoryTraceKind.WeakCreated);
             return true;
         }
+        finally { ExitGate(); }
     }
 
     internal bool TryUpgrade(int slot, long version, int offset, int length,
         out NativeShared<T> shared, out NativeSharingExhaustionReason reason)
     {
-        lock (_gate)
+        EnterGate();
+        try
         {
             ValidateWeak(slot, version);
             shared = default;
@@ -177,11 +281,13 @@ internal sealed class NativeSharedControl<T> where T : unmanaged
             Trace(NativeMemoryTraceKind.WeakUpgraded);
             return true;
         }
+        finally { ExitGate(); }
     }
 
     internal bool IsExpired(int slot, long version)
     {
-        lock (_gate)
+        EnterGate();
+        try
         {
             ValidateWeak(slot, version);
             if (!_expired && (_payload is null || !_payload.TryGetTarget(out _)))
@@ -191,6 +297,7 @@ internal sealed class NativeSharedControl<T> where T : unmanaged
             }
             return _expired;
         }
+        finally { ExitGate(); }
     }
 
     // Reads take no lock, so readers of one payload never serialize. A reader
@@ -204,63 +311,71 @@ internal sealed class NativeSharedControl<T> where T : unmanaged
         if (Volatile.Read(ref _expired) || !Volatile.Read(ref _strong).IsActiveConcurrent(slot, version))
         {
             // A release that saw this refused reader is completed here.
-            LeaveRead(payload);
+            LeaveRead(payload, version);
             throw new InvalidOperationException("This strong binding is stale, released or expired.");
         }
     }
 
-    internal void ExitRead(NativeTransferControl<T> payload)
+    internal void ExitRead(NativeTransferControl<T> payload, long version)
     {
         if (Volatile.Read(ref _activeReads) == 0) throw new InvalidOperationException("The shared payload has no entered read.");
-        LeaveRead(payload);
+        LeaveRead(payload, version);
     }
 
-    private void LeaveRead(NativeTransferControl<T> payload)
+    // The last reader to leave an expired control completes its release. A
+    // reader of an earlier lifetime of a reused control does not hold this
+    // lifetime's payload: it releases only the payload recorded at expiry.
+    private void LeaveRead(NativeTransferControl<T> payload, long version)
     {
         if (Interlocked.Decrement(ref _activeReads) != 0 || !Volatile.Read(ref _expired))
         {
             return;
         }
 
-        bool release;
-        lock (_gate)
+        NativeTransferControl<T>? releasing;
+        EnterGate();
+        try
         {
-            release = BeginReleaseIfReady();
+            releasing = _releasingPayload ?? (IsEarlierLifetime(version) ? null : payload);
+            if (releasing is not null && !BeginReleaseIfReady()) releasing = null;
         }
+        finally { ExitGate(); }
 
-        if (release)
-        {
-            payload.ReturnSharedPayload();
-        }
+        releasing?.ReturnSharedPayload();
     }
 
     internal void ReleaseStrong(NativeTransferControl<T> payload, int slot, long version)
     {
         bool release;
-        lock (_gate)
+        EnterGate();
+        try
         {
             ValidateStrong(slot, version);
             _strong.Release(slot, version);
             if (_strong.Occupied == 0)
             {
+                _releasingPayload = payload;
                 _expired = true;
                 DropExpiredBanks();
             }
             Trace(NativeMemoryTraceKind.OwnershipReleased);
             release = BeginReleaseIfReady();
         }
+        finally { ExitGate(); }
         if (release) payload.ReturnSharedPayload();
     }
 
     internal void ReleaseWeak(int slot, long version)
     {
-        lock (_gate)
+        EnterGate();
+        try
         {
             ValidateWeak(slot, version);
             _weak.Release(slot, version);
             if (_expired) DropExpiredBanks();
             Trace(NativeMemoryTraceKind.OwnershipReleased);
         }
+        finally { ExitGate(); }
     }
 
     private void DropExpiredBanks()
@@ -281,24 +396,37 @@ internal sealed class NativeSharedControl<T> where T : unmanaged
         return true;
     }
 
+    // Abandoned payloads release from their own finalizer or failed creation;
+    // recording one here would keep it reachable from weak observers.
     internal bool BeginAbandonedRelease()
     {
-        lock (_gate)
+        EnterGate();
+        try
         {
             _expired = true;
             DropExpiredBanks();
             return BeginReleaseIfReady();
         }
+        finally { ExitGate(); }
     }
 
-    internal void RecordPayloadReturn()
+    internal void RecordPayloadReturn(bool mayPark = false)
     {
-        lock (_gate)
+        bool park;
+        EnterGate();
+        try
         {
             if (_released) return;
             _released = true;
             _expired = true;
+            _releasingPayload = null;
             Increment(ref _payloadReturns);
+            park = mayPark
+                && _tracedBudget is null
+                && _strongBank.Occupied == 0
+                && _weakBank.Occupied == 0
+                && Volatile.Read(ref _activeReads) == 0
+                && !NativeMemoryTestHooks.FaultInjectionPending;
             try { Trace(NativeMemoryTraceKind.PayloadReturned); }
             finally
             {
@@ -306,51 +434,163 @@ internal sealed class NativeSharedControl<T> where T : unmanaged
                 _borrowedBytes = 0;
                 if (_payload is not null)
                 {
-                    RecyclePayloadReference(_payload);
+                    // A parked control keeps its own reference for the next lifetime.
+                    if (!park)
+                    {
+                        RecyclePayloadReference(_payload);
+                        _payloadReference = null;
+                    }
+
                     _payload = null;
                 }
             }
+        }
+        finally { ExitGate(); }
+
+        if (park)
+        {
+            Park();
+        }
+    }
+
+    private void Park()
+    {
+        NativeThreadState thread = NativeThreadState.Current;
+        ParkedControls stack = thread.GetTyped<ParkedControls>(s_parkedSlot) ?? CreateParkedControls(thread);
+        stack.TryPush(thread, this);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static ParkedControls CreateParkedControls(NativeThreadState thread)
+    {
+        ParkedControls stack = new(thread);
+        thread.SetTyped(s_parkedSlot, stack);
+        return stack;
+    }
+
+    // Returned controls of one element type on one thread, most recent last.
+    private sealed class ParkedControls
+    {
+        private readonly NativeSharedControl<T>?[] _items = new NativeSharedControl<T>?[ParkCapacity];
+        private int _epoch;
+
+        internal int Count;
+
+        internal ParkedControls(NativeThreadState thread) => _epoch = thread.ReuseEpoch;
+
+        internal void TryPush(NativeThreadState thread, NativeSharedControl<T> control)
+        {
+            if (_epoch != thread.ReuseEpoch)
+            {
+                Clear(thread);
+            }
+
+            // A full stack drops its oldest control: the most recent preparation
+            // is the likeliest to come back.
+            if (Count == ParkCapacity)
+            {
+                Array.Copy(_items, 1, _items, 0, ParkCapacity - 1);
+                Count--;
+            }
+
+            _items[Count++] = control;
+        }
+
+        internal NativeSharedControl<T>? TryTake(NativeThreadState thread, NativeSharingPreparation preparation)
+        {
+            if (_epoch != thread.ReuseEpoch)
+            {
+                Clear(thread);
+                return null;
+            }
+
+            for (int index = Count - 1; index >= 0; index--)
+            {
+                NativeSharedControl<T> control = _items[index]!;
+                if (control._preparation == preparation)
+                {
+                    _items[index] = _items[--Count];
+                    _items[Count] = null;
+                    return control;
+                }
+            }
+
+            return null;
+        }
+
+        private void Clear(NativeThreadState thread)
+        {
+            Array.Clear(_items);
+            Count = 0;
+            _epoch = thread.ReuseEpoch;
         }
     }
 
     internal void RecordReturnFailure()
     {
-        lock (_gate) { Increment(ref _returnFailures); _releaseStarted = false; }
+        EnterGate();
+        // Retries come from the payload's own bindings, weak target or finalizer:
+        // a failed payload must not stay reachable from this control.
+        try { Increment(ref _returnFailures); _releaseStarted = false; _releasingPayload = null; }
+        finally { ExitGate(); }
     }
 
     internal void DeferPayloadReturn()
     {
-        lock (_gate) { _releaseStarted = false; }
+        EnterGate();
+        try { _releaseStarted = false; }
+        finally { ExitGate(); }
     }
 
-    internal bool TryCompletePayloadReturn(NativeTransferControl<T>? knownPayload = null)
+    // Private custody retry: the caller holds the actual payload.
+    internal bool TryCompletePayloadReturn(NativeTransferControl<T> knownPayload) =>
+        TryCompletePayloadReturn(long.MaxValue, knownPayload);
+
+    internal bool TryCompletePayloadReturn(long bindingVersion, NativeTransferControl<T>? knownPayload = null)
     {
         NativeTransferControl<T>? payload;
-        lock (_gate)
+        EnterGate();
+        try
         {
-            if (_released) return true;
-            payload = knownPayload;
+            if (_released || IsEarlierLifetime(bindingVersion)) return true;
+            payload = _releasingPayload ?? knownPayload;
             if (payload is null && (_payload is null || !_payload.TryGetTarget(out payload))) return false;
             if (!BeginReleaseIfReady()) return false;
         }
+        finally { ExitGate(); }
         payload.ReturnSharedPayload();
         return Volatile.Read(ref _released);
     }
 
     internal void RecordDetach()
     {
-        lock (_gate) { Increment(ref _detaches); Trace(NativeMemoryTraceKind.Detached); }
+        EnterGate();
+        try { Increment(ref _detaches); Trace(NativeMemoryTraceKind.Detached); }
+        finally { ExitGate(); }
     }
 
     internal void RecordDetachRefusal()
     {
-        lock (_gate) { Increment(ref _detachRefusals); }
+        EnterGate();
+        try { Increment(ref _detachRefusals); }
+        finally { ExitGate(); }
     }
 
-    internal NativeSharingStatistics CaptureSnapshot()
+    internal NativeSharingStatistics CaptureSnapshot() => CaptureSnapshot(long.MaxValue);
+
+    internal NativeSharingStatistics CaptureSnapshot(long bindingVersion)
     {
-        lock (_gate)
+        EnterGate();
+        try
         {
+            if (IsEarlierLifetime(bindingVersion))
+            {
+                // A binding of an earlier lifetime of this reused control: that
+                // lifetime ended with its payload returned and its banks dropped.
+                return new(Id, OwnerId, _preparation, 0, 0, 0, 0, 0, true, true, 0, 0, 0, 0,
+                    0, 0, 0, 0, 0, 0, 1, 0, false);
+            }
+
             return new(Id, OwnerId, _preparation, _strong.Occupied, _weak.Occupied,
                 Volatile.Read(ref _activeReads), _peakStrong, _peakWeak, _expired, _released, _ownedBytes,
                 _borrowedBytes, _released ? 0 : _initializedBytes,
@@ -363,6 +603,7 @@ internal sealed class NativeSharedControl<T> where T : unmanaged
                 PeakInitializedPayloadBytes = _initializedBytes
             };
         }
+        finally { ExitGate(); }
     }
 
     private void ValidateStrong(int slot, long version)
@@ -376,6 +617,30 @@ internal sealed class NativeSharedControl<T> where T : unmanaged
         if (!_weak.IsActive(slot, version))
             throw new InvalidOperationException("This weak binding is stale or released.");
     }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void EnterGate()
+    {
+        if (Interlocked.CompareExchange(ref _gate, 1, 0) != 0)
+        {
+            WaitForGate();
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private void WaitForGate()
+    {
+        SpinWait spinner = default;
+        do
+        {
+            spinner.SpinOnce();
+        }
+        while (Volatile.Read(ref _gate) != 0
+            || Interlocked.CompareExchange(ref _gate, 1, 0) != 0);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void ExitGate() => Volatile.Write(ref _gate, 0);
 
     private void Increment(ref long history) => NativeOwnerHistory.Increment(ref history, ref _historyOverflowed);
 

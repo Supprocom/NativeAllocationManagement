@@ -23,9 +23,10 @@ internal partial class NativeTransferControl<T> where T : unmanaged
             return false;
         }
 
-        if (NativeOperationAdmission.Close(ref _operationAdmission) != 0)
+        // The state CAS and an entering unique callback's admission increment are
+        // both full fences: the callback sees Moving and leaves, or this sees it.
+        if (NativeOperationAdmission.Count(ref _operationAdmission) != 0)
         {
-            NativeOperationAdmission.Open(ref _operationAdmission);
             Volatile.Write(ref _state, Active);
             return false;
         }
@@ -109,7 +110,7 @@ internal partial class NativeTransferControl<T> where T : unmanaged
     {
         if (StorageHasBeenReturned)
         {
-            CompleteSharedPayloadReturn();
+            CompleteSharedPayloadReturn(mayPark);
             return;
         }
         int observed = Interlocked.CompareExchange(ref _state, Disposing, Shared);
@@ -142,7 +143,7 @@ internal partial class NativeTransferControl<T> where T : unmanaged
                 ReturnStorage("NativeTransfer.Dispose");
                 Volatile.Write(ref _state, Disposed);
             }
-            CompleteSharedPayloadReturn();
+            CompleteSharedPayloadReturn(mayPark);
         }
         catch (Exception returnFailure)
         {
@@ -154,7 +155,7 @@ internal partial class NativeTransferControl<T> where T : unmanaged
             NativeMemoryTestHooks.NotifyBeforeOperationEntry("NativeShared.RetryReady");
             if (returned)
             {
-                try { CompleteSharedPayloadReturn(); }
+                try { CompleteSharedPayloadReturn(mayPark); }
                 catch (Exception observationFailure)
                 {
                     throw new AggregateException("Storage return completed but its observations failed.", returnFailure, observationFailure);
@@ -187,9 +188,9 @@ internal partial class NativeTransferControl<T> where T : unmanaged
     }
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA1816", Justification = "Actual shared payload return disarms the existing acquisition-time emergency finalizer; no second finalizable wrapper is allocated.")]
-    private void CompleteSharedPayloadReturn()
+    private void CompleteSharedPayloadReturn(bool mayPark)
     {
-        try { Control.RecordPayloadReturn(); }
+        try { Control.RecordPayloadReturn(mayPark); }
         finally { GC.SuppressFinalize(this); }
     }
 

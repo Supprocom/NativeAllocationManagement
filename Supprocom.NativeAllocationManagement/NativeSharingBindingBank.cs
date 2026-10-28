@@ -72,6 +72,33 @@ internal sealed class NativeSharingBindingBank
         Occupied--;
     }
 
+    internal long MaxVersion
+    {
+        get
+        {
+            long max = 0;
+            foreach (ref readonly Slot slot in _slots.AsSpan())
+            {
+                max = Math.Max(max, slot.Version);
+            }
+
+            return max;
+        }
+    }
+
+    // Moves every free slot's version up to the floor, so versions issued
+    // before it never match again. Versions only increase.
+    internal void RaiseVersions(long floor)
+    {
+        foreach (ref Slot slot in _slots.AsSpan())
+        {
+            if (slot.Version < floor)
+            {
+                Volatile.Write(ref slot.Version, floor);
+            }
+        }
+    }
+
     internal void ExpireAll()
     {
         foreach (ref Slot slot in _slots.AsSpan())

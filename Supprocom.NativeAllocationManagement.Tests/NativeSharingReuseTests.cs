@@ -1,8 +1,12 @@
+using System.Reflection;
+
 namespace Supprocom.NativeAllocationManagement.Tests;
 
 // An unbudgeted direct payload's control parks once its shared payload returns,
 // and its weak-reference slot is recycled; bindings and observers of earlier
-// lifetimes keep their own sharing control and stay stale.
+// lifetimes keep their own sharing control and stay stale. A sharing control
+// with no observer or reader left parks too, and serves the thread's next
+// share with the same preparation.
 public sealed class NativeSharingReuseTests
 {
     [Fact]
@@ -96,4 +100,84 @@ public sealed class NativeSharingReuseTests
             }
         }
     }
+
+    [Fact]
+    public void ASharingControlServesTheNextShareAndEarlierBindingsReportTheirReturn()
+    {
+        NativeShared<int> first = Share(4, 7, new(2, 1));
+        Assert.True(first.TryShare(out NativeShared<int> alias, out _));
+        Assert.True(first.TryDowngrade(out NativeWeak<int> observer, out _));
+        long firstId = first.Id;
+        alias.Dispose();
+        observer.Dispose();
+        first.Dispose();
+
+        NativeShared<int> second = Share(4, 9, new(2, 1));
+        Assert.Same(ControlOf(first), ControlOf(second));
+        Assert.NotEqual(firstId, second.Id);
+        NativeSharingStatistics fresh = second.CaptureSnapshot();
+        Assert.Equal(0, fresh.ShareCount);
+        Assert.Equal(0, fresh.WeakCreationCount);
+        Assert.Equal(0, fresh.PayloadReturnCount);
+        Assert.Equal(1, fresh.StrongBindingCount);
+        Assert.False(fresh.Expired);
+
+        Assert.Throws<InvalidOperationException>(() => first.Read(static view => view[0]));
+        Assert.Throws<InvalidOperationException>(() => alias.Read(static view => view[0]));
+        Assert.Throws<InvalidOperationException>(first.Dispose);
+        Assert.Throws<InvalidOperationException>(() => first.TryShare(out _, out _));
+        Assert.Throws<InvalidOperationException>(() => first.TryDowngrade(out _, out _));
+        Assert.Throws<InvalidOperationException>(() => observer.TryUpgrade(out _, out _));
+        NativeSharingStatistics earlier = first.CaptureSnapshot();
+        Assert.True(earlier.Expired);
+        Assert.True(earlier.PayloadReleased);
+        Assert.Equal(1, earlier.PayloadReturnCount);
+        Assert.Equal(0, earlier.StrongBindingCount);
+        Assert.Equal(0, earlier.OwnedBackingBytes);
+        Assert.True(first.TryCompletePayloadReturn());
+        Assert.True(observer.TryCompletePayloadReturn());
+        Assert.Equal(9, second.Read(static view => view[3]));
+        second.Dispose();
+    }
+
+    [Fact]
+    public void ASharingControlWithALiveObserverIsNotReused()
+    {
+        NativeShared<int> first = Share(2, 1, new(1, 1));
+        Assert.True(first.TryDowngrade(out NativeWeak<int> observer, out _));
+        first.Dispose();
+        Assert.True(observer.IsExpired);
+
+        NativeShared<int> second = Share(2, 5, new(1, 1));
+        Assert.NotSame(ControlOf(first), ControlOf(second));
+        Assert.True(observer.IsExpired);
+        Assert.False(observer.TryUpgrade(out _, out NativeSharingExhaustionReason reason));
+        Assert.Equal(NativeSharingExhaustionReason.ExpiredPayload, reason);
+        Assert.Equal(5, second.Read(static view => view[0]));
+        second.Dispose();
+        observer.Dispose();
+    }
+
+    [Fact]
+    public void OnlyTheSamePreparationReusesAControl()
+    {
+        NativeShared<int> first = Share(2, 1, new(1, 0));
+        first.Dispose();
+        NativeShared<int> other = Share(2, 2, new(3, 0));
+        Assert.NotSame(ControlOf(first), ControlOf(other));
+        NativeShared<int> same = Share(2, 3, new(1, 0));
+        Assert.Same(ControlOf(first), ControlOf(same));
+        Assert.Equal(new NativeSharingPreparation(3, 0), other.CaptureSnapshot().Preparation);
+        other.Dispose();
+        same.Dispose();
+    }
+
+    private static NativeShared<int> Share(int length, int value, NativeSharingPreparation preparation)
+    {
+        NativeTransfer<int>? source = NativeTransfer<int>.Create(length, value);
+        return NativeShared<int>.Create(ref source, preparation);
+    }
+
+    private static object ControlOf(NativeShared<int> binding) =>
+        typeof(NativeShared<int>).GetField("_control", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(binding)!;
 }

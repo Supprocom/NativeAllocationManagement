@@ -219,7 +219,7 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
             return false;
         }
 
-        Control.RecordPayloadReturn();
+        Control.RecordPayloadReturn(mayPark: true);
         EndSharing();
         if (!TryPark())
         {

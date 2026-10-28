@@ -812,16 +812,16 @@ public sealed class NativeBuilder<T> : IDisposable
                 $"NativeBuilder.{operation} cannot run during another builder operation.");
         }
 
-        int observed = Interlocked.CompareExchange(
-            ref _state,
-            terminalState,
-            Active);
+        // Every state transition happens under the writer gate, so the gate
+        // holder reads and publishes the state without a second atomic.
+        int observed = Volatile.Read(ref _state);
         if (observed != Active)
         {
             Volatile.Write(ref _writerGate, 0);
             ThrowInactive(operation, observed);
         }
 
+        Volatile.Write(ref _state, terminalState);
     }
 
     private void FailOperation(Exception failure)
