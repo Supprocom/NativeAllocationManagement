@@ -19,7 +19,7 @@ public static class NativeTransferPoolExtensions
             scoped: false,
             initializer,
             transferable: true);
-        return NativeTransfer<T>.Create(
+        return NativePoolTransferControl<T>.Publish(
             kernel,
             lease,
             "NativeConcurrentPool.RentTransferable");
@@ -134,9 +134,6 @@ public readonly struct NativeTransfer<T> : IDisposable
     internal NativeTransferControl<T> CustodyForSharing => GetControl("NativeShared.Adopt");
     internal long SharingAuthorityVersion => _authorityVersion;
 
-    internal static NativeTransfer<T> Create(NativeOwnerKernel kernel, NativePoolLease lease, string operation) =>
-        new(NativeTransferControl<T>.Create(kernel, lease, operation), authorityVersion: 1);
-
     internal static NativeTransfer<T> Create(NativeOwnerKernel kernel, NativeRegionAllocation allocation, string operation) =>
         new(NativeTransferControl<T>.Create(kernel, allocation, operation), authorityVersion: 1);
 
@@ -167,7 +164,7 @@ internal partial class NativeTransferControl<T>
     private NativeSharedControl<T>? _sharingControl;
     private NativeAllocation? _allocationState;
     private long _ownerId;
-    private readonly bool _borrowedBacking;
+    private bool _borrowedBacking;
     // Direct custody uses the descriptor's epoch/owner as allocation metadata.
     // Kernel custody has no direct block: the same two scalar slots hold its
     // captured generation/allocation identity instead of duplicate fields.
@@ -185,7 +182,7 @@ internal partial class NativeTransferControl<T>
     private bool _sharingAllocationEntered;
     private bool _sharingGenerationEntered;
 
-    private NativeTransferControl(
+    private protected NativeTransferControl(
         NativeOwnerKernel kernel,
         NativeAllocation allocationState,
         long generation,
@@ -194,16 +191,26 @@ internal partial class NativeTransferControl<T>
         _kernel = kernel;
         _allocationState = allocationState;
         _ownerId = kernel.Id;
-        NativeSegment? segment = allocationState.Segment;
-        _borrowedBacking = segment is { AllocationByteLength: 0 };
-        nuint backingBytes = _borrowedBacking ? segment!.ByteLength : segment?.AllocationByteLength ?? 0;
-        _ = checked((long)backingBytes);
-        // A closed kernel no longer roots its domain. The existing block slot
-        // keeps identity and still-pending trace custody until real return.
-        _block = new NativeBlock(IntPtr.Zero, backingBytes, generation, kernel.BudgetForSharing, allocationId);
+        _block = KernelBlock(kernel, allocationState, generation, allocationId, out _borrowedBacking);
         _length = allocationState.Length;
         _capacity = allocationState.Capacity;
         _state = Active;
+    }
+
+    // A closed kernel no longer roots its domain. The existing block slot
+    // keeps identity and still-pending trace custody until real return.
+    private static NativeBlock KernelBlock(
+        NativeOwnerKernel kernel,
+        NativeAllocation allocationState,
+        long generation,
+        long allocationId,
+        out bool borrowedBacking)
+    {
+        NativeSegment? segment = allocationState.Segment;
+        borrowedBacking = segment is { AllocationByteLength: 0 };
+        nuint backingBytes = borrowedBacking ? segment!.ByteLength : segment?.AllocationByteLength ?? 0;
+        _ = checked((long)backingBytes);
+        return new NativeBlock(IntPtr.Zero, backingBytes, generation, kernel.BudgetForSharing, allocationId);
     }
 
     private protected NativeTransferControl(
@@ -316,6 +323,18 @@ internal partial class NativeTransferControl<T>
                     _block.Pointer,
                     _length));
             }
+            else if (_kernel.TryEnterCachedTransferOperation(_allocationState!, _block.MetricsEpoch, _block.OwnerId, out NativePoolThreadCache? cache, out int epoch))
+            {
+                NativeAllocation allocation = _allocationState!;
+                try
+                {
+                    action(new NativeLeaseView<T>(allocation));
+                }
+                finally
+                {
+                    _kernel.ExitCachedTransferOperation(allocation.GenerationState, cache, epoch);
+                }
+            }
             else
             {
                 NativeOperationToken token =
@@ -351,6 +370,19 @@ internal partial class NativeTransferControl<T>
                     _length));
             }
 
+            if (_kernel.TryEnterCachedTransferOperation(_allocationState!, _block.MetricsEpoch, _block.OwnerId, out NativePoolThreadCache? cache, out int epoch))
+            {
+                NativeAllocation allocation = _allocationState!;
+                try
+                {
+                    return action(new NativeLeaseView<T>(allocation));
+                }
+                finally
+                {
+                    _kernel.ExitCachedTransferOperation(allocation.GenerationState, cache, epoch);
+                }
+            }
+
             NativeOperationToken token =
                 EnterKernelOperation(nameof(Read));
             try
@@ -381,6 +413,19 @@ internal partial class NativeTransferControl<T>
                 unsafe
                 {
                     return TProcessor.Invoke(new Span<T>((void*)_block.Pointer, _length), in state);
+                }
+            }
+
+            NativeAllocation allocation = _allocationState!;
+            if (_kernel.TryEnterCachedTransferOperation(allocation, _block.MetricsEpoch, _block.OwnerId, out NativePoolThreadCache? cache, out int epoch))
+            {
+                try
+                {
+                    return TProcessor.Invoke(NativeOwnerKernel.CachedSpan<T>(allocation, allocation.Length), in state);
+                }
+                finally
+                {
+                    _kernel.ExitCachedTransferOperation(allocation.GenerationState, cache, epoch);
                 }
             }
 
@@ -459,17 +504,6 @@ internal partial class NativeTransferControl<T>
             throw;
         }
     }
-
-    internal static NativeTransferControl<T> Create(
-        NativeOwnerKernel kernel,
-        NativePoolLease lease,
-        string operation) =>
-        Create(
-            kernel,
-            lease.AllocationState,
-            lease.Generation,
-            lease.AllocationId,
-            operation);
 
     internal static NativeTransferControl<T> Create(
         NativeOwnerKernel kernel,
@@ -831,6 +865,25 @@ internal partial class NativeTransferControl<T>
         _sharingGenerationEntered = false;
         Volatile.Write(ref _payloadReturned, 0);
         Volatile.Write(ref _authorityVersion, firstVersion);
+    }
+
+    // Starts a later lifetime on a returned control for a kernel lease and
+    // publishes it Active, as the kernel constructor does for a new control.
+    private protected void BeginKernelLifetime(
+        NativeOwnerKernel kernel,
+        NativeAllocation allocationState,
+        long generation,
+        long allocationId,
+        long firstVersion)
+    {
+        NativeBlock block = KernelBlock(kernel, allocationState, generation, allocationId, out bool borrowedBacking);
+        BeginReusedLifetime(block, kernel.Id, firstVersion);
+        _kernel = kernel;
+        _allocationState = allocationState;
+        _borrowedBacking = borrowedBacking;
+        _length = allocationState.Length;
+        _capacity = allocationState.Capacity;
+        Volatile.Write(ref _state, Active);
     }
 
     // An unpublished control learns its final shape before publishing Active.

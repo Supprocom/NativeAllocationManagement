@@ -62,13 +62,13 @@ internal sealed class NativePoolThreadCache
     internal int Initializing;
 
     // Transferable leases rented through this cache. Any thread may return one,
-    // so the list has its own short lock; a fold takes it too.
-    internal readonly Lock TransferGate = new();
+    // so the list has its own short gate; a fold takes it too.
+    private int _transferGate;
     internal NativeAllocation?[] Transfers = new NativeAllocation?[4];
     internal int TransferCount;
 
     // Transferable leases other threads returned, kept for this thread's next
-    // rents so records flow back to the thread that rents them. Under TransferGate.
+    // rents so records flow back to the thread that rents them. Under the transfer gate.
     internal const int RemoteFreeCapacity = 64;
     internal readonly NativeAllocation?[] RemoteFree = new NativeAllocation?[RemoteFreeCapacity];
     internal int RemoteFreeCount;
@@ -106,6 +106,32 @@ internal sealed class NativePoolThreadCache
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void Exit() => Volatile.Write(ref Busy, 0);
+
+    // The transfer gate spins: its holders move a few slots and never
+    // allocate, block or throw while they hold it.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void EnterTransferGate()
+    {
+        if (Interlocked.CompareExchange(ref _transferGate, 1, 0) != 0)
+        {
+            WaitForTransferGate();
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void ExitTransferGate() => Volatile.Write(ref _transferGate, 0);
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private void WaitForTransferGate()
+    {
+        SpinWait spinner = default;
+        do
+        {
+            spinner.SpinOnce();
+        }
+        while (Volatile.Read(ref _transferGate) != 0
+            || Interlocked.CompareExchange(ref _transferGate, 1, 0) != 0);
+    }
 
     internal void WaitUntilIdle()
     {
@@ -214,19 +240,14 @@ internal sealed class NativePoolThreadCache
         RecordCount = last;
     }
 
-    // Under TransferGate.
+    // Under the transfer gate, with room made by the owner.
     internal void AddTransfer(NativeAllocation allocation)
     {
-        if (TransferCount == Transfers.Length)
-        {
-            Array.Resize(ref Transfers, Transfers.Length * 2);
-        }
-
         allocation.CacheSlot = TransferCount;
         Transfers[TransferCount++] = allocation;
     }
 
-    // Under TransferGate.
+    // Under the transfer gate.
     internal void RemoveTransfer(NativeAllocation allocation)
     {
         int slot = allocation.CacheSlot;

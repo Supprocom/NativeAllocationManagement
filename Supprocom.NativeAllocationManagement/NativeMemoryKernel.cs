@@ -2898,7 +2898,7 @@ internal ref struct NativeOperationToken
     private readonly string _operation;
     private readonly NativePoolThreadCache? _cache;
     private readonly int _cacheEpoch;
-    private readonly bool _atomicAllocation;
+    private readonly bool _recordEntered;
 
     internal NativeOperationToken(
         NativeOwnerKernel kernel,
@@ -2917,30 +2917,30 @@ internal ref struct NativeOperationToken
         _operation = operation;
         _cache = null;
         _cacheEpoch = 0;
-        _atomicAllocation = false;
+        _recordEntered = false;
     }
 
-    // An operation counted in a thread's cache; a transferable lease's own
-    // admission was entered atomically.
+    // An operation counted in a thread's cache. A cached lease also counts it
+    // on its record; a transferable lease's control admission stands for that.
     internal NativeOperationToken(
         NativeOwnerKernel kernel,
         NativeGeneration generation,
         NativeAllocation allocation,
         NativePoolThreadCache cache,
         int cacheEpoch,
-        bool atomicAllocation,
+        bool recordEntered,
         string operation)
     {
         _kernel = kernel;
         _generationState = generation;
         _generationOwner = generation.Owner;
         _allocation = allocation;
-        _allocationEntered = true;
+        _allocationEntered = recordEntered;
         _generationEntered = true;
         _operation = operation;
         _cache = cache;
         _cacheEpoch = cacheEpoch;
-        _atomicAllocation = atomicAllocation;
+        _recordEntered = recordEntered;
     }
 
     internal NativeLeaseView<T> GetView<T>() => new(_allocation);
@@ -2966,7 +2966,7 @@ internal ref struct NativeOperationToken
     internal void MoveToSharingCustody(out bool allocationEntered, out bool generationEntered)
     {
         if (_kernel is null) throw new InvalidOperationException("The operation token has already ended.");
-        // Transferable leases never use a thread cache, so their tokens hold real admissions.
+        // Sharing pins fold every thread cache first, so their tokens hold real admissions.
         if (_cache is not null) throw new InvalidOperationException("A thread-cached operation cannot move to sharing custody.");
         allocationEntered = _allocationEntered;
         generationEntered = _generationEntered;
@@ -2984,7 +2984,7 @@ internal ref struct NativeOperationToken
         _kernel = null;
         if (_cache is not null)
         {
-            kernel.ExitCachedOperation(_generationState, _allocation, _cache, _cacheEpoch, _atomicAllocation);
+            kernel.ExitCachedOperation(_generationState, _allocation, _cache, _cacheEpoch, _recordEntered);
             return;
         }
 
