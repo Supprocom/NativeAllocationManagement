@@ -429,66 +429,78 @@ internal partial class NativeTransferControl<T>
         where TProcessor : struct, INativeSpanProcessor<T, TState, TResult>
     {
         bool lone = EnterTransferOperation(authorityVersion, nameof(NativeTransfer<T>.Process));
+
+        // A direct block and a lease cached on this thread share one call of
+        // the processor, so a caller inlining this method inlines the processor
+        // once; any other lease takes the token path out of line. Nothing
+        // between the entry above and the protected region can throw, and one
+        // region with a small finally lets the JIT run its exit inline instead
+        // of calling a finally funclet.
+        NativeOwnerKernel? kernel = _kernel;
+        NativeAllocation? allocation = null;
+        NativePoolThreadCache? cache = null;
+        int epoch = 0;
+        Span<T> span;
+        if (kernel is null)
+        {
+            unsafe
+            {
+                span = new Span<T>((void*)_block.Pointer, _length);
+            }
+        }
+        else
+        {
+            allocation = _allocationState!;
+            if (!kernel.TryEnterCachedTransferOperation(allocation, _block.MetricsEpoch, _block.OwnerId, out cache, out epoch))
+            {
+                return ProcessThroughToken<TState, TResult, TProcessor>(lone, in state);
+            }
+
+            span = NativeOwnerKernel.CachedSpan<T>(allocation, allocation.Length);
+        }
+
         try
         {
-            // A direct block and a lease cached on this thread share one call
-            // of the processor, so a caller inlining this method inlines the
-            // processor once; any other lease takes the token path out of line.
-            NativeOwnerKernel? kernel = _kernel;
-            NativeAllocation? allocation = null;
-            NativePoolThreadCache? cache = null;
-            int epoch = 0;
-            Span<T> span;
-            if (kernel is null)
+            return TProcessor.Invoke(span, in state);
+        }
+        finally
+        {
+            if (cache is not null)
             {
-                unsafe
-                {
-                    span = new Span<T>((void*)_block.Pointer, _length);
-                }
-            }
-            else
-            {
-                allocation = _allocationState!;
-                if (!kernel.TryEnterCachedTransferOperation(allocation, _block.MetricsEpoch, _block.OwnerId, out cache, out epoch))
-                {
-                    return ProcessThroughToken<TState, TResult, TProcessor>(in state);
-                }
-
-                span = NativeOwnerKernel.CachedSpan<T>(allocation, allocation.Length);
+                ExitCachedProcess(kernel!, allocation!, cache, epoch);
             }
 
+            ExitTransferOperation(lone);
+            GC.KeepAlive(this);
+        }
+    }
+
+    // Out of line, so the finally above stays small enough to run inline.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void ExitCachedProcess(NativeOwnerKernel kernel, NativeAllocation allocation, NativePoolThreadCache cache, int epoch) =>
+        kernel.ExitCacheCountedOperation(allocation.GenerationState, cache, epoch);
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private TResult ProcessThroughToken<TState, TResult, TProcessor>(bool lone, scoped in TState state)
+        where TState : allows ref struct
+        where TProcessor : struct, INativeSpanProcessor<T, TState, TResult>
+    {
+        try
+        {
+            NativeOperationToken token = EnterKernelOperation(nameof(NativeTransfer<T>.Process));
             try
             {
-                return TProcessor.Invoke(span, in state);
+                return TProcessor.Invoke(token.GetView<T>().AsSpan(), in state);
             }
             finally
             {
-                if (cache is not null)
-                {
-                    kernel!.ExitCacheCountedOperation(allocation!.GenerationState, cache, epoch);
-                }
+                token.Dispose();
             }
         }
         finally
         {
             ExitTransferOperation(lone);
             GC.KeepAlive(this);
-        }
-    }
-
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    private TResult ProcessThroughToken<TState, TResult, TProcessor>(scoped in TState state)
-        where TState : allows ref struct
-        where TProcessor : struct, INativeSpanProcessor<T, TState, TResult>
-    {
-        NativeOperationToken token = EnterKernelOperation(nameof(NativeTransfer<T>.Process));
-        try
-        {
-            return TProcessor.Invoke(token.GetView<T>().AsSpan(), in state);
-        }
-        finally
-        {
-            token.Dispose();
         }
     }
 

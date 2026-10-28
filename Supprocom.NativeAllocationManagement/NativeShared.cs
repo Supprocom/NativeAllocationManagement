@@ -104,10 +104,10 @@ public readonly struct NativeShared<T> : IDisposable where T : unmanaged
         NativeTransferControl<T> payload = Payload;
         NativeSharedControl<T> control = Control;
         control.EnterRead(payload, _slot, _version);
-        Exception? callbackFailure = null;
         try { action(payload.GetView(_offset, _length)); }
-        catch (Exception failure) { callbackFailure = failure; throw; }
-        finally { EndRead(control, payload, _slot, _version, callbackFailure); }
+        catch (Exception failure) { EndFailedRead(control, payload, _slot, _version, failure); throw; }
+        control.ExitRead(payload, _slot, _version);
+        GC.KeepAlive(payload);
     }
 
     /// <summary>Computes a non-ref-struct result in one entered synchronous read-only callback.</summary>
@@ -117,10 +117,12 @@ public readonly struct NativeShared<T> : IDisposable where T : unmanaged
         NativeTransferControl<T> payload = Payload;
         NativeSharedControl<T> control = Control;
         control.EnterRead(payload, _slot, _version);
-        Exception? callbackFailure = null;
-        try { return action(payload.GetView(_offset, _length)); }
-        catch (Exception failure) { callbackFailure = failure; throw; }
-        finally { EndRead(control, payload, _slot, _version, callbackFailure); }
+        TResult result;
+        try { result = action(payload.GetView(_offset, _length)); }
+        catch (Exception failure) { EndFailedRead(control, payload, _slot, _version, failure); throw; }
+        control.ExitRead(payload, _slot, _version);
+        GC.KeepAlive(payload);
+        return result;
     }
 
     /// <summary>Runs one compile-time read-only processor in one entered synchronous read.</summary>
@@ -134,16 +136,21 @@ public readonly struct NativeShared<T> : IDisposable where T : unmanaged
         NativeTransferControl<T> payload = Payload;
         NativeSharedControl<T> control = Control;
         control.EnterRead(payload, _slot, _version);
-        Exception? callbackFailure = null;
-        try { return TProcessor.Invoke(payload.GetView(_offset, _length).AsSpan(), in state); }
-        catch (Exception failure) { callbackFailure = failure; throw; }
-        finally { EndRead(control, payload, _slot, _version, callbackFailure); }
+        TResult result;
+        try { result = TProcessor.Invoke(payload.GetView(_offset, _length).AsSpan(), in state); }
+        catch (Exception failure) { EndFailedRead(control, payload, _slot, _version, failure); throw; }
+        control.ExitRead(payload, _slot, _version);
+        GC.KeepAlive(payload);
+        return result;
     }
 
-    private static void EndRead(NativeSharedControl<T> control, NativeTransferControl<T> payload, int slot, long version, Exception? callbackFailure)
+    // The callbacks leave their read inline after a normal return; only a
+    // failed callback takes this path, so no finally runs on every read.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void EndFailedRead(NativeSharedControl<T> control, NativeTransferControl<T> payload, int slot, long version, Exception callbackFailure)
     {
         try { control.ExitRead(payload, slot, version); }
-        catch (Exception cleanupFailure) when (callbackFailure is not null)
+        catch (Exception cleanupFailure)
         {
             throw new AggregateException("The shared callback and payload return both failed.", callbackFailure, cleanupFailure);
         }

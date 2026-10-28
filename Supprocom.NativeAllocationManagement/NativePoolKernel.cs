@@ -15,6 +15,10 @@ public sealed unsafe partial class NativePool<T>
     private readonly NativeMemoryReturn _returnMemoryOnDispose;
     private NativeMemoryBudget? _budget;
     private readonly int _ownerThreadId;
+    // A thread's shared pool proves ownership by sitting in that thread's
+    // slot, which the Shared getter has just read: no second thread-static
+    // lookup on its rents.
+    private bool _isShared;
     private int[] _freeHeads = [];
     private Slab[] _slabs = [];
     private uint _nonEmptyFreeClasses;
@@ -977,7 +981,9 @@ public sealed unsafe partial class NativePool<T>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void ValidateThread(string operation)
     {
-        if (NativeThreadIdentity.Current == _ownerThreadId)
+        if (_isShared
+            ? ReferenceEquals(t_shared, this)
+            : NativeThreadIdentity.Current == _ownerThreadId)
         {
             return;
         }

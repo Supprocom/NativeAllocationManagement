@@ -655,7 +655,7 @@ public sealed class RuntimeConcurrencyCoverageTests
     {
         try
         {
-            _ = lease.Length;
+            _ = lease.Read(static view => view.Length);
             return false;
         }
         catch (NativeAllocationException exception) when (
@@ -701,7 +701,7 @@ public sealed class RuntimeConcurrencyCoverageTests
     {
         try
         {
-            _ = lease.Length;
+            _ = lease.Read(static view => view.Length);
         }
         catch (NativeAllocationReturnedException exception)
         {

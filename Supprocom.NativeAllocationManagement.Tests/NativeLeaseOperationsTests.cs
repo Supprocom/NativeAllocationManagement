@@ -407,7 +407,7 @@ public sealed class NativeLeaseOperationsTests
         NativeAllocationException? staleFailure = null;
         try
         {
-            _ = values.Length;
+            _ = values.Read(static view => view.Length);
         }
         catch (NativeAllocationException exception)
         {

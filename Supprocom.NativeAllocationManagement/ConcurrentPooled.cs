@@ -12,16 +12,23 @@ public readonly ref struct ConcurrentPooled<T>
     private readonly long _allocationId;
     private readonly NativeGeneration? _generationState;
     private readonly NativeAllocation? _allocationState;
+    // A lease's shape is fixed when it is published, so the handle carries it
+    // like an array carries its length: reading it needs no validated operation.
+    private readonly int _length;
+    private readonly int _capacity;
 
     internal ConcurrentPooled(
         NativeOwnerKernel kernel,
         NativePoolLease lease)
     {
+        NativeAllocation allocation = lease.AllocationState;
         _kernel = kernel;
-        _generation = lease.Generation;
+        _generation = allocation.GenerationState.Number;
         _allocationId = lease.AllocationId;
-        _generationState = lease.GenerationState;
-        _allocationState = lease.AllocationState;
+        _generationState = allocation.GenerationState;
+        _allocationState = allocation;
+        _length = allocation.Length;
+        _capacity = allocation.Capacity;
     }
 
     internal NativeOwnerKernel KernelForComposite =>
@@ -41,34 +48,24 @@ public readonly ref struct ConcurrentPooled<T>
         EnterOperation(operation);
 
     /// <summary>Gets the logical element count.</summary>
+    /// <remarks>The count the lease was published with; reading it does not validate the lease.</remarks>
     public int Length
     {
         get
         {
-            if (TryEnterCached(out NativePoolThreadCache? cache, out int epoch))
-            {
-                int length = _allocationState!.Length;
-                ExitCached(cache, epoch);
-                return length;
-            }
-
-            return GetMetadata(nameof(Length)).Length;
+            _ = GetKernel(nameof(Length));
+            return _length;
         }
     }
 
     /// <summary>Gets the physical element capacity.</summary>
+    /// <remarks>The capacity the lease was published with; reading it does not validate the lease.</remarks>
     public int Capacity
     {
         get
         {
-            if (TryEnterCached(out NativePoolThreadCache? cache, out int epoch))
-            {
-                int capacity = _allocationState!.Capacity;
-                ExitCached(cache, epoch);
-                return capacity;
-            }
-
-            return GetMetadata(nameof(Capacity)).Capacity;
+            _ = GetKernel(nameof(Capacity));
+            return _capacity;
         }
     }
 
@@ -259,15 +256,20 @@ public readonly ref struct ConcurrentPooled<T>
     {
         if (TryEnterCached(out NativePoolThreadCache? cache, out int epoch))
         {
+            TResult result;
             try
             {
                 CheckPrefix(length);
-                return TProcessor.Invoke(NativeOwnerKernel.CachedSpan<T>(_allocationState!, length), in state);
+                result = TProcessor.Invoke(NativeOwnerKernel.CachedSpan<T>(_allocationState!, length), in state);
             }
-            finally
+            catch
             {
-                ExitCached(cache, epoch);
+                ExitCachedAfterFailure(_kernel!, _generationState!, _allocationState!, cache, epoch);
+                throw;
             }
+
+            ExitCached(cache, epoch);
+            return result;
         }
 
         return ProcessThroughToken<TState, TResult, TProcessor>(length, in state);
@@ -330,6 +332,18 @@ public readonly ref struct ConcurrentPooled<T>
     private void ExitCached(NativePoolThreadCache cache, int epoch) =>
         _kernel!.ExitCachedLeaseOperation(_generationState!, _allocationState!, cache, epoch);
 
+    // A cached operation leaves inline after a normal return; only a failed
+    // callback comes here, so no finally runs on every operation. Static, so
+    // the handle's address is never taken.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void ExitCachedAfterFailure(
+        NativeOwnerKernel kernel,
+        NativeGeneration generation,
+        NativeAllocation allocation,
+        NativePoolThreadCache cache,
+        int epoch) =>
+        kernel.ExitCachedLeaseOperation(generation, allocation, cache, epoch);
+
     // The same checks as an operation token's prefix view.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void CheckPrefix(int length)
@@ -370,14 +384,6 @@ public readonly ref struct ConcurrentPooled<T>
 
     private NativeOperationToken EnterOperation(string operation) =>
         GetKernel(operation).EnterOperation(
-            GetGenerationState(operation),
-            GetAllocationState(operation),
-            _generation,
-            _allocationId,
-            operation);
-
-    private NativeHandleMetadata GetMetadata(string operation) =>
-        GetKernel(operation).ValidateHandle(
             GetGenerationState(operation),
             GetAllocationState(operation),
             _generation,

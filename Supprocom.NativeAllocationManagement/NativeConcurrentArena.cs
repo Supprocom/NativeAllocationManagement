@@ -361,21 +361,23 @@ public readonly ref struct ConcurrentArenaLease<T>
         EnterCompositeOperation(operation);
 
     /// <summary>Gets the logical element count.</summary>
+    /// <remarks>The count the lease was published with; reading it does not validate the lease.</remarks>
     public int Length
     {
         get
         {
-            _ = GetMetadata(nameof(Length));
+            _ = GetKernel(nameof(Length));
             return _length;
         }
     }
 
     /// <summary>Gets the physical capacity represented by this handle.</summary>
+    /// <remarks>The capacity the lease was published with; reading it does not validate the lease.</remarks>
     public int Capacity
     {
         get
         {
-            _ = GetMetadata(nameof(Capacity));
+            _ = GetKernel(nameof(Capacity));
             return _capacity;
         }
     }
@@ -699,18 +701,6 @@ public readonly ref struct ConcurrentArenaLease<T>
             allocation.Id,
             operation);
     }
-
-    private NativeHandleMetadata GetMetadata(string operation) =>
-        IsArenaFast
-            ? GetKernel(operation).ValidateArenaFastHandle(
-                CreateArenaAllocation(),
-                operation)
-            : GetKernel(operation).ValidateHandle(
-                GetGenerationState(operation),
-                GetAllocationState(operation),
-                _generation,
-                _payload,
-                operation);
 
     // A scratch range from a lane of this thread's cache counts its operations
     // there; see NativeOwnerKernel.TryEnterArenaLaneOperation.
