@@ -72,6 +72,9 @@ internal sealed class NativePoolThreadCache
     // Deep enough for a producer-consumer queue of a few hundred transfers.
     internal const int RemoteFreeCapacity = 512;
     internal readonly NativeAllocation?[] RemoteFree = new NativeAllocation?[RemoteFreeCapacity];
+
+    // Returned records a reclaim carries out of the transfer gate at once.
+    internal readonly NativeAllocation?[] RemoteBatch = new NativeAllocation?[FreeCapacity];
     internal int RemoteFreeCount;
 
     // An arena thread's private chunk of a shared bump segment while armed: it

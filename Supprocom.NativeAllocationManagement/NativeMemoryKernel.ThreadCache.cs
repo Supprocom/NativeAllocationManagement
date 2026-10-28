@@ -231,10 +231,33 @@ internal sealed partial class NativeOwnerKernel
         int last = --cache.RemoteFreeCount;
         cache.RemoteFree[best] = cache.RemoteFree[last];
         cache.RemoteFree[last] = null;
+        // While the cache has room, bring more of them along: in a pipeline
+        // every return is remote, and each one carried now spares a later rent
+        // the gate and the slow path.
+        int extra = Math.Min(
+            Math.Min(NativePoolThreadCache.FreeCapacity - cache.FreeCount, cache.Records.Length - cache.RecordCount - 1),
+            cache.RemoteFreeCount);
+        for (int index = 0; index < extra; index++)
+        {
+            int newest = --cache.RemoteFreeCount;
+            cache.RemoteBatch[index] = cache.RemoteFree[newest];
+            cache.RemoteFree[newest] = null;
+        }
+
         cache.ExitTransferGate();
         allocation.CacheOwner = cache;
         cache.AddRecord(allocation);
         cache.PayloadDelta -= (long)allocation.StorageBytes;
+        for (int index = 0; index < extra; index++)
+        {
+            NativeAllocation returned = cache.RemoteBatch[index]!;
+            cache.RemoteBatch[index] = null;
+            returned.CacheOwner = cache;
+            cache.AddRecord(returned);
+            cache.AddFree(returned);
+            cache.PayloadDelta -= (long)returned.StorageBytes;
+        }
+
         return allocation;
     }
 
