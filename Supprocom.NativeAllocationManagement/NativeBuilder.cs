@@ -973,13 +973,19 @@ public sealed class NativeBuilder<T> : IDisposable
         // An empty unbudgeted builder starts at one cache line: smaller native
         // blocks only add reallocations, and malloc rounds tiny requests up.
         // A budgeted builder keeps exact small steps for admission arithmetic.
+        // Unbudgeted builders quadruple from 1 KiB to 64 KiB: blocks are
+        // cache-line aligned, so every growth copies, and fewer steps copy
+        // less where the copies cost. Small builders keep exact doubling.
+        bool unbudgeted = _block.Budget is null;
         int next = _capacity != 0 ? _capacity
-            : _block.Budget is null ? Math.Max(4, 64 / Unsafe.SizeOf<T>()) : 4;
+            : unbudgeted ? Math.Max(4, 64 / Unsafe.SizeOf<T>()) : 4;
         while (next < required)
         {
-            next = next > int.MaxValue / 2
+            long bytes = (long)next * Unsafe.SizeOf<T>();
+            int factor = unbudgeted && bytes >= 1024 && bytes < 64 * 1024 ? 4 : 2;
+            next = next > int.MaxValue / factor
                 ? required
-                : checked(next * 2);
+                : checked(next * factor);
         }
 
         if (!NativeBlockAllocator.TryResize<T>(

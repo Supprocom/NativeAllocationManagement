@@ -311,7 +311,7 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
     {
         if (_spare.Pointer != IntPtr.Zero)
         {
-            NativeMemory.Free((void*)_spare.Pointer);
+            NativeMemory.AlignedFree((void*)_spare.Pointer);
         }
 
         _spare.Clear();
@@ -334,7 +334,7 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
 
         if (spare.Pointer != IntPtr.Zero)
         {
-            NativeMemory.Free((void*)spare.Pointer);
+            NativeMemory.AlignedFree((void*)spare.Pointer);
         }
 
         return NativeBlockAllocator.Allocate(
@@ -717,7 +717,7 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
             {
                 if (_spare.Pointer != IntPtr.Zero)
                 {
-                    NativeMemory.Free((void*)_spare.Pointer);
+                    NativeMemory.AlignedFree((void*)_spare.Pointer);
                 }
             }
 
