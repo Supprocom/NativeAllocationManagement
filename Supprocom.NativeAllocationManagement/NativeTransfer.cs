@@ -192,6 +192,10 @@ internal partial class NativeTransferControl<T>
     private int _capacity;
     private int _state;
     private int _operationAdmission;
+    // One borrow at a time enters here with a CAS and leaves with a store; a
+    // second concurrent borrow uses _operationAdmission. Every check of active
+    // borrows reads both.
+    private int _loneBorrow;
     private long _authorityVersion = 1;
     private int _peakBorrows;
     private bool _borrowed;
@@ -262,7 +266,7 @@ internal partial class NativeTransferControl<T>
         bool allocationActive = kernel is null || (generation is not null && allocation is not null
             && kernel.TransferAuthorityIsActive(generation, allocation, _block.MetricsEpoch, _block.OwnerId));
         bool bindingActive = !returned && state == Active && authority == bindingVersion && allocationActive;
-        int borrows = NativeOperationAdmission.Count(ref _operationAdmission);
+        int borrows = ActiveBorrows;
         bool backingPresent = !returned && (kernel is null
             || (allocation?.Segment is { } segment && segment.Pointer != IntPtr.Zero));
         long initialized = (long)_length * Unsafe.SizeOf<T>();
@@ -297,7 +301,7 @@ internal partial class NativeTransferControl<T>
             PayloadReturnCount = returned ? 1 : 0,
             PayloadReturnFailureCount = Volatile.Read(ref _returnFailures),
             HistoryOverflowed = Volatile.Read(ref _historyOverflowed),
-            ControlFieldBytes = 3L * IntPtr.Size + 3L * sizeof(long) + 6L * sizeof(int) + 5L * sizeof(bool) + Unsafe.SizeOf<NativeBlockSlot>()
+            ControlFieldBytes = 3L * IntPtr.Size + 3L * sizeof(long) + 7L * sizeof(int) + 5L * sizeof(bool) + Unsafe.SizeOf<NativeBlockSlot>()
         };
     }
 
@@ -305,7 +309,7 @@ internal partial class NativeTransferControl<T>
     internal bool TryCompletePayloadReturn()
     {
         if (Volatile.Read(ref _payloadReturned) != 0) return true;
-        if (NativeOperationAdmission.Count(ref _operationAdmission) != 0
+        if (ActiveBorrows != 0
             || Interlocked.CompareExchange(ref _state, Disposing, Retiring) != Retiring) return false;
         try
         {
@@ -333,7 +337,7 @@ internal partial class NativeTransferControl<T>
     internal void Access(long authorityVersion, NativeLeaseAction<T> action)
     {
         ArgumentNullException.ThrowIfNull(action);
-        EnterTransferOperation(authorityVersion, nameof(Access));
+        bool lone = EnterTransferOperation(authorityVersion, nameof(Access));
         try
         {
             if (_kernel is null)
@@ -370,7 +374,7 @@ internal partial class NativeTransferControl<T>
         }
         finally
         {
-            ExitTransferOperation();
+            ExitTransferOperation(lone);
             GC.KeepAlive(this);
         }
     }
@@ -379,7 +383,7 @@ internal partial class NativeTransferControl<T>
     internal TResult Read<TResult>(long authorityVersion, NativeLeaseFunc<T, TResult> action)
     {
         ArgumentNullException.ThrowIfNull(action);
-        EnterTransferOperation(authorityVersion, nameof(Read));
+        bool lone = EnterTransferOperation(authorityVersion, nameof(Read));
         try
         {
             if (_kernel is null)
@@ -415,7 +419,7 @@ internal partial class NativeTransferControl<T>
         }
         finally
         {
-            ExitTransferOperation();
+            ExitTransferOperation(lone);
             GC.KeepAlive(this);
         }
     }
@@ -424,7 +428,7 @@ internal partial class NativeTransferControl<T>
         where TState : allows ref struct
         where TProcessor : struct, INativeSpanProcessor<T, TState, TResult>
     {
-        EnterTransferOperation(authorityVersion, nameof(NativeTransfer<T>.Process));
+        bool lone = EnterTransferOperation(authorityVersion, nameof(NativeTransfer<T>.Process));
         try
         {
             if (_kernel is null)
@@ -460,7 +464,7 @@ internal partial class NativeTransferControl<T>
         }
         finally
         {
-            ExitTransferOperation();
+            ExitTransferOperation(lone);
             GC.KeepAlive(this);
         }
     }
@@ -485,10 +489,10 @@ internal partial class NativeTransferControl<T>
             ThrowInactive(nameof(Dispose), Moved);
         }
 
-        // The state CAS above and an entering callback's admission increment are
-        // both full fences, so either that callback sees Disposing and leaves, or
-        // this read sees it. Admission needs no separate close here.
-        if (NativeOperationAdmission.Count(ref _operationAdmission) != 0)
+        // The state CAS above and an entering callback's admission CAS or
+        // increment are both full fences, so either that callback sees Disposing
+        // and leaves, or this read sees it. Admission needs no separate close here.
+        if (BorrowsRemainActive())
         {
             Volatile.Write(ref _state, Active);
             throw new InvalidOperationException(
@@ -597,9 +601,75 @@ internal partial class NativeTransferControl<T>
             _block.OwnerId,
             operation);
 
-    private protected void EnterTransferOperation(long authorityVersion, string operation)
+    private protected int ActiveBorrows =>
+        NativeOperationAdmission.Count(ref _operationAdmission) + Volatile.Read(ref _loneBorrow);
+
+    // Called after the state left Active, so no borrow can newly enter. A
+    // borrow still counted may be an alias that passed its first check before
+    // that change and is about to refuse itself: wait a few microseconds for
+    // it before treating it as an active callback.
+    private protected bool BorrowsRemainActive()
+    {
+        if (ActiveBorrows == 0)
+        {
+            return false;
+        }
+
+        return WaitForRefusedBorrows();
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private bool WaitForRefusedBorrows()
+    {
+        for (int attempt = 0; attempt < 64; attempt++)
+        {
+            Thread.SpinWait(8);
+            if (ActiveBorrows == 0)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    // Returns true for the lone borrow, which ExitTransferOperation must be told.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private protected bool EnterTransferOperation(long authorityVersion, string operation)
     {
         EnsureActive(authorityVersion, operation);
+        if (Interlocked.CompareExchange(ref _loneBorrow, 1, 0) == 0)
+        {
+            if (Volatile.Read(ref _state) == Active && Volatile.Read(ref _authorityVersion) == authorityVersion)
+            {
+                _borrowed = true;
+                return true;
+            }
+
+            LeaveRefusedLoneBorrow(operation);
+        }
+
+        EnterSharedTransferOperation(authorityVersion, operation);
+        return false;
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private void LeaveRefusedLoneBorrow(string operation)
+    {
+        Interlocked.Exchange(ref _loneBorrow, 0);
+        int state = Volatile.Read(ref _state);
+        if (state == Retiring)
+        {
+            CompleteRetirement();
+        }
+
+        ThrowInactive(operation, state == Active ? Moved : state);
+    }
+
+    // A borrow while another one holds the lone slot.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private void EnterSharedTransferOperation(long authorityVersion, string operation)
+    {
         if (!NativeOperationAdmission.TryEnter(
             ref _operationAdmission, out int enteredCount))
         {
@@ -611,13 +681,11 @@ internal partial class NativeTransferControl<T>
         int state = Volatile.Read(ref _state);
         if (state == Active && Volatile.Read(ref _authorityVersion) == authorityVersion)
         {
-            // A lone borrow, the usual case, records its peak of one without an atomic.
-            if (enteredCount == 1) _borrowed = true;
-            else RecordPeakBorrows(enteredCount);
+            RecordPeakBorrows(enteredCount + 1);
             return;
         }
 
-        NativeOperationAdmission.Exit(ref _operationAdmission);
+        ExitSharedTransferOperation();
         ThrowInactive(operation, state == Active ? Moved : state);
     }
 
@@ -633,7 +701,27 @@ internal partial class NativeTransferControl<T>
         }
     }
 
-    private protected void ExitTransferOperation()
+    // The lone exit is a release store: a retiring move fences every processor
+    // before it rechecks, so either it sees this exit or this sees Retiring.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private protected void ExitTransferOperation(bool lone)
+    {
+        if (lone)
+        {
+            Volatile.Write(ref _loneBorrow, 0);
+            if (Volatile.Read(ref _state) == Retiring)
+            {
+                CompleteRetirement();
+            }
+
+            return;
+        }
+
+        ExitSharedTransferOperation();
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private void ExitSharedTransferOperation()
     {
         int remaining =
             NativeOperationAdmission.Exit(ref _operationAdmission);
@@ -644,10 +732,28 @@ internal partial class NativeTransferControl<T>
         }
     }
 
+    // Every exit that may be the last calls this after reading Retiring. A
+    // shared exit is a full fence, a lone exit only a release store, so a lone
+    // borrow that still looks active is rechecked after fencing every
+    // processor: its exit store is then visible, or that exit reads Retiring
+    // and completes the retirement itself.
     private void CompleteRetirement()
     {
-        if (NativeOperationAdmission.Count(ref _operationAdmission) == 0
-            && Interlocked.CompareExchange(ref _state, Disposing, Retiring) == Retiring)
+        if (NativeOperationAdmission.Count(ref _operationAdmission) != 0)
+        {
+            return;
+        }
+
+        if (Volatile.Read(ref _loneBorrow) != 0)
+        {
+            Interlocked.MemoryBarrierProcessWide();
+            if (Volatile.Read(ref _loneBorrow) != 0)
+            {
+                return;
+            }
+        }
+
+        if (Interlocked.CompareExchange(ref _state, Disposing, Retiring) == Retiring)
         {
             if (ReturnStorageFromFinalizer()) Volatile.Write(ref _state, Disposed);
             else Volatile.Write(ref _state, Retiring);
@@ -675,9 +781,8 @@ internal partial class NativeTransferControl<T>
             ThrowInactive(nameof(Move), Moved);
         }
 
-        int activeOperations =
-            NativeOperationAdmission.Close(ref _operationAdmission);
-        if (activeOperations != 0)
+        if (NativeOperationAdmission.Close(ref _operationAdmission) + Volatile.Read(ref _loneBorrow) != 0
+            && BorrowsRemainActive())
         {
             try
             {
@@ -685,7 +790,9 @@ internal partial class NativeTransferControl<T>
             }
             finally
             {
-                Volatile.Write(ref _state, Retiring);
+                // A full fence: the recheck below reads the counts only after
+                // every exit can see Retiring.
+                Interlocked.Exchange(ref _state, Retiring);
                 TraceOwnership(budget, NativeMemoryTraceKind.Retired);
                 // The last callback may have exited while the state was Moving.
                 // Recheck after publication; the terminal CAS arbitrates with its exit.
@@ -732,7 +839,9 @@ internal partial class NativeTransferControl<T>
     private void PublishMove(long authorityVersion)
     {
         Volatile.Write(ref _authorityVersion, authorityVersion);
-        NativeOperationAdmission.Reset(ref _operationAdmission);
+        // Clear only the closed bit: an alias of the old version that is
+        // stepping out of a refused entry still holds its increment.
+        NativeOperationAdmission.Open(ref _operationAdmission);
         NativeMemoryBudget? budget = _kernel?.BudgetForSharing ?? _block.Budget;
         TraceOwnership(budget, NativeMemoryTraceKind.Moved);
         Volatile.Write(ref _state, Active);
@@ -834,7 +943,7 @@ internal partial class NativeTransferControl<T>
             return;
         }
 
-        if (NativeOperationAdmission.Close(ref _operationAdmission) != 0
+        if (NativeOperationAdmission.Close(ref _operationAdmission) + Volatile.Read(ref _loneBorrow) != 0
             || !ReturnStorageFromFinalizer())
         {
             Volatile.Write(ref _state, Retiring);
@@ -877,6 +986,8 @@ internal partial class NativeTransferControl<T>
         _ownerId = ownerId;
         _length = 0;
         _capacity = 0;
+        // _loneBorrow is not reset: it is zero once disposal succeeded, and a
+        // stale borrow refused since then clears only the slot it took.
         NativeOperationAdmission.Reset(ref _operationAdmission);
         _peakBorrows = 0;
         _borrowed = false;

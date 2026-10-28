@@ -23,9 +23,10 @@ internal partial class NativeTransferControl<T> where T : unmanaged
             return false;
         }
 
-        // The state CAS and an entering unique callback's admission increment are
-        // both full fences: the callback sees Moving and leaves, or this sees it.
-        if (NativeOperationAdmission.Count(ref _operationAdmission) != 0)
+        // The state CAS and an entering unique callback's admission CAS or
+        // increment are both full fences: the callback sees Moving and leaves,
+        // or this sees it.
+        if (BorrowsRemainActive())
         {
             Volatile.Write(ref _state, Active);
             return false;
@@ -51,7 +52,8 @@ internal partial class NativeTransferControl<T> where T : unmanaged
             Volatile.Write(ref _state, Active);
             ThrowInactive("NativeShared.Pin", Moved);
         }
-        if (NativeOperationAdmission.Close(ref _operationAdmission) != 0)
+        if (NativeOperationAdmission.Close(ref _operationAdmission) + Volatile.Read(ref _loneBorrow) != 0
+            && BorrowsRemainActive())
         {
             NativeOperationAdmission.Open(ref _operationAdmission);
             Volatile.Write(ref _state, Active);

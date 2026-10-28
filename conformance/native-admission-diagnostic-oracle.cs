@@ -11,7 +11,7 @@ internal static class NativeAdmissionDiagnosticOracle
     // reference and owner identity. Excludes CLR headers and field padding.
     // The descriptor retains the complete acquired extent for terminal history;
     // the control no longer keeps a second copy of that same scalar.
-    internal static long UniqueControlFieldBytes => 6L * IntPtr.Size + 5L * sizeof(long) + 6L * sizeof(int) + 5L * sizeof(bool);
+    internal static long UniqueControlFieldBytes => 6L * IntPtr.Size + 5L * sizeof(long) + 7L * sizeof(int) + 5L * sizeof(bool);
     // A builder-produced unique control adds its reuse fields: lifetime start version,
     // parked block descriptor, park epoch and parked flag.
     internal static long BuilderUniqueControlFieldBytes => UniqueControlFieldBytes

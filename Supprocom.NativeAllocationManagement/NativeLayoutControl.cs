@@ -136,18 +136,18 @@ internal sealed class NativeLayoutControl : NativeMemoryReservationControl<byte>
         where TState : allows ref struct
     {
         ArgumentNullException.ThrowIfNull(action);
-        EnterTransferOperation(version, "NativeLayoutOwner.Read");
+        bool lone = EnterTransferOperation(version, "NativeLayoutOwner.Read");
         try { return action(new(_layout, new Span<byte>((byte*)OwnedBlock.Pointer + _payloadOffset, _layout.ExtentBytes)), state); }
-        finally { ExitTransferOperation(); GC.KeepAlive(this); }
+        finally { ExitTransferOperation(lone); GC.KeepAlive(this); }
     }
 
     internal unsafe void AccessLayout<TState>(long version, TState state, NativeLayoutAction<TState> action)
         where TState : allows ref struct
     {
         ArgumentNullException.ThrowIfNull(action);
-        EnterTransferOperation(version, "NativeLayoutOwner.Access");
+        bool lone = EnterTransferOperation(version, "NativeLayoutOwner.Access");
         try { action(new(_layout, new Span<byte>((byte*)OwnedBlock.Pointer + _payloadOffset, _layout.ExtentBytes)), state); }
-        finally { ExitTransferOperation(); GC.KeepAlive(this); }
+        finally { ExitTransferOperation(lone); GC.KeepAlive(this); }
     }
 
     internal unsafe NativeTransfer<T> DetachField<T>(long version, NativeLayoutField<T> field,
@@ -156,7 +156,7 @@ internal sealed class NativeLayoutControl : NativeMemoryReservationControl<byte>
         ArgumentNullException.ThrowIfNull(budget);
         NativeLayoutRegion region = _layout.Region(field);
         cancellationToken.ThrowIfCancellationRequested();
-        EnterTransferOperation(version, "NativeLayoutOwner.DetachField");
+        bool lone = EnterTransferOperation(version, "NativeLayoutOwner.DetachField");
         try
         {
             if (!budget.TryReserve<T>(region.Length, out NativeMemoryReservation<T>? permission, out _))
@@ -186,7 +186,7 @@ internal sealed class NativeLayoutControl : NativeMemoryReservationControl<byte>
             }
             finally { permission?.Dispose(); }
         }
-        finally { ExitTransferOperation(); GC.KeepAlive(this); }
+        finally { ExitTransferOperation(lone); GC.KeepAlive(this); }
     }
 
     private void RecordLayoutHistory(ref long history, long delta)
