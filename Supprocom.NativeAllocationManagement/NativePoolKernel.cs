@@ -26,7 +26,11 @@ public sealed unsafe partial class NativePool<T>
     private int _slabCount;
     private int _unusedHead = -1;
     private int _returnedSlabIndex = -1;
-    private int _returnedLogicalLength = -1;
+    // The capacity of the slab returned last, or -1, and the length above
+    // which it is in that slab's size class (half its capacity rounded up to
+    // a power of two).
+    private int _returnedCapacity = -1;
+    private int _returnedFloor;
     private int _liveLeaseCount;
     private int _retirementState;
     private long _leaseTokenCounter;
@@ -85,7 +89,7 @@ public sealed unsafe partial class NativePool<T>
             {
                 nuint bytes = CalculateByteLength(preLease);
                 int index = AddSlab(preLease, bytes, "typed reservation");
-                CacheReturnedSlab(index, preLease);
+                CacheReturnedSlab(index);
             }
 
             if (preAllocateBytes != 0)
@@ -99,7 +103,7 @@ public sealed unsafe partial class NativePool<T>
                     capacity,
                     preAllocateBytes,
                     "raw reservation");
-                CacheReturnedSlab(index, capacity);
+                CacheReturnedSlab(index);
             }
         }
         catch
@@ -238,7 +242,7 @@ public sealed unsafe partial class NativePool<T>
             slab.State = SlabState.Free;
             _liveLeaseCount--;
             _requestedBytes -= checked((long)CalculateByteLength(length));
-            CacheReturnedSlab(slab, length);
+            CacheReturnedSlab(slab);
         }
     }
 
@@ -278,7 +282,7 @@ public sealed unsafe partial class NativePool<T>
             slab.State = SlabState.Free;
             _liveLeaseCount--;
             _requestedBytes -= checked((long)CalculateByteLength(length));
-            CacheReturnedSlab(slab, length);
+            CacheReturnedSlab(slab);
         }
     }
 
@@ -424,7 +428,7 @@ public sealed unsafe partial class NativePool<T>
         slab.State = SlabState.Free;
         _liveLeaseCount--;
         _requestedBytes -= checked((long)CalculateByteLength(length));
-        CacheReturnedSlab(slab, length);
+        CacheReturnedSlab(slab);
     }
 
     /// <summary>Reads the current typed slab state.</summary>
@@ -643,7 +647,8 @@ public sealed unsafe partial class NativePool<T>
         _nonEmptyFreeClasses = donor._nonEmptyFreeClasses;
         _unusedHead = donor._unusedHead;
         _returnedSlabIndex = donor._returnedSlabIndex;
-        _returnedLogicalLength = donor._returnedLogicalLength;
+        _returnedCapacity = donor._returnedCapacity;
+        _returnedFloor = donor._returnedFloor;
         _retainedBytes = donor._retainedBytes;
         _peakRetainedBytes = _retainedBytes;
         _nextAllocationOrdinal = donor._nextAllocationOrdinal;
@@ -654,7 +659,7 @@ public sealed unsafe partial class NativePool<T>
         donor._nonEmptyFreeClasses = 0;
         donor._unusedHead = -1;
         donor._returnedSlabIndex = -1;
-        donor._returnedLogicalLength = -1;
+        donor._returnedCapacity = -1;
         donor._retainedBytes = 0;
         GC.SuppressFinalize(donor);
         return true;
@@ -693,14 +698,18 @@ public sealed unsafe partial class NativePool<T>
         return false;
     }
 
+    // The slab returned last serves any length of its own size class that
+    // it holds, as a fresh slab (rounded up to a power of two) would; lengths
+    // changing between rents within a class stay on this path. Other lengths
+    // take the best fit from the free lists.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private int TakeOrAddSlab(int length)
     {
-        if (_returnedLogicalLength == length)
+        if (length <= _returnedCapacity && length > _returnedFloor)
         {
             int slabIndex = _returnedSlabIndex;
             _returnedSlabIndex = -1;
-            _returnedLogicalLength = -1;
+            _returnedCapacity = -1;
             return slabIndex;
         }
 
@@ -718,7 +727,7 @@ public sealed unsafe partial class NativePool<T>
                 if (_slabs[slabIndex].Capacity >= length)
                 {
                     _returnedSlabIndex = -1;
-                    _returnedLogicalLength = -1;
+                    _returnedCapacity = -1;
                     return slabIndex;
                 }
                 // Keep the only available slab reachable if growth fails.
@@ -726,7 +735,7 @@ public sealed unsafe partial class NativePool<T>
             else
             {
                 _returnedSlabIndex = -1;
-                _returnedLogicalLength = -1;
+                _returnedCapacity = -1;
                 PushFreeList(slabIndex);
             }
         }
@@ -745,7 +754,9 @@ public sealed unsafe partial class NativePool<T>
             "rent growth");
     }
 
-    [MethodImpl(MethodImplOptions.NoInlining)]
+    // Inlined into its one caller, already out of line: one call per rent
+    // whose length changes size class.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private int TakeFreeSlow(int length)
     {
         int firstClass = GetSizeClass(length);
@@ -934,7 +945,7 @@ public sealed unsafe partial class NativePool<T>
         Slab slab = _slabs[slabIndex];
         slab.State = SlabState.Free;
         _liveLeaseCount--;
-        CacheReturnedSlab(slab, length);
+        CacheReturnedSlab(slab);
     }
 
     // A lease holds its slab object, so validation reads no slot table. Tokens
@@ -1062,15 +1073,17 @@ public sealed unsafe partial class NativePool<T>
             allocationId: 0,
             _lifecycle);
 
-    private void CacheReturnedSlab(int slabIndex, int logicalLength) =>
-        CacheReturnedSlab(_slabs[slabIndex], logicalLength);
+    private void CacheReturnedSlab(int slabIndex) =>
+        CacheReturnedSlab(_slabs[slabIndex]);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void CacheReturnedSlab(Slab slab, int logicalLength)
+    private void CacheReturnedSlab(Slab slab)
     {
         int displaced = _returnedSlabIndex;
+        int capacity = slab.Capacity;
         _returnedSlabIndex = slab.Index;
-        _returnedLogicalLength = logicalLength;
+        _returnedCapacity = capacity;
+        _returnedFloor = capacity <= 1 ? 0 : (int)(BitOperations.RoundUpToPowerOf2((uint)capacity) >> 1);
         slab.Next = -1;
         if (displaced >= 0)
         {
@@ -1092,12 +1105,12 @@ public sealed unsafe partial class NativePool<T>
         Array.Fill(_freeHeads, -1);
         _nonEmptyFreeClasses = 0;
         _returnedSlabIndex = -1;
-        _returnedLogicalLength = -1;
+        _returnedCapacity = -1;
         for (int index = 0; index < _slabCount; index++)
         {
             if (_slabs[index].State == SlabState.Free)
             {
-                CacheReturnedSlab(index, _slabs[index].Capacity);
+                CacheReturnedSlab(index);
             }
         }
     }
