@@ -21,7 +21,11 @@ namespace Supprocom.NativeAllocationManagement;
 // the owner lock; a revoker reads it only after the owner left its window.
 internal sealed class NativePoolThreadCache
 {
-    internal const int FreeCapacity = 4;
+    // Deep enough for a thread that holds several leases at once: a return to a
+    // full free list or a rent from an empty one takes the owner lock. Idle
+    // records belong to the pool either way, and a pool takes other threads'
+    // idle records back before it grows.
+    internal const int FreeCapacity = 16;
     internal const int IdBlockSize = 1024;
 
     internal int Busy;
@@ -125,7 +129,9 @@ internal sealed class NativePoolThreadCache
     internal bool HasRecordRoom => RecordCount < Records.Length;
 
     // Takes the smallest free record whose slab holds the length, like the
-    // generation's own smallest-available-slab choice.
+    // generation's own smallest-available-slab choice. Slabs are as long as
+    // the rent that made them, so a thread renting one size stops at the
+    // newest record.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal NativeAllocation? TakeFree(int length)
     {
@@ -139,6 +145,10 @@ internal sealed class NativePoolThreadCache
             {
                 best = index;
                 bestCapacity = capacity;
+                if (capacity == length)
+                {
+                    break;
+                }
             }
         }
 
