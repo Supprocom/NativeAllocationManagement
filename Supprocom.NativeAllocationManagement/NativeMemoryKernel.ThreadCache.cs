@@ -334,9 +334,67 @@ internal sealed partial class NativeOwnerKernel
     // initializer callback: a cached record is filled in place and published;
     // anything else takes the initializer path with an equivalent fill.
     // Elements that are or contain references are always written.
+    // The common case, a small cached lease that stays on this thread, is kept
+    // short so callers' loops can still inline their lease operations.
     internal NativePoolLease RentFilled<T>(int length, T value, bool fill, bool transferable = false)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(length);
+        if (transferable)
+        {
+            return RentTransferableFilled(length, value, fill);
+        }
+
+        if (length > 0
+            && ThreadCacheEligible
+            && !NativeMemoryTestHooks.FaultInjectionPending
+            && NativePoolThreadCaches.Find(Id) is NativePoolThreadCache cache
+            && cache.Enter())
+        {
+            if (cache.NextId <= cache.LastId
+                && (!fill || (nuint)length * (nuint)_storageElementSize <= InWindowFillBytes)
+                && cache.TakeFree(length) is NativeAllocation allocation)
+            {
+                long allocationId = PublishCachedLease(cache, allocation, length, value, fill);
+                cache.Exit();
+                return new NativePoolLease(allocationId, allocation);
+            }
+
+            cache.Exit();
+        }
+
+        return RentFilledSlow(length, value, fill, transferable: false);
+    }
+
+    // A transferable rent on a thread whose returned transferable records
+    // wait in its stash or remote returns reuses one in place, in one window.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private NativePoolLease RentTransferableFilled<T>(int length, T value, bool fill)
+    {
+        if (length > 0
+            && ThreadCacheEligible
+            && !NativeMemoryTestHooks.FaultInjectionPending
+            && NativePoolThreadCaches.Find(Id) is NativePoolThreadCache cache
+            && cache.Enter())
+        {
+            if (cache.NextId <= cache.LastId
+                && (!fill || (nuint)length * (nuint)_storageElementSize <= InWindowFillBytes)
+                && TakeReturnedTransfer(cache, length) is NativeAllocation returned)
+            {
+                long returnedId = PublishCachedLease(cache, returned, length, value, fill);
+                returned.TransferOwner = cache;
+                cache.Exit();
+                return new NativePoolLease(returnedId, returned);
+            }
+
+            cache.Exit();
+        }
+
+        return RentFilledSlow(length, value, fill, transferable: true);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private NativePoolLease RentFilledSlow<T>(int length, T value, bool fill, bool transferable)
+    {
         if (length > 0
             && ThreadCacheEligible
             && !NativeMemoryTestHooks.FaultInjectionPending

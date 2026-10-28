@@ -270,6 +270,17 @@ public readonly ref struct ConcurrentPooled<T>
             }
         }
 
+        return ProcessThroughToken<TState, TResult, TProcessor>(length, in state);
+    }
+
+    // Out of line, so a caller inlining Process inlines the processor once.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private TResult ProcessThroughToken<TState, TResult, TProcessor>(
+        int length,
+        scoped in TState state)
+        where TState : allows ref struct
+        where TProcessor : struct, INativeSpanProcessor<T, TState, TResult>
+    {
         NativeOperationToken token = EnterOperation(nameof(Process));
         try
         {

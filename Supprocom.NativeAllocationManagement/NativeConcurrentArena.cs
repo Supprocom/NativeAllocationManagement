@@ -600,36 +600,49 @@ public readonly ref struct ConcurrentArenaLease<T>
         where TState : allows ref struct
         where TProcessor : struct, INativeSpanProcessor<T, TState, TResult>
     {
+        // The creating thread and a lane's thread share one call of the
+        // processor, so a caller inlining this method inlines the processor
+        // once; anything else takes the general path out of line.
         NativeOwnerKernel kernel = GetKernel(nameof(Process));
-        if (IsArenaFast
-            && kernel.CanUseArenaFastLocalOperation)
+        if (IsArenaFast)
         {
-            NativeArenaLocalOperationToken localToken =
-                kernel.EnterArenaFastLocalOperation(
-                    CreateArenaAllocation(),
-                    nameof(Process));
+            NativeArenaLocalOperationToken localToken = default;
+            NativePoolThreadCache? cache = null;
+            int epoch = 0;
+            if (kernel.CanUseArenaFastLocalOperation)
+            {
+                localToken = kernel.EnterArenaFastLocalOperation(CreateArenaAllocation(), nameof(Process));
+            }
+            else if (!TryEnterLane(kernel, out cache, out epoch))
+            {
+                return ProcessThroughToken<TState, TResult, TProcessor>(in state);
+            }
+
             try
             {
                 return TProcessor.Invoke(new NativeLeaseView<T>(GetArenaPointer(), _length).AsSpan(), in state);
             }
             finally
             {
-                localToken.Dispose();
+                if (cache is not null)
+                {
+                    kernel.ExitCacheCountedOperation(_generationState!, cache, epoch);
+                }
+                else
+                {
+                    localToken.Dispose();
+                }
             }
         }
 
-        if (TryEnterLane(kernel, out NativePoolThreadCache? cache, out int epoch))
-        {
-            try
-            {
-                return TProcessor.Invoke(new NativeLeaseView<T>(GetArenaPointer(), _length).AsSpan(), in state);
-            }
-            finally
-            {
-                kernel.ExitCacheCountedOperation(_generationState!, cache, epoch);
-            }
-        }
+        return ProcessThroughToken<TState, TResult, TProcessor>(in state);
+    }
 
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private TResult ProcessThroughToken<TState, TResult, TProcessor>(scoped in TState state)
+        where TState : allows ref struct
+        where TProcessor : struct, INativeSpanProcessor<T, TState, TResult>
+    {
         NativeArenaOperationToken token = EnterOperation(nameof(Process));
         try
         {
