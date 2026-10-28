@@ -11,9 +11,10 @@ namespace Supprocom.NativeAllocationManagement;
 public sealed partial class NativePool<T> : IDisposable
     where T : unmanaged
 {
-    // The per-thread instance lives in the thread state, so Shared and the
-    // owner-thread check of the following call read one thread-static.
-    private static readonly int s_sharedSlot = NativeThreadState.AllocateTypedSlot();
+    // Its own thread-static: one load chain shorter than a thread-state slot,
+    // which this hot getter would otherwise pay on every rent.
+    [ThreadStatic]
+    private static NativePool<T>? t_shared;
 
     /// <summary>Gets this thread's shared pool, created on first use.</summary>
     /// <remarks>
@@ -28,21 +29,15 @@ public sealed partial class NativePool<T> : IDisposable
     {
         get
         {
-            NativeThreadState thread = NativeThreadState.Current;
-            NativePool<T>? pool = thread.GetTyped<NativePool<T>>(s_sharedSlot);
+            NativePool<T>? pool = t_shared;
             return pool is not null && pool._lifecycle == NativeOwnerLifecycle.Active
                 ? pool
-                : CreateShared(thread);
+                : CreateShared();
         }
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static NativePool<T> CreateShared(NativeThreadState thread)
-    {
-        NativePool<T> pool = new();
-        thread.SetTyped(s_sharedSlot, pool);
-        return pool;
-    }
+    private static NativePool<T> CreateShared() => t_shared = new NativePool<T>();
 
     /// <summary>Gets the stable process-local allocator identity.</summary>
     public long Id { get; }
