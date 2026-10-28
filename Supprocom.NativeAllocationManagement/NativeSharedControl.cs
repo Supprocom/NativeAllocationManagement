@@ -13,8 +13,12 @@ namespace Supprocom.NativeAllocationManagement;
 // reader's: a stale reader can only complete the current lifetime's release.
 internal sealed class NativeSharedControl<T> where T : unmanaged
 {
-    private const int ParkCapacity = 4;
+    private const int ParkCapacity = 8;
     private static readonly int s_parkedSlot = NativeThreadState.AllocateTypedSlot();
+
+    // A full thread stack travels to threads that share, a stack at a time:
+    // in a pipeline the consuming thread returns every payload.
+    private static readonly NativeParkingDepot<NativeSharedControl<T>> s_depot = new(ParkCapacity, magazineLimit: 32);
 
     // A spin gate, not a Lock: holders update a few fields, never block or run
     // user code, and the control needs no second object.
@@ -72,14 +76,29 @@ internal sealed class NativeSharedControl<T> where T : unmanaged
     {
         NativeThreadState thread = NativeThreadState.Current;
         if (!NativeMemoryTestHooks.FaultInjectionPending
-            && thread.GetTyped<ParkedControls>(s_parkedSlot) is { Count: > 0 } stack
-            && stack.TryTake(thread, preparation) is { } parked)
+            && (thread.GetTyped<ParkedControls>(s_parkedSlot) is { Count: > 0 } stack
+                ? stack.TryTake(thread, preparation)
+                : TakeFromOtherThreads(thread, preparation)) is { } parked)
         {
             parked.BeginLifetime(thread, ownerId, length);
             return parked;
         }
 
         return new NativeSharedControl<T>(thread, preparation, ownerId, length);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static NativeSharedControl<T>? TakeFromOtherThreads(NativeThreadState thread, NativeSharingPreparation preparation)
+    {
+        if (!s_depot.HasFull)
+        {
+            return null;
+        }
+
+        ParkedControls stack = thread.GetTyped<ParkedControls>(s_parkedSlot) ?? CreateParkedControls(thread);
+        return stack.Count == 0 && stack.TryRefill(thread)
+            ? stack.TryTake(thread, preparation)
+            : null;
     }
 
     // No binding of this lifetime exists yet, but stale bindings of earlier ones
@@ -478,11 +497,23 @@ internal sealed class NativeSharedControl<T> where T : unmanaged
 
         internal ParkedControls(NativeThreadState thread) => _epoch = thread.ReuseEpoch;
 
+        internal bool TryRefill(NativeThreadState thread)
+        {
+            _epoch = thread.ReuseEpoch;
+            Count = s_depot.TryRefill(_items);
+            return Count != 0;
+        }
+
         internal void TryPush(NativeThreadState thread, NativeSharedControl<T> control)
         {
             if (_epoch != thread.ReuseEpoch)
             {
                 Clear(thread);
+            }
+
+            if (Count == ParkCapacity && s_depot.TrySpill(_items, Count))
+            {
+                Count = 0;
             }
 
             // A full stack drops its oldest control: the most recent preparation

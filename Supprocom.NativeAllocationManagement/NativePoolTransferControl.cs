@@ -10,13 +10,13 @@ namespace Supprocom.NativeAllocationManagement;
 internal sealed class NativePoolTransferControl<T> : NativeTransferControl<T>
     where T : unmanaged
 {
-    private const int ParkCapacity = 4;
+    private const int ParkCapacity = 8;
     private static readonly int s_parkedSlot = NativeThreadState.AllocateTypedSlot();
 
-    // A full thread stack overflows into a few shared partitions, from which a
-    // thread with an empty stack takes: in a pipeline the consuming thread
-    // returns every control and the producing thread rents every lease.
-    private static readonly SharedPartition[] s_shared = SharedPartition.CreateAll();
+    // A full thread stack travels to a thread with an empty one, a stack at a
+    // time: in a pipeline the consuming thread returns every control and the
+    // producing thread rents every lease.
+    private static readonly NativeParkingDepot<NativePoolTransferControl<T>> s_depot = new(ParkCapacity, magazineLimit: 32);
 
     private long _lifetimeFirstVersion = 1;
 
@@ -34,9 +34,17 @@ internal sealed class NativePoolTransferControl<T> : NativeTransferControl<T>
         NativePoolLease lease,
         string operation)
     {
-        ParkedControls? parked = NativeThreadState.Current.GetTyped<ParkedControls>(s_parkedSlot);
-        if ((parked is { Count: > 0 } ? parked.Pop() : SharedPartition.TryTake(s_shared)) is NativePoolTransferControl<T> reused)
+        NativeThreadState thread = NativeThreadState.Current;
+        ParkedControls? parked = thread.GetTyped<ParkedControls>(s_parkedSlot);
+        if (parked is not { Count: > 0 } && s_depot.HasFull)
         {
+            parked ??= CreateParkedControls(thread);
+            parked.Refill();
+        }
+
+        if (parked is { Count: > 0 })
+        {
+            NativePoolTransferControl<T> reused = parked.Pop();
             long first = reused.CurrentAuthorityVersion + 1;
             Volatile.Write(ref reused._lifetimeFirstVersion, first);
             reused.BeginKernelLifetime(kernel, lease.AllocationState, lease.Generation, lease.AllocationId, first);
@@ -71,11 +79,16 @@ internal sealed class NativePoolTransferControl<T> : NativeTransferControl<T>
         PublishControlState(Disposed);
         NativeThreadState thread = NativeThreadState.Current;
         ParkedControls parked = thread.GetTyped<ParkedControls>(s_parkedSlot) ?? CreateParkedControls(thread);
+        if (parked.Count == ParkCapacity)
+        {
+            parked.Spill();
+        }
+
         if (parked.Count < ParkCapacity)
         {
             parked.Push(this);
         }
-        else if (!SharedPartition.TryPark(s_shared, this))
+        else
         {
             GC.SuppressFinalize(this);
         }
@@ -91,100 +104,6 @@ internal sealed class NativePoolTransferControl<T> : NativeTransferControl<T>
         return parked;
     }
 
-    // Holders move one slot under a spin gate and never allocate or block.
-    private sealed class SharedPartition
-    {
-        private const int Capacity = 128;
-        private readonly NativePoolTransferControl<T>?[] _items = new NativePoolTransferControl<T>?[Capacity];
-        private int _gate;
-        private int _count;
-
-        internal static SharedPartition[] CreateAll()
-        {
-            SharedPartition[] partitions = new SharedPartition[Math.Clamp(Environment.ProcessorCount, 1, 8)];
-            foreach (ref SharedPartition partition in partitions.AsSpan())
-            {
-                partition = new SharedPartition();
-            }
-
-            return partitions;
-        }
-
-        internal static NativePoolTransferControl<T>? TryTake(SharedPartition[] partitions)
-        {
-            int start = Thread.GetCurrentProcessorId();
-            for (int offset = 0; offset < partitions.Length; offset++)
-            {
-                SharedPartition partition = partitions[(start + offset) % partitions.Length];
-                if (Volatile.Read(ref partition._count) != 0
-                    && partition.TryTake() is NativePoolTransferControl<T> control)
-                {
-                    return control;
-                }
-            }
-
-            return null;
-        }
-
-        internal static bool TryPark(SharedPartition[] partitions, NativePoolTransferControl<T> control)
-        {
-            int start = Thread.GetCurrentProcessorId();
-            for (int offset = 0; offset < partitions.Length; offset++)
-            {
-                SharedPartition partition = partitions[(start + offset) % partitions.Length];
-                if (Volatile.Read(ref partition._count) != Capacity
-                    && partition.TryPark(control))
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        private NativePoolTransferControl<T>? TryTake()
-        {
-            Enter();
-            int count = _count;
-            if (count == 0)
-            {
-                Volatile.Write(ref _gate, 0);
-                return null;
-            }
-
-            NativePoolTransferControl<T> control = _items[--count]!;
-            _items[count] = null;
-            Volatile.Write(ref _count, count);
-            Volatile.Write(ref _gate, 0);
-            return control;
-        }
-
-        private bool TryPark(NativePoolTransferControl<T> control)
-        {
-            Enter();
-            int count = _count;
-            if (count == Capacity)
-            {
-                Volatile.Write(ref _gate, 0);
-                return false;
-            }
-
-            _items[count] = control;
-            Volatile.Write(ref _count, count + 1);
-            Volatile.Write(ref _gate, 0);
-            return true;
-        }
-
-        private void Enter()
-        {
-            SpinWait spinner = default;
-            while (Interlocked.CompareExchange(ref _gate, 1, 0) != 0)
-            {
-                spinner.SpinOnce();
-            }
-        }
-    }
-
     private sealed class ParkedControls
     {
         private readonly NativePoolTransferControl<T>?[] _items = new NativePoolTransferControl<T>?[ParkCapacity];
@@ -192,6 +111,16 @@ internal sealed class NativePoolTransferControl<T> : NativeTransferControl<T>
         internal int Count;
 
         internal void Push(NativePoolTransferControl<T> control) => _items[Count++] = control;
+
+        internal void Spill()
+        {
+            if (s_depot.TrySpill(_items, Count))
+            {
+                Count = 0;
+            }
+        }
+
+        internal void Refill() => Count = s_depot.TryRefill(_items);
 
         internal NativePoolTransferControl<T> Pop()
         {
