@@ -620,21 +620,29 @@ public readonly ref struct ConcurrentArenaLease<T>
                 return ProcessThroughToken<TState, TResult, TProcessor>(in state);
             }
 
+            // The operation is left inline after a normal return; only a
+            // failed processor takes the out-of-line exit, so no finally runs.
+            TResult result;
             try
             {
-                return TProcessor.Invoke(new NativeLeaseView<T>(GetArenaPointer(), _length).AsSpan(), in state);
+                result = TProcessor.Invoke(new NativeLeaseView<T>(GetArenaPointer(), _length).AsSpan(), in state);
             }
-            finally
+            catch
             {
-                if (cache is not null)
-                {
-                    kernel.ExitCacheCountedOperation(_generationState!, cache, epoch);
-                }
-                else
-                {
-                    localToken.Dispose();
-                }
+                ExitAfterFailure(kernel, _generationState!, cache, epoch, localToken);
+                throw;
             }
+
+            if (cache is not null)
+            {
+                kernel.ExitCacheCountedOperation(_generationState!, cache, epoch);
+            }
+            else
+            {
+                localToken.Dispose();
+            }
+
+            return result;
         }
 
         return ProcessThroughToken<TState, TResult, TProcessor>(in state);
@@ -653,6 +661,26 @@ public readonly ref struct ConcurrentArenaLease<T>
         finally
         {
             token.Dispose();
+        }
+    }
+
+    // Leaves a lane or local operation after a failed callback. Static, so
+    // the lease's address is never taken.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void ExitAfterFailure(
+        NativeOwnerKernel kernel,
+        NativeGeneration generation,
+        NativePoolThreadCache? cache,
+        int epoch,
+        NativeArenaLocalOperationToken localToken)
+    {
+        if (cache is not null)
+        {
+            kernel.ExitCacheCountedOperation(generation, cache, epoch);
+        }
+        else
+        {
+            localToken.Dispose();
         }
     }
 

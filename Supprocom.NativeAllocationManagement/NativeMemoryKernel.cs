@@ -8028,6 +8028,9 @@ internal sealed partial class NativeOwnerKernel
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    // Small and free of exception handling, so the finally of a callback
+    // that leaves an arena operation can run inline; the locked exit of a
+    // retired generation is out of line.
     internal void ExitArenaFastLocalOperation(
         NativeGeneration generation,
         string operation)
@@ -8036,8 +8039,7 @@ internal sealed partial class NativeOwnerKernel
         int depth = _arenaFastOperationDepth;
         if (depth <= 0)
         {
-            throw new InvalidOperationException(
-                "The Arena lane operation count is already zero.");
+            ThrowArenaOperationCountZero();
         }
 
         depth--;
@@ -8058,11 +8060,22 @@ internal sealed partial class NativeOwnerKernel
             return;
         }
 
+        FinishArenaFastLocalExit(generation);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private void FinishArenaFastLocalExit(NativeGeneration generation)
+    {
         lock (_gate)
         {
             FinishOperationExitLocked(generation);
         }
     }
+
+    [System.Diagnostics.CodeAnalysis.DoesNotReturn]
+    private static void ThrowArenaOperationCountZero() =>
+        throw new InvalidOperationException(
+            "The Arena lane operation count is already zero.");
 
     internal void TransferLeaseAuthority<TState>(
         NativeGeneration expectedGeneration,
