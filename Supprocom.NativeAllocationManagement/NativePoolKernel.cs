@@ -35,6 +35,17 @@ public sealed unsafe partial class NativePool<T>
     private long _nextAllocationOrdinal;
     private long _peakRetainedBytes;
     private bool _historyOverflowed;
+    private int _retainEpoch;
+
+    // One disposed default-policy pool per thread and element type keeps its
+    // slabs for the next pool the thread creates, as regions and arenas do:
+    // a pool made for one scope then allocates no native memory, and the
+    // disposed one needs no finalization. Stale leases of the disposed pool
+    // still name it and fail its validation.
+    private const long ReuseLimitBytes = 1024 * 1024;
+
+    [ThreadStatic]
+    private static NativePool<T>? t_reusable;
 
     private NativePool(
         int preLease,
@@ -52,8 +63,17 @@ public sealed unsafe partial class NativePool<T>
         _returnMemoryOnDispose = returnMemoryOnDispose;
         _budget = budget;
         _ownerThreadId = NativeThreadIdentity.Current;
-        _slabs = new Slab[4];
         _lifecycle = NativeOwnerLifecycle.Active;
+        if (returnMemoryOnDispose == NativeMemoryReturn.ToGarbageCollector
+            && budget is null
+            && preLease == 0
+            && preAllocateBytes == 0
+            && TryAdoptRetainedSlabs())
+        {
+            return;
+        }
+
+        _slabs = new Slab[4];
 
         try
         {
@@ -570,7 +590,84 @@ public sealed unsafe partial class NativePool<T>
             return;
         }
 
+        if (TryRetainForReuse())
+        {
+            return;
+        }
+
         MarkDetached();
+    }
+
+    // Every slab is free: disposal refused live leases.
+    private bool TryRetainForReuse()
+    {
+        if (_budget is not null
+            || _slabCount == 0
+            || _retainedBytes > ReuseLimitBytes
+            || t_reusable is not null)
+        {
+            return false;
+        }
+
+        _retainEpoch = NativeThreadState.Current.ReuseEpoch;
+        t_reusable = this;
+        return true;
+    }
+
+    // Takes the slab table of this thread's retained pool, unless it is from
+    // an older reuse or measurement epoch; such a donor is detached for its
+    // finalizer as its disposal would have.
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA1816", Justification = "The donor's slabs now belong to this pool, so the donor's emergency finalizer has nothing left to return.")]
+    private bool TryAdoptRetainedSlabs()
+    {
+        NativePool<T>? donor = t_reusable;
+        if (donor is null)
+        {
+            return false;
+        }
+
+        t_reusable = null;
+        if (donor._retainEpoch != NativeThreadState.Current.ReuseEpoch || !donor.SlabsInCurrentMetricsEpoch())
+        {
+            donor.MarkDetached();
+            return false;
+        }
+
+        _slabs = donor._slabs;
+        _slabCount = donor._slabCount;
+        _freeHeads = donor._freeHeads;
+        _nonEmptyFreeClasses = donor._nonEmptyFreeClasses;
+        _unusedHead = donor._unusedHead;
+        _returnedSlabIndex = donor._returnedSlabIndex;
+        _returnedLogicalLength = donor._returnedLogicalLength;
+        _retainedBytes = donor._retainedBytes;
+        _peakRetainedBytes = _retainedBytes;
+        _nextAllocationOrdinal = donor._nextAllocationOrdinal;
+        _leaseTokenCounter = donor._leaseTokenCounter;
+        donor._slabs = [];
+        donor._slabCount = 0;
+        donor._freeHeads = [];
+        donor._nonEmptyFreeClasses = 0;
+        donor._unusedHead = -1;
+        donor._returnedSlabIndex = -1;
+        donor._returnedLogicalLength = -1;
+        donor._retainedBytes = 0;
+        GC.SuppressFinalize(donor);
+        return true;
+    }
+
+    private bool SlabsInCurrentMetricsEpoch()
+    {
+        long epoch = NativeMemoryAccounting.CurrentMetricsEpoch;
+        foreach (ref readonly Slab slab in _slabs.AsSpan(0, _slabCount))
+        {
+            if (slab.AllocationBytes != 0 && slab.MetricsEpoch != epoch)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private bool HasInFlightSlab()
