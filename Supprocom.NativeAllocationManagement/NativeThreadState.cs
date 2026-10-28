@@ -29,6 +29,10 @@ internal sealed class NativeThreadState
     // NativeRegionKernel: one disposed default-policy region kept for reuse.
     internal NativeRegionKernel? ReusableRegion;
 
+    // NativeArena: one disposed default-policy arena whose segment the next
+    // arena on this thread takes.
+    internal NativeArena? ReusableArena;
+
     // Per element type state, such as parked transfer controls, by slot index.
     private object?[] _typed = new object?[8];
 

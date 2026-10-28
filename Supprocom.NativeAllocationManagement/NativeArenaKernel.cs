@@ -34,6 +34,14 @@ public sealed unsafe partial class NativeArena
     private long _nextAllocationOrdinal;
     private bool _historyOverflowed;
     private int _segmentCount;
+    private int _retainEpoch;
+
+    // One disposed garbage-collector-policy arena per thread keeps its only
+    // segment for the next arena on the thread instead of detaching it for its
+    // finalizer, as a region does: an arena made for one scope then allocates
+    // no native memory, and the disposed one needs no finalization. The
+    // memory stays mapped either way.
+    private const long ReuseLimitBytes = 1024 * 1024;
 
     private NativeArena(
         nuint preAllocateBytes,
@@ -48,6 +56,13 @@ public sealed unsafe partial class NativeArena
         _budget = budget;
         _ownerThreadId = NativeThreadIdentity.Current;
         _lifecycle = NativeOwnerLifecycle.Active;
+        if (returnMemoryOnDispose == NativeMemoryReturn.ToGarbageCollector
+            && budget is null
+            && TryAdoptRetainedSegment(preAllocateBytes))
+        {
+            return;
+        }
+
         if (preAllocateBytes != 0)
         {
             AppendSegment(
@@ -56,6 +71,42 @@ public sealed unsafe partial class NativeArena
                 "declaration reservation");
             ResetLane(ref _ordinary);
         }
+    }
+
+    // Takes the segment of this thread's retained arena, unless it is from an
+    // older reuse or measurement epoch or too short for the reservation; such
+    // a donor is detached for its finalizer as its disposal would have.
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA1816", Justification = "The donor's segment now belongs to this arena, so the donor's emergency finalizer has nothing left to return.")]
+    private bool TryAdoptRetainedSegment(nuint preAllocateBytes)
+    {
+        NativeThreadState thread = NativeThreadState.Current;
+        NativeArena? donor = thread.ReusableArena;
+        if (donor is null)
+        {
+            return false;
+        }
+
+        thread.ReusableArena = null;
+        ArenaSegmentHeader* segment = donor._ordinary.First;
+        if (donor._retainEpoch != thread.ReuseEpoch
+            || segment->MetricsEpoch != NativeMemoryAccounting.CurrentMetricsEpoch
+            || segment->Capacity < preAllocateBytes)
+        {
+            donor.DetachForFinalizer();
+            return false;
+        }
+
+        donor._ordinary = default;
+        donor._retainedBytes = 0;
+        donor._segmentCount = 0;
+        GC.SuppressFinalize(donor);
+        _ordinary.First = segment;
+        _ordinary.Tail = segment;
+        ResetLane(ref _ordinary);
+        _retainedBytes = checked((long)segment->AllocationBytes);
+        _peakRetainedBytes = _retainedBytes;
+        _segmentCount = 1;
+        return true;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -454,10 +505,48 @@ public sealed unsafe partial class NativeArena
             return;
         }
 
+        if (TryRetainForReuse())
+        {
+            return;
+        }
+
+        DetachForFinalizer();
+    }
+
+    private void DetachForFinalizer()
+    {
         MarkDetached(_ordinary);
         MarkDetached(_scoped);
         NativeMemoryAccounting.RecordDetachedGeneration(
             NativeMemoryAccounting.CurrentMetricsEpoch);
+    }
+
+    // A plain arena with one segment within the limit, on the thread that
+    // owns it, waits in that thread's slot for the next arena.
+    private bool TryRetainForReuse()
+    {
+        ArenaSegmentHeader* segment = _ordinary.First;
+        if (_budget is not null
+            || _prepared
+            || _retentionEnabled
+            || segment == null
+            || segment->Next != null
+            || segment->External != 0
+            || (long)segment->Capacity > ReuseLimitBytes
+            || _scoped.First != null)
+        {
+            return false;
+        }
+
+        NativeThreadState thread = NativeThreadState.Current;
+        if (thread.ReusableArena is not null)
+        {
+            return false;
+        }
+
+        _retainEpoch = thread.ReuseEpoch;
+        thread.ReusableArena = this;
+        return true;
     }
 
     private ulong GetNextEpochOrClose(
