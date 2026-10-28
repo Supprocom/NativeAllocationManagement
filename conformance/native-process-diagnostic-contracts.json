@@ -16,7 +16,7 @@
     {
       "name": "OutstandingNativeBytes", "units": "bytes", "role": "gauge",
       "definition": "Current actual acquired NAM-owned extents, including known headers/padding and retained, retired, quarantined and detached backing. Resize changes the old charge to the complete replacement; failed acquisition adds none.",
-      "implementation": ["NativeMemoryAccounting.cs#AddOutstanding(checked((long)byteLength), metricsEpoch);", "NativeMemoryAccounting.cs#AddOutstanding(-bytes, metricsEpoch);"],
+      "implementation": ["NativeMemoryAccounting.cs#AddOutstanding(thread, checked((long)byteLength), metricsEpoch);", "NativeMemoryAccounting.cs#AddOutstanding(thread, -bytes, metricsEpoch);"],
       "overflow": "Exact gauge for actual addressable acquired extents, not a saturating event history. Each thread keeps its unflushed change in its own stripe and a capture adds every stripe of the current epoch, so a capture is exact whenever no other thread is acquiring or releasing at that moment. Individual extent conversion is checked.",
       "additionalProofs": ["NativeProductionAccountingTests.PublicDiagnosticsAccountWithoutFaultHookActivation", "NativeProductionAccountingTests.PreEpochReleaseAndResizeRespectMeasurementBoundaries"]
     },

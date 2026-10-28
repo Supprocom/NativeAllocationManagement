@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+
 namespace Supprocom.NativeAllocationManagement;
 
 /// <summary>Owns reusable native slabs for one unmanaged element type.</summary>
@@ -9,8 +11,9 @@ namespace Supprocom.NativeAllocationManagement;
 public sealed partial class NativePool<T> : IDisposable
     where T : unmanaged
 {
-    [ThreadStatic]
-    private static NativePool<T>? t_shared;
+    // The per-thread instance lives in the thread state, so Shared and the
+    // owner-thread check of the following call read one thread-static.
+    private static readonly int s_sharedSlot = NativeThreadState.AllocateTypedSlot();
 
     /// <summary>Gets this thread's shared pool, created on first use.</summary>
     /// <remarks>
@@ -25,11 +28,20 @@ public sealed partial class NativePool<T> : IDisposable
     {
         get
         {
-            NativePool<T>? pool = t_shared;
+            NativeThreadState thread = NativeThreadState.Current;
+            NativePool<T>? pool = thread.GetTyped<NativePool<T>>(s_sharedSlot);
             return pool is not null && pool._lifecycle == NativeOwnerLifecycle.Active
                 ? pool
-                : t_shared = new NativePool<T>();
+                : CreateShared(thread);
         }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static NativePool<T> CreateShared(NativeThreadState thread)
+    {
+        NativePool<T> pool = new();
+        thread.SetTyped(s_sharedSlot, pool);
+        return pool;
     }
 
     /// <summary>Gets the stable process-local allocator identity.</summary>

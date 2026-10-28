@@ -124,9 +124,9 @@ public sealed class NativeBuilderBudgetLifetimeTests
         Assert.DoesNotContain(builderFields, static field => field.FieldType == typeof(NativeMemoryBudget));
         int backingFields = 0;
         foreach (FieldInfo field in builderFields)
-            if (field.FieldType == typeof(NativeBlock)) backingFields++;
+            if (field.FieldType == typeof(NativeBlockSlot)) backingFields++;
         Assert.Equal(1, backingFields);
-        Assert.Contains(typeof(NativeBlock).GetFields(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly),
+        Assert.Contains(typeof(NativeBlockSlot).GetFields(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly),
             static field => field.FieldType == typeof(NativeMemoryBudget));
     }
 

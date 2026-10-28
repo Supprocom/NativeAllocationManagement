@@ -267,7 +267,7 @@ public sealed class NativeLayoutDiagnosticContractTests
 
     private static int ActualPayloadOffset(object control, int alignment)
     {
-        NativeBlock block = (NativeBlock)typeof(NativeTransferControl<byte>).GetField("_block", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(control)!;
+        NativeBlock block = ((NativeBlockSlot)typeof(NativeTransferControl<byte>).GetField("_block", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(control)!).Value;
         nuint remainder = (nuint)block.Pointer % (nuint)alignment;
         return remainder == 0 ? 0 : checked(alignment - (int)remainder);
     }

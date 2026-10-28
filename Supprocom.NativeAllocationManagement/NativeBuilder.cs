@@ -18,7 +18,7 @@ public sealed class NativeBuilder<T> : IDisposable
     private int _writerGate;
     private int _count;
     private int _capacity;
-    private NativeBlock _block;
+    private NativeBlockSlot _block;
     private readonly long _id = NativeOwnerIdentity.Next();
     private readonly NativeBuilderControl<T> _control;
 
@@ -51,8 +51,8 @@ public sealed class NativeBuilder<T> : IDisposable
         _control = NativeBuilderControl<T>.Acquire(
             checked((nuint)preLease * (nuint)Unsafe.SizeOf<T>()),
             budget,
-            _id,
-            out _block);
+            _id);
+        _block.Set(_control.Block);
         _capacity = (int)Math.Min(int.MaxValue, _block.ByteLength / (nuint)Unsafe.SizeOf<T>());
     }
 
@@ -950,10 +950,10 @@ public sealed class NativeBuilder<T> : IDisposable
     private NativeTransfer<T> CompleteDirect(int length)
     {
         NativeTransfer<T> transfer = _control.Publish(
-            _block,
+            _block.Value,
             length,
             _capacity);
-        _block = default;
+        _block.Clear();
         return transfer;
     }
 
@@ -983,7 +983,7 @@ public sealed class NativeBuilder<T> : IDisposable
         }
 
         if (!NativeBlockAllocator.TryResize<T>(
-            _block,
+            _block.Value,
             next,
             required,
             nameof(NativeBuilder<T>),
@@ -997,7 +997,7 @@ public sealed class NativeBuilder<T> : IDisposable
             return false;
         }
 
-        _block = replacement;
+        _block.Set(replacement);
         _capacity = capacity;
         _control.InstallBlock(replacement);
         return true;
@@ -1005,8 +1005,8 @@ public sealed class NativeBuilder<T> : IDisposable
 
     private void ReleaseBlock()
     {
-        NativeBlock block = _block;
-        _block = default;
+        NativeBlock block = _block.Value;
+        _block.Clear();
         _control.ReturnUnpublished(block);
     }
 }

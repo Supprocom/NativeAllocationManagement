@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+
 namespace Supprocom.NativeAllocationManagement;
 
 internal static class NativeOwnerIdentity
@@ -8,35 +10,33 @@ internal static class NativeOwnerIdentity
     // Each thread claims a block of identities with one atomic add and hands
     // them out without touching shared state, so owner construction on many
     // threads does not contend on one cache line.
-    [ThreadStatic]
-    private static long t_next;
-
-    [ThreadStatic]
-    private static long t_end;
-
+    //
     // One construction-time number, never a registry or an address. Numbers
     // increase within a thread; the checked claim cannot wrap and turn an old
     // identity into a new owner.
     internal static long Next()
     {
         NativeMemoryAccounting.PrepareThread();
-        return NextWithoutPreparation();
+        return Next(NativeThreadState.Current);
     }
 
-    internal static long NextWithoutPreparation()
+    internal static long NextWithoutPreparation() => Next(NativeThreadState.Current);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static long Next(NativeThreadState thread)
     {
-        long next = t_next;
-        if (next != t_end)
+        long next = thread.NextOwnerId;
+        if (next != thread.OwnerIdEnd)
         {
-            t_next = next + 1;
+            thread.NextOwnerId = next + 1;
             return next;
         }
 
-        return ClaimBlock();
+        return ClaimBlock(thread);
     }
 
-    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
-    private static long ClaimBlock()
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static long ClaimBlock(NativeThreadState thread)
     {
         long end;
         while (true)
@@ -50,8 +50,8 @@ internal static class NativeOwnerIdentity
         }
 
         long first = end - BlockSize + 1;
-        t_next = first + 1;
-        t_end = end + 1;
+        thread.NextOwnerId = first + 1;
+        thread.OwnerIdEnd = end + 1;
         return first;
     }
 }

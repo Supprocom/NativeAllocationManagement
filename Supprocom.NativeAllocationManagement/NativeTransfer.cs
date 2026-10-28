@@ -168,7 +168,7 @@ internal partial class NativeTransferControl<T>
     // Direct custody uses the descriptor's epoch/owner as allocation metadata.
     // Kernel custody has no direct block: the same two scalar slots hold its
     // captured generation/allocation identity instead of duplicate fields.
-    private NativeBlock _block;
+    private NativeBlockSlot _block;
     private int _length;
     private int _capacity;
     private int _state;
@@ -191,7 +191,7 @@ internal partial class NativeTransferControl<T>
         _kernel = kernel;
         _allocationState = allocationState;
         _ownerId = kernel.Id;
-        _block = KernelBlock(kernel, allocationState, generation, allocationId, out _borrowedBacking);
+        _block.Set(KernelBlock(kernel, allocationState, generation, allocationId, out _borrowedBacking));
         _length = allocationState.Length;
         _capacity = allocationState.Capacity;
         _state = Active;
@@ -219,7 +219,7 @@ internal partial class NativeTransferControl<T>
         int capacity,
         bool published)
     {
-        _block = block;
+        _block.Set(block);
         _ownerId = block.OwnerId;
         _ = checked((long)block.ByteLength);
         _length = length;
@@ -278,7 +278,7 @@ internal partial class NativeTransferControl<T>
             PayloadReturnCount = returned ? 1 : 0,
             PayloadReturnFailureCount = Volatile.Read(ref _returnFailures),
             HistoryOverflowed = Volatile.Read(ref _historyOverflowed),
-            ControlFieldBytes = 3L * IntPtr.Size + 3L * sizeof(long) + 6L * sizeof(int) + 5L * sizeof(bool) + Unsafe.SizeOf<NativeBlock>()
+            ControlFieldBytes = 3L * IntPtr.Size + 3L * sizeof(long) + 6L * sizeof(int) + 5L * sizeof(bool) + Unsafe.SizeOf<NativeBlockSlot>()
         };
     }
 
@@ -727,7 +727,7 @@ internal partial class NativeTransferControl<T>
         try
         {
             NativeMemoryTestHooks.CheckManagedPublicationBoundary(operation, 4, "unique payload authority return");
-            if (_kernel is null) NativeBlockAllocator.Free(_block);
+            if (_kernel is null) NativeBlockAllocator.Free(_block.Value);
             else _kernel.ReturnTransferLease(_allocationState!, _block.MetricsEpoch, _block.OwnerId, operation);
         }
         catch
@@ -830,7 +830,9 @@ internal partial class NativeTransferControl<T>
     private protected int CurrentControlState => Volatile.Read(ref _state);
     private protected bool StorageReturned => Volatile.Read(ref _payloadReturned) != 0;
     private protected int DeclaredLength => _length;
-    private protected NativeBlock OwnedBlock => _block;
+    private protected NativeBlock OwnedBlock => _block.Value;
+    private protected IntPtr OwnedPointer => _block.Pointer;
+    private protected nuint OwnedByteLength => _block.ByteLength;
     private protected bool TryTransition(int expected, int next) =>
         Interlocked.CompareExchange(ref _state, next, expected) == expected;
 
@@ -852,7 +854,7 @@ internal partial class NativeTransferControl<T>
         _kernel = null;
         _sharingControl = null;
         _allocationState = null;
-        _block = block;
+        _block.Set(block);
         _ownerId = ownerId;
         _length = 0;
         _capacity = 0;
@@ -895,7 +897,7 @@ internal partial class NativeTransferControl<T>
 
     private protected void InstallOwnedBlock(NativeBlock block)
     {
-        _block = block;
+        _block.Set(block);
         _ = checked((long)block.ByteLength);
     }
 
@@ -911,7 +913,7 @@ internal partial class NativeTransferControl<T>
         // Returned aliases keep numeric observation, never a pointer, budget,
         // kernel or allocation record. Numeric extent is lifetime peak history,
         // not live storage or authority. Direct and kernel identities are stable.
-        _block = new NativeBlock(IntPtr.Zero, _block.ByteLength, _block.MetricsEpoch, OwnerId: _block.OwnerId);
+        _block.Detach();
         Volatile.Write(ref _payloadReturned, 1);
     }
 

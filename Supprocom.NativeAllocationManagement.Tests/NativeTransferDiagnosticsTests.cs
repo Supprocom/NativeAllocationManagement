@@ -209,6 +209,7 @@ public sealed class NativeTransferDiagnosticsTests
             representedBytes += !type.IsValueType ? IntPtr.Size : type == typeof(long) ? sizeof(long)
                 : type == typeof(int) ? sizeof(int) : type == typeof(bool) ? sizeof(bool)
                 : type == typeof(NativeBlock) ? Unsafe.SizeOf<NativeBlock>()
+                : type == typeof(NativeBlockSlot) ? Unsafe.SizeOf<NativeBlockSlot>()
                 : throw new InvalidOperationException($"Unaccounted control field {field.Name}");
         }
         Assert.Equal(representedBytes, owner.CaptureSnapshot().ControlFieldBytes);
@@ -270,8 +271,8 @@ public sealed class NativeTransferDiagnosticsTests
         Assert.False(returned.HasReturnObligation);
         Assert.False(returned.BindingIsActive);
         Assert.Throws<ObjectDisposedException>(() => observed.Read(static view => view.Length));
-        NativeBlock descriptor = (NativeBlock)typeof(NativeTransferControl<int>)
-            .GetField("_block", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(observed.ControlForTest)!;
+        NativeBlock descriptor = ((NativeBlockSlot)typeof(NativeTransferControl<int>)
+            .GetField("_block", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(observed.ControlForTest)!).Value;
         Assert.Equal(IntPtr.Zero, descriptor.Pointer);
         Assert.Equal((nuint)(initial.OwnedBackingBytes + initial.BorrowedBackingBytes), descriptor.ByteLength);
         Assert.Null(descriptor.Budget);

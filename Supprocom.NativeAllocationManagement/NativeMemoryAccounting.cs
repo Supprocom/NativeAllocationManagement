@@ -130,7 +130,7 @@ internal static class NativeMemoryAccounting
     private const int GaugeStripeLimit = 1024;
 
     [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Explicit, Size = 192)]
-    private struct GaugeFields
+    internal struct GaugeFields
     {
         // The middle of 192 bytes keeps these off the cache lines of neighboring objects.
         [System.Runtime.InteropServices.FieldOffset(64)] internal long Epoch;
@@ -138,7 +138,7 @@ internal static class NativeMemoryAccounting
         [System.Runtime.InteropServices.FieldOffset(80)] internal long MaxDelta;
     }
 
-    private sealed class GaugeStripe
+    internal sealed class GaugeStripe
     {
         internal GaugeFields Fields;
         internal WeakReference<Thread>? OwnerThread;
@@ -151,16 +151,17 @@ internal static class NativeMemoryAccounting
         internal static int Count;
     }
 
-    [ThreadStatic]
-    private static GaugeStripe? t_gauge;
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void AddOutstanding(long bytes, long metricsEpoch) =>
+        AddOutstanding(NativeThreadState.Current, bytes, metricsEpoch);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void AddOutstanding(long bytes, long metricsEpoch)
+    private static void AddOutstanding(NativeThreadState thread, long bytes, long metricsEpoch)
     {
-        GaugeStripe? stripe = t_gauge;
+        GaugeStripe? stripe = thread.Gauge;
         if (stripe is null || stripe.Fields.Epoch != metricsEpoch)
         {
-            stripe = ClaimGauge(metricsEpoch);
+            stripe = ClaimGauge(thread, metricsEpoch);
             if (stripe is null)
             {
                 RecordPeak(Interlocked.Add(ref _outstandingNativeBytes, bytes));
@@ -179,7 +180,21 @@ internal static class NativeMemoryAccounting
                 FlushGauge(ref fields);
             }
         }
-        else if (delta <= 0 && fields.MaxDelta > 0 || delta < -FlushBytes)
+        else if (delta == 0 && fields.MaxDelta > 0)
+        {
+            // Back at the flushed total, the usual end of a short-lived block:
+            // its high-water mark matters only when it raises the peak.
+            if (Volatile.Read(ref _outstandingNativeBytes) + fields.MaxDelta
+                <= Volatile.Read(ref _peakOutstandingNativeBytes))
+            {
+                Volatile.Write(ref fields.MaxDelta, 0);
+            }
+            else
+            {
+                FlushGauge(ref fields);
+            }
+        }
+        else if (delta < 0 && fields.MaxDelta > 0 || delta < -FlushBytes)
         {
             FlushGauge(ref fields);
         }
@@ -202,9 +217,9 @@ internal static class NativeMemoryAccounting
 
     // Null means the thread could not get a stripe and uses the shared total.
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static GaugeStripe? ClaimGauge(long metricsEpoch)
+    private static GaugeStripe? ClaimGauge(NativeThreadState thread, long metricsEpoch)
     {
-        GaugeStripe? stripe = t_gauge;
+        GaugeStripe? stripe = thread.Gauge;
         if (stripe is not null)
         {
             // The first use in a new measurement epoch drops the old epoch's change.
@@ -236,7 +251,7 @@ internal static class NativeMemoryAccounting
             return null;
         }
 
-        t_gauge = stripe;
+        thread.Gauge = stripe;
         return stripe;
     }
 
@@ -492,7 +507,11 @@ internal static class NativeMemoryAccounting
             return total;
         }
     }
-    internal static long RecordAllocation(nuint byteLength, bool zeroed)
+    internal static long RecordAllocation(nuint byteLength, bool zeroed) =>
+        RecordAllocation(NativeThreadState.Current, byteLength, zeroed);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static long RecordAllocation(NativeThreadState thread, nuint byteLength, bool zeroed)
     {
         long metricsEpoch = CurrentMetricsEpoch;
         if (DetailedCounters)
@@ -504,7 +523,7 @@ internal static class NativeMemoryAccounting
             }
         }
 
-        AddOutstanding(checked((long)byteLength), metricsEpoch);
+        AddOutstanding(thread, checked((long)byteLength), metricsEpoch);
         return metricsEpoch;
     }
 
@@ -540,7 +559,11 @@ internal static class NativeMemoryAccounting
         }
     }
 
-    internal static void RecordFree(nuint byteLength, bool detached, long metricsEpoch)
+    internal static void RecordFree(nuint byteLength, bool detached, long metricsEpoch) =>
+        RecordFree(NativeThreadState.Current, byteLength, detached, metricsEpoch);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static void RecordFree(NativeThreadState thread, nuint byteLength, bool detached, long metricsEpoch)
     {
         if (metricsEpoch != CurrentMetricsEpoch)
         {
@@ -553,7 +576,7 @@ internal static class NativeMemoryAccounting
         }
 
         long bytes = checked((long)byteLength);
-        AddOutstanding(-bytes, metricsEpoch);
+        AddOutstanding(thread, -bytes, metricsEpoch);
         if (detached)
         {
             Interlocked.Add(ref _detachedNativeBytes, -bytes);

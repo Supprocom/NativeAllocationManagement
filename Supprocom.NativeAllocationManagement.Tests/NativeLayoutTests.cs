@@ -42,7 +42,7 @@ public sealed class NativeLayoutTests
         Assert.True(layout.TryReserve(budget, out NativeLayoutReservation? permission, out _));
         permission.Value.PrepareBacking();
         object control = permission.Value.ControlForTest!;
-        NativeBlock block = (NativeBlock)typeof(NativeTransferControl<byte>).GetField("_block", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(control)!;
+        NativeBlock block = ((NativeBlockSlot)typeof(NativeTransferControl<byte>).GetField("_block", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(control)!).Value;
         NativeLayoutStatistics prepared = permission.Value.CaptureSnapshot();
         // Three bytes followed by an aligned pair of ints: these expectations
         // come from the declared shape, not from the descriptor's own totals.
@@ -506,6 +506,7 @@ public sealed class NativeLayoutTests
         : type == typeof(int) || type.IsEnum ? sizeof(int)
         : type == typeof(bool) ? sizeof(bool)
         : type == typeof(NativeBlock) ? Unsafe.SizeOf<NativeBlock>()
+        : type == typeof(NativeBlockSlot) ? Unsafe.SizeOf<NativeBlockSlot>()
         : throw new InvalidOperationException($"Unaccounted layout control field: {type}.");
 
     private static NativeLayoutOwner Create(NativeLayout layout, NativeLayoutField<int> field, NativeMemoryBudget budget)

@@ -70,6 +70,7 @@ public sealed class NativePoolTransferReuseTests
                 representedBytes += !fieldType.IsValueType ? IntPtr.Size : fieldType == typeof(long) ? sizeof(long)
                     : fieldType == typeof(int) ? sizeof(int) : fieldType == typeof(bool) ? sizeof(bool)
                     : fieldType == typeof(NativeBlock) ? Unsafe.SizeOf<NativeBlock>()
+                    : fieldType == typeof(NativeBlockSlot) ? Unsafe.SizeOf<NativeBlockSlot>()
                     : throw new InvalidOperationException($"Unaccounted control field {field.Name}");
             }
         }

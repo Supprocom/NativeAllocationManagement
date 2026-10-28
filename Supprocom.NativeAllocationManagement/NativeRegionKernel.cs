@@ -17,13 +17,12 @@ internal sealed unsafe class NativeRegionKernel
     // that size.
     private const long ReuseLimitBytes = 64 * 1024;
 
-    [ThreadStatic]
-    private static NativeRegionKernel? t_reusable;
-
     private readonly NativeMemoryReturn _returnMemoryOnDispose;
     private NativeMemoryBudget? _budget;
     internal long Id { get; private set; } = NativeOwnerIdentity.Next();
     private readonly int _ownerThreadId;
+    // The construction thread's state: disposal reaches its reuse slot without a TLS read.
+    private readonly NativeThreadState _ownerThread;
     private NativeOwnerLifecycle _lifecycle;
     private RegionSegmentHeader* _firstSegment;
     private RegionSegmentHeader* _currentSegment;
@@ -51,7 +50,8 @@ internal sealed unsafe class NativeRegionKernel
     {
         _returnMemoryOnDispose = returnMemoryOnDispose;
         _budget = budget;
-        _ownerThreadId = NativeThreadIdentity.Current;
+        _ownerThread = NativeThreadState.Current;
+        _ownerThreadId = _ownerThread.ManagedThreadId;
         _lifecycle = NativeOwnerLifecycle.Active;
 
         if (preAllocateBytes != 0)
@@ -66,7 +66,7 @@ internal sealed unsafe class NativeRegionKernel
 
     internal int Generation => _generation;
 
-    internal static bool HasReusableKernelForTest => t_reusable is not null;
+    internal static bool HasReusableKernelForTest => NativeThreadState.Current.ReusableRegion is not null;
 
     internal static NativeRegionKernel Acquire(
         nuint preAllocateBytes,
@@ -74,11 +74,12 @@ internal sealed unsafe class NativeRegionKernel
     {
         if (returnMemoryOnDispose == NativeMemoryReturn.ToGarbageCollector)
         {
-            NativeRegionKernel? reusable = t_reusable;
+            NativeThreadState thread = NativeThreadState.Current;
+            NativeRegionKernel? reusable = thread.ReusableRegion;
             if (reusable is not null)
             {
-                t_reusable = null;
-                if (reusable.TryReactivate(preAllocateBytes))
+                thread.ReusableRegion = null;
+                if (reusable.TryReactivate(thread, preAllocateBytes))
                 {
                     return reusable;
                 }
@@ -91,13 +92,13 @@ internal sealed unsafe class NativeRegionKernel
     }
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA1816", Justification = "A discarded reuse candidate frees its storage and disarms its emergency finalizer.")]
-    private bool TryReactivate(nuint preAllocateBytes)
+    private bool TryReactivate(NativeThreadState thread, nuint preAllocateBytes)
     {
         RegionSegmentHeader* segment = _firstSegment;
         // A new measurement epoch observes fresh acquisition, and a short
         // segment cannot satisfy the requested reservation.
         if (segment == null
-            || _retainEpoch != NativeStorageReuse.CurrentEpoch
+            || _retainEpoch != thread.ReuseEpoch
             || segment->MetricsEpoch != NativeMemoryAccounting.CurrentMetricsEpoch
             || segment->Capacity < preAllocateBytes
             || _generation == int.MaxValue)
@@ -107,7 +108,8 @@ internal sealed unsafe class NativeRegionKernel
             return false;
         }
 
-        Id = NativeOwnerIdentity.Next();
+        NativeMemoryAccounting.PrepareThread();
+        Id = NativeOwnerIdentity.Next(thread);
         _generation++;
         _retainedForReuse = false;
         _lifecycle = NativeOwnerLifecycle.Active;
@@ -124,8 +126,9 @@ internal sealed unsafe class NativeRegionKernel
     {
         // Disposal already proved no initializer or borrow is entered, and no
         // other thread can reach this storage, so detaching it buys no safety.
+        NativeThreadState thread = _ownerThread;
         if (_budget is not null
-            || t_reusable is not null
+            || thread.ReusableRegion is not null
             || _firstSegment == null)
         {
             return false;
@@ -152,8 +155,8 @@ internal sealed unsafe class NativeRegionKernel
         }
 
         _retainedForReuse = true;
-        _retainEpoch = NativeStorageReuse.CurrentEpoch;
-        t_reusable = this;
+        _retainEpoch = thread.ReuseEpoch;
+        thread.ReusableRegion = this;
         return true;
     }
 
@@ -390,15 +393,10 @@ internal sealed unsafe class NativeRegionKernel
         _currentSegment != null && _currentCursor == (byte*)_currentSegment + HeaderBytes ? 1 : 0;
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA1816", Justification = "Internal region-kernel disposal disarms its emergency finalizer; the outer owner exposes disposal.")]
+    // Only NativeRegion.Dispose calls this, and the ref struct cannot leave its
+    // construction thread, so disposal needs no thread check.
     internal void Dispose()
     {
-        if (NativeThreadIdentity.Current != _ownerThreadId)
-        {
-            throw CreateState(
-                nameof(Dispose),
-                "NativeRegion is confined to its construction thread.");
-        }
-
         if (_lifecycle == NativeOwnerLifecycle.Disposed)
         {
             return;

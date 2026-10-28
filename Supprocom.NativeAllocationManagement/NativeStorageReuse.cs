@@ -6,18 +6,15 @@ namespace Supprocom.NativeAllocationManagement;
 // the process-wide one. Tests advance both so each test starts with empty slots.
 internal static class NativeStorageReuse
 {
-    [ThreadStatic]
-    private static int t_epoch;
-
     private static int s_sharedEpoch;
 
-    internal static int CurrentEpoch => t_epoch;
+    internal static int CurrentEpoch => NativeThreadState.Current.ReuseEpoch;
 
     internal static int SharedEpoch => Volatile.Read(ref s_sharedEpoch);
 
     internal static void InvalidateCurrentThreadForTest()
     {
-        t_epoch++;
+        NativeThreadState.Current.ReuseEpoch++;
         Interlocked.Increment(ref s_sharedEpoch);
     }
 }

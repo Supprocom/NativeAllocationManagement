@@ -16,7 +16,7 @@ public sealed class NativeWorkspace<T> : IDisposable
     private const int Active = 0;
     private const int Released = 1;
 
-    private NativeBlock _block;
+    private NativeBlockSlot _block;
     private readonly int _capacity;
     private readonly int _ownerThreadId;
     private readonly long _id = NativeOwnerIdentity.Next();
@@ -45,12 +45,12 @@ public sealed class NativeWorkspace<T> : IDisposable
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(preLease);
         _ownerThreadId = NativeThreadIdentity.Current;
-        _block = NativeBlockAllocator.Allocate(
+        _block.Set(NativeBlockAllocator.Allocate(
             checked((nuint)preLease * (nuint)Unsafe.SizeOf<T>()),
             nameof(NativeWorkspace<T>),
             "NativeWorkspace.Constructor",
             budget,
-            ownerId: _id);
+            ownerId: _id));
         _capacity = preLease;
     }
 
@@ -447,8 +447,8 @@ public sealed class NativeWorkspace<T> : IDisposable
             return;
         }
 
-        NativeBlock block = _block;
-        _block = default;
+        NativeBlock block = _block.Value;
+        _block.Clear();
         _length = 0;
         _published = 0;
         NativeBlockAllocator.Free(block);

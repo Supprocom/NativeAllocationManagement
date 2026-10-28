@@ -552,6 +552,7 @@ public sealed class NativeMemoryReservationTests
         : type == typeof(int) || type.IsEnum ? sizeof(int)
         : type == typeof(bool) ? sizeof(bool)
         : type == typeof(NativeBlock) ? Unsafe.SizeOf<NativeBlock>()
+        : type == typeof(NativeBlockSlot) ? Unsafe.SizeOf<NativeBlockSlot>()
         : throw new InvalidOperationException($"Unaccounted field representation: {type}.");
 
     [MethodImpl(MethodImplOptions.NoInlining)]

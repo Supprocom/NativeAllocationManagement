@@ -22,12 +22,11 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
     private const nuint ParkLimitBytes = 64 * 1024;
     private const nuint SmallReuseBytes = 1024;
 
-    [ThreadStatic]
-    private static ParkedControls? t_parked;
+    private static readonly int s_parkedSlot = NativeThreadState.AllocateTypedSlot();
 
     private static readonly SharedPartition[] s_shared = SharedPartition.CreateAll();
 
-    private NativeBlock _spare;
+    private NativeBlockSlot _spare;
     private long _lifetimeFirstVersion = 1;
     private bool _parked;
 
@@ -36,24 +35,40 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
         PublishControlState(Building);
 
 
+    // The acquired block is installed in the returned control: read it back
+    // through Block or Pointer instead of copying it out through a parameter.
     internal static NativeBuilderControl<T> Acquire(
         nuint byteLength,
         NativeMemoryBudget? budget,
-        long ownerId,
-        out NativeBlock block)
+        long ownerId) =>
+        Acquire(NativeThreadState.Current, byteLength, budget, ownerId);
+
+    internal static NativeBuilderControl<T> Acquire(
+        NativeThreadState thread,
+        nuint byteLength,
+        NativeMemoryBudget? budget,
+        long ownerId)
     {
         if (budget is null
             && !NativeMemoryTestHooks.FaultInjectionPending
-            && (t_parked is { Count: > 0 } stack
-                ? stack.TakeCurrent(byteLength)
+            && (thread.GetTyped<ParkedControls>(s_parkedSlot) is { Count: > 0 } stack
+                ? stack.TakeCurrent(thread, byteLength)
                 : SharedPartition.TryTake(s_shared, byteLength)) is NativeBuilderControl<T> parked)
         {
-            block = parked.TakeSpare(byteLength, ownerId);
-            parked.BeginLifetime(block, ownerId);
+            parked.BeginLifetime(parked.TakeSpare(thread, byteLength, ownerId), ownerId);
             return parked;
         }
 
-        block = NativeBlockAllocator.Allocate(
+        return AcquireNew(byteLength, budget, ownerId);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static NativeBuilderControl<T> AcquireNew(
+        nuint byteLength,
+        NativeMemoryBudget? budget,
+        long ownerId)
+    {
+        NativeBlock block = NativeBlockAllocator.Allocate(
             byteLength,
             nameof(NativeBuilder<T>),
             "NativeBuilder.Constructor",
@@ -74,40 +89,59 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
     // cannot fail, so the acquired control publishes without a builder.
     internal static unsafe NativeTransfer<T> CreateTransfer(scoped ReadOnlySpan<T> values)
     {
+        NativeThreadState thread = PrepareThread();
         NativeBuilderControl<T> control = Acquire(
+            thread,
             (nuint)values.Length * (nuint)Unsafe.SizeOf<T>(),
             budget: null,
-            NativeOwnerIdentity.Next(),
-            out NativeBlock block);
-        Span<T> destination = new((void*)block.Pointer, values.Length);
+            NativeOwnerIdentity.Next(thread));
+        Span<T> destination = new((void*)control.Pointer, values.Length);
         values.CopyTo(destination);
         NativeMemoryAccounting.RecordCopiedRange(values, destination);
-        return control.Publish(block, values.Length, Capacity(block));
+        return control.PublishInstalled(values.Length);
     }
 
     internal static unsafe NativeTransfer<T> CreateTransfer(int length, T value)
     {
+        NativeThreadState thread = PrepareThread();
         NativeBuilderControl<T> control = Acquire(
+            thread,
             checked((nuint)length * (nuint)Unsafe.SizeOf<T>()),
             budget: null,
-            NativeOwnerIdentity.Next(),
-            out NativeBlock block);
-        new Span<T>((void*)block.Pointer, length).Fill(value);
-        return control.Publish(block, length, Capacity(block));
+            NativeOwnerIdentity.Next(thread));
+        new Span<T>((void*)control.Pointer, length).Fill(value);
+        return control.PublishInstalled(length);
     }
 
     internal static NativeTransfer<T> CreateUninitializedTransfer(int length)
     {
+        NativeThreadState thread = PrepareThread();
         NativeBuilderControl<T> control = Acquire(
+            thread,
             checked((nuint)length * (nuint)Unsafe.SizeOf<T>()),
             budget: null,
-            NativeOwnerIdentity.Next(),
-            out NativeBlock block);
-        return control.Publish(block, length, Capacity(block));
+            NativeOwnerIdentity.Next(thread));
+        return control.PublishInstalled(length);
     }
 
-    private static int Capacity(NativeBlock block) =>
-        (int)Math.Min(int.MaxValue, block.ByteLength / (nuint)Unsafe.SizeOf<T>());
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static NativeThreadState PrepareThread()
+    {
+        NativeMemoryAccounting.PrepareThread();
+        return NativeThreadState.Current;
+    }
+
+    internal NativeBlock Block => OwnedBlock;
+
+    internal IntPtr Pointer => OwnedPointer;
+
+    // Publishes the block Acquire installed, filled by the caller.
+    internal NativeTransfer<T> PublishInstalled(int length)
+    {
+        PublishShape(length, (int)Math.Min(int.MaxValue, OwnedByteLength / (nuint)Unsafe.SizeOf<T>()));
+        PublishControlState(Active);
+        return NativeTransfer<T>.CreateAdmitted(this, CurrentAuthorityVersion);
+    }
 
     internal void InstallBlock(NativeBlock block) => InstallOwnedBlock(block);
 
@@ -146,7 +180,7 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
     internal override NativeTransferStatistics CaptureSnapshot(long bindingVersion)
     {
         long first = Volatile.Read(ref _lifetimeFirstVersion);
-        long derivedFieldBytes = sizeof(long) + Unsafe.SizeOf<NativeBlock>() + sizeof(bool);
+        long derivedFieldBytes = sizeof(long) + Unsafe.SizeOf<NativeBlockSlot>() + sizeof(bool);
         if (bindingVersion < first)
         {
             // A value from an earlier lifetime of this reused control: that
@@ -205,10 +239,11 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
             return false;
         }
 
-        ParkedControls stack = t_parked ??= new ParkedControls();
-        if (stack.HasRoom(block.ByteLength))
+        NativeThreadState thread = NativeThreadState.Current;
+        ParkedControls stack = thread.GetTyped<ParkedControls>(s_parkedSlot) ?? CreateParkedControls(thread);
+        if (stack.HasRoom(thread, block.ByteLength))
         {
-            BecomeParked(block);
+            BecomeParked(thread, block);
             stack.Push(this, block.ByteLength);
             return true;
         }
@@ -226,12 +261,22 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
     // returning call completes, so a test can reuse it inside that window.
     internal static Action? AfterSharedHandOffForTest { get; set; }
 
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static ParkedControls CreateParkedControls(NativeThreadState thread)
+    {
+        ParkedControls stack = new(thread);
+        thread.SetTyped(s_parkedSlot, stack);
+        return stack;
+    }
+
+    private void BecomeParked(NativeBlock block) => BecomeParked(NativeThreadState.Current, block);
+
     // Everything the returning thread writes happens here, before the control
     // becomes visible in a reuse slot; it keeps its finalizer registration.
-    private void BecomeParked(NativeBlock block)
+    private void BecomeParked(NativeThreadState thread, NativeBlock block)
     {
-        NativeMemoryAccounting.RecordFree(block.ByteLength, detached: false, block.MetricsEpoch);
-        _spare = block;
+        NativeMemoryAccounting.RecordFree(thread, block.ByteLength, detached: false, block.MetricsEpoch);
+        _spare.Set(block);
         CompleteStorageReturn();
         _parked = true;
         PublishControlState(Disposed);
@@ -246,7 +291,7 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
             NativeMemory.Free((void*)_spare.Pointer);
         }
 
-        _spare = default;
+        _spare.Clear();
     }
 
     // Reuse only a block that fits without pinning far more than requested.
@@ -254,13 +299,13 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
         spareBytes >= byteLength
         && spareBytes <= Math.Max(byteLength * 4, SmallReuseBytes);
 
-    private unsafe NativeBlock TakeSpare(nuint byteLength, long ownerId)
+    private unsafe NativeBlock TakeSpare(NativeThreadState thread, nuint byteLength, long ownerId)
     {
-        NativeBlock spare = _spare;
-        _spare = default;
+        NativeBlock spare = _spare.Value;
+        _spare.Clear();
         if (spare.Pointer != IntPtr.Zero && Fits(spare.ByteLength, byteLength))
         {
-            long metricsEpoch = NativeMemoryAccounting.RecordAllocation(spare.ByteLength, zeroed: false);
+            long metricsEpoch = NativeMemoryAccounting.RecordAllocation(thread, spare.ByteLength, zeroed: false);
             return new NativeBlock(spare.Pointer, spare.ByteLength, metricsEpoch, Budget: null, ownerId);
         }
 
@@ -293,16 +338,18 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
         private const int Capacity = 8;
         private readonly NativeBuilderControl<T>?[] _items = new NativeBuilderControl<T>?[Capacity];
         private nuint _bytes;
-        private int _epoch = NativeStorageReuse.CurrentEpoch;
+        private int _epoch;
 
         internal int Count;
 
+        internal ParkedControls(NativeThreadState thread) => _epoch = thread.ReuseEpoch;
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal bool HasRoom(nuint bytes)
+        internal bool HasRoom(NativeThreadState thread, nuint bytes)
         {
-            if (_epoch != NativeStorageReuse.CurrentEpoch)
+            if (_epoch != thread.ReuseEpoch)
             {
-                DiscardAll();
+                DiscardAll(thread);
             }
 
             return (uint)Count < Capacity && _bytes + bytes <= ParkLimitBytes;
@@ -318,11 +365,11 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
         // Takes the most recent control when its block fits; otherwise searches
         // the rest, and failing that reuses the most recent control with a new block.
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal NativeBuilderControl<T>? TakeCurrent(nuint byteLength)
+        internal NativeBuilderControl<T>? TakeCurrent(NativeThreadState thread, nuint byteLength)
         {
-            if (_epoch != NativeStorageReuse.CurrentEpoch)
+            if (_epoch != thread.ReuseEpoch)
             {
-                DiscardAll();
+                DiscardAll(thread);
                 return null;
             }
 
@@ -361,7 +408,7 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
         }
 
         [MethodImpl(MethodImplOptions.NoInlining)]
-        private void DiscardAll()
+        private void DiscardAll(NativeThreadState thread)
         {
             foreach (ref readonly NativeBuilderControl<T>? control in _items.AsSpan(0, Count))
             {
@@ -371,7 +418,7 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
             Array.Clear(_items);
             Count = 0;
             _bytes = 0;
-            _epoch = NativeStorageReuse.CurrentEpoch;
+            _epoch = thread.ReuseEpoch;
         }
     }
 
@@ -516,7 +563,7 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
                 }
             }
 
-            _spare = default;
+            _spare.Clear();
             return;
         }
 

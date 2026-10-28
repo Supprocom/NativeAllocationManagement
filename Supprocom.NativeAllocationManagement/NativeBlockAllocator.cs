@@ -233,6 +233,67 @@ internal readonly record struct NativeBlock(
     internal readonly nuint ByteLength = ByteLength;
 }
 
+// A NativeBlock field of a heap object. Assigning the whole 40-byte block
+// copies it with a write-barrier helper and `rep movsq` (about 17 ns on the
+// reference host); Set stores the four numbers plainly and only the budget
+// reference through a barrier.
+internal struct NativeBlockSlot
+{
+    private IntPtr _pointer;
+    private nuint _byteLength;
+    private long _metricsEpoch;
+    private long _ownerId;
+    private NativeMemoryBudget? _budget;
+
+    internal readonly IntPtr Pointer => _pointer;
+    internal readonly nuint ByteLength => _byteLength;
+    internal readonly long MetricsEpoch => _metricsEpoch;
+    internal readonly long OwnerId => _ownerId;
+    internal readonly NativeMemoryBudget? Budget => _budget;
+    internal readonly NativeBlock Value => new(_pointer, _byteLength, _metricsEpoch, _budget, _ownerId);
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+    internal void Set(in NativeBlock block)
+    {
+        _pointer = block.Pointer;
+        _byteLength = block.ByteLength;
+        _metricsEpoch = block.MetricsEpoch;
+        _ownerId = block.OwnerId;
+        if (block.Budget is not null || _budget is not null) _budget = block.Budget;
+    }
+
+    // An unbudgeted block: no reference store at all when the slot already has none.
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+    internal void SetUnbudgeted(IntPtr pointer, nuint byteLength, long metricsEpoch, long ownerId)
+    {
+        _pointer = pointer;
+        _byteLength = byteLength;
+        _metricsEpoch = metricsEpoch;
+        _ownerId = ownerId;
+        if (_budget is not null) _budget = null;
+    }
+
+    internal void SetPointer(IntPtr pointer) => _pointer = pointer;
+
+    // Keeps numeric identity and extent, drops the pointer and the budget.
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+    internal void Detach()
+    {
+        _pointer = IntPtr.Zero;
+        if (_budget is not null) _budget = null;
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+    internal void Clear()
+    {
+        _pointer = IntPtr.Zero;
+        _byteLength = 0;
+        _metricsEpoch = 0;
+        _ownerId = 0;
+        if (_budget is not null) _budget = null;
+    }
+}
+
 internal static class NativeAlignedAllocation
 {
     // The Unix NativeMemory backend rounds size to the alignment before its
