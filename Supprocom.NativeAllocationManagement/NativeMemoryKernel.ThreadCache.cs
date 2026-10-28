@@ -712,6 +712,91 @@ internal sealed partial class NativeOwnerKernel
         return false;
     }
 
+    // A one-shot rental (NativeConcurrentPool<T>.Process): takes a cached
+    // record, publishes it filled and enters an operation on it in one busy
+    // window, where a rent, an operation and a return take one each.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal bool TryRentCachedOperation<T>(
+        int length,
+        T value,
+        [NotNullWhen(true)] out NativePoolThreadCache? cache,
+        [NotNullWhen(true)] out NativeAllocation? allocation,
+        out long allocationId,
+        out int epoch)
+    {
+        if (length > 0
+            && ThreadCacheEligible
+            && !NativeMemoryTestHooks.FaultInjectionPending
+            && !NativeMemoryTestHooks.OperationHooksEnabled
+            && NativePoolThreadCaches.Find(Id) is NativePoolThreadCache found
+            && found.Enter())
+        {
+            if (found.NextId <= found.LastId
+                && (nuint)length * (nuint)_storageElementSize <= InWindowFillBytes
+                && found.TakeFree(length) is NativeAllocation taken)
+            {
+                allocationId = PublishCachedLease(found, taken, length, value, fill: true);
+                taken.EnterOwnerOperation();
+                found.ActiveOperations++;
+                epoch = found.FoldEpoch;
+                found.Exit();
+                cache = found;
+                allocation = taken;
+                return true;
+            }
+
+            found.Exit();
+        }
+
+        cache = null;
+        allocation = null;
+        allocationId = 0;
+        epoch = 0;
+        return false;
+    }
+
+    // Ends a one-shot rental's operation and returns its record in one busy
+    // window; anything else (a fold during the callback, a full free list)
+    // takes the locked paths an operation exit and a return would.
+    internal void ExitCachedOperationAndReturn(
+        NativePoolThreadCache cache,
+        NativeAllocation allocation,
+        long allocationId,
+        int epoch)
+    {
+        NativeGeneration generation = allocation.GenerationState;
+        long generationNumber = generation.Number;
+        if (cache.Enter())
+        {
+            if (cache.FoldEpoch == epoch)
+            {
+                allocation.ExitOwnerOperation();
+                cache.ActiveOperations--;
+                if (cache.FreeCount < NativePoolThreadCache.FreeCapacity
+                    && ReferenceEquals(allocation.CacheOwner, cache)
+                    && allocation.Id == allocationId
+                    && allocation.Lifecycle == NativeAllocationLifecycle.Active
+                    && allocation.HasNoOwnerOperations)
+                {
+                    cache.PayloadDelta -= (long)allocation.StorageBytes;
+                    allocation.Lifecycle = NativeAllocationLifecycle.Returned;
+                    cache.AddFree(allocation);
+                    cache.Exit();
+                    return;
+                }
+
+                cache.Exit();
+                ReturnLease(generation, allocation, generationNumber, allocationId, "NativeConcurrentPool.Process");
+                return;
+            }
+
+            cache.Exit();
+        }
+
+        ExitFoldedOperation(generation, allocation, cache, epoch);
+        ReturnLease(generation, allocation, generationNumber, allocationId, "NativeConcurrentPool.Process");
+    }
+
     // Returns a lease. A cached record goes back into its cache, and a stale
     // handle is ignored, as the locked path does; everything else takes the
     // locked path, which first folds a cache that still holds the record. A

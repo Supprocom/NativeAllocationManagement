@@ -146,6 +146,115 @@ public sealed class NativeConcurrentPool<T> : IDisposable
     public ConcurrentPooled<T> Rent(int length, T value) =>
         new(_kernel, _kernel.RentFilled(length, value, fill: true));
 
+    /// <summary>Fills a temporary rental, runs a compile-time processor, and returns it before this call completes.</summary>
+    /// <param name="length">The complete initialized element count exposed to the processor.</param>
+    /// <param name="value">The value written to every element before processing.</param>
+    /// <param name="state">Explicit state passed to the processor.</param>
+    /// <typeparam name="TState">The caller state type.</typeparam>
+    /// <typeparam name="TResult">The result type, which cannot contain the borrowed span.</typeparam>
+    /// <typeparam name="TProcessor">The processor; its static member is called without a delegate.</typeparam>
+    /// <returns>The processor result after the rental has been returned.</returns>
+    /// <remarks>
+    /// Equivalent to <see cref="Rent(int, T)"/>, <see cref="ConcurrentPooled{T}.Process{TState, TResult, TProcessor}(int, in TState)"/>
+    /// and disposing the lease, in fewer steps. Processor failure also returns the rental. Requires storage without managed references.
+    /// </remarks>
+    public TResult Process<TState, TResult, TProcessor>(int length, T value, scoped in TState state)
+        where TState : allows ref struct
+        where TProcessor : struct, INativeSpanProcessor<T, TState, TResult>
+    {
+        if (_kernel.TryRentCachedOperation(length, value, out NativePoolThreadCache? cache, out NativeAllocation? allocation, out long allocationId, out int epoch))
+        {
+            // The rental is left inline after a normal return; only a failed
+            // processor takes the out-of-line exit.
+            TResult result;
+            try
+            {
+                result = TProcessor.Invoke(NativeOwnerKernel.CachedSpan<T>(allocation, length), in state);
+            }
+            catch
+            {
+                ExitAfterFailure(_kernel, cache, allocation, allocationId, epoch);
+                throw;
+            }
+
+            _kernel.ExitCachedOperationAndReturn(cache, allocation, allocationId, epoch);
+            return result;
+        }
+
+        return ProcessThroughLease<TState, TResult, TProcessor>(length, value, in state);
+    }
+
+    /// <summary>Fills a temporary rental, processes it with explicit caller state, and returns it before this call completes.</summary>
+    /// <param name="length">The complete initialized element count exposed to the processor.</param>
+    /// <param name="value">The value written to every element before processing.</param>
+    /// <param name="state">Explicit state passed to the synchronous processor.</param>
+    /// <param name="processor">The bounded operation; its span cannot escape the callback.</param>
+    /// <typeparam name="TState">The caller state type.</typeparam>
+    /// <typeparam name="TResult">The result type, which cannot contain the borrowed span.</typeparam>
+    /// <returns>The processor result after the rental has been returned.</returns>
+    /// <remarks>Processor failure also returns the rental. Requires storage without managed references.</remarks>
+    public TResult Process<TState, TResult>(
+        int length,
+        T value,
+        TState state,
+        NativeSpanStateProcessor<T, TState, TResult> processor)
+    {
+        ArgumentNullException.ThrowIfNull(processor);
+        if (_kernel.TryRentCachedOperation(length, value, out NativePoolThreadCache? cache, out NativeAllocation? allocation, out long allocationId, out int epoch))
+        {
+            TResult result;
+            try
+            {
+                result = processor(NativeOwnerKernel.CachedSpan<T>(allocation, length), state);
+            }
+            catch
+            {
+                ExitAfterFailure(_kernel, cache, allocation, allocationId, epoch);
+                throw;
+            }
+
+            _kernel.ExitCachedOperationAndReturn(cache, allocation, allocationId, epoch);
+            return result;
+        }
+
+        return ProcessThroughLease<DelegateCall<TState, TResult>, TResult, DelegateProcessor<TState, TResult>>(
+            length,
+            value,
+            new DelegateCall<TState, TResult>(processor, state));
+    }
+
+    private readonly struct DelegateCall<TState, TResult>(NativeSpanStateProcessor<T, TState, TResult> processor, TState state)
+    {
+        internal NativeSpanStateProcessor<T, TState, TResult> Processor { get; } = processor;
+
+        internal TState State { get; } = state;
+    }
+
+    private readonly struct DelegateProcessor<TState, TResult>
+        : INativeSpanProcessor<T, DelegateCall<TState, TResult>, TResult>
+    {
+        public static TResult Invoke(Span<T> span, in DelegateCall<TState, TResult> state) =>
+            state.Processor(span, state.State);
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private TResult ProcessThroughLease<TState, TResult, TProcessor>(int length, T value, scoped in TState state)
+        where TState : allows ref struct
+        where TProcessor : struct, INativeSpanProcessor<T, TState, TResult>
+    {
+        using ConcurrentPooled<T> lease = Rent(length, value);
+        return lease.Process<TState, TResult, TProcessor>(length, in state);
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static void ExitAfterFailure(
+        NativeOwnerKernel kernel,
+        NativePoolThreadCache cache,
+        NativeAllocation allocation,
+        long allocationId,
+        int epoch) =>
+        kernel.ExitCachedOperationAndReturn(cache, allocation, allocationId, epoch);
+
     /// <summary>Rents one synchronized lease without writing its elements.</summary>
     /// <param name="length">The element count.</param>
     /// <remarks>
