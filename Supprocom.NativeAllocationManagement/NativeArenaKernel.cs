@@ -496,7 +496,9 @@ public sealed unsafe partial class NativeArena
 
         nuint aligned = originalCursor == null
             ? 0
-            : AlignUp((nuint)originalCursor, alignment);
+            : byteLength >= NativeVectorAlignment.MinimumBytes
+                ? AlignLarge((nuint)originalCursor, (nuint)lane.End, byteLength, alignment)
+                : AlignUp((nuint)originalCursor, alignment);
         if (originalCursor == null
             || aligned > (nuint)lane.End
             || byteLength > (nuint)lane.End - aligned)
@@ -1046,6 +1048,17 @@ public sealed unsafe partial class NativeArena
     private static byte* GetDataStart(
         ArenaSegmentHeader* segment) =>
         segment->DataStart;
+
+    // A large range takes a vector-aligned start when the segment has room
+    // for it; otherwise the element alignment decides, as for every range.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static nuint AlignLarge(nuint cursor, nuint end, nuint byteLength, nuint alignment)
+    {
+        nuint vector = AlignUp(cursor, NativeVectorAlignment.For(byteLength, alignment));
+        return vector <= end && byteLength <= end - vector
+            ? vector
+            : AlignUp(cursor, alignment);
+    }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static nuint AlignUp(nuint value, nuint alignment)

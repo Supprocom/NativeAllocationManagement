@@ -438,7 +438,9 @@ internal sealed unsafe class NativeRegionKernel
         byte* originalCursor = _currentCursor;
         nuint aligned = originalCursor == null
             ? 0
-            : AlignUp((nuint)originalCursor, alignment);
+            : byteLength >= NativeVectorAlignment.MinimumBytes
+                ? AlignLarge((nuint)originalCursor, (nuint)_currentEnd, byteLength, alignment)
+                : AlignUp((nuint)originalCursor, alignment);
         if (originalCursor == null
             || aligned > (nuint)_currentEnd
             || byteLength > (nuint)_currentEnd - aligned)
@@ -756,6 +758,17 @@ internal sealed unsafe class NativeRegionKernel
             : size >= 2
                 ? 2u
                 : 1u;
+    }
+
+    // A large range takes a vector-aligned start when the segment has room
+    // for it; otherwise the element alignment decides, as for every range.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static nuint AlignLarge(nuint cursor, nuint end, nuint byteLength, nuint alignment)
+    {
+        nuint vector = AlignUp(cursor, NativeVectorAlignment.For(byteLength, alignment));
+        return vector <= end && byteLength <= end - vector
+            ? vector
+            : AlignUp(cursor, alignment);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
