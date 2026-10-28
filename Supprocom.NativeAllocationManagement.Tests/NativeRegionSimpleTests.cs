@@ -483,7 +483,7 @@ public sealed class NativeRegionSimpleTests
             budgeted.Dispose();
             Assert.False(NativeRegionKernel.HasReusableKernelForTest);
 
-            NativeRegion large = new(preAllocateBytes: 128 * 1024);
+            NativeRegion large = new(preAllocateBytes: 2 * 1024 * 1024);
             large.Dispose();
             Assert.False(NativeRegionKernel.HasReusableKernelForTest);
         });
@@ -510,12 +510,24 @@ public sealed class NativeRegionSimpleTests
             next.Dispose();
             Assert.True(NativeRegionKernel.HasReusableKernelForTest);
 
+            // A large segment within the limit serves the next region without
+            // a fresh allocation.
+            NativeRegion large = new(preAllocateBytes: 64);
+            _ = large.Lease<long>(64 * 1024, static writer => writer.Fill(4));
+            large.Dispose();
+            Assert.True(NativeRegionKernel.HasReusableKernelForTest);
+            NativeRegion reused = new();
+            Local<long> big = reused.Lease<long>(64 * 1024, static writer => writer.Fill(5));
+            Assert.Equal(0, reused.GetStatistics().FreshSegmentAllocationCount);
+            Assert.Equal(5, big.Read(static view => view[^1]));
+            reused.Dispose();
+
             NativeRegion past = new(preAllocateBytes: 64);
-            _ = past.Lease<long>(64 * 1024, static writer => writer.Fill(4));
+            _ = past.Lease<long>(256 * 1024, static writer => writer.Fill(6));
             past.Dispose();
             Assert.True(NativeRegionKernel.HasReusableKernelForTest);
             NativeRegion after = new();
-            Assert.True(after.GetStatistics().RetainedBytes <= 64 * 1024);
+            Assert.True(after.GetStatistics().RetainedBytes <= 1024 * 1024);
             after.Dispose();
         });
     }

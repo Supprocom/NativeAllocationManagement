@@ -14,8 +14,9 @@ internal sealed unsafe class NativeRegionKernel
     // One disposed garbage-collector-policy region per thread keeps one segment
     // for the next region instead of detaching it for finalization: its largest
     // segment within the limit, so a region that grew starts the next one at
-    // that size.
-    private const long ReuseLimitBytes = 64 * 1024;
+    // that size. A larger segment would be mapped fresh, page by page, for
+    // every region that needs it.
+    private const long ReuseLimitBytes = 1024 * 1024;
 
     private readonly NativeMemoryReturn _returnMemoryOnDispose;
     private NativeMemoryBudget? _budget;
@@ -137,7 +138,7 @@ internal sealed unsafe class NativeRegionKernel
         RegionSegmentHeader* keep = null;
         for (RegionSegmentHeader* segment = _firstSegment; segment != null; segment = segment->Next)
         {
-            if ((long)segment->AllocationBytes <= ReuseLimitBytes
+            if ((long)segment->Capacity <= ReuseLimitBytes
                 && (keep == null || segment->Capacity > keep->Capacity))
             {
                 keep = segment;

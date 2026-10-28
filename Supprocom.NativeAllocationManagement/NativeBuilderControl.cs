@@ -19,7 +19,9 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
     where T : unmanaged
 {
     private const int Building = 11;
-    private const nuint ParkLimitBytes = 64 * 1024;
+    // A transfer's spare block up to this size parks with its control; a
+    // larger one would be allocated afresh by every transfer that needs it.
+    private const nuint ParkLimitBytes = 1024 * 1024;
     private const nuint SmallReuseBytes = 1024;
 
     private static readonly int s_parkedSlot = NativeThreadState.AllocateTypedSlot();
