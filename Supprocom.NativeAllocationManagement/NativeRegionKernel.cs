@@ -11,8 +11,10 @@ internal sealed unsafe class NativeRegionKernel
         (nuint)sizeof(RegionSegmentHeader),
         NativeSegment.Alignment);
 
-    // One disposed garbage-collector-policy region per thread keeps its single
-    // segment for the next region instead of detaching it for finalization.
+    // One disposed garbage-collector-policy region per thread keeps one segment
+    // for the next region instead of detaching it for finalization: its largest
+    // segment within the limit, so a region that grew starts the next one at
+    // that size.
     private const long ReuseLimitBytes = 64 * 1024;
 
     [ThreadStatic]
@@ -124,11 +126,29 @@ internal sealed unsafe class NativeRegionKernel
         // other thread can reach this storage, so detaching it buys no safety.
         if (_budget is not null
             || t_reusable is not null
-            || _firstSegment == null
-            || _firstSegment->Next != null
-            || _retainedBytes > ReuseLimitBytes)
+            || _firstSegment == null)
         {
             return false;
+        }
+
+        RegionSegmentHeader* keep = null;
+        for (RegionSegmentHeader* segment = _firstSegment; segment != null; segment = segment->Next)
+        {
+            if ((long)segment->AllocationBytes <= ReuseLimitBytes
+                && (keep == null || segment->Capacity > keep->Capacity))
+            {
+                keep = segment;
+            }
+        }
+
+        if (keep == null)
+        {
+            return false;
+        }
+
+        if (_firstSegment->Next != null)
+        {
+            FreeSegmentsExcept(keep);
         }
 
         _retainedForReuse = true;
@@ -598,6 +618,34 @@ internal sealed unsafe class NativeRegionKernel
 
         NativeMemoryAccounting.RecordDetachedGeneration(
             NativeMemoryAccounting.CurrentMetricsEpoch);
+    }
+
+    // Frees every segment but the kept one, which becomes the only segment.
+    private void FreeSegmentsExcept(RegionSegmentHeader* keep)
+    {
+        RegionSegmentHeader* segment = _firstSegment;
+        while (segment != null)
+        {
+            RegionSegmentHeader* next = segment->Next;
+            if (segment != keep)
+            {
+                nuint allocationBytes = segment->AllocationBytes;
+                long metricsEpoch = segment->MetricsEpoch;
+                NativeMemory.AlignedFree(segment);
+                NativeMemoryAccounting.RecordFree(allocationBytes, detached: false, metricsEpoch);
+            }
+
+            segment = next;
+        }
+
+        // The next lifetime starts with this one segment, as a region that
+        // never grew does; unbudgeted ordinals only number the chain.
+        keep->Next = null;
+        keep->AllocationOrdinal = 1;
+        _firstSegment = keep;
+        _currentSegment = keep;
+        _segmentCount = 1;
+        _retainedBytes = checked((long)keep->AllocationBytes);
     }
 
     private void FreeSegments()

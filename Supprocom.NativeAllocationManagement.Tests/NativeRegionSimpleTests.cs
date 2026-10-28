@@ -486,11 +486,37 @@ public sealed class NativeRegionSimpleTests
             NativeRegion large = new(preAllocateBytes: 128 * 1024);
             large.Dispose();
             Assert.False(NativeRegionKernel.HasReusableKernelForTest);
+        });
+    }
 
+    [Fact]
+    public void AGrownRegionKeepsItsLargestSegmentForTheNextRegion()
+    {
+        RunOnFreshThread(static () =>
+        {
             NativeRegion grown = new(preAllocateBytes: 64);
             _ = grown.Lease<long>(64, static writer => writer.Fill(1));
+            _ = grown.Lease<long>(600, static writer => writer.Fill(2));
+            Assert.Equal(3, grown.GetStatistics().SegmentCount);
             grown.Dispose();
-            Assert.False(NativeRegionKernel.HasReusableKernelForTest);
+            Assert.True(NativeRegionKernel.HasReusableKernelForTest);
+
+            NativeRegion next = new();
+            Assert.Equal(1, next.GetStatistics().SegmentCount);
+            Local<long> fits = next.Lease<long>(600, static writer => writer.Fill(3));
+            Assert.Equal(1, next.GetStatistics().SegmentCount);
+            Assert.Equal(0, next.GetStatistics().FreshSegmentAllocationCount);
+            Assert.Equal(3, fits.Read(static view => view[599]));
+            next.Dispose();
+            Assert.True(NativeRegionKernel.HasReusableKernelForTest);
+
+            NativeRegion past = new(preAllocateBytes: 64);
+            _ = past.Lease<long>(64 * 1024, static writer => writer.Fill(4));
+            past.Dispose();
+            Assert.True(NativeRegionKernel.HasReusableKernelForTest);
+            NativeRegion after = new();
+            Assert.True(after.GetStatistics().RetainedBytes <= 64 * 1024);
+            after.Dispose();
         });
     }
 

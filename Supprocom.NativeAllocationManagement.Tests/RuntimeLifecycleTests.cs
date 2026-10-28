@@ -696,6 +696,9 @@ public sealed class RuntimeLifecycleTests
     {
         NativeMemoryTestHooks.Reset();
         NativeRegion region = new(preAllocateBytes: 1, returnMemoryOnDispose: NativeMemoryReturn.ToGarbageCollector);
+        // Occupy this thread's region reuse slot, so the grown region is
+        // detached for finalization rather than kept for the next region.
+        new NativeRegion(preAllocateBytes: 64).Dispose();
         Local<long> first = region.Lease<long>(32, static writer => writer.Fill(default!));
         first.Access(static span => span[0] = 8);
         region.Dispose();
