@@ -523,7 +523,10 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
         }
 
         // Takes the most recent control when its block fits; otherwise searches
-        // the rest, and failing that reuses the most recent control with a new block.
+        // the rest. Failing that, a stack with room keeps its controls for the
+        // sizes they hold and lets the caller acquire a new one, so a thread
+        // that cycles through a few sizes ends with a block for each; a full
+        // stack reuses its most recent control with a new block.
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal NativeBuilderControl<T>? TakeCurrent(NativeThreadState thread, nuint byteLength)
         {
@@ -548,16 +551,26 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
         }
 
         [MethodImpl(MethodImplOptions.NoInlining)]
-        private NativeBuilderControl<T> TakeSearched(nuint byteLength)
+        private NativeBuilderControl<T>? TakeSearched(nuint byteLength)
         {
-            int index = Count - 1;
-            for (int candidate = index - 1; candidate >= 0; candidate--)
+            int index = -1;
+            for (int candidate = Count - 2; candidate >= 0; candidate--)
             {
                 if (Fits(_items[candidate]!._spare.ByteLength, byteLength))
                 {
                     index = candidate;
                     break;
                 }
+            }
+
+            if (index < 0)
+            {
+                if (Count < Capacity)
+                {
+                    return null;
+                }
+
+                index = Count - 1;
             }
 
             NativeBuilderControl<T> control = _items[index]!;

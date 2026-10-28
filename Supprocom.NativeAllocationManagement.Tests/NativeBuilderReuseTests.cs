@@ -155,6 +155,34 @@ public sealed class NativeBuilderReuseTests
     private readonly record struct MagazineProbe(int Value);
 
     [Fact]
+    public void AThreadCyclingThroughSizesKeepsAParkedBlockForEach()
+    {
+        NativeMemoryTestHooks.Reset();
+        RunOnNewThread(static () =>
+        {
+            NativeTransfer<CycleProbe> small = NativeTransfer<CycleProbe>.Create(16, new CycleProbe(1));
+            object smallControl = small.ControlForTest!;
+            small.Dispose();
+            // The parked small block cannot hold this one, so it stays parked
+            // and a new control serves the large transfer.
+            NativeTransfer<CycleProbe> large = NativeTransfer<CycleProbe>.Create(4096, new CycleProbe(2));
+            object largeControl = large.ControlForTest!;
+            Assert.NotSame(smallControl, largeControl);
+            large.Dispose();
+            NativeTransfer<CycleProbe> smallAgain = NativeTransfer<CycleProbe>.Create(16, new CycleProbe(3));
+            Assert.Same(smallControl, smallAgain.ControlForTest);
+            NativeTransfer<CycleProbe> largeAgain = NativeTransfer<CycleProbe>.Create(4096, new CycleProbe(4));
+            Assert.Same(largeControl, largeAgain.ControlForTest);
+            Assert.Equal(new CycleProbe(4), largeAgain.Read(static view => view[4095]));
+            smallAgain.Dispose();
+            largeAgain.Dispose();
+        });
+        Assert.Equal(0, NativeMemoryTestHooks.Snapshot().OutstandingNativeBytes);
+    }
+
+    private readonly record struct CycleProbe(int Value);
+
+    [Fact]
     public void TransfersReturnedOnAnotherThreadServeTheCreatingThread()
     {
         NativeMemoryTestHooks.Reset();
