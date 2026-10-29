@@ -142,9 +142,13 @@ internal static class AllocatorPerformanceRegression
             (nuint)(RegionIterations
                 * RegionBatchWidth
                 * RegionReservationBytesPerIteration));
+        // The published-region comparison compiles this file against the
+        // released 0.3.0 package too, which has only the old name.
+#pragma warning disable CS0618
         NativeRegion region = new(
             reservation,
-            NativeMemoryReturn.Free);
+            NativeMemoryReturn.ToNativeMemory);
+#pragma warning restore CS0618
         NativeOwnerStatistics beforeStatistics =
             region.GetStatistics();
         int gen0Before = GC.CollectionCount(0);
@@ -310,9 +314,11 @@ internal static class AllocatorPerformanceRegression
 
     private static void WarmRegion()
     {
+#pragma warning disable CS0618 // Compiled against the released 0.3.0 package too; see above.
         NativeRegion region = new(
             32_000,
-            NativeMemoryReturn.Free);
+            NativeMemoryReturn.ToNativeMemory);
+#pragma warning restore CS0618
         for (int iteration = 0; iteration < 32; iteration++)
         {
             Local<byte> bytes = region.Lease<byte>(32, FillBytes);
