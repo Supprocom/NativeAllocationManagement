@@ -401,6 +401,38 @@ public sealed class NativePoolSimpleTests
         }
     }
 
+    // Rents cycling through sizes take their own class's slab while the slab
+    // returned last stays cached: one slab per size, none acquired again.
+    [Fact]
+    public unsafe void RentsCyclingThroughSizesReuseOneSlabPerSize()
+    {
+        using NativePool<int> pool = new(
+            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        int[] lengths = [16, 100, 1000, 5000];
+        nint[] addresses = new nint[lengths.Length];
+        for (int cycle = 0; cycle < 4; cycle++)
+        {
+            for (int index = 0; index < lengths.Length; index++)
+            {
+                using Pooled<int> lease = pool.RentUninitialized(lengths[index]);
+                nint address = (nint)System.Runtime.CompilerServices.Unsafe.AsPointer(
+                    ref System.Runtime.InteropServices.MemoryMarshal.GetReference(lease.AsSpan()));
+                if (cycle == 0)
+                {
+                    addresses[index] = address;
+                }
+                else
+                {
+                    Assert.Equal(addresses[index], address);
+                }
+            }
+        }
+
+        NativeOwnerStatistics statistics = pool.GetStatistics();
+        Assert.Equal(lengths.Length, statistics.SegmentCount);
+        Assert.Equal(lengths.Length, statistics.FreshSegmentAllocationCount);
+    }
+
     [Fact]
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The test intentionally captures arbitrary callback or worker failures for lifecycle assertions.")]
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000", Justification = "Retire transfers cleanup to ReleaseRetiredStorage on the coordinator thread.")]
