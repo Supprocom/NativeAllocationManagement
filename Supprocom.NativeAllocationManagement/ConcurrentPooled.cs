@@ -72,7 +72,7 @@ public readonly ref struct ConcurrentPooled<T>
     /// <summary>Clears the logical range.</summary>
     public void Clear()
     {
-        if (TryEnterCached(out NativePoolThreadCache? cache, out int epoch))
+        if (TryEnterCached(out int epoch) is NativePoolThreadCache cache)
         {
             try
             {
@@ -100,7 +100,7 @@ public readonly ref struct ConcurrentPooled<T>
     /// <summary>Copies one exact bounded source.</summary>
     public void CopyFrom(scoped ReadOnlySpan<T> source)
     {
-        if (TryEnterCached(out NativePoolThreadCache? cache, out int epoch))
+        if (TryEnterCached(out int epoch) is NativePoolThreadCache cache)
         {
             try
             {
@@ -128,7 +128,7 @@ public readonly ref struct ConcurrentPooled<T>
     /// <summary>Copies the logical range into one bounded destination.</summary>
     public void CopyTo(scoped Span<T> destination)
     {
-        if (TryEnterCached(out NativePoolThreadCache? cache, out int epoch))
+        if (TryEnterCached(out int epoch) is NativePoolThreadCache cache)
         {
             try
             {
@@ -157,7 +157,7 @@ public readonly ref struct ConcurrentPooled<T>
     public void Access(NativeLeaseAction<T> action)
     {
         ArgumentNullException.ThrowIfNull(action);
-        if (TryEnterCached(out NativePoolThreadCache? cache, out int epoch))
+        if (TryEnterCached(out int epoch) is NativePoolThreadCache cache)
         {
             try
             {
@@ -186,7 +186,7 @@ public readonly ref struct ConcurrentPooled<T>
     public TResult Read<TResult>(NativeLeaseFunc<T, TResult> action)
     {
         ArgumentNullException.ThrowIfNull(action);
-        if (TryEnterCached(out NativePoolThreadCache? cache, out int epoch))
+        if (TryEnterCached(out int epoch) is NativePoolThreadCache cache)
         {
             try
             {
@@ -217,7 +217,7 @@ public readonly ref struct ConcurrentPooled<T>
         where TState : allows ref struct
     {
         ArgumentNullException.ThrowIfNull(callback);
-        if (TryEnterCached(out NativePoolThreadCache? cache, out int epoch))
+        if (TryEnterCached(out int epoch) is NativePoolThreadCache cache)
         {
             try
             {
@@ -254,7 +254,7 @@ public readonly ref struct ConcurrentPooled<T>
         where TState : allows ref struct
         where TProcessor : struct, INativeSpanProcessor<T, TState, TResult>
     {
-        if (TryEnterCached(out NativePoolThreadCache? cache, out int epoch))
+        if (TryEnterCached(out int epoch) is NativePoolThreadCache cache)
         {
             TResult result;
             try
@@ -323,21 +323,21 @@ public readonly ref struct ConcurrentPooled<T>
     }
 
     // This thread's cached lease enters and exits its operations without an
-    // operation token; any other lease takes the kernel's admission path.
+    // operation token; any other lease takes the kernel's admission path. The
+    // cache is the return value, null when not entered: a caller too large to
+    // inline this into would otherwise store it through a write barrier.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private bool TryEnterCached([NotNullWhen(true)] out NativePoolThreadCache? cache, out int epoch)
+    private NativePoolThreadCache? TryEnterCached(out int epoch)
     {
         NativeAllocation? allocation = _allocationState;
         if (allocation?.CacheOwner is NativePoolThreadCache owner
             && NativeOwnerKernel.TryEnterCachedLeaseOperation(owner, _generationState!, allocation, _generation, _allocationId, out epoch))
         {
-            cache = owner;
-            return true;
+            return owner;
         }
 
-        cache = null;
         epoch = 0;
-        return false;
+        return null;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
