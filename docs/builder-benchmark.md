@@ -9,14 +9,14 @@ known-sized output.
 The paired command defaults to `ManagedExactArray`: directly initialize exact
 arrays and consume their bytes through spans. `--managed-baseline ManagedListPrefix`
 retains geometric List growth but hands its live prefix to the consumer without
-ToArray or upload copies. `--managed-baseline ManagedList` preserves the historical
+ToArray or upload copies. `--managed-baseline ManagedList` keeps the original
 List/ToArray/byte-array materialization comparison. All sides retain identical
 generated values, sequence
 ordering, checksum, batch sizes and the one-slot channel. Managed value packets
 hold storage references without an additional per-packet heap owner.
 
 The paired native default is `NativeBuilderBudgeted`; `--native-baseline
-NativeBuilder` retains the explicit historical unbudgeted path. The budgeted
+NativeBuilder` retains the original unbudgeted path. The budgeted
 worker creates one shared domain inside its preparation clock and gives it to
 both builders for correctness validation, warm-up, the measured batch and the
 separate probe. `--native-budget-bytes` sets its immutable NAM-requested extent
@@ -64,7 +64,7 @@ phase observations are separate measurements, not components to add to that
 time. Its `PerformanceAdvantage` field is a time-only observation, not the full
 total-allocation measurement. A smaller GC number does not include
 native growth requests. Use actual budget histories on budgeted workers for
-that defined domain; legacy unbudgeted request volume is unavailable. This does
+that defined domain; the unbudgeted path's request volume is unavailable. This does
 not measure opaque backend overhead. Managed pooling, shared-cap comparisons
 and application-specific reuse need corresponding workloads.
 
@@ -79,9 +79,9 @@ counters. CPU sampling overhead is excluded from the GC allocation boundaries;
 accounting/CPU observers are initialized before preparation on both sides.
 Process startup is outside these phase observations.
 
-The legacy GC allocation/collection/heap fields now correspond only to the
+The older GC allocation/collection/heap fields now correspond only to the
 complete measured batch, ending before RSS queries and the separate probe.
-Its legacy elapsed time still covers the inner producer/consumer loop, so use
+Its older elapsed-time field still covers the inner producer/consumer loop, so use
 `LifecycleEvidence.MeasuredBatch.ElapsedMilliseconds` for complete invocation
 time. Process CPU is shared by all process threads and has OS timer granularity;
 GC heap size is the last collection's value, not instantaneous live storage.

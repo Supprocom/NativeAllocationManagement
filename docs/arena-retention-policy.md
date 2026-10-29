@@ -25,7 +25,7 @@ CaptureRetentionSnapshot is thread-confined, allocation-free and does not reset
 history. RetainedBytes includes all physically retained native extent. IdleBytes
 counts reusable whole owned segments, excluding external units and partial slack;
 closed owners expose zero reusable authority. OversizedBytes is a current subset
-of retained extent; PeakOversizedBytes records its actual historical maximum.
+of retained extent; PeakOversizedBytes records the highest value it has reached.
 ReleasedBytes records only physical policy-maintenance frees; unrelated trim and
 final disposal receive no invented policy-release credit. MaintenanceCount counts
 actual enabled reset/recycle/maintenance invocations, even if nothing is released.

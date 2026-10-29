@@ -64,25 +64,25 @@ supplied number. The actual capture sources and consistency rules above still
 apply. Do not treat a serialized default struct as a capture.
 
 Older incomplete worker reports are not silently upgraded to valid evidence.
-Preserve them under their original schema/source identities and use a matching
-historical reader; never fill missing measurements from current process state.
+Preserve them under their original schema/source identities and use a reader
+for their schema; never fill missing measurements from current process state.
 Complete reports emitted by the current workers retain their member names and
 numeric/null values. This is a pre-release contract change, not a new runtime
 allocator behavior. [System.Text.Json required properties](https://learn.microsoft.com/en-us/dotnet/standard/serialization/system-text-json/required-properties)
 define presence requirements; [JsonRequiredAttribute](https://learn.microsoft.com/en-us/dotnet/api/system.text.json.serialization.jsonrequiredattribute?view=net-10.0)
 still permits an explicit null token.
 
-Legacy `ChildRunResult` and `BenchmarkSummary` have no maintained worker producer.
+The older `ChildRunResult` and `BenchmarkSummary` types have no maintained worker producer.
 Their optional numeric fields below describe supplied report data only. Omission
 or null means unavailable, not a recorded zero; an explicit zero remains a value.
-Thirteen former zero defaults are now nullable, alongside the already nullable
-legacy LOH quantity. Callers reading these optional values must handle absence;
+Thirteen former zero defaults are now nullable, alongside the LOH quantity,
+which was already nullable. Callers reading these optional values must handle absence;
 do not use `GetValueOrDefault()` to turn unavailable data back into a measurement.
 
-| Legacy optional property | Units and scope of a supplied value |
+| Optional property | Units and scope of a supplied value |
 | --- | --- |
-| `ChildRunResult.LargeObjectHeapBytesAfterRun` | Bytes in the legacy run's supplied LOH observation, not current/native/RSS memory. |
-| `ChildRunResult.ColdManagedAllocatedBytes` | Managed bytes for the legacy run's supplied cold phase, not live storage or native allocation. |
+| `ChildRunResult.LargeObjectHeapBytesAfterRun` | Bytes in an older run's supplied LOH observation, not current/native/RSS memory. |
+| `ChildRunResult.ColdManagedAllocatedBytes` | Managed bytes for an older run's supplied cold phase, not live storage or native allocation. |
 | `ChildRunResult.ColdElapsedMilliseconds` | Supplied cold-phase wall milliseconds. |
 | `BenchmarkSummary.SafeMeanGenerationMilliseconds` | Mean supplied safe generation-stage wall milliseconds. |
 | `BenchmarkSummary.SafeMeanFaceDerivationMilliseconds` | Mean supplied safe face-derivation wall milliseconds. |

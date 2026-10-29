@@ -44,7 +44,7 @@ public sealed class ReleaseDocumentationContractTests
     {
         string readme = Read("README.md");
         string benchmark = Read("docs", "builder-benchmark.md");
-        Assert.Contains("Historical voxel runs", readme, StringComparison.Ordinal);
+        Assert.Contains("Earlier runs of the voxel demo", readme, StringComparison.Ordinal);
         Assert.Contains("Results depend on workload", readme, StringComparison.Ordinal);
         Assert.Contains("total managed/native allocation", readme, StringComparison.Ordinal);
         Assert.Contains("docs/builder-benchmark.md", readme, StringComparison.Ordinal);

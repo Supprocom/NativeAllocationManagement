@@ -158,7 +158,7 @@ quiescent boundary. Absent-current zeros do not authorize returned handles.
 This narrowly bound registry does not close the remaining full private inventory.
 
 See [prepared page diagnostics](prepared-pools.md#prepared-snapshot-inventory)
-for full retained capacity, historical occupancy, exhaustion, managed bank costs
+for full retained capacity, past occupancy, exhaustion, managed bank costs
 and sparse-page retention.
 
 See [bounded budget tracing](memory-budgets.md#owner-identities-and-optional-tracing)
@@ -195,7 +195,7 @@ survive. No snapshot holds a reference to the transferred payload.
 
 Builder `RequestedBytes` and `InitializedPayloadBytes` are its successfully
 published prefix, not reserved capacity or an unfinished writer. Its monotonic
-published count and capacity preserve historical peaks without added append-time
+published count and capacity keep earlier peaks without added append-time
 accounting. A cancelled terminal operation preserves any prefix actually
 committed before cancellation; an incomplete producer never earns publication
 credit.
@@ -225,12 +225,12 @@ the observation. The local reader resolves the process's cgroup membership rathe
 than substituting the host mount root. Nonstandard/unresolvable mounts are
 unavailable, not measurements of a guessed group.
 
-Cgroup-v2 `memory.peak` is historical. Resetting it changes later reads through
+Cgroup-v2 `memory.peak` is the highest usage since it was last reset. Resetting it changes later reads through
 the same open descriptor; the harness does not claim a reset performed through
 another Docker command. `ExternalCgroupPeakBytes` is the maximum observed within
 the observation window, a sampling lower bound unless
 `ExternalCgroupPeakIsKernelHighWater` records a newly exceeded kernel high water.
-The before/after snapshots retain the historical peaks separately. Multi-file
+The before/after snapshots keep their peaks separately. Multi-file
 reads are not an atomic cross-file snapshot. V1 hierarchical RSS (including swap
 cache) and limit-hit counters have separate fields; they are not relabeled as v2
 anonymous bytes or max events.

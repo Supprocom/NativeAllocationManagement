@@ -117,7 +117,7 @@ ownership, the same ideas as C++'s `unique_ptr`, `shared_ptr` and `weak_ptr`.
 It depends on how much of your time goes into memory. The repository includes a
 voxel-meshing demo that does the same work twice: once in carefully optimized safe C#
 (pooling, exact sizing, capped buffer retention, and holding back work until memory
-is available) and once with NAM. Both produce identical output. Historical voxel runs
+is available) and once with NAM. Both produce identical output. Earlier runs of the voxel demo
 estimated NAM to be 50 to 85 percent faster without memory limits and 90 to 130
 percent faster under tight memory limits. Much of the gain comes from NAM writing its
 results straight into the buffer that is uploaded to the GPU, where the safe version
