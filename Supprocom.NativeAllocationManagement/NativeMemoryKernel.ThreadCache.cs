@@ -23,7 +23,7 @@ internal sealed partial class NativeOwnerKernel
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private NativeAllocation? TakeCachedForRent(int length, out NativePoolThreadCache? cache)
     {
-        cache = NativePoolThreadCaches.Find(Id);
+        cache = NativePoolThreadCaches.Find(Id, _cacheSlot);
         if (cache is not null && cache.Enter())
         {
             if (cache.NextId <= cache.LastId
@@ -46,7 +46,6 @@ internal sealed partial class NativeOwnerKernel
     // slab or a new slab. Null means this thread has no cache for the pool.
     private NativeAllocation? ClaimForThreadCache(int length, ref NativePoolThreadCache? cache)
     {
-        NativePoolThreadCache? evicted = null;
         NativeAllocation? claimed = null;
         lock (_gate)
         {
@@ -71,7 +70,7 @@ internal sealed partial class NativeOwnerKernel
                     RevokeThreadCachesLocked();
                 }
 
-                cache = CreateThreadCacheLocked(out evicted);
+                cache = CreateThreadCacheLocked();
             }
 
             if (cache.Generation is not null && !ReferenceEquals(cache.Generation, generation))
@@ -137,11 +136,6 @@ internal sealed partial class NativeOwnerKernel
             _ = cache.Enter();
             BeginCachedLease(cache, claimed, length);
             cache.Exit();
-        }
-
-        if (evicted is not null)
-        {
-            DetachEvictedThreadCache(evicted);
         }
 
         return claimed;
@@ -347,7 +341,7 @@ internal sealed partial class NativeOwnerKernel
         if (length > 0
             && ThreadCacheEligible
             && !NativeMemoryTestHooks.FaultInjectionPending
-            && NativePoolThreadCaches.Find(Id) is NativePoolThreadCache cache
+            && NativePoolThreadCaches.Find(Id, _cacheSlot) is NativePoolThreadCache cache
             && cache.Enter())
         {
             if (cache.NextId <= cache.LastId
@@ -373,7 +367,7 @@ internal sealed partial class NativeOwnerKernel
         if (length > 0
             && ThreadCacheEligible
             && !NativeMemoryTestHooks.FaultInjectionPending
-            && NativePoolThreadCaches.Find(Id) is NativePoolThreadCache cache
+            && NativePoolThreadCaches.Find(Id, _cacheSlot) is NativePoolThreadCache cache
             && cache.Enter())
         {
             if (cache.NextId <= cache.LastId
@@ -398,7 +392,7 @@ internal sealed partial class NativeOwnerKernel
         if (length > 0
             && ThreadCacheEligible
             && !NativeMemoryTestHooks.FaultInjectionPending
-            && NativePoolThreadCaches.Find(Id) is NativePoolThreadCache cache)
+            && NativePoolThreadCaches.Find(Id, _cacheSlot) is NativePoolThreadCache cache)
         {
             if (transferable)
             {
@@ -728,7 +722,7 @@ internal sealed partial class NativeOwnerKernel
             && ThreadCacheEligible
             && !NativeMemoryTestHooks.FaultInjectionPending
             && !NativeMemoryTestHooks.OperationHooksEnabled
-            && NativePoolThreadCaches.Find(Id) is NativePoolThreadCache found
+            && NativePoolThreadCaches.Find(Id, _cacheSlot) is NativePoolThreadCache found
             && found.Enter())
         {
             if (found.NextId <= found.LastId
@@ -998,7 +992,7 @@ internal sealed partial class NativeOwnerKernel
     {
         if (allocation.TransferOwner is not null
             && !NativeMemoryTestHooks.OperationHooksEnabled
-            && NativePoolThreadCaches.Find(Id) is NativePoolThreadCache found
+            && NativePoolThreadCaches.Find(Id, _cacheSlot) is NativePoolThreadCache found
             && found.Enter())
         {
             NativeGeneration generation = allocation.GenerationState;
@@ -1025,7 +1019,7 @@ internal sealed partial class NativeOwnerKernel
     // This thread's cache in its busy window, armed for operations if need be.
     private NativePoolThreadCache? EnterOperationCache()
     {
-        NativePoolThreadCache? cache = NativePoolThreadCaches.Find(Id);
+        NativePoolThreadCache? cache = NativePoolThreadCaches.Find(Id, _cacheSlot);
         if (cache is not null && cache.Enter())
         {
             return cache;
@@ -1043,10 +1037,10 @@ internal sealed partial class NativeOwnerKernel
     // another pool's cache.
     private NativePoolThreadCache? ArmOperationCache()
     {
-        NativePoolThreadCache? cache = NativePoolThreadCaches.Find(Id);
+        NativePoolThreadCache? cache = NativePoolThreadCaches.Find(Id, _cacheSlot);
         if (NativeMemoryTestHooks.FaultInjectionPending
             || cache is null
-                && (!NativePoolThreadCaches.HasRoom || Volatile.Read(ref _threadCacheCount) == ThreadCacheLimit))
+                && Volatile.Read(ref _threadCacheCount) == ThreadCacheLimit)
         {
             return null;
         }
@@ -1065,8 +1059,7 @@ internal sealed partial class NativeOwnerKernel
                     return null;
                 }
 
-                cache = CreateThreadCacheLocked(out NativePoolThreadCache? evicted);
-                System.Diagnostics.Debug.Assert(evicted is null, "The thread had room for another cache.");
+                cache = CreateThreadCacheLocked();
             }
 
             if (cache.Generation is not null && !ReferenceEquals(cache.Generation, generation))
@@ -1101,7 +1094,7 @@ internal sealed partial class NativeOwnerKernel
         out int epoch)
     {
         if (!NativeMemoryTestHooks.OperationHooksEnabled
-            && (known ?? NativePoolThreadCaches.Find(Id)) is NativePoolThreadCache found
+            && (known ?? NativePoolThreadCaches.Find(Id, _cacheSlot)) is NativePoolThreadCache found
             && found.Enter())
         {
             if (ReferenceEquals(found.Generation, allocation.GenerationState)
@@ -1180,7 +1173,7 @@ internal sealed partial class NativeOwnerKernel
     {
         if (allocation.TransferOwner is NativePoolThreadCache owner)
         {
-            if (ReferenceEquals(NativePoolThreadCaches.Find(Id), owner) && owner.Enter())
+            if (ReferenceEquals(NativePoolThreadCaches.Find(Id, _cacheSlot), owner) && owner.Enter())
             {
                 // No fold runs in the busy window, and only the lease's holder
                 // returns it.
@@ -1238,7 +1231,7 @@ internal sealed partial class NativeOwnerKernel
     private void PublishThreadCachePeak(NativeGeneration generation)
     {
         if (_threadCacheCount == 0
-            || NativePoolThreadCaches.Find(Id) is not NativePoolThreadCache cache
+            || NativePoolThreadCaches.Find(Id, _cacheSlot) is not NativePoolThreadCache cache
             || !cache.Enter())
         {
             return;
@@ -1329,7 +1322,7 @@ internal sealed partial class NativeOwnerKernel
         }
     }
 
-    private NativePoolThreadCache CreateThreadCacheLocked(out NativePoolThreadCache? evicted)
+    private NativePoolThreadCache CreateThreadCacheLocked()
     {
         NativePoolThreadCache cache = new(this, Thread.CurrentThread);
         if (_threadCacheCount == _threadCaches.Length)
@@ -1340,26 +1333,8 @@ internal sealed partial class NativeOwnerKernel
         }
 
         _threadCaches[_threadCacheCount++] = cache;
-        evicted = NativePoolThreadCaches.Remember(cache);
+        NativePoolThreadCaches.Remember(cache);
         return cache;
-    }
-
-    // A thread that uses many pools drops its least recently used cache.
-    private static void DetachEvictedThreadCache(NativePoolThreadCache evicted)
-    {
-        if (evicted.Kernel.TryGetTarget(out NativeOwnerKernel? kernel))
-        {
-            kernel.RemoveThreadCache(evicted);
-        }
-    }
-
-    private void RemoveThreadCache(NativePoolThreadCache cache)
-    {
-        lock (_gate)
-        {
-            RevokeThreadCacheLocked(cache);
-            RemoveThreadCacheLocked(cache);
-        }
     }
 
     private void RemoveThreadCacheLocked(NativePoolThreadCache cache)
@@ -1593,7 +1568,7 @@ internal sealed partial class NativeOwnerKernel
             return false;
         }
 
-        NativePoolThreadCache? cache = NativePoolThreadCaches.Find(Id);
+        NativePoolThreadCache? cache = NativePoolThreadCaches.Find(Id, _cacheSlot);
         if (!TryReserveArenaLane(cache, byteLength, alignment, out ArenaLaneReservation reservation)
             && !ClaimArenaLane(ref cache, byteLength, alignment, out reservation))
         {
@@ -1645,7 +1620,7 @@ internal sealed partial class NativeOwnerKernel
             return false;
         }
 
-        NativePoolThreadCache? cache = NativePoolThreadCaches.Find(Id);
+        NativePoolThreadCache? cache = NativePoolThreadCaches.Find(Id, _cacheSlot);
         // A lane with room takes, fills and publishes the range in one busy
         // window: no initializer runs, and a small fill delays a revocation
         // no longer than an operation does.
@@ -1754,7 +1729,6 @@ internal sealed partial class NativeOwnerKernel
         out ArenaLaneReservation reservation)
     {
         reservation = default;
-        NativePoolThreadCache? evicted = null;
         lock (_gate)
         {
             if (_lifecycle != NativeOwnerLifecycle.Active || _current is not NativeGeneration generation)
@@ -1769,7 +1743,7 @@ internal sealed partial class NativeOwnerKernel
                     return false;
                 }
 
-                cache = CreateThreadCacheLocked(out evicted);
+                cache = CreateThreadCacheLocked();
             }
 
             if (cache.Generation is not null && !ReferenceEquals(cache.Generation, generation))
@@ -1833,11 +1807,6 @@ internal sealed partial class NativeOwnerKernel
             {
                 throw new InvalidOperationException("A new arena lane could not hold the range it was chosen for.");
             }
-        }
-
-        if (evicted is not null)
-        {
-            DetachEvictedThreadCache(evicted);
         }
 
         return true;

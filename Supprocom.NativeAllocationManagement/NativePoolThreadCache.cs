@@ -1,3 +1,4 @@
+using System.Numerics;
 using System.Runtime.CompilerServices;
 
 namespace Supprocom.NativeAllocationManagement;
@@ -33,6 +34,8 @@ internal sealed class NativePoolThreadCache
     internal readonly long KernelId;
     internal readonly WeakReference<NativeOwnerKernel> Kernel;
     internal readonly WeakReference<Thread> OwnerThread;
+    // The pool's slot in each thread's table; see NativePoolThreadCaches.
+    internal readonly int Slot;
     // Caches are created on their owner thread. A revocation from that thread
     // needs no process-wide barrier.
     internal readonly int OwnerThreadId;
@@ -97,6 +100,7 @@ internal sealed class NativePoolThreadCache
     internal NativePoolThreadCache(NativeOwnerKernel kernel, Thread owner)
     {
         KernelId = kernel.Id;
+        Slot = kernel.CacheSlot;
         Kernel = new WeakReference<NativeOwnerKernel>(kernel);
         OwnerThread = new WeakReference<Thread>(owner);
         OwnerThreadId = NativeThreadIdentity.Current;
@@ -350,62 +354,67 @@ internal struct FreeSlotArray
     private int _element;
 }
 
-// The caches of the current thread, most recently used first. Their own
-// thread-statics: every cached rent looks one up, and a thread-state field
-// sits one dependent load further away.
+// The caches of the current thread, indexed by their pool's cache slot, a
+// small number each pool holds while it lives. A thread can use any number of
+// pools without dropping caches: a fixed table of the most recently used ones
+// thrashed (create one cache, evict another, under both pools' locks) once a
+// thread cycled through one more pool than it held. Their own thread-statics:
+// every cached rent looks one up, and a thread-state field sits one
+// dependent load further away.
 internal static class NativePoolThreadCaches
 {
-    private const int PerThreadLimit = 8;
-
     [ThreadStatic]
     private static NativePoolThreadCache? t_recent;
 
     [ThreadStatic]
-    private static NativePoolThreadCache?[]? t_all;
+    private static NativePoolThreadCache?[]? t_bySlot;
+
+    private static readonly Lock s_slotGate = new();
+    private static int[] s_freeSlots = new int[16];
+    private static int s_freeSlotCount;
+    private static int s_nextSlot;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static NativePoolThreadCache? Find(long kernelId)
+    internal static NativePoolThreadCache? Find(long kernelId, int slot)
     {
         NativePoolThreadCache? recent = t_recent;
         return recent is not null && recent.KernelId == kernelId
             ? recent
-            : FindSlow(kernelId);
+            : FindSlow(kernelId, slot);
     }
 
-    // Whether this thread can remember another cache without dropping one.
-    internal static bool HasRoom => t_all is not { } all || all[^1] is null;
-
+    // A slot reused by a later pool may still hold an earlier pool's emptied
+    // cache on this thread: the pool identity tells them apart.
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static NativePoolThreadCache? FindSlow(long kernelId)
+    private static NativePoolThreadCache? FindSlow(long kernelId, int slot)
     {
-        NativePoolThreadCache?[]? all = t_all;
-        if (all is null)
+        NativePoolThreadCache?[]? caches = t_bySlot;
+        if (caches is not null
+            && (uint)slot < (uint)caches.Length
+            && caches[slot] is NativePoolThreadCache cache
+            && cache.KernelId == kernelId)
         {
-            return null;
-        }
-
-        foreach (NativePoolThreadCache? cache in all)
-        {
-            if (cache is not null && cache.KernelId == kernelId)
-            {
-                t_recent = cache;
-                return cache;
-            }
+            t_recent = cache;
+            return cache;
         }
 
         return null;
     }
 
-    // Records a new cache for this thread. A full table hands back its least
-    // recently used entry, which the caller detaches from its pool.
-    internal static NativePoolThreadCache? Remember(NativePoolThreadCache cache)
+    // Records a new cache for this thread in its pool's slot.
+    internal static void Remember(NativePoolThreadCache cache)
     {
-        NativePoolThreadCache?[] all = t_all ??= new NativePoolThreadCache?[PerThreadLimit];
-        NativePoolThreadCache? evicted = all[^1];
-        Array.Copy(all, 0, all, 1, all.Length - 1);
-        all[0] = cache;
+        int slot = cache.Slot;
+        NativePoolThreadCache?[]? caches = t_bySlot;
+        if (caches is null || slot >= caches.Length)
+        {
+            NativePoolThreadCache?[] grown = new NativePoolThreadCache?[Math.Max(8, (int)BitOperations.RoundUpToPowerOf2((uint)slot + 1))];
+            caches?.AsSpan().CopyTo(grown);
+            t_bySlot = caches = grown;
+        }
+
+        caches[slot] = cache;
         t_recent = cache;
-        return evicted;
     }
 
     internal static void Forget(NativePoolThreadCache cache)
@@ -415,17 +424,35 @@ internal static class NativePoolThreadCaches
             t_recent = null;
         }
 
-        NativePoolThreadCache?[]? all = t_all;
-        if (all is null)
+        NativePoolThreadCache?[]? caches = t_bySlot;
+        int slot = cache.Slot;
+        if (caches is not null && (uint)slot < (uint)caches.Length && ReferenceEquals(caches[slot], cache))
         {
-            return;
+            caches[slot] = null;
         }
+    }
 
-        int index = Array.IndexOf(all, cache);
-        if (index >= 0)
+    // A pool takes a slot when created and gives it back when disposed or
+    // finalized; slots are reused, so the tables stay as long as the most
+    // pools alive at once.
+    internal static int AllocateSlot()
+    {
+        lock (s_slotGate)
         {
-            Array.Copy(all, index + 1, all, index, all.Length - index - 1);
-            all[^1] = null;
+            return s_freeSlotCount != 0 ? s_freeSlots[--s_freeSlotCount] : s_nextSlot++;
+        }
+    }
+
+    internal static void ReleaseSlot(int slot)
+    {
+        lock (s_slotGate)
+        {
+            if (s_freeSlotCount == s_freeSlots.Length)
+            {
+                Array.Resize(ref s_freeSlots, s_freeSlots.Length * 2);
+            }
+
+            s_freeSlots[s_freeSlotCount++] = slot;
         }
     }
 }

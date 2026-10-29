@@ -3397,6 +3397,21 @@ internal ref struct NativeMultiOwnerOperationToken
 internal sealed partial class NativeOwnerKernel
 {
     internal long Id { get; } = NativeOwnerIdentity.Next();
+
+    // This pool's slot in every thread's cache table, -1 once given back;
+    // see NativePoolThreadCaches.
+    private int _cacheSlot = NativePoolThreadCaches.AllocateSlot();
+
+    internal int CacheSlot => _cacheSlot;
+
+    private void ReleaseCacheSlot()
+    {
+        int slot = Interlocked.Exchange(ref _cacheSlot, -1);
+        if (slot >= 0)
+        {
+            NativePoolThreadCaches.ReleaseSlot(slot);
+        }
+    }
     internal NativeMemoryBudget? BudgetForSharing => _budget;
     private NativeOwnerModel Model => _kind switch
     {
@@ -4275,7 +4290,7 @@ internal sealed partial class NativeOwnerKernel
             && length > 0
             && ThreadCacheEligible
             && !NativeMemoryTestHooks.FaultInjectionPending
-            && NativePoolThreadCaches.Find(Id) is NativePoolThreadCache cache
+            && NativePoolThreadCaches.Find(Id, _cacheSlot) is NativePoolThreadCache cache
             && cache.Enter())
         {
             if (cache.NextId <= cache.LastId
@@ -9277,6 +9292,7 @@ internal sealed partial class NativeOwnerKernel
                     _retiredGenerations.Clear();
                     _quarantinedGenerations.Clear();
                     _lifecycle = NativeOwnerLifecycle.Disposed;
+                    ReleaseCacheSlot();
                     _budget = null;
                     GC.SuppressFinalize(this);
                     return;
@@ -9307,6 +9323,7 @@ internal sealed partial class NativeOwnerKernel
                     _retiredGenerations.Clear();
                     _quarantinedGenerations.Clear();
                     _lifecycle = NativeOwnerLifecycle.Disposed;
+                    ReleaseCacheSlot();
                     _budget = null;
                     GC.SuppressFinalize(this);
                     return;
@@ -9337,6 +9354,7 @@ internal sealed partial class NativeOwnerKernel
                 _retiredGenerations.Clear();
                 _quarantinedGenerations.Clear();
                 _lifecycle = NativeOwnerLifecycle.Disposed;
+                ReleaseCacheSlot();
                 _budget = null;
                 GC.SuppressFinalize(this);
             }
@@ -11161,7 +11179,7 @@ internal sealed partial class NativeOwnerKernel
     // its locked and cached leases stay consecutive.
     private long NextAllocationIdLocked() =>
         _threadCacheCount != 0
-        && NativePoolThreadCaches.Find(Id) is { Generation: not null } cache
+        && NativePoolThreadCaches.Find(Id, _cacheSlot) is { Generation: not null } cache
         && cache.NextId <= cache.LastId
             ? cache.NextId++
             : checked(++_nextAllocationId);
@@ -11392,6 +11410,7 @@ internal sealed partial class NativeOwnerKernel
             generation = _current;
             _current = null;
             _lifecycle = NativeOwnerLifecycle.Disposed;
+            ReleaseCacheSlot();
         }
 
         try
