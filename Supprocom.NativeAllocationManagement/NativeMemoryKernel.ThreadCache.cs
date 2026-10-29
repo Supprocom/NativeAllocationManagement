@@ -364,12 +364,7 @@ internal sealed partial class NativeOwnerKernel
                 }
 
                 allocation.InitializedLength = 0;
-                long payload = cache.PayloadDelta + (long)allocation.StorageBytes;
-                cache.PayloadDelta = payload;
-                if (payload > cache.MaxPayloadDelta)
-                {
-                    cache.MaxPayloadDelta = payload;
-                }
+                cache.AddPayload((long)allocation.StorageBytes);
 
                 allocation.Lifecycle = NativeAllocationLifecycle.Active;
                 cache.Initializing--;
@@ -593,13 +588,7 @@ internal sealed partial class NativeOwnerKernel
             CachedSpan<T>(allocation, length).Fill(value);
         }
 
-        long payload = cache.PayloadDelta + (long)storageBytes;
-        cache.PayloadDelta = payload;
-        if (payload > cache.MaxPayloadDelta)
-        {
-            cache.MaxPayloadDelta = payload;
-        }
-
+        cache.AddPayload((long)storageBytes);
         allocation.Lifecycle = NativeAllocationLifecycle.Active;
         return allocationId;
     }
@@ -637,12 +626,7 @@ internal sealed partial class NativeOwnerKernel
             if (ReferenceEquals(allocation.CacheOwner, cache))
             {
                 allocation.InitializedLength = 0;
-                long payload = cache.PayloadDelta + (long)allocation.StorageBytes;
-                cache.PayloadDelta = payload;
-                if (payload > cache.MaxPayloadDelta)
-                {
-                    cache.MaxPayloadDelta = payload;
-                }
+                cache.AddPayload((long)allocation.StorageBytes);
 
                 allocation.Lifecycle = NativeAllocationLifecycle.Active;
                 cache.Initializing--;
@@ -688,12 +672,7 @@ internal sealed partial class NativeOwnerKernel
                 }
 
                 allocation.InitializedLength = 0;
-                long payload = cache.PayloadDelta + (long)allocation.StorageBytes;
-                cache.PayloadDelta = payload;
-                if (payload > cache.MaxPayloadDelta)
-                {
-                    cache.MaxPayloadDelta = payload;
-                }
+                cache.AddPayload((long)allocation.StorageBytes);
 
                 allocation.Lifecycle = NativeAllocationLifecycle.Active;
                 cache.Initializing--;
@@ -801,7 +780,7 @@ internal sealed partial class NativeOwnerKernel
                 && allocation.Lifecycle == NativeAllocationLifecycle.Active
                 && allocation.HasNoOwnerOperations)
             {
-                cache.PayloadDelta -= (long)allocation.StorageBytes;
+                cache.DeferReturnedPayload((long)allocation.StorageBytes);
                 allocation.Lifecycle = NativeAllocationLifecycle.Returned;
                 cache.AddFree(allocation);
                 cache.Exit();
@@ -880,7 +859,7 @@ internal sealed partial class NativeOwnerKernel
                     && allocation.Lifecycle == NativeAllocationLifecycle.Active
                     && allocation.HasNoOwnerOperations)
                 {
-                    cache.PayloadDelta -= (long)allocation.StorageBytes;
+                    cache.DeferReturnedPayload((long)allocation.StorageBytes);
                     allocation.Lifecycle = NativeAllocationLifecycle.Returned;
                     cache.AddFree(allocation);
                     cache.Exit();
@@ -1370,6 +1349,7 @@ internal sealed partial class NativeOwnerKernel
             return;
         }
 
+        cache.SettleDeferredReturn();
         if (ReferenceEquals(cache.Generation, generation) && cache.MaxPayloadDelta != 0)
         {
             RecordPayloadPeak(Volatile.Read(ref generation.InitializedPayloadBytes) + cache.MaxPayloadDelta);
@@ -1630,6 +1610,7 @@ internal sealed partial class NativeOwnerKernel
             remote.Exit();
         }
 
+        cache.SettleDeferredReturn();
         long delta = cache.PayloadDelta;
         long max = cache.MaxPayloadDelta;
         if (delta != 0 || max != 0)

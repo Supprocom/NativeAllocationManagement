@@ -67,6 +67,13 @@ internal sealed class NativePoolThreadCache
     internal long PayloadDelta;
     internal long MaxPayloadDelta;
 
+    // A cached return whose payload is still in PayloadDelta: its bytes plus
+    // one, zero when there is none. The owner's next rent of the same size
+    // takes its place (AddPayload); anything that reads PayloadDelta or resets
+    // MaxPayloadDelta settles it first (SettleDeferredReturn). Arena lanes
+    // never return payload this way, so theirs stays zero.
+    internal long DeferredReturn;
+
     // Operations and initializers running on cached records since the last fold.
     internal int ActiveOperations;
     internal int Initializing;
@@ -104,6 +111,58 @@ internal sealed class NativePoolThreadCache
         Kernel = new WeakReference<NativeOwnerKernel>(kernel);
         OwnerThread = new WeakReference<Thread>(owner);
         OwnerThreadId = NativeThreadIdentity.Current;
+    }
+
+    // A rent's payload, in the owner's busy window. A deferred return of the
+    // same size gives this lease its place, so the payload and its high-water
+    // mark stand; otherwise the deferred return leaves first, so the mark is
+    // taken from the exact payload.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void AddPayload(long bytes)
+    {
+        long deferred = DeferredReturn;
+        if (deferred == bytes + 1)
+        {
+            DeferredReturn = 0;
+            return;
+        }
+
+        if (deferred != 0)
+        {
+            DeferredReturn = 0;
+            bytes -= deferred - 1;
+        }
+
+        long payload = PayloadDelta + bytes;
+        PayloadDelta = payload;
+        if (payload > MaxPayloadDelta)
+        {
+            MaxPayloadDelta = payload;
+        }
+    }
+
+    // A cached return's payload, in the owner's busy window: left counted for
+    // the next rent (AddPayload). One deferred earlier leaves now.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void DeferReturnedPayload(long bytes)
+    {
+        long previous = DeferredReturn;
+        DeferredReturn = bytes + 1;
+        if (previous != 0)
+        {
+            PayloadDelta -= previous - 1;
+        }
+    }
+
+    // In the owner's busy window, or in a fold while the owner is idle.
+    internal void SettleDeferredReturn()
+    {
+        long deferred = DeferredReturn;
+        if (deferred != 0)
+        {
+            DeferredReturn = 0;
+            PayloadDelta -= deferred - 1;
+        }
     }
 
     internal bool IsOwnerAlive =>
