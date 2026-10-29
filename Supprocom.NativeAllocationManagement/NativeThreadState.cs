@@ -23,6 +23,9 @@ internal sealed class NativeThreadState
     // Managed thread ids start at one and never change for a thread.
     internal readonly int ManagedThreadId = Environment.CurrentManagedThreadId;
 
+    // Once it ends, NativeEndedThreads returns what this state keeps.
+    internal readonly Thread Thread = Thread.CurrentThread;
+
     // NativeMemoryAccounting: this thread's outstanding-bytes stripe.
     internal NativeMemoryAccounting.GaugeStripe? Gauge;
 
@@ -50,7 +53,13 @@ internal sealed class NativeThreadState
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static NativeThreadState Create() => t_current = new NativeThreadState();
+    private static NativeThreadState Create()
+    {
+        NativeThreadState state = new();
+        t_current = state;
+        NativeEndedThreads.Register(state);
+        return state;
+    }
 
     // Called once per generic instantiation from a static readonly initializer,
     // which tiered compilation then folds into a constant.
@@ -64,6 +73,28 @@ internal sealed class NativeThreadState
         return (uint)slot < (uint)typed.Length ? Unsafe.As<TSlot>(typed[slot]) : null;
     }
 
+    // Returns the storage this ended thread kept for its next owners; see
+    // NativeEndedThreads.
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "Like the emergency finalizers this cleanup replaces, it must not fail the thread that runs it.")]
+    internal void ReleaseStorageOfEndedThread()
+    {
+        try
+        {
+            NativeRegionKernel.ReleaseRetained(this);
+            NativeArenaKernel.ReleaseRetained(this);
+            foreach (object? typed in _typed)
+            {
+                (typed as INativeThreadStorage)?.ReleaseStorageOfEndedThread();
+            }
+
+            SpareFinalizationGuard?.Disarm();
+            SpareFinalizationGuard = null;
+        }
+        catch
+        {
+        }
+    }
+
     [MethodImpl(MethodImplOptions.NoInlining)]
     internal void SetTyped(int slot, object? value)
     {
@@ -74,4 +105,10 @@ internal sealed class NativeThreadState
 
         _typed[slot] = value;
     }
+}
+
+// Per element type state that keeps native storage for the thread's next owners.
+internal interface INativeThreadStorage
+{
+    void ReleaseStorageOfEndedThread();
 }

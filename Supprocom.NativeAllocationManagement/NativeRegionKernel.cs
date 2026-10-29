@@ -184,6 +184,27 @@ internal sealed unsafe class NativeRegionKernel
         return true;
     }
 
+    // The kernels an ended thread kept for its next regions: large segments
+    // go to NativeLargeBlocks, the rest to native memory.
+    internal static void ReleaseRetained(NativeThreadState thread)
+    {
+        NativeRegionKernel? kernel = thread.ReusableRegion;
+        thread.ReusableRegion = null;
+        while (kernel is not null)
+        {
+            kernel.ReleaseSegments();
+            kernel = thread.MoreReusableRegions?.Pop();
+        }
+    }
+
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA1816", Justification = "A released reuse candidate frees its storage and disarms its emergency finalizer.")]
+    private void ReleaseSegments()
+    {
+        KeepLargeSegments();
+        FreeSegments();
+        GC.SuppressFinalize(this);
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal Local<T> LeaseInitialized<T>(
         int length,

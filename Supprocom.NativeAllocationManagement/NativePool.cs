@@ -37,7 +37,12 @@ public sealed partial class NativePool<T> : IDisposable
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static NativePool<T> CreateShared() => t_shared = new NativePool<T>() { _isShared = true };
+    private static NativePool<T> CreateShared()
+    {
+        NativePool<T> pool = new() { _isShared = true };
+        RegisterShared(pool);
+        return t_shared = pool;
+    }
 
     /// <summary>Gets the stable process-local allocator identity.</summary>
     public long Id { get; }

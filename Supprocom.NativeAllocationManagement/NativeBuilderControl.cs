@@ -325,6 +325,20 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
         _spare.Clear();
     }
 
+    internal bool HasSpareForTest => _spare.Pointer != IntPtr.Zero;
+
+    // A parked spare already counts as freed.
+    private unsafe void ReleaseSpareOfEndedThread()
+    {
+        if (_spare.Pointer != IntPtr.Zero
+            && !NativeLargeBlocks.TryKeep((void*)_spare.Pointer, _spare.ByteLength))
+        {
+            NativeMemory.AlignedFree((void*)_spare.Pointer);
+        }
+
+        _spare.Clear();
+    }
+
     // Reuse only a block that fits without pinning far more than requested.
     private static bool Fits(nuint spareBytes, nuint byteLength) =>
         spareBytes >= byteLength
@@ -477,7 +491,7 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
 
     // Parked controls of one element type on one thread: at most eight, holding
     // at most ParkLimitBytes of spare blocks together.
-    private sealed class ParkedControls
+    private sealed class ParkedControls : INativeThreadStorage
     {
         internal const int Capacity = 8;
         private readonly NativeBuilderControl<T>?[] _items = new NativeBuilderControl<T>?[Capacity];
@@ -590,6 +604,20 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
             _items[Count] = null;
             _bytes -= control._spare.ByteLength;
             return control;
+        }
+
+        // Large spares go to NativeLargeBlocks, the rest to native memory; the
+        // controls are dropped.
+        public void ReleaseStorageOfEndedThread()
+        {
+            foreach (ref readonly NativeBuilderControl<T>? control in _items.AsSpan(0, Count))
+            {
+                control!.ReleaseSpareOfEndedThread();
+            }
+
+            Array.Clear(_items);
+            Count = 0;
+            _bytes = 0;
         }
 
         [MethodImpl(MethodImplOptions.NoInlining)]

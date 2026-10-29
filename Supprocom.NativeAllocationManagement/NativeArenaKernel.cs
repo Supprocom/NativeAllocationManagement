@@ -691,6 +691,21 @@ internal sealed unsafe partial class NativeArenaKernel : INativeFinalizationTarg
         return true;
     }
 
+    // The kernels an ended thread kept for its next arenas: large segments go
+    // to NativeLargeBlocks, the rest to native memory.
+    internal static void ReleaseRetained(NativeThreadState thread)
+    {
+        NativeArenaKernel? kernel = thread.ReusableArena;
+        thread.ReusableArena = null;
+        while (kernel is not null)
+        {
+            kernel.ReleaseSegmentsExcept(null);
+            kernel._guard?.Disarm();
+            kernel._guard = null;
+            kernel = thread.MoreReusableArenas?.Pop();
+        }
+    }
+
     private void ReleaseSegmentsExcept(ArenaSegmentHeader* keep)
     {
         for (ArenaSegmentHeader* segment = _ordinary.First, next; segment != null; segment = next)

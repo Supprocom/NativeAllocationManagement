@@ -46,6 +46,15 @@ internal sealed class NativeFinalizationGuard
         GC.SuppressFinalize(this);
     }
 
+    // The owner's storage is returned for a thread that ended, which needs no
+    // spare guard.
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA1816", Justification = "The guard is disarmed only after its owner returned its native storage.")]
+    internal void Disarm()
+    {
+        Target = null;
+        GC.SuppressFinalize(this);
+    }
+
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "An emergency finalizer must never let cleanup exceptions terminate the process.")]
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "MA0055", Justification = "Emergency native-memory cleanup supplements mandatory deterministic disposal.")]
     ~NativeFinalizationGuard()

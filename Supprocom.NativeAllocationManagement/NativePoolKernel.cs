@@ -57,12 +57,54 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget
     // generic thread-static field was one more thread-local lookup each.
     private static readonly int s_reuseSlot = NativeThreadState.AllocateTypedSlot();
 
-    private sealed class ReusablePools
+    private sealed class ReusablePools : INativeThreadStorage
     {
         internal NativePool<T>? Slot;
 
         // More disposed pools behind the slot, for nested scopes.
         internal NativeReuseStack<NativePool<T>>? More;
+
+        // The thread's shared pool, kept here too for the release below.
+        internal NativePool<T>? Shared;
+
+        public void ReleaseStorageOfEndedThread()
+        {
+            NativePool<T>? pool = Slot;
+            Slot = null;
+            while (pool is not null)
+            {
+                pool.ReleaseSlabsOfEndedThread();
+                pool = More?.Pop();
+            }
+
+            // A retired shared pool is its coordinator's to release.
+            NativePool<T>? shared = Shared;
+            Shared = null;
+            if (shared is not null
+                && shared._lifecycle == NativeOwnerLifecycle.Active
+                && Interlocked.CompareExchange(ref shared._retirementState, 2, 0) == 0)
+            {
+                shared._lifecycle = NativeOwnerLifecycle.Disposed;
+                shared.ReleaseSlabsOfEndedThread();
+            }
+        }
+    }
+
+    // The thread that could use these slabs ended, and with it every lease of
+    // them: large slabs go to NativeLargeBlocks, the rest to native memory.
+    private void ReleaseSlabsOfEndedThread()
+    {
+        KeepLargeSlabs();
+        FreeAll();
+        _guard?.Disarm();
+        _guard = null;
+    }
+
+    // Registers a new shared pool for its thread's release.
+    internal static void RegisterShared(NativePool<T> pool)
+    {
+        NativeThreadState thread = NativeThreadState.Current;
+        (thread.GetTyped<ReusablePools>(s_reuseSlot) ?? CreateReusablePools(thread)).Shared = pool;
     }
 
     private NativePool(
