@@ -498,17 +498,32 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
         long token,
         int length)
     {
-        ValidateLeaseOwner(nameof(Pooled<T>.Dispose));
-        ValidateLease(slab, token, nameof(Pooled<T>.Dispose));
-        if (slab.BorrowCount != 0)
+        // Every failure takes one cold call made with the incoming arguments:
+        // no value has to outlive a call first, so the common return saves no
+        // registers.
+        if (_lifecycle != NativeOwnerLifecycle.Active
+            || slab.State != SlabState.Leased
+            || slab.Token != token
+            || slab.BorrowCount != 0)
         {
-            ThrowActiveBorrow();
+            ThrowReturnFailure(slab, token);
         }
 
         slab.State = SlabState.Free;
         _liveLeaseCount--;
         _requestedBytes -= checked((long)CalculateByteLength(length));
         CacheReturnedSlab(slab);
+    }
+
+    // Throws what Return's checks found, in their order. Not NoInlining: the
+    // JIT then sees that it never returns, and Return keeps no value across it.
+    [DoesNotReturn]
+    private void ThrowReturnFailure(Slab slab, long token)
+    {
+        ValidateLeaseOwner(nameof(Pooled<T>.Dispose));
+        ValidateLease(slab, token, nameof(Pooled<T>.Dispose));
+        ThrowActiveBorrow();
+        throw new System.Diagnostics.UnreachableException();
     }
 
     /// <summary>Reads the current typed slab state.</summary>
