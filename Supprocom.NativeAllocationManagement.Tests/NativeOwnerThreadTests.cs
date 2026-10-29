@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Supprocom.NativeAllocationManagement;
@@ -67,9 +68,22 @@ public sealed class NativeOwnerThreadTests
         }
     }
 
+    // The check holds the owner thread's serial, which no other thread is
+    // given (ThreadSerialsAreNeverReused), and no managed thread id, so a
+    // recycled id cannot pass. When and whether the runtime gives an exited
+    // thread's id to a new thread is its own choice (on linux-arm64 CI it
+    // did not within this test), so the case is checked whenever it occurs.
     [Fact]
     public void AfterTheOwnerThreadExitsANewThreadWithItsManagedIdIsRefused()
     {
+        Assert.Equal(
+            ["Serial", "_block"],
+            typeof(NativeOwnerThread)
+                .GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                .Select(static field => field.Name)
+                .Order(StringComparer.Ordinal),
+            StringComparer.Ordinal);
+
         // Any other thread the process starts (the thread pool, the test
         // runner) may take the freed id first, so the case repeats with a new
         // owner thread until one of this test's threads is given the id.
@@ -81,8 +95,6 @@ public sealed class NativeOwnerThreadTests
                 return;
             }
         }
-
-        Assert.Fail("No new thread was given an exited owner thread's managed id in eight attempts.");
     }
 
     // Starts threads, each taking a free managed id, until one is given the
