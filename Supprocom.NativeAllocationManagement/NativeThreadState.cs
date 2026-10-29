@@ -41,8 +41,8 @@ internal sealed class NativeThreadState
 
     // One disposed budgeted region and arena kernel, kept for this thread's
     // next owner with the same budget. Unlike the slots above, other threads
-    // take them too, with an atomic exchange, when their budget refuses an
-    // admission; see NativeEndedThreads.ReleaseKeptFor.
+    // take them too, when their budget refuses an admission: only
+    // NativeKeptStorage touches them.
     internal NativeRegionKernel? KeptBudgetedRegion;
     internal NativeArenaKernel? KeptBudgetedArena;
 

@@ -40,8 +40,8 @@ internal static class NativeEndedThreads
 
     // A budget refused an admission: every registered thread, live or ended,
     // gives back the kernels it kept charged to that budget. Each is taken
-    // from its slot with an atomic exchange, so its own thread either took it
-    // first or finds the slot empty.
+    // from its slot with a compare-and-exchange (NativeKeptStorage), so its
+    // own thread either took it first or finds the slot empty.
     internal static void ReleaseKeptFor(NativeMemoryBudget budget)
     {
         // The release records frees on the calling thread's state, which must

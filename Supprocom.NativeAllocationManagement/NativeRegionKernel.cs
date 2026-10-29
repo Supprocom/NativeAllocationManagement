@@ -224,7 +224,7 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
     // disposal to make room in the budget: a disposed budgeted region used to
     // detach its storage until finalization, so regions made per scope ran
     // the budget out (a 1 GiB budget after 16,368 regions of 64 KiB) before
-    // any collection, and each one allocated and freed its storage (280 ns
+    // any collection, and each one acquired its storage afresh (533-669 ns
     // per region against 21 without a budget). Now the next region takes the
     // kept storage, and a budget that refuses an admission first takes back
     // what every thread kept for it (NativeEndedThreads.ReleaseKeptFor), so
