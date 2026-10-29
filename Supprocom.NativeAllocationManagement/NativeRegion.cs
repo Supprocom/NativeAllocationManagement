@@ -96,8 +96,9 @@ public readonly ref struct NativeRegion
     /// <summary>Invalidates all Local handles and ends the Region lifetime.</summary>
     public void Dispose()
     {
-        // Small enough that a using statement's finally runs inline instead
-        // of as a funclet call: the failure is thrown out of line.
+        // The failure is thrown out of line, and the kernel's common disposal
+        // inlines here. A using statement's finally then runs as one funclet
+        // call in the loops measured, where it made two calls before.
         NativeRegionKernel? kernel = _kernel;
         if (kernel is null)
         {

@@ -548,10 +548,35 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
 
     // Only NativeRegion.Dispose calls this, and the ref struct cannot leave its
     // construction thread, so disposal needs no thread check.
-    // Out of line, so the finally of a using statement over a NativeRegion
-    // stays small enough for the JIT to run inline rather than as a funclet.
-    [MethodImpl(MethodImplOptions.NoInlining)]
+    // The common case inlines into the region's own Dispose: a default-policy
+    // region with no budget whose one segment is small enough to keep, its
+    // kernel still in the thread's slot, only marks the kernel free there.
+    // This is what TryRetainForReuse does for it, without the calls.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void Dispose()
+    {
+        RegionSegmentHeader* first = _firstSegment;
+        NativeThreadState thread = _ownerThread;
+        if (_lifecycle == NativeOwnerLifecycle.Active
+            && _activeBorrowCount == 0
+            && _budget is null
+            && _returnMemoryOnDispose == NativeMemoryReturn.Reuse
+            && first != null
+            && first->Next == null
+            && (long)first->Capacity <= ReuseLimitBytes
+            && ReferenceEquals(thread.ReusableRegion, this))
+        {
+            _lifecycle = NativeOwnerLifecycle.Disposed;
+            _retainEpoch = thread.ReuseEpoch;
+            return;
+        }
+
+        DisposeSlow();
+    }
+
+    // Every other case, out of line so that the inlined part stays small.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private void DisposeSlow()
     {
         if (_lifecycle == NativeOwnerLifecycle.Disposed)
         {
