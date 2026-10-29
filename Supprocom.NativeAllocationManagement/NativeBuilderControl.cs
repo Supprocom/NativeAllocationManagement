@@ -368,9 +368,14 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
     // stack is empty takes one back, so a producer-consumer pipeline pays one
     // lock per stack of controls instead of one per control. Magazines already
     // hold parked controls, which published Disposed before they became visible.
+    // Deep enough for a batch of thousands of transfers outstanding at once:
+    // with 32 magazines, transfers past about 264 outstanding acquired a new
+    // control and block each (16 ints: 51 ns per transfer with 256
+    // outstanding, 255 ns with 1,024, 335 ns with 4,096). The bytes bound
+    // still caps the blocks the depot keeps.
     private static class Depot
     {
-        private const int MagazineLimit = 32;
+        private const int MagazineLimit = 512;
         private const nuint LimitBytes = 512 * 1024;
         private static readonly Lock s_gate = new();
         private static readonly Magazine?[] s_full = new Magazine?[MagazineLimit];

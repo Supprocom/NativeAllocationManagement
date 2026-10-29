@@ -15,8 +15,9 @@ internal sealed class NativePoolTransferControl<T> : NativeTransferControl<T>
 
     // A full thread stack travels to a thread with an empty one, a stack at a
     // time: in a pipeline the consuming thread returns every control and the
-    // producing thread rents every lease.
-    private static readonly NativeParkingDepot<NativePoolTransferControl<T>> s_depot = new(ParkCapacity, magazineLimit: 32);
+    // producing thread rents every lease. Deep enough for thousands of
+    // transfers outstanding at once, as the direct transfer depot is.
+    private static readonly NativeParkingDepot<NativePoolTransferControl<T>> s_depot = new(ParkCapacity, magazineLimit: 512);
 
     private long _lifetimeFirstVersion = 1;
 

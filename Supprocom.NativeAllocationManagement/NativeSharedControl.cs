@@ -18,8 +18,9 @@ internal sealed class NativeSharedControl<T> where T : unmanaged
     private static readonly int s_parkedSlot = NativeThreadState.AllocateTypedSlot();
 
     // A full thread stack travels to threads that share, a stack at a time:
-    // in a pipeline the consuming thread returns every payload.
-    private static readonly NativeParkingDepot<NativeSharedControl<T>> s_depot = new(ParkCapacity, magazineLimit: 32);
+    // in a pipeline the consuming thread returns every payload. Deep enough
+    // for thousands of shared payloads outstanding at once.
+    private static readonly NativeParkingDepot<NativeSharedControl<T>> s_depot = new(ParkCapacity, magazineLimit: 512);
 
     // A spin gate, not a Lock: holders update a few fields, never block or run
     // user code, and the control needs no second object.
