@@ -17,6 +17,88 @@ internal sealed partial class NativeOwnerKernel
 
     private bool ThreadCacheEligible => _threadCacheEligible;
 
+    // The thread caches of a pool, indexed by the 4 KiB stack block their owner
+    // last found them from. The thread-local lookup is a TLS call and a chain of
+    // dependent loads, so a rent looks here first: an entry counts when its
+    // cache's owner last found it from the caller's own block and the cache is
+    // not revoked. Anything else takes the thread-local tables, which record
+    // the entry.
+    //
+    // Assumption, as for NativeOwnerThread: no two live threads have stack
+    // frames in the same 4 KiB block. The stacks an operating system allocates
+    // for threads are separate whole pages, so they cannot share one. A stack a
+    // program supplies itself (pthread_attr_setstack) may begin or end inside a
+    // block that another thread's stack also uses; two threads renting from one
+    // pool while their frames are in that block could then use one cache at
+    // once and corrupt its records. NAM cannot detect such stacks.
+    //
+    // After a cache's owner exits, a new thread whose stack reuses that memory
+    // may take the exited owner's cache while it is armed. No other thread can
+    // use it meanwhile, so its busy window works as it does for the owner. A
+    // revocation drops it, since its owner is not alive, and the new thread's
+    // leases from it fold into the generation like any cached lease's. A
+    // revocation compares the revoker with each cache's owner by thread serial
+    // (OwnerThreadSerial), so it never skips the barrier for a cache that
+    // another thread may be using.
+    private const int CacheBlockTableSize = 64;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private NativePoolThreadCache? FindOwnCache() =>
+        FindOwnCache(NativeOwnerThread.CurrentBlock());
+
+    // Only a pool whose leases use thread caches calls this.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private NativePoolThreadCache? FindOwnCache(nuint block)
+    {
+        NativePoolThreadCache? cache = Unsafe.Add(
+            ref System.Runtime.InteropServices.MemoryMarshal.GetArrayDataReference(_cacheByBlock!),
+            (nint)(block & (CacheBlockTableSize - 1)));
+        return cache is not null && cache.OwnerBlock == block && Volatile.Read(ref cache.Revoked) == 0
+            ? cache
+            : FindOwnCacheSlow(block);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private NativePoolThreadCache? FindOwnCacheSlow(nuint block)
+    {
+        NativePoolThreadCache? cache = NativePoolThreadCaches.Find(Id, _cacheSlot);
+        if (cache is not null)
+        {
+            cache.OwnerBlock = block;
+            _cacheByBlock![(int)(block & (CacheBlockTableSize - 1))] = cache;
+        }
+
+        return cache;
+    }
+
+    // This thread's cache, found through the thread-local tables.
+    internal NativePoolThreadCache? ThreadCacheForTest() =>
+        NativePoolThreadCaches.Find(Id, _cacheSlot);
+
+    // A filled rent that looks the calling thread's cache up for the given stack
+    // block, as RentFilled does for the caller's own: tests simulate a thread
+    // whose stack reuses an exited thread's memory.
+    internal NativePoolLease RentFilledAtBlockForTest<T>(nuint block, int length, T value)
+    {
+        if (length > 0
+            && ThreadCacheEligible
+            && !NativeMemoryTestHooks.FaultInjectionPending
+            && FindOwnCache(block) is NativePoolThreadCache cache
+            && cache.Enter())
+        {
+            if (cache.NextId <= cache.LastId && cache.TakeFree(length) is NativeAllocation allocation)
+            {
+                long allocationId = PublishCachedLease(cache, allocation, length, value, fill: true);
+                cache.Exit();
+                return new NativePoolLease(allocationId, allocation);
+            }
+
+            cache.Exit();
+        }
+
+        return RentFilledSlow(length, value, fill: true, transferable: false);
+    }
+
     // Returns the cache too: once the busy window closes, a revocation on
     // another thread may clear the record's CacheOwner.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -430,7 +512,7 @@ internal sealed partial class NativeOwnerKernel
         if (length > 0
             && ThreadCacheEligible
             && !NativeMemoryTestHooks.FaultInjectionPending
-            && NativePoolThreadCaches.Find(Id, _cacheSlot) is NativePoolThreadCache cache
+            && FindOwnCache() is NativePoolThreadCache cache
             && cache.Enter())
         {
             if (cache.NextId <= cache.LastId
@@ -456,7 +538,7 @@ internal sealed partial class NativeOwnerKernel
         if (length > 0
             && ThreadCacheEligible
             && !NativeMemoryTestHooks.FaultInjectionPending
-            && NativePoolThreadCaches.Find(Id, _cacheSlot) is NativePoolThreadCache cache
+            && FindOwnCache() is NativePoolThreadCache cache
             && cache.Enter())
         {
             if (cache.NextId <= cache.LastId
@@ -808,7 +890,7 @@ internal sealed partial class NativeOwnerKernel
             && ThreadCacheEligible
             && !NativeMemoryTestHooks.FaultInjectionPending
             && !NativeMemoryTestHooks.OperationHooksEnabled
-            && NativePoolThreadCaches.Find(Id, _cacheSlot) is NativePoolThreadCache found
+            && FindOwnCache() is NativePoolThreadCache found
             && found.Enter())
         {
             if (found.NextId <= found.LastId
@@ -1474,13 +1556,13 @@ internal sealed partial class NativeOwnerKernel
         // thread is never inside its own cache's window here, so revoking only
         // its own cache (the single-threaded case) needs none.
         bool armed = false;
-        int current = NativeThreadIdentity.Current;
+        long current = NativeThreadState.CurrentSerialOrZero;
         foreach (ref readonly NativePoolThreadCache cache in _threadCaches.AsSpan(0, count))
         {
             if (Volatile.Read(ref cache.Revoked) == 0)
             {
                 Volatile.Write(ref cache.Revoked, 1);
-                armed |= cache.OwnerThreadId != current;
+                armed |= cache.OwnerThreadSerial != current;
             }
         }
 
@@ -1506,7 +1588,7 @@ internal sealed partial class NativeOwnerKernel
         if (Volatile.Read(ref cache.Revoked) == 0)
         {
             Volatile.Write(ref cache.Revoked, 1);
-            if (cache.OwnerThreadId != NativeThreadIdentity.Current)
+            if (cache.OwnerThreadSerial != NativeThreadState.CurrentSerialOrZero)
             {
                 Interlocked.MemoryBarrierProcessWide();
             }

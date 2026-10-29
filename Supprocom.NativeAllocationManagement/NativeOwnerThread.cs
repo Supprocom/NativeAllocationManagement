@@ -64,7 +64,7 @@ internal struct NativeOwnerThread
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static unsafe nuint CurrentBlock()
+    internal static unsafe nuint CurrentBlock()
     {
         byte frame;
         return (nuint)(&frame) >> BlockShift;

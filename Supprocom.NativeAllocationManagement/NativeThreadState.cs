@@ -62,6 +62,10 @@ internal sealed class NativeThreadState
     // Per element type state, such as parked transfer controls, by slot index.
     private object?[] _typed = new object?[8];
 
+    // The calling thread's serial, or zero, which no thread is given, when the
+    // thread has no state yet: reading it creates none.
+    internal static long CurrentSerialOrZero => t_current?.Serial ?? 0;
+
     internal static NativeThreadState Current
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]

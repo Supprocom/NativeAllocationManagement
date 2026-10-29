@@ -37,8 +37,15 @@ internal sealed class NativePoolThreadCache
     // The pool's slot in each thread's table; see NativePoolThreadCaches.
     internal readonly int Slot;
     // Caches are created on their owner thread. A revocation from that thread
-    // needs no process-wide barrier.
-    internal readonly int OwnerThreadId;
+    // needs no process-wide barrier. A thread serial, never given to another
+    // thread: a thread whose stack reuses an exited owner's memory may use the
+    // owner's cache (see NativeOwnerKernel.FindOwnCache), and a recycled managed
+    // thread id would let a third thread skip the barrier against it.
+    internal readonly long OwnerThreadSerial;
+
+    // The 4 KiB stack block where the owner last found this cache through the
+    // thread-local tables; see NativeOwnerKernel.FindOwnCache.
+    internal nuint OwnerBlock;
 
     // The generation this cache serves while armed; null once folded.
     internal NativeGeneration? Generation;
@@ -110,7 +117,7 @@ internal sealed class NativePoolThreadCache
         Slot = kernel.CacheSlot;
         Kernel = new WeakReference<NativeOwnerKernel>(kernel);
         OwnerThread = new WeakReference<Thread>(owner);
-        OwnerThreadId = NativeThreadIdentity.Current;
+        OwnerThreadSerial = NativeThreadState.Current.Serial;
     }
 
     // A rent's payload, in the owner's busy window. A deferred return of the
