@@ -34,7 +34,7 @@ public sealed class NativeProcessDiagnosticContractTests
             expected = expected.WithAcquisition(8);
             // On a thread that ends, so the parked block is freed below as
             // NAM frees an ended thread's kept storage.
-            TestThread.Run(() =>
+            NativeThreadState worker = TestThread.Run(() =>
             {
                 using (NativeBuilder<int> builder = new(preLease: 2))
                 {
@@ -50,6 +50,9 @@ public sealed class NativeProcessDiagnosticContractTests
             NativeEndedThreads.ReleaseEndedForTest();
             expected = expected.WithRelease(8);
             NativeProcessDiagnosticOracle.Verify(expected, "failed-replacement:old-storage-actually-released");
+            // The worker's state stays reachable until its storage is released:
+            // a collected state leaves the parked block to its finalizer.
+            GC.KeepAlive(worker);
         }
         finally { NativeMemoryTestHooks.Reset(); }
     }

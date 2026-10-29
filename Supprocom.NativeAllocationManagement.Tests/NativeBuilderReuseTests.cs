@@ -128,7 +128,7 @@ public sealed class NativeBuilderReuseTests
         }
 
         HashSet<object> controls = [.. first.Select(static transfer => transfer.ControlForTest!)];
-        RunOnNewThread(() =>
+        NativeThreadState worker = TestThread.Run(() =>
         {
             // Eight fill the stack; the ninth sends those eight to the depot.
             foreach (NativeTransfer<MagazineProbe> transfer in first)
@@ -155,6 +155,10 @@ public sealed class NativeBuilderReuseTests
         // until its release.
         NativeEndedThreads.ReleaseEndedForTest();
         KeptStorage.AssertBalanced<MagazineProbe>(NativeMemoryTestHooks.Snapshot());
+        // The ended thread's state stays reachable until its storage is
+        // released: a collected state leaves its parked blocks to their
+        // finalizers, which free them later.
+        GC.KeepAlive(worker);
     }
 
     private readonly record struct MagazineProbe(int Value);
@@ -163,7 +167,7 @@ public sealed class NativeBuilderReuseTests
     public void AThreadCyclingThroughSizesKeepsAParkedBlockForEach()
     {
         NativeMemoryTestHooks.Reset();
-        RunOnNewThread(static () =>
+        NativeThreadState worker = TestThread.Run(static () =>
         {
             NativeTransfer<CycleProbe> small = NativeTransfer<CycleProbe>.Create(16, new CycleProbe(1));
             object smallControl = small.ControlForTest!;
@@ -184,6 +188,10 @@ public sealed class NativeBuilderReuseTests
         });
         NativeEndedThreads.ReleaseEndedForTest();
         KeptStorage.AssertBalanced<CycleProbe>(NativeMemoryTestHooks.Snapshot());
+        // The ended thread's state stays reachable until its storage is
+        // released: a collected state leaves its parked blocks to their
+        // finalizers, which free them later.
+        GC.KeepAlive(worker);
     }
 
     private readonly record struct CycleProbe(int Value);
@@ -199,7 +207,7 @@ public sealed class NativeBuilderReuseTests
         }
 
         HashSet<object> controls = [.. first.Select(static transfer => transfer.ControlForTest!)];
-        RunOnNewThread(() =>
+        NativeThreadState worker = TestThread.Run(() =>
         {
             foreach (NativeTransfer<int> transfer in first)
             {
@@ -224,6 +232,10 @@ public sealed class NativeBuilderReuseTests
 
         NativeEndedThreads.ReleaseEndedForTest();
         KeptStorage.AssertBalanced<int>(NativeMemoryTestHooks.Snapshot());
+        // The ended thread's state stays reachable until its storage is
+        // released: a collected state leaves its parked blocks to their
+        // finalizers, which free them later.
+        GC.KeepAlive(worker);
     }
 
     [Fact]
