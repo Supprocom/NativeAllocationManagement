@@ -26,11 +26,11 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget
     private int _slabCount;
     private int _unusedHead = -1;
     private int _returnedSlabIndex = -1;
-    // The capacity of the slab returned last, or -1, and the length above
-    // which it is in that slab's size class (half its capacity rounded up to
-    // a power of two).
-    private int _returnedCapacity = -1;
-    private int _returnedFloor;
+    // The lengths the slab returned last serves, those of its size class it
+    // holds: from _returnedLow, _returnedSpan of them, and none when the span
+    // is zero. One unsigned compare tests a length.
+    private int _returnedLow;
+    private int _returnedSpan;
     private int _liveLeaseCount;
     private int _retirementState;
     private long _leaseTokenCounter;
@@ -671,8 +671,8 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget
         _nonEmptyFreeClasses = donor._nonEmptyFreeClasses;
         _unusedHead = donor._unusedHead;
         _returnedSlabIndex = donor._returnedSlabIndex;
-        _returnedCapacity = donor._returnedCapacity;
-        _returnedFloor = donor._returnedFloor;
+        _returnedLow = donor._returnedLow;
+        _returnedSpan = donor._returnedSpan;
         _retainedBytes = donor._retainedBytes;
         _peakRetainedBytes = _retainedBytes;
         _nextAllocationOrdinal = donor._nextAllocationOrdinal;
@@ -683,7 +683,7 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget
         donor._nonEmptyFreeClasses = 0;
         donor._unusedHead = -1;
         donor._returnedSlabIndex = -1;
-        donor._returnedCapacity = -1;
+        donor._returnedSpan = 0;
         donor._retainedBytes = 0;
         // The donor's guard, still registered, becomes this pool's.
         _guard = donor._guard;
@@ -732,11 +732,11 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private int TakeOrAddSlab(int length)
     {
-        if (length <= _returnedCapacity && length > _returnedFloor)
+        if ((uint)(length - _returnedLow) < (uint)_returnedSpan)
         {
             int slabIndex = _returnedSlabIndex;
             _returnedSlabIndex = -1;
-            _returnedCapacity = -1;
+            _returnedSpan = 0;
             return slabIndex;
         }
 
@@ -754,7 +754,7 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget
                 if (_slabs[slabIndex].Capacity >= length)
                 {
                     _returnedSlabIndex = -1;
-                    _returnedCapacity = -1;
+                    _returnedSpan = 0;
                     return slabIndex;
                 }
                 // Keep the only available slab reachable if growth fails.
@@ -762,7 +762,7 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget
             else
             {
                 _returnedSlabIndex = -1;
-                _returnedCapacity = -1;
+                _returnedSpan = 0;
                 PushFreeList(slabIndex);
             }
         }
@@ -871,11 +871,14 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget
                     zeroed: false);
             }
 
+            int floor = capacity <= 1 ? 0 : (int)(BitOperations.RoundUpToPowerOf2((uint)capacity) >> 1);
             _slabs[index] = new Slab
             {
                 Pointer = (IntPtr)memory,
                 AllocationBytes = backingBytes,
                 Capacity = capacity,
+                ClassLow = floor + 1,
+                ClassSpan = capacity - floor,
                 Next = -1,
                 Token = 0,
                 State = SlabState.Free,
@@ -1107,10 +1110,9 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget
     private void CacheReturnedSlab(Slab slab)
     {
         int displaced = _returnedSlabIndex;
-        int capacity = slab.Capacity;
         _returnedSlabIndex = slab.Index;
-        _returnedCapacity = capacity;
-        _returnedFloor = capacity <= 1 ? 0 : (int)(BitOperations.RoundUpToPowerOf2((uint)capacity) >> 1);
+        _returnedLow = slab.ClassLow;
+        _returnedSpan = slab.ClassSpan;
         slab.Next = -1;
         if (displaced >= 0)
         {
@@ -1132,7 +1134,7 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget
         Array.Fill(_freeHeads, -1);
         _nonEmptyFreeClasses = 0;
         _returnedSlabIndex = -1;
-        _returnedCapacity = -1;
+        _returnedSpan = 0;
         for (int index = 0; index < _slabCount; index++)
         {
             if (_slabs[index].State == SlabState.Free)
@@ -1306,6 +1308,11 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget
         internal IntPtr Pointer;
         internal nuint AllocationBytes;
         internal int Capacity;
+        // The lengths of this slab's size class it holds, from ClassLow,
+        // ClassSpan of them: above half its capacity rounded up to a power of
+        // two. Kept here so a return only copies them.
+        internal int ClassLow;
+        internal int ClassSpan;
         internal int Next;
         internal long Token;
         internal int BorrowCount;
@@ -1321,6 +1328,8 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget
             Pointer = IntPtr.Zero;
             AllocationBytes = 0;
             Capacity = 0;
+            ClassLow = 0;
+            ClassSpan = 0;
             Next = 0;
             Token = 0;
             BorrowCount = 0;
