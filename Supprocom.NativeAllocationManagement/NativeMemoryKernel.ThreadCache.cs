@@ -439,7 +439,7 @@ internal sealed partial class NativeOwnerKernel
             && cache.Enter())
         {
             if (cache.NextId <= cache.LastId
-                && (!fill || (nuint)length * (nuint)_storageElementSize <= InWindowFillBytes)
+                && (!fill || (nuint)length * StorageSize<T>() <= InWindowFillBytes)
                 && cache.TakeFree(length) is NativeAllocation allocation)
             {
                 long allocationId = PublishCachedLease(cache, allocation, length, value, fill);
@@ -465,7 +465,7 @@ internal sealed partial class NativeOwnerKernel
             && cache.Enter())
         {
             if (cache.NextId <= cache.LastId
-                && (!fill || (nuint)length * (nuint)_storageElementSize <= InWindowFillBytes)
+                && (!fill || (nuint)length * StorageSize<T>() <= InWindowFillBytes)
                 && TakeReturnedTransfer(cache, length) is NativeAllocation returned)
             {
                 long returnedId = PublishCachedLease(cache, returned, length, value, fill);
@@ -497,7 +497,7 @@ internal sealed partial class NativeOwnerKernel
             {
                 if (cache.NextId <= cache.LastId)
                 {
-                    bool inWindow = !fill || (nuint)length * (nuint)_storageElementSize <= InWindowFillBytes;
+                    bool inWindow = !fill || (nuint)length * StorageSize<T>() <= InWindowFillBytes;
 
                     // A returned transferable record serves the next
                     // transferable rent in place on the transfer list.
@@ -560,6 +560,16 @@ internal sealed partial class NativeOwnerKernel
     // thread waits at most that long.
     private const nuint InWindowFillBytes = 16 * 1024;
 
+    // The storage size of the pool's element type, which every generic rent
+    // here is called with: the kernel was made with the same size, and the
+    // JIT folds this one into a constant where the field would be a load.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private nuint StorageSize<T>()
+    {
+        System.Diagnostics.Debug.Assert(_storageElementSize == NativeTypeLayout.StorageSize<T>());
+        return (nuint)NativeTypeLayout.StorageSize<T>();
+    }
+
     // Begins, fills and publishes a cached lease in one busy window: no
     // initializer runs, so the lease never shows as initializing.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -567,7 +577,7 @@ internal sealed partial class NativeOwnerKernel
     {
         NativeSlab slab = allocation.Slab!;
         long allocationId = cache.NextId++;
-        nuint storageBytes = (nuint)length * (nuint)_storageElementSize;
+        nuint storageBytes = (nuint)length * StorageSize<T>();
         allocation.ResetCached(allocationId, length, storageBytes, cache.Generation!.ScopeEpoch, slab.Segment.Pointer);
         if (slab.HasBeenUsed)
         {
@@ -824,7 +834,7 @@ internal sealed partial class NativeOwnerKernel
             && found.Enter())
         {
             if (found.NextId <= found.LastId
-                && (nuint)length * (nuint)_storageElementSize <= InWindowFillBytes
+                && (nuint)length * StorageSize<T>() <= InWindowFillBytes
                 && found.TakeFree(length) is NativeAllocation taken)
             {
                 allocationId = PublishCachedLease(found, taken, length, value, fill: true);
