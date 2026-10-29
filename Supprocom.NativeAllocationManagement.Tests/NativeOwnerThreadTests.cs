@@ -70,18 +70,34 @@ public sealed class NativeOwnerThreadTests
     [Fact]
     public void AfterTheOwnerThreadExitsANewThreadWithItsManagedIdIsRefused()
     {
+        // Any other thread the process starts (the thread pool, the test
+        // runner) may take the freed id first, so the case repeats with a new
+        // owner thread until one of this test's threads is given the id.
+        for (int attempt = 0; attempt < 8; attempt++)
+        {
+            if (TryCheckFromRecycledId() is Run recycled)
+            {
+                Assert.False(recycled.Passed);
+                return;
+            }
+        }
+
+        Assert.Fail("No new thread was given an exited owner thread's managed id in eight attempts.");
+    }
+
+    // Starts threads, each taking a free managed id, until one is given the
+    // exited owner thread's id. They stay alive until then, so no id is freed
+    // in between.
+    private static Run? TryCheckFromRecycledId()
+    {
         Run owner = RunOwnerThread();
         owner.Box.Owner.ForgetBlockForTest();
         Collect();
-
-        // Each new thread takes a free managed id. They stay alive until one is
-        // given the exited owner thread's id, so no id is freed in between.
         using ManualResetEventSlim release = new();
         List<Thread> holders = [];
-        Run? recycled = null;
         try
         {
-            for (int attempt = 0; attempt < 64 && recycled is null; attempt++)
+            for (int index = 0; index < 64; index++)
             {
                 Collect();
                 Run run = new(owner.Box) { CheckOnlyId = owner.ManagedThreadId, Hold = release };
@@ -89,9 +105,11 @@ public sealed class NativeOwnerThreadTests
                 run.Checked.Wait();
                 if (run.ManagedThreadId == owner.ManagedThreadId)
                 {
-                    recycled = run;
+                    return run;
                 }
             }
+
+            return null;
         }
         finally
         {
@@ -101,9 +119,6 @@ public sealed class NativeOwnerThreadTests
                 holder.Join();
             }
         }
-
-        Assert.True(recycled is not null, "No new thread was given the exited owner thread's managed id.");
-        Assert.False(recycled.Passed);
     }
 
     [Fact]
