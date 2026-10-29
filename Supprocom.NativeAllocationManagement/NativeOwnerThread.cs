@@ -73,3 +73,22 @@ internal struct NativeOwnerThread
     // A block no frame is in, so the next check takes the serial path.
     internal void ForgetBlockForTest() => _block = 0;
 }
+
+// Tests simulate a thread whose stack reuses an exited thread's memory by
+// naming the stack block NativeOwnerKernel.FindOwnCache looks up. Only a test
+// process sets the switch; elsewhere the flag is false, and optimized code
+// drops the override.
+internal static class NativeStackBlockForTest
+{
+    internal const string Switch = "Supprocom.NativeAllocationManagement.Testing.StackBlockOverride";
+
+    internal static readonly bool Enabled = AppContext.TryGetSwitch(Switch, out bool enabled) && enabled;
+
+    // The block this thread's lookups use while nonzero.
+    [ThreadStatic]
+    internal static nuint Override;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static nuint Current() =>
+        Enabled && Override != 0 ? Override : NativeOwnerThread.CurrentBlock();
+}

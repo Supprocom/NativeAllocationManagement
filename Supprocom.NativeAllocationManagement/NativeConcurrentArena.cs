@@ -345,6 +345,8 @@ public readonly ref struct ConcurrentArenaLease<T>
 
     internal bool HasLaneCacheForTest => _laneCache is not null;
 
+    internal NativePoolThreadCache? LaneCacheForTest => _laneCache;
+
     internal NativeOwnerKernel KernelForComposite =>
         GetKernel("NativeLeaseOperations.Access");
 

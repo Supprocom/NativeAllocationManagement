@@ -12,6 +12,8 @@
   <ItemGroup>
     <!-- Diagnostic contracts and measurement workers read per-event counters. -->
     <RuntimeHostConfigurationOption Include="Supprocom.NativeAllocationManagement.DetailedCounters" Value="true" />
+    <!-- Tests name the stack block a pool's thread-cache lookup uses, to simulate stack reuse. -->
+    <RuntimeHostConfigurationOption Include="Supprocom.NativeAllocationManagement.Testing.StackBlockOverride" Value="true" />
   </ItemGroup>
 
   <ItemGroup>

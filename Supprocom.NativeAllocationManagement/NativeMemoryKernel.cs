@@ -3421,7 +3421,7 @@ internal sealed partial class NativeOwnerKernel
     // A pool of values without references: its leases may use thread caches.
     private readonly bool _threadCacheEligible;
     // Thread caches by stack block; see FindOwnCache. Only a pool whose leases
-    // use thread caches has one.
+    // use thread caches, or an arena whose threads use lanes, has one.
     private readonly NativePoolThreadCache?[]? _cacheByBlock;
     private long _generation;
     private long _nextAllocationId;
@@ -4065,7 +4065,7 @@ internal sealed partial class NativeOwnerKernel
         _preAllocateBytes = preAllocateBytes;
         _containsReferences = containsReferences;
         _threadCacheEligible = kind == NativeOwnerKind.Pool && !containsReferences;
-        _cacheByBlock = _threadCacheEligible ? new NativePoolThreadCache?[CacheBlockTableSize] : null;
+        _cacheByBlock = _threadCacheEligible || kind == NativeOwnerKind.Arena ? new NativePoolThreadCache?[CacheBlockTableSize] : null;
         _arenaFastThreadId =
             kind == NativeOwnerKind.Arena
                 ? Environment.CurrentManagedThreadId

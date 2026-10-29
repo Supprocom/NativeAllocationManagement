@@ -17,12 +17,14 @@ internal sealed partial class NativeOwnerKernel
 
     private bool ThreadCacheEligible => _threadCacheEligible;
 
-    // The thread caches of a pool, indexed by the 4 KiB stack block their owner
-    // last found them from. The thread-local lookup is a TLS call and a chain of
-    // dependent loads, so a rent looks here first: an entry counts when its
-    // cache's owner last found it from the caller's own block and the cache is
-    // not revoked. Anything else takes the thread-local tables, which record
-    // the entry.
+    // The thread caches of a pool, or of an arena's lanes, indexed by the
+    // 4 KiB stack block their owner last found them from. The thread-local
+    // lookup is a TLS call and a chain of dependent loads, so the fast paths
+    // look here first: an entry counts when its cache's owner last found it
+    // from the caller's own block and the cache is not revoked. Anything else
+    // takes the thread-local tables, which record the entry. No slow path arms
+    // a cache found here: each finds the thread's own cache through the
+    // thread-local tables first (ClaimArenaLane included).
     //
     // Assumption, as for NativeOwnerThread: no two live threads have stack
     // frames in the same 4 KiB block. The stacks an operating system allocates
@@ -44,9 +46,9 @@ internal sealed partial class NativeOwnerKernel
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private NativePoolThreadCache? FindOwnCache() =>
-        FindOwnCache(NativeOwnerThread.CurrentBlock());
+        FindOwnCache(NativeStackBlockForTest.Current());
 
-    // Only a pool whose leases use thread caches calls this.
+    // Only a kernel with a table calls this (see _cacheByBlock).
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private NativePoolThreadCache? FindOwnCache(nuint block)
     {
@@ -1156,7 +1158,7 @@ internal sealed partial class NativeOwnerKernel
     {
         if (allocation.TransferOwner is not null
             && !NativeMemoryTestHooks.OperationHooksEnabled
-            && NativePoolThreadCaches.Find(Id, _cacheSlot) is NativePoolThreadCache found
+            && FindOwnCache() is NativePoolThreadCache found
             && found.Enter())
         {
             NativeGeneration generation = allocation.GenerationState;
@@ -1192,7 +1194,7 @@ internal sealed partial class NativeOwnerKernel
     {
         if (allocation.TransferOwner is not null
             && !NativeMemoryTestHooks.OperationHooksEnabled
-            && NativePoolThreadCaches.Find(Id, _cacheSlot) is NativePoolThreadCache found
+            && FindOwnCache() is NativePoolThreadCache found
             && found.Enter())
         {
             NativeGeneration generation = allocation.GenerationState;
@@ -1287,7 +1289,7 @@ internal sealed partial class NativeOwnerKernel
         out int epoch)
     {
         if (!NativeMemoryTestHooks.OperationHooksEnabled
-            && (known ?? NativePoolThreadCaches.Find(Id, _cacheSlot)) is NativePoolThreadCache found
+            && (known ?? FindOwnCache()) is NativePoolThreadCache found
             && found.Enter())
         {
             if (ReferenceEquals(found.Generation, allocation.GenerationState)
@@ -1366,7 +1368,7 @@ internal sealed partial class NativeOwnerKernel
     {
         if (allocation.TransferOwner is NativePoolThreadCache owner)
         {
-            if (ReferenceEquals(NativePoolThreadCaches.Find(Id, _cacheSlot), owner) && owner.Enter())
+            if (ReferenceEquals(FindOwnCache(), owner) && owner.Enter())
             {
                 // No fold runs in the busy window, and only the lease's holder
                 // returns it.
@@ -1766,9 +1768,9 @@ internal sealed partial class NativeOwnerKernel
             return false;
         }
 
-        NativePoolThreadCache? cache = NativePoolThreadCaches.Find(Id, _cacheSlot);
+        NativePoolThreadCache? cache = FindOwnCache();
         if (!TryReserveArenaLane(cache, byteLength, alignment, out ArenaLaneReservation reservation)
-            && !ClaimArenaLane(ref cache, byteLength, alignment, out reservation))
+            && !ClaimArenaLane(out cache, byteLength, alignment, out reservation))
         {
             return false;
         }
@@ -1819,7 +1821,7 @@ internal sealed partial class NativeOwnerKernel
             return false;
         }
 
-        NativePoolThreadCache? cache = NativePoolThreadCaches.Find(Id, _cacheSlot);
+        NativePoolThreadCache? cache = FindOwnCache();
         // A lane with room takes, fills and publishes the range in one busy
         // window: no initializer runs, and a small fill delays a revocation
         // no longer than an operation does.
@@ -1860,7 +1862,7 @@ internal sealed partial class NativeOwnerKernel
         }
 
         if (!TryReserveArenaLane(cache, byteLength, alignment, out ArenaLaneReservation reservation)
-            && !ClaimArenaLane(ref cache, byteLength, alignment, out reservation))
+            && !ClaimArenaLane(out cache, byteLength, alignment, out reservation))
         {
             return false;
         }
@@ -1921,12 +1923,16 @@ internal sealed partial class NativeOwnerKernel
     // between. A full lane goes back to the generation as an ordinary segment.
     // False means the arena is not active or has no room for another cache;
     // the locked path then reports or serves the request.
+    // Arms this thread's own cache, found through the thread-local tables: a
+    // cache the stack-block table gave the caller may be an exited thread's,
+    // which a revocation may have dropped since.
     private bool ClaimArenaLane(
-        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] ref NativePoolThreadCache? cache,
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out NativePoolThreadCache? cache,
         nuint byteLength,
         nuint alignment,
         out ArenaLaneReservation reservation)
     {
+        cache = NativePoolThreadCaches.Find(Id, _cacheSlot);
         reservation = default;
         lock (_gate)
         {
