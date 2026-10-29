@@ -314,6 +314,109 @@ internal sealed partial class NativeOwnerKernel
         }
     }
 
+    // A returned transferable record initialized where it is, on the transfer
+    // list, as a filled transferable rent reuses one: it never joins the leased
+    // set, so it is not moved there and back. A fold meanwhile moves it to the
+    // generation like any record on the list.
+    private NativePoolLease InitializeReturnedTransfer<T>(
+        NativePoolThreadCache cache,
+        NativeAllocation allocation,
+        NativeLeaseInitializer<T> initializer)
+    {
+        long allocationId = allocation.Id;
+        int initializedLength = 0;
+        try
+        {
+            NativeLeaseWriter<T> writer = RuntimeHelpers.IsReferenceOrContainsReferences<T>()
+                ? new(allocation, ref initializedLength)
+                : new(allocation, CachedSpan<T>(allocation, allocation.Length), ref initializedLength);
+            initializer(writer);
+            allocation.InitializedLength = initializedLength;
+            CompleteReturnedTransferInitialization(cache, allocation);
+            return new NativePoolLease(allocationId, allocation);
+        }
+        catch
+        {
+            allocation.InitializedLength = initializedLength;
+            AbortReturnedTransferInitialization(cache, allocation);
+            throw;
+        }
+    }
+
+    // This thread's cache lists, read without folding the cache.
+    internal (int Records, int Transfers, int Stashed) ThreadCacheListsForTest() =>
+        NativePoolThreadCaches.Find(Id, _cacheSlot) is NativePoolThreadCache cache
+            ? (cache.RecordCount, cache.TransferCount, cache.StashCount)
+            : default;
+
+    private void CompleteReturnedTransferInitialization(NativePoolThreadCache cache, NativeAllocation allocation)
+    {
+        if (cache.Enter())
+        {
+            if (ReferenceEquals(allocation.TransferOwner, cache))
+            {
+                if (allocation.InitializedLength != allocation.Length)
+                {
+                    cache.Exit();
+                    throw new InvalidOperationException(
+                        "The native lease initializer did not write all logical elements.");
+                }
+
+                allocation.InitializedLength = 0;
+                long payload = cache.PayloadDelta + (long)allocation.StorageBytes;
+                cache.PayloadDelta = payload;
+                if (payload > cache.MaxPayloadDelta)
+                {
+                    cache.MaxPayloadDelta = payload;
+                }
+
+                allocation.Lifecycle = NativeAllocationLifecycle.Active;
+                cache.Initializing--;
+                cache.Exit();
+                return;
+            }
+
+            cache.Exit();
+        }
+
+        // A fold moved the record and its initializer count to the generation.
+        WaitForThreadCacheFold();
+        CompleteInitialization(allocation.GenerationState, allocation, scoped: false);
+    }
+
+    private void AbortReturnedTransferInitialization(NativePoolThreadCache cache, NativeAllocation allocation)
+    {
+        if (cache.Enter())
+        {
+            // Back on the stash, returned, as before this rent. The stash grows
+            // with the transfer list, which still holds the record, so it has
+            // room.
+            if (ReferenceEquals(allocation.TransferOwner, cache)
+                && allocation.Lifecycle == NativeAllocationLifecycle.Initializing)
+            {
+                allocation.TransferOwner = null;
+                allocation.Lifecycle = NativeAllocationLifecycle.Returned;
+                allocation.InitializedLength = 0;
+                cache.Initializing--;
+                cache.Stash[cache.StashCount++] = allocation;
+                cache.Exit();
+                return;
+            }
+
+            cache.Exit();
+        }
+
+        lock (_gate)
+        {
+            if (ReferenceEquals(allocation.TransferOwner, cache))
+            {
+                RevokeThreadCacheLocked(cache);
+            }
+        }
+
+        AbortPoolInitialization(allocation.GenerationState, allocation);
+    }
+
     // Rents a lease filled with one value, or left unwritten, without an
     // initializer callback: a cached record is filled in place and published;
     // anything else takes the initializer path with an equivalent fill.

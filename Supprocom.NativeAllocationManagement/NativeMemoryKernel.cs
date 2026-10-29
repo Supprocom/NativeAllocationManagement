@@ -4271,13 +4271,25 @@ internal sealed partial class NativeOwnerKernel
             && NativePoolThreadCaches.Find(Id, _cacheSlot) is NativePoolThreadCache cache
             && cache.Enter())
         {
-            if (cache.NextId <= cache.LastId
-                && (cache.TakeFree(length) ?? (cache.HasRecordRoom ? TakeRemoteFree(cache, length) : null))
-                    is NativeAllocation allocation)
+            if (cache.NextId <= cache.LastId)
             {
-                BeginCachedLease(cache, allocation, length);
-                cache.Exit();
-                return InitializeCached(cache, allocation, initializer, transferable);
+                // A transferable rent takes a returned transferable record
+                // first and initializes it where it is, on the transfer list.
+                if (transferable && TakeReturnedTransfer(cache, length) is NativeAllocation returned)
+                {
+                    BeginCachedLease(cache, returned, length);
+                    returned.TransferOwner = cache;
+                    cache.Exit();
+                    return InitializeReturnedTransfer(cache, returned, initializer);
+                }
+
+                if ((cache.TakeFree(length) ?? (cache.HasRecordRoom ? TakeRemoteFree(cache, length) : null))
+                    is NativeAllocation allocation)
+                {
+                    BeginCachedLease(cache, allocation, length);
+                    cache.Exit();
+                    return InitializeCached(cache, allocation, initializer, transferable);
+                }
             }
 
             cache.Exit();
