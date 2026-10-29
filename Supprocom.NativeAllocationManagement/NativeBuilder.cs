@@ -803,14 +803,17 @@ public sealed class NativeBuilder<T> : IDisposable
         int terminalState)
     {
         EnsureActive(operation);
-        if (Interlocked.CompareExchange(
-            ref _writerGate,
-            1,
-            0) != 0)
+        // A plain load and store, where Append's fast path takes no gate at all:
+        // the analyzer (NAM1028-NAM1033) confines a builder to one local, used
+        // by one thread at a time, so only an operation this thread entered, a
+        // borrow or a callback, can hold the gate here, and this load sees it.
+        if (_writerGate != 0)
         {
             throw new InvalidOperationException(
                 $"NativeBuilder.{operation} cannot run during another builder operation.");
         }
+
+        _writerGate = 1;
 
         // Every state transition happens under the writer gate, so the gate
         // holder reads and publishes the state without a second atomic.
