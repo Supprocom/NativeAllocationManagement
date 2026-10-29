@@ -316,11 +316,17 @@ public readonly ref struct ConcurrentPooled<T>
 
         if (kernel is null || generation is null || allocation is null)
         {
-            throw new NativeAllocationUninitializedException(nameof(ConcurrentPooled<T>), nameof(Dispose));
+            ThrowUninitializedDispose();
         }
 
         kernel.ReturnLease(generation, allocation, generationNumber, allocationId);
     }
+
+    // Not NoInlining: the JIT then sees that it never returns, and Return keeps
+    // no value across it.
+    [DoesNotReturn]
+    private static void ThrowUninitializedDispose() =>
+        throw new NativeAllocationUninitializedException(nameof(ConcurrentPooled<T>), nameof(Dispose));
 
     // This thread's cached lease enters and exits its operations without an
     // operation token; any other lease takes the kernel's admission path. The
