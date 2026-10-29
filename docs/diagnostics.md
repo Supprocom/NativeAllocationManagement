@@ -124,7 +124,7 @@ defines all thirteen friend-test observations separately from public capture.
 Its independent transition tests cover initialization, nested borrows, failure,
 empty records, whole-page retention, ordinals and terminal/coordinator cleanup.
 The active-operation probe counts entered initializers as well as actual slab
-borrows; its legacy generation name does not invent generational storage.
+borrows; its name still says generation, but the storage is not generational.
 Both slab-capacity tuple elements describe the same allocated metadata bank,
 not two arrays or two physical charges. Page capacity stays allocated after
 native trim. The ordinal probe validates the owner thread and creates a numeric
