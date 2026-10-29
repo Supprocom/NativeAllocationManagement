@@ -1570,17 +1570,20 @@ internal sealed partial class NativeOwnerKernel
 
     // Ordinary unmanaged scratch on a thread other than the arena's own fast
     // thread: bump-allocates from the thread's private lane segment without the
-    // owner lock. False sends the caller to the locked path.
+    // owner lock. False sends the caller to the locked path. The lane's cache
+    // goes to the lease, whose operations then skip looking it up.
     internal bool TryLeaseArenaLaneInitialized<T>(
         int length,
         int elementSize,
         nuint alignment,
         NativeLeaseInitializer<T> initializer,
-        out NativeArenaAllocation allocation)
+        out NativeArenaAllocation allocation,
+        out NativePoolThreadCache? laneCache)
     {
         ArgumentNullException.ThrowIfNull(initializer);
         ArgumentOutOfRangeException.ThrowIfNegative(length);
         allocation = default;
+        laneCache = null;
         nuint byteLength = CalculateArenaByteLength(length, elementSize);
         if (byteLength == 0 || NativeMemoryTestHooks.FaultInjectionPending)
         {
@@ -1615,6 +1618,7 @@ internal sealed partial class NativeOwnerKernel
         }
 
         allocation = new NativeArenaAllocation(reservation.Generation, pointer, reservation.OriginalCursor, length);
+        laneCache = cache;
         return true;
     }
 

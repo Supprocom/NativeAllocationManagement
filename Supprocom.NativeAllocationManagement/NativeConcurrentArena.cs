@@ -126,9 +126,10 @@ public sealed class NativeConcurrentArena : IDisposable
                 elementSize,
                 alignment,
                 initializer,
-                out NativeArenaAllocation lane))
+                out NativeArenaAllocation lane,
+                out NativePoolThreadCache? laneCache))
         {
-            return new ConcurrentArenaLease<T>(_kernel, lane);
+            return new ConcurrentArenaLease<T>(_kernel, lane, laneCache);
         }
 
         NativeRegionAllocation allocation = _kernel.LeaseBumpInitialized(
@@ -341,6 +342,8 @@ public readonly ref struct ConcurrentArenaLease<T>
         NativePoolThreadCache? laneCache)
         : this(kernel, allocation) =>
         _laneCache = laneCache;
+
+    internal bool HasLaneCacheForTest => _laneCache is not null;
 
     internal NativeOwnerKernel KernelForComposite =>
         GetKernel("NativeLeaseOperations.Access");
