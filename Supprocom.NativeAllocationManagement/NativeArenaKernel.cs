@@ -531,7 +531,61 @@ public sealed unsafe partial class NativeArena : INativeFinalizationTarget
             return;
         }
 
+        // Nothing to finalize: the guard goes back to the thread for the next owner.
+        if (_ordinary.First == null && _scoped.First == null)
+        {
+            ReleaseGuard(thread);
+            return;
+        }
+
+        if (_budget is null && !_prepared)
+        {
+            bool kept = KeepLargeSegments(ref _ordinary);
+            kept |= KeepLargeSegments(ref _scoped);
+            if (kept && _ordinary.First == null && _scoped.First == null)
+            {
+                ReleaseGuard(thread);
+                return;
+            }
+        }
+
         DetachForFinalizer();
+    }
+
+    // Disposal already proved no borrow or initializer is entered, so large
+    // segments go to NativeLargeBlocks instead of waiting for the finalizer.
+    private bool KeepLargeSegments(ref ArenaLane lane)
+    {
+        ArenaSegmentHeader* remaining = null;
+        ArenaSegmentHeader** tail = &remaining;
+        bool kept = false;
+        for (ArenaSegmentHeader* segment = lane.First, next; segment != null; segment = next)
+        {
+            next = segment->Next;
+            nuint allocationBytes = segment->AllocationBytes;
+            long metricsEpoch = segment->MetricsEpoch;
+            if (segment->External == 0 && NativeLargeBlocks.TryKeep(segment, allocationBytes))
+            {
+                NativeMemoryAccounting.RecordFree(allocationBytes, detached: false, metricsEpoch);
+                _retainedBytes -= checked((long)allocationBytes);
+                _segmentCount--;
+                kept = true;
+            }
+            else
+            {
+                *tail = segment;
+                tail = &segment->Next;
+            }
+        }
+
+        if (kept)
+        {
+            *tail = null;
+            lane = default;
+            lane.First = remaining;
+        }
+
+        return kept;
     }
 
     private void DetachForFinalizer()
@@ -808,9 +862,23 @@ public sealed unsafe partial class NativeArena : INativeFinalizationTarget
                 throw new NativeAllocationFailedException(allocationBytes, OwnerKind,
                     generation: unchecked((long)_generation), operation, _lifecycle);
             }
-            memory = NativeMemory.AlignedAlloc(
-                allocationBytes,
-                SegmentAlignment);
+            nuint keptBytes = 0;
+            memory = _budget is null
+                ? NativeLargeBlocks.TryTake(allocationBytes, out keptBytes)
+                : null;
+            if (memory != null)
+            {
+                allocationBytes = keptBytes;
+                capacity = keptBytes - HeaderBytes;
+                prospectiveBytes = checked(_retainedBytes + checked((long)allocationBytes));
+            }
+            else
+            {
+                memory = NativeMemory.AlignedAlloc(
+                    allocationBytes,
+                    SegmentAlignment);
+            }
+
             if (memory == null)
             {
                 // AlignedAlloc reports native allocation failure with a null pointer.

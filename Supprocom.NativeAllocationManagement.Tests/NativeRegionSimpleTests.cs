@@ -471,7 +471,7 @@ public sealed class NativeRegionSimpleTests
     }
 
     [Fact]
-    public void NativeReturnBudgetedAndLargeRegionsAreNotRetainedForReuse()
+    public void NativeReturnAndBudgetedRegionsAreNotRetainedForReuse()
     {
         RunOnFreshThread(static () =>
         {
@@ -482,10 +482,32 @@ public sealed class NativeRegionSimpleTests
             NativeRegion budgeted = new(new NativeMemoryBudget(65_536), 256, NativeMemoryReturn.ToGarbageCollector);
             budgeted.Dispose();
             Assert.False(NativeRegionKernel.HasReusableKernelForTest);
+        });
+    }
 
+    [Fact]
+    public void ALargeOrEmptyRegionIsRetainedWithoutStorage()
+    {
+        RunOnFreshThread(static () =>
+        {
             NativeRegion large = new(preAllocateBytes: 2 * 1024 * 1024);
             large.Dispose();
-            Assert.False(NativeRegionKernel.HasReusableKernelForTest);
+            Assert.True(NativeRegionKernel.HasReusableKernelForTest);
+            NativeRegion afterLarge = new();
+            Assert.Equal(0, afterLarge.GetStatistics().SegmentCount);
+            Assert.Equal(0, afterLarge.GetStatistics().RetainedBytes);
+            Assert.Equal(7, afterLarge.Lease<int>(4, 7).Read(static view => view[3]));
+            afterLarge.Dispose();
+
+            NativeRegion empty = new();
+            NativeRegion nested = new();
+            nested.Dispose();
+            empty.Dispose();
+            Assert.True(NativeRegionKernel.HasReusableKernelForTest);
+            NativeRegion afterEmpty = new(preAllocateBytes: 256);
+            Assert.Equal(1, afterEmpty.GetStatistics().SegmentCount);
+            Assert.Equal(9, afterEmpty.Lease<int>(4, 9).Read(static view => view[3]));
+            afterEmpty.Dispose();
         });
     }
 

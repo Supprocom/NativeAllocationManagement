@@ -108,12 +108,13 @@ internal sealed unsafe class NativeRegionKernel
     private bool TryReactivate(NativeThreadState thread, nuint preAllocateBytes)
     {
         RegionSegmentHeader* segment = _firstSegment;
-        // A new measurement epoch observes fresh acquisition, and a short
-        // segment cannot satisfy the requested reservation.
-        if (segment == null
-            || _retainEpoch != thread.ReuseEpoch
-            || segment->MetricsEpoch != NativeMemoryAccounting.CurrentMetricsEpoch
-            || segment->Capacity < preAllocateBytes
+        // A new measurement epoch observes fresh acquisition, and a short or
+        // missing segment cannot satisfy the requested reservation.
+        if (_retainEpoch != thread.ReuseEpoch
+            || (segment == null
+                ? preAllocateBytes != 0
+                : segment->MetricsEpoch != NativeMemoryAccounting.CurrentMetricsEpoch
+                    || segment->Capacity < preAllocateBytes)
             || _generation == int.MaxValue)
         {
             FreeSegments();
@@ -127,8 +128,8 @@ internal sealed unsafe class NativeRegionKernel
         _retainedForReuse = false;
         _lifecycle = NativeOwnerLifecycle.Active;
         _currentSegment = segment;
-        _currentCursor = (byte*)segment + HeaderBytes;
-        _currentEnd = _currentCursor + segment->Capacity;
+        _currentCursor = segment == null ? null : (byte*)segment + HeaderBytes;
+        _currentEnd = segment == null ? null : _currentCursor + segment->Capacity;
         _requestedBytes = 0;
         _peakRetainedBytes = _retainedBytes;
         _activationSegmentCount = _segmentCount;
@@ -140,12 +141,13 @@ internal sealed unsafe class NativeRegionKernel
         // Disposal already proved no initializer or borrow is entered, and no
         // other thread can reach this storage, so detaching it buys no safety.
         NativeThreadState thread = _ownerThread;
-        if (_budget is not null
-            || _firstSegment == null)
+        if (_budget is not null)
         {
             return false;
         }
 
+        // A region that never leased, or grew only past the limit, is kept
+        // without storage: the next region then allocates no kernel.
         RegionSegmentHeader* keep = null;
         for (RegionSegmentHeader* segment = _firstSegment; segment != null; segment = segment->Next)
         {
@@ -156,14 +158,14 @@ internal sealed unsafe class NativeRegionKernel
             }
         }
 
-        if (keep == null
-            || thread.ReusableRegion is not null
-                && !(thread.MoreReusableRegions ??= new()).HasRoom((long)keep->Capacity))
+        long keptBytes = keep == null ? 0 : (long)keep->Capacity;
+        if (thread.ReusableRegion is not null
+            && !(thread.MoreReusableRegions ??= new()).HasRoom(keptBytes))
         {
             return false;
         }
 
-        if (_firstSegment->Next != null)
+        if (_firstSegment != null && (keep == null || _firstSegment->Next != null))
         {
             FreeSegmentsExcept(keep);
         }
@@ -176,7 +178,7 @@ internal sealed unsafe class NativeRegionKernel
         }
         else
         {
-            thread.MoreReusableRegions!.Push(this, (long)keep->Capacity);
+            thread.MoreReusableRegions!.Push(this, keptBytes);
         }
 
         return true;
@@ -445,7 +447,54 @@ internal sealed unsafe class NativeRegionKernel
             return;
         }
 
+        if (_budget is null && KeepLargeSegments())
+        {
+            GC.SuppressFinalize(this);
+            return;
+        }
+
         MarkSegmentsDetached();
+    }
+
+    // Disposal already proved no borrow is entered, so large segments go to
+    // NativeLargeBlocks instead of waiting for the finalizer; true when none
+    // is left to detach.
+    private bool KeepLargeSegments()
+    {
+        RegionSegmentHeader* remaining = null;
+        RegionSegmentHeader** tail = &remaining;
+        bool kept = false;
+        bool detached = false;
+        for (RegionSegmentHeader* segment = _firstSegment, next; segment != null; segment = next)
+        {
+            next = segment->Next;
+            nuint allocationBytes = segment->AllocationBytes;
+            long metricsEpoch = segment->MetricsEpoch;
+            if (NativeLargeBlocks.TryKeep(segment, allocationBytes))
+            {
+                NativeMemoryAccounting.RecordFree(allocationBytes, detached: false, metricsEpoch);
+                _retainedBytes -= checked((long)allocationBytes);
+                kept = true;
+            }
+            else
+            {
+                *tail = segment;
+                tail = &segment->Next;
+                detached = true;
+            }
+        }
+
+        if (!kept)
+        {
+            return false;
+        }
+
+        *tail = null;
+        _firstSegment = remaining;
+        _currentSegment = null;
+        _currentCursor = null;
+        _currentEnd = null;
+        return !detached;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -569,9 +618,22 @@ internal sealed unsafe class NativeRegionKernel
             {
                 throw new NativeAllocationFailedException(allocationBytes, OwnerKind, generation: 0, operation, _lifecycle);
             }
-            memory = NativeMemory.AlignedAlloc(
-                allocationBytes,
-                NativeSegment.Alignment);
+            nuint keptBytes = 0;
+            memory = _budget is null
+                ? NativeLargeBlocks.TryTake(allocationBytes, out keptBytes)
+                : null;
+            if (memory != null)
+            {
+                allocationBytes = keptBytes;
+                capacity = keptBytes - HeaderBytes;
+                prospectiveBytes = checked(_retainedBytes + checked((long)allocationBytes));
+            }
+            else
+            {
+                memory = NativeMemory.AlignedAlloc(
+                    allocationBytes,
+                    NativeSegment.Alignment);
+            }
             if (memory == null)
             {
                 throw new NativeAllocationFailedException(
@@ -645,7 +707,9 @@ internal sealed unsafe class NativeRegionKernel
             NativeMemoryAccounting.CurrentMetricsEpoch);
     }
 
-    // Frees every segment but the kept one, which becomes the only segment.
+    // Frees every segment but the kept one, which becomes the only segment;
+    // with none kept, the region is left without storage. Large segments go
+    // to NativeLargeBlocks.
     private void FreeSegmentsExcept(RegionSegmentHeader* keep)
     {
         RegionSegmentHeader* segment = _firstSegment;
@@ -656,11 +720,26 @@ internal sealed unsafe class NativeRegionKernel
             {
                 nuint allocationBytes = segment->AllocationBytes;
                 long metricsEpoch = segment->MetricsEpoch;
-                NativeMemory.AlignedFree(segment);
+                if (!NativeLargeBlocks.TryKeep(segment, allocationBytes))
+                {
+                    NativeMemory.AlignedFree(segment);
+                }
+
                 NativeMemoryAccounting.RecordFree(allocationBytes, detached: false, metricsEpoch);
             }
 
             segment = next;
+        }
+
+        if (keep == null)
+        {
+            _firstSegment = null;
+            _currentSegment = null;
+            _currentCursor = null;
+            _currentEnd = null;
+            _segmentCount = 0;
+            _retainedBytes = 0;
+            return;
         }
 
         // The next lifetime starts with this one segment, as a region that

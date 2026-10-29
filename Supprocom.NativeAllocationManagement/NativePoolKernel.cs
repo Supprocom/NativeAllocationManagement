@@ -615,6 +615,13 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget
             return;
         }
 
+        // Large slabs go to NativeLargeBlocks first, so a pool that grew past
+        // the reuse limit can still be kept with the rest.
+        if (_budget is null && _retainedBytes > ReuseLimitBytes)
+        {
+            KeepLargeSlabs();
+        }
+
         if (TryRetainForReuse(thread))
         {
             return;
@@ -623,11 +630,42 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget
         MarkDetached();
     }
 
+    // Disposal refused live leases, so no lease can reach these slabs.
+    private void KeepLargeSlabs()
+    {
+        bool kept = false;
+#pragma warning disable HLQ013 // The slab's index joins the unused list.
+        for (int index = 0; index < _slabCount; index++)
+        {
+            Slab slab = _slabs[index];
+            nuint bytes = slab.AllocationBytes;
+            if (slab.State != SlabState.Free
+                || !NativeLargeBlocks.TryKeep((void*)slab.Pointer, bytes))
+            {
+                continue;
+            }
+
+            NativeMemoryAccounting.RecordFree(bytes, detached: false, slab.MetricsEpoch);
+            _retainedBytes -= checked((long)bytes);
+            slab.Reset();
+            slab.Next = _unusedHead;
+            _unusedHead = index;
+            kept = true;
+        }
+#pragma warning restore HLQ013
+
+        if (kept)
+        {
+            RebuildFreeListsWithoutFreedSlabs();
+        }
+    }
+
     // Every slab is free: disposal refused live leases.
     private bool TryRetainForReuse(NativeThreadState thread)
     {
+        // A pool that never rented is kept too: the next pool takes its slab
+        // table and guard instead of allocating them.
         if (_budget is not null
-            || _slabCount == 0
             || _retainedBytes > ReuseLimitBytes)
         {
             return false;
@@ -882,9 +920,22 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget
                         operation);
                 }
 
-                memory = NativeMemory.AlignedAlloc(
-                    allocationBytes,
-                    SlabAlignment);
+                nuint keptBytes = 0;
+                memory = _budget is null
+                    ? NativeLargeBlocks.TryTake(backingBytes, out keptBytes)
+                    : null;
+                if (memory != null)
+                {
+                    backingBytes = keptBytes;
+                    prospectiveBytes = checked(_retainedBytes + checked((long)backingBytes));
+                }
+                else
+                {
+                    memory = NativeMemory.AlignedAlloc(
+                        allocationBytes,
+                        SlabAlignment);
+                }
+
                 if (memory == null)
                 {
                     throw CreateAllocationFailure(

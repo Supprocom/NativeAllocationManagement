@@ -87,12 +87,18 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
         NativeMemoryBudget? budget,
         long ownerId)
     {
-        NativeBlock block = NativeBlockAllocator.Allocate(
-            byteLength,
-            nameof(NativeBuilder<T>),
-            "NativeBuilder.Constructor",
-            budget,
-            ownerId: ownerId);
+        NativeBlock block = budget is null
+            ? NativeBlockAllocator.AllocateReusable(
+                byteLength,
+                nameof(NativeBuilder<T>),
+                "NativeBuilder.Constructor",
+                ownerId)
+            : NativeBlockAllocator.Allocate(
+                byteLength,
+                nameof(NativeBuilder<T>),
+                "NativeBuilder.Constructor",
+                budget,
+                ownerId: ownerId);
         try
         {
             return new NativeBuilderControl<T>(block);
@@ -184,7 +190,7 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
 
         try
         {
-            NativeBlockAllocator.Free(block);
+            NativeBlockAllocator.FreeOrKeep(block);
         }
         finally
         {
@@ -334,17 +340,18 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
             return new NativeBlock(spare.Pointer, spare.ByteLength, metricsEpoch, Budget: null, ownerId);
         }
 
-        if (spare.Pointer != IntPtr.Zero)
+        // A parked spare already counts as freed.
+        if (spare.Pointer != IntPtr.Zero
+            && !NativeLargeBlocks.TryKeep((void*)spare.Pointer, spare.ByteLength))
         {
             NativeMemory.AlignedFree((void*)spare.Pointer);
         }
 
-        return NativeBlockAllocator.Allocate(
+        return NativeBlockAllocator.AllocateReusable(
             byteLength,
             nameof(NativeBuilder<T>),
             "NativeBuilder.Constructor",
-            budget: null,
-            ownerId: ownerId);
+            ownerId);
     }
 
     private void BeginLifetime(NativeBlock block, long ownerId)

@@ -150,6 +150,14 @@ internal static unsafe class NativeBlockAllocator
                 throw CreateAllocationFailure(byteLength, ownerKind, operation);
             }
 
+            if (budget is null
+                && (byteLength >= NativeLargeBlocks.MinimumBytes || block.ByteLength >= NativeLargeBlocks.MinimumBytes)
+                && TryMoveThroughLargeBlocks(block, byteLength, ownerId, out NativeBlock moved))
+            {
+                acquired = true;
+                return moved;
+            }
+
             void* memory = NativeMemory.AlignedRealloc(
                 (void*)block.Pointer,
                 byteLength,
@@ -178,6 +186,77 @@ internal static unsafe class NativeBlockAllocator
                 budget?.Cancel(byteLength, ownerId);
             }
         }
+    }
+
+    // A growing builder takes a kept block and keeps the one it leaves,
+    // instead of reallocating: the aligned realloc allocates, copies and
+    // frees anyway, and a builder grown per use would map every doubling
+    // afresh. False when neither block goes through NativeLargeBlocks.
+    private static bool TryMoveThroughLargeBlocks(NativeBlock block, nuint byteLength, long ownerId, out NativeBlock moved)
+    {
+        nuint blockBytes = byteLength;
+        void* memory = NativeLargeBlocks.TryTake(byteLength, out nuint keptBytes);
+        if (memory != null)
+        {
+            blockBytes = keptBytes;
+        }
+        else if (block.ByteLength >= NativeLargeBlocks.MinimumBytes && !NativeMemoryTestHooks.FaultInjectionPending)
+        {
+            memory = NativeMemory.AlignedAlloc(byteLength, BlockAlignment);
+            if (memory == null)
+            {
+#pragma warning disable CA2201
+                throw new OutOfMemoryException();
+#pragma warning restore CA2201
+            }
+        }
+        else
+        {
+            moved = default;
+            return false;
+        }
+
+        Buffer.MemoryCopy((void*)block.Pointer, memory, blockBytes, Math.Min(block.ByteLength, byteLength));
+        long metricsEpoch = NativeMemoryAccounting.RecordAllocation(blockBytes, zeroed: false);
+        FreeOrKeep(block);
+        moved = new NativeBlock((IntPtr)memory, blockBytes, metricsEpoch, Budget: null, ownerId);
+        return true;
+    }
+
+    // An unbudgeted block kept by NativeLargeBlocks, at most twice the
+    // length, or else a new one.
+    internal static NativeBlock AllocateReusable(
+        nuint byteLength,
+        string ownerKind,
+        string operation,
+        long ownerId)
+    {
+        void* kept = NativeLargeBlocks.TryTake(byteLength, out nuint keptBytes);
+        if (kept == null)
+        {
+            return Allocate(byteLength, ownerKind, operation, budget: null, ownerId);
+        }
+
+        long metricsEpoch = NativeMemoryAccounting.RecordAllocation(keptBytes, zeroed: false);
+        return new NativeBlock(
+            (IntPtr)kept,
+            keptBytes,
+            metricsEpoch,
+            Budget: null,
+            ownerId == 0 ? NativeOwnerIdentity.Next() : ownerId);
+    }
+
+    // Frees the block, or hands an unbudgeted large one to NativeLargeBlocks.
+    internal static void FreeOrKeep(NativeBlock block)
+    {
+        if (block.Budget is null
+            && NativeLargeBlocks.TryKeep((void*)block.Pointer, block.ByteLength))
+        {
+            NativeMemoryAccounting.RecordFree(block.ByteLength, detached: false, block.MetricsEpoch);
+            return;
+        }
+
+        Free(block);
     }
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "This boundary captures any failure to preserve cleanup and report the original error.")]
