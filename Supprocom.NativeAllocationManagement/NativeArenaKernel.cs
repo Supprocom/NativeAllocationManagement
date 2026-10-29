@@ -89,20 +89,36 @@ internal sealed unsafe partial class NativeArenaKernel : INativeFinalizationTarg
     {
         if (returnMemoryOnDispose == NativeMemoryReturn.Reuse)
         {
+            // The slot's kernel stays in the slot while an arena uses it, so
+            // disposal stores no reference to put it back.
             NativeThreadState thread = NativeThreadState.Current;
             NativeArenaKernel? reusable = thread.ReusableArena;
-            if (reusable is not null)
+            bool inSlot = reusable is { _lifecycle: NativeOwnerLifecycle.Disposed };
+            if (!inSlot)
             {
-                thread.ReusableArena = null;
-            }
-            else if (thread.MoreReusableArenas is not null)
-            {
-                reusable = TakeMoreReusable(thread);
+                // One in use there belongs to an enclosing arena, which puts it
+                // back on disposal, or to an arena never disposed: leaving it to
+                // its arena lets the guard return an abandoned arena's storage.
+                if (reusable is not null)
+                {
+                    thread.ReusableArena = null;
+                }
+
+                reusable = thread.MoreReusableArenas is null ? null : TakeMoreReusable(thread);
             }
 
-            if (reusable is not null && reusable.TryReactivate(thread, preAllocateBytes))
+            if (reusable is not null)
             {
-                return reusable;
+                if (reusable.TryReactivate(thread, preAllocateBytes))
+                {
+                    return reusable;
+                }
+
+                // Its storage is freed; the slot must not offer it again.
+                if (inSlot)
+                {
+                    thread.ReusableArena = null;
+                }
             }
         }
 
@@ -689,7 +705,10 @@ internal sealed unsafe partial class NativeArenaKernel : INativeFinalizationTarg
         }
 
         long keptBytes = keep == null ? 0 : (long)keep->Capacity;
-        if (thread.ReusableArena is not null
+        // A kernel this thread took from the slot is still in it.
+        bool inSlot = ReferenceEquals(thread.ReusableArena, this);
+        if (!inSlot
+            && thread.ReusableArena is not null
             && !(thread.MoreReusableArenas ??= new()).HasRoom(keptBytes))
         {
             return false;
@@ -697,6 +716,11 @@ internal sealed unsafe partial class NativeArenaKernel : INativeFinalizationTarg
 
         ReleaseSegmentsExcept(keep);
         _retainEpoch = thread.ReuseEpoch;
+        if (inSlot)
+        {
+            return true;
+        }
+
         if (thread.ReusableArena is null)
         {
             thread.ReusableArena = this;
@@ -745,6 +769,13 @@ internal sealed unsafe partial class NativeArenaKernel : INativeFinalizationTarg
     {
         NativeArenaKernel? kernel = thread.ReusableArena;
         thread.ReusableArena = null;
+        // A kernel still in use belongs to an arena its thread never disposed;
+        // its guard returns that storage once the arena is unreachable.
+        if (kernel is { _lifecycle: NativeOwnerLifecycle.Active })
+        {
+            kernel = thread.MoreReusableArenas?.Pop();
+        }
+
         while (kernel is not null)
         {
             kernel.ReleaseSegmentsExcept(null);
