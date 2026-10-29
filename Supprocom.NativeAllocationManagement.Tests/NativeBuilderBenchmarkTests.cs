@@ -10,6 +10,16 @@ namespace Supprocom.NativeAllocationManagement.Tests;
 [Collection(ProcessCounterGroup.Name)]
 public sealed class NativeBuilderBenchmarkTests
 {
+    // Returns what earlier tests' ended threads and dropped owners kept, so
+    // that neither a thread this test starts nor a finalizer returns it
+    // between the two process-wide snapshots.
+    private static void Settle()
+    {
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        NativeEndedThreads.ReleaseEndedForTest();
+    }
+
     [Theory]
     [InlineData(NativeBuilderBenchmarkImplementation.ManagedList)]
     [InlineData(NativeBuilderBenchmarkImplementation.ManagedListPrefix)]
@@ -349,6 +359,7 @@ public sealed class NativeBuilderBenchmarkTests
     {
         NativeBuilderBenchmarkOptions options = CreateOptions() with { ElementCount = 17, BatchSize = 4 };
         NativeMemoryBudget budget = new(capacity);
+        Settle();
         NativeMemoryStatistics before = NativeMemoryDiagnostics.Snapshot();
         NativeMemoryBudgetExceededException failure = await Assert.ThrowsAsync<NativeMemoryBudgetExceededException>(
             () => NativeBuilderBenchmark.RunNativeBatchAsync(options, 2, budget,
@@ -389,6 +400,7 @@ public sealed class NativeBuilderBenchmarkTests
             4 => ["--native-builder-worker", "--implementation", "NativeBuilderBudgeted", "--native-budget-bytes", "-1"],
             _ => ["--native-builder-worker", "--implementation", "NativeBuilderBudgeted", "--native-budget-bytes", "bad"]
         };
+        Settle();
         NativeMemoryStatistics before = NativeMemoryDiagnostics.Snapshot();
         if (shape == 4)
             await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => NativeBuilderBenchmark.RunCommandAsync(args));
@@ -445,6 +457,7 @@ public sealed class NativeBuilderBenchmarkTests
             BatchSize = 4,
             NativeBudgetCapacityBytes = 16
         };
+        Settle();
         NativeMemoryStatistics before = NativeMemoryDiagnostics.Snapshot();
         NativeMemoryBudgetExceededException failure = await Assert.ThrowsAsync<NativeMemoryBudgetExceededException>(
             () => NativeBuilderBenchmark.RunWorkerAsync(NativeBuilderBenchmarkImplementation.NativeBuilderBudgeted, options));
@@ -615,6 +628,7 @@ public sealed class NativeBuilderBenchmarkTests
     {
         NativeBuilderBenchmarkOptions options = CreateOptions() with { ElementCount = 17, PreLease = preLease, BatchSize = 4 };
         NativeMemoryBudget budget = new(capacity);
+        Settle();
         NativeMemoryStatistics before = NativeMemoryDiagnostics.Snapshot();
         await Assert.ThrowsAsync<NativeMemoryBudgetExceededException>(
             () => NativeBuilderBenchmark.RunNativeBatchAsync(options, 2, budget));
