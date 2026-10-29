@@ -14,7 +14,7 @@ namespace Supprocom.NativeAllocationManagement;
 internal sealed class NativeReuseStack<T>
     where T : class
 {
-    private const int Capacity = 4;
+    private const int Capacity = 16;
     internal const long LimitBytes = 512 * 1024;
 
     private Items _items;

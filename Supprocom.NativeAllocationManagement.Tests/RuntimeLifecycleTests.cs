@@ -699,7 +699,7 @@ public sealed class RuntimeLifecycleTests
         // Occupy this thread's region reuse slot and the regions kept behind
         // it, so the grown region is detached for finalization rather than
         // kept for the next region.
-        OccupyRegionReuse(5);
+        OccupyRegionReuse(17);
         Local<long> first = region.Lease<long>(32, static writer => writer.Fill(default!));
         first.Access(static span => span[0] = 8);
         region.Dispose();
