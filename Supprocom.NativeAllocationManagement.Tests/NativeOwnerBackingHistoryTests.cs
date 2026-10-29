@@ -30,10 +30,12 @@ public sealed class NativeOwnerBackingHistoryTests
         {
             using NativePool<byte> pool = new(budget, 0, 64, NativeMemoryReturn.ToGarbageCollector);
             AssertBacking(pool.CaptureDiagnosticSnapshot(), 64, 0, 64);
+            // Kept for the thread's next pool with this budget, still charged
+            // and outstanding, but not detached.
             pool.Dispose();
-            AssertBacking(pool.CaptureDiagnosticSnapshot(), 64, 64, 64);
+            AssertBacking(pool.CaptureDiagnosticSnapshot(), 64, 0, 64);
             pool.Dispose();
-            AssertBacking(pool.CaptureDiagnosticSnapshot(), 64, 64, 64);
+            AssertBacking(pool.CaptureDiagnosticSnapshot(), 64, 0, 64);
             Assert.Equal(64, budget.CaptureStatistics().CommittedBytes);
             GC.KeepAlive(pool);
         }

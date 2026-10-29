@@ -44,6 +44,9 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
     private long _peakRetainedBytes;
     private bool _historyOverflowed;
     private int _retainEpoch;
+    // Disposed and kept for reuse: its slabs wait for the next pool, not for
+    // finalization, so it reports none of them detached.
+    private bool _keptForReuse;
 
     // One disposed default-policy pool per thread and element type keeps its
     // slabs for the next pool the thread creates, as regions and arenas do:
@@ -529,7 +532,8 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
             HistoryOverflowed = _historyOverflowed,
             OutstandingNativeBytes = _retainedBytes,
             DetachedNativeBytes = _lifecycle == NativeOwnerLifecycle.Disposed
-                && _returnMemoryOnDispose == NativeMemoryReturn.ToGarbageCollector ? _retainedBytes : 0,
+                && _returnMemoryOnDispose == NativeMemoryReturn.ToGarbageCollector
+                && !_keptForReuse ? _retainedBytes : 0,
             PeakOutstandingNativeBytes = _peakRetainedBytes,
             InitializedPayloadBytes = _requestedBytes,
             PeakInitializedPayloadBytes = _peakInitializedPayloadBytes,
@@ -554,7 +558,8 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
             HistoryOverflowed = _historyOverflowed,
             OutstandingNativeBytes = _retainedBytes,
             DetachedNativeBytes = _lifecycle == NativeOwnerLifecycle.Disposed
-                && _returnMemoryOnDispose == NativeMemoryReturn.ToGarbageCollector ? _retainedBytes : 0,
+                && _returnMemoryOnDispose == NativeMemoryReturn.ToGarbageCollector
+                && !_keptForReuse ? _retainedBytes : 0,
             PeakOutstandingNativeBytes = _peakRetainedBytes,
             InitializedPayloadBytes = _requestedBytes,
             PeakInitializedPayloadBytes = _peakInitializedPayloadBytes
@@ -685,6 +690,7 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
 
         if (TryRetainForReuse(thread))
         {
+            _keptForReuse = true;
             return;
         }
 

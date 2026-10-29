@@ -191,21 +191,38 @@ public sealed class VoxelAllocatorDiagnosticContractTests
         Assert.Equal(0, budget.CaptureStatistics().CommittedBytes);
     }
 
+    // A disposed owner detaches only storage it cannot keep for reuse: this
+    // pool has no budget and holds more than the 1 MiB a thread keeps, in
+    // slabs too small for the large-block cache, so its storage stays
+    // outstanding until finalization.
     [VoxelDemonstrationFact]
     public void DetachedBackingRemainsMeasuredAndChargedUntilActualFinalization()
     {
-        NativeMemoryBudget budget = new(128);
-        using NativePool<byte> pool = new(budget, 0, 64, NativeMemoryReturn.ToGarbageCollector);
+        using NativePool<byte> pool = new(preLease: 1, NativeMemoryReturn.ToGarbageCollector);
+        HoldSlabs(pool, 9);
+        long retained = pool.GetStatistics().RetainedBytes;
+        Assert.True(retained > 1024 * 1024);
         pool.Dispose();
         PressureAllocatorDiagnosticSnapshot detached = VerifyCompleteMapping(pool.CaptureDiagnosticSnapshot());
-        Assert.Equal(64, detached.OutstandingNativeBytes);
-        Assert.Equal(64, detached.DetachedNativeBytes);
-        Assert.Equal(64, detached.PeakOutstandingNativeBytes);
+        Assert.Equal(retained, detached.OutstandingNativeBytes);
+        Assert.Equal(retained, detached.DetachedNativeBytes);
+        Assert.Equal(retained, detached.PeakOutstandingNativeBytes);
         Assert.Equal(NativeOwnerLifecycle.Disposed.ToString(), detached.Lifecycle);
         Assert.Equal(0, detached.AvailableSegmentCount);
-        Assert.Equal(64, budget.CaptureStatistics().CommittedBytes);
         Assert.Throws<NativeAllocationDisposedException>(() => pool.Rent(1, static writer => writer.Write(31)));
         GC.KeepAlive(pool);
+    }
+
+    // Slabs of 131,072 bytes, each held while the next is rented.
+    private static void HoldSlabs(NativePool<byte> pool, int count)
+    {
+        if (count == 0)
+        {
+            return;
+        }
+
+        using Pooled<byte> lease = pool.RentUninitialized(100_000);
+        HoldSlabs(pool, count - 1);
     }
 
     [VoxelDemonstrationFact]

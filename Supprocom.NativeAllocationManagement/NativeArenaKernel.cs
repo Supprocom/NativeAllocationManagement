@@ -35,6 +35,9 @@ internal sealed unsafe partial class NativeArenaKernel : INativeFinalizationTarg
     private bool _historyOverflowed;
     private int _segmentCount;
     private int _retainEpoch;
+    // Disposed and kept for reuse: its storage waits for the next arena, not
+    // for finalization, so it reports none of it detached.
+    private bool _keptForReuse;
 
     // A disposed default-policy arena kernel waits in its thread's reuse slot
     // (and nested scopes' kernels behind it) for the next NativeArena the
@@ -181,6 +184,7 @@ internal sealed unsafe partial class NativeArenaKernel : INativeFinalizationTarg
         _scopeEpochBase = _scopeEpoch;
         _scopeEpoch++;
         _lifecycle = NativeOwnerLifecycle.Active;
+        _keptForReuse = false;
         ResetLane(ref _ordinary);
         _peakRetainedBytes = _retainedBytes;
         _initializedPayloadBytes = 0;
@@ -528,7 +532,8 @@ internal sealed unsafe partial class NativeArenaKernel : INativeFinalizationTarg
             HistoryOverflowed = _historyOverflowed,
             OutstandingNativeBytes = _retainedBytes,
             DetachedNativeBytes = _lifecycle == NativeOwnerLifecycle.Disposed
-                && _returnMemoryOnDispose == NativeMemoryReturn.ToGarbageCollector ? _retainedBytes : 0,
+                && _returnMemoryOnDispose == NativeMemoryReturn.ToGarbageCollector
+                && !_keptForReuse ? _retainedBytes : 0,
             PeakOutstandingNativeBytes = _peakRetainedBytes,
             InitializedPayloadBytes = _lifecycle == NativeOwnerLifecycle.Active ? _initializedPayloadBytes : 0,
             PeakInitializedPayloadBytes = _peakInitializedPayloadBytes
@@ -617,6 +622,7 @@ internal sealed unsafe partial class NativeArenaKernel : INativeFinalizationTarg
 
         if (TryRetainForReuse(thread))
         {
+            _keptForReuse = true;
             return;
         }
 
