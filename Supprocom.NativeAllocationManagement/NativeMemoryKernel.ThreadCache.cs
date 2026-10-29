@@ -273,7 +273,7 @@ internal sealed partial class NativeOwnerKernel
         NativeSlab slab = allocation.Slab!;
         allocation.ResetCached(
             cache.NextId++, length, (nuint)length * (nuint)_storageElementSize,
-            cache.Generation!.ScopeEpoch);
+            NativeAllocationLifecycle.Initializing);
         cache.Initializing++;
         if (slab.HasBeenUsed)
         {
@@ -573,7 +573,7 @@ internal sealed partial class NativeOwnerKernel
         NativeSlab slab = allocation.Slab!;
         long allocationId = cache.NextId++;
         nuint storageBytes = (nuint)length * StorageSize<T>();
-        allocation.ResetCached(allocationId, length, storageBytes, cache.Generation!.ScopeEpoch);
+        allocation.ResetCached(allocationId, length, storageBytes, NativeAllocationLifecycle.Active);
         if (slab.HasBeenUsed)
         {
             NativeMemoryAccounting.RecordReusedNativeSegment();
@@ -589,7 +589,6 @@ internal sealed partial class NativeOwnerKernel
         }
 
         cache.AddPayload((long)storageBytes);
-        allocation.Lifecycle = NativeAllocationLifecycle.Active;
         return allocationId;
     }
 

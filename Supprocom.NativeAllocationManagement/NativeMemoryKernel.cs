@@ -1560,14 +1560,17 @@ internal sealed class NativeAllocation
 
     // Re-rents a record its thread cache already holds: the slab, offset,
     // capacity, reference roots and scope flag are those of its last cached rent.
+    // Cached records are never scoped, and only a scoped record's epoch is ever
+    // compared, so the epoch is left as it is. A filled rent publishes the
+    // record active here: no other thread holds its new id, and a revoker waits
+    // for the rent's busy window to close.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal void ResetCached(long id, int length, nuint storageBytes, long scopeEpoch)
+    internal void ResetCached(long id, int length, nuint storageBytes, NativeAllocationLifecycle lifecycle)
     {
         Volatile.Write(ref _id, 0);
         Length = length;
         StorageBytes = storageBytes;
-        Volatile.Write(ref _scopeEpoch, scopeEpoch);
-        Lifecycle = NativeAllocationLifecycle.Initializing;
+        Lifecycle = lifecycle;
         NativeOperationAdmission.Reset(ref _operationAdmission);
         InitializedLength = 0;
         Volatile.Write(ref _id, id);
