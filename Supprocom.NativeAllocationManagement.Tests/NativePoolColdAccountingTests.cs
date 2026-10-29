@@ -11,6 +11,7 @@ public sealed class NativePoolColdAccountingTests
     [InlineData(4)]
     public void FilledRentInitializerScopeAndReturnLeaveUnusedThreadCountersUnclaimed(int length)
     {
+        Quiesce();
         OnFreshThread(() =>
         {
             Assert.Null(ThreadAccounting());
@@ -141,6 +142,17 @@ public sealed class NativePoolColdAccountingTests
 
     private static object? ThreadAccounting() => typeof(NativeMemoryAccounting)
         .GetField("_threadHotMetrics", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null);
+
+    // The test compares process-wide counters, so nothing else may change them
+    // in its window. A thread's first use of NAM frees what ended threads
+    // kept, and guards free leaked storage when finalized: both happen here
+    // first.
+    private static void Quiesce()
+    {
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        NativeEndedThreads.ReleaseEndedForTest();
+    }
 
     private static void OnFreshThread(Action action)
     {
