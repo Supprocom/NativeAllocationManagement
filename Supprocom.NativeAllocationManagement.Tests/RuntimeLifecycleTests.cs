@@ -697,14 +697,18 @@ public sealed class RuntimeLifecycleTests
         NativeMemoryTestHooks.Reset();
         NativeRegion region = new(preAllocateBytes: 1, returnMemoryOnDispose: NativeMemoryReturn.ToGarbageCollector);
         // Occupy this thread's region reuse slot and the regions kept behind
-        // it, so the grown region is detached for finalization rather than
-        // kept for the next region.
+        // it, so the grown region is not kept for the next region.
         OccupyRegionReuse(NativeReuseStack<NativeRegionKernel>.MaxCount + 1);
         Local<long> first = region.Lease<long>(32, static writer => writer.Fill(default!));
         first.Access(static span => span[0] = 8);
+        long freesBefore = NativeMemoryTestHooks.Snapshot().FreeCount;
         region.Dispose();
         Assert.IsType<NativeAllocationDisposedException>(CaptureDisposed(first));
-        Assert.Equal(1, NativeMemoryTestHooks.Snapshot().DetachedGenerationCount);
+        // A region its thread cannot keep frees its storage on disposal;
+        // nothing is left for finalization.
+        Assert.True(NativeMemoryTestHooks.Snapshot().FreeCount > freesBefore);
+        Assert.Equal(0, NativeMemoryTestHooks.Snapshot().DetachedGenerationCount);
+        Assert.Equal(0, NativeMemoryTestHooks.Snapshot().DetachedNativeBytes);
     }
 
     // Nested regions disposed innermost first fill the slot, then the regions
@@ -1063,14 +1067,10 @@ public sealed class RuntimeLifecycleTests
                 pool.Dispose();
                 NativeMemoryTestMetrics poolAfter = NativeMemoryTestHooks.Snapshot();
                 Assert.True(poolAfter.AllocationCount > poolBefore.AllocationCount);
-                if (policy == NativeMemoryReturn.ToNativeMemory)
-                {
-                    Assert.True(poolAfter.FreeCount > poolBefore.FreeCount);
-                }
-                else
-                {
-                    Assert.True(poolAfter.DetachedGenerationCount > poolBefore.DetachedGenerationCount);
-                }
+                // A concurrent pool keeps nothing for reuse, so disposal frees its
+                // storage under either policy.
+                Assert.True(poolAfter.FreeCount > poolBefore.FreeCount);
+                Assert.Equal(poolBefore.DetachedGenerationCount, poolAfter.DetachedGenerationCount);
 
                 NativeMemoryTestMetrics regionBefore = NativeMemoryTestHooks.Snapshot();
                 bool reusesKernel = policy == NativeMemoryReturn.ToGarbageCollector
@@ -1088,11 +1088,13 @@ public sealed class RuntimeLifecycleTests
                 }
                 else
                 {
-                    // A one-segment region is kept for the thread's next region
-                    // instead of being detached for finalization.
-                    Assert.True(regionAfter.DetachedGenerationCount > regionBefore.DetachedGenerationCount
+                    // A one-segment region is kept for the thread's next region;
+                    // one that is not kept frees its storage.
+                    Assert.True(regionAfter.FreeCount > regionBefore.FreeCount
                         || NativeRegionKernel.HasReusableKernelForTest);
                 }
+
+                Assert.Equal(regionBefore.DetachedGenerationCount, regionAfter.DetachedGenerationCount);
             }
         }
     }

@@ -42,7 +42,6 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
     // kernel starts the next lifetime, so earlier handles stay disposed.
     private int _generation;
     private int _retainEpoch;
-    private bool _retainedForReuse;
 
     internal NativeRegionKernel(
         nuint preAllocateBytes,
@@ -159,7 +158,6 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
         NativeMemoryAccounting.PrepareThread();
         Id = NativeOwnerIdentity.Next(thread);
         _generation++;
-        _retainedForReuse = false;
         _lifecycle = NativeOwnerLifecycle.Active;
         _currentSegment = segment;
         _currentCursor = segment == null ? null : (byte*)segment + HeaderBytes;
@@ -204,7 +202,6 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
             FreeSegmentsExcept(keep);
         }
 
-        _retainedForReuse = true;
         _retainEpoch = thread.ReuseEpoch;
         if (thread.ReusableRegion is null)
         {
@@ -253,7 +250,6 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
             FreeSegmentsExcept(keep);
         }
 
-        _retainedForReuse = true;
         _retainEpoch = thread.ReuseEpoch;
         _generation++;
         NativeKeptStorage.Keep(ref thread.KeptBudgetedRegion, this);
@@ -505,9 +501,8 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
             Model = NativeOwnerModel.ThreadConfinedRegion,
             HistoryOverflowed = false,
             OutstandingNativeBytes = _retainedBytes,
-            DetachedNativeBytes = _lifecycle == NativeOwnerLifecycle.Disposed
-                && _returnMemoryOnDispose == NativeMemoryReturn.ToGarbageCollector
-                && !_retainedForReuse ? _retainedBytes : 0,
+            // A disposed region kept its storage for reuse or freed it.
+            DetachedNativeBytes = 0,
             PeakOutstandingNativeBytes = _peakRetainedBytes,
             InitializedPayloadBytes = _lifecycle == NativeOwnerLifecycle.Active ? _requestedBytes : 0,
             PeakInitializedPayloadBytes = _requestedBytes
@@ -549,34 +544,28 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
             return;
         }
 
-        // A budgeted region that is not kept, because its budget traces,
-        // frees its storage now: kept or freed, a disposed region makes room
-        // in its budget, so tracing does not change whether a budget runs out.
-        if (_budget is not null)
+        // What is not kept is freed now, not detached for finalization: a
+        // developer who disposes a region expects its storage kept for the
+        // next owner or given back, and disposal proved no borrow is entered
+        // and no other thread can reach it. A budgeted region is not kept when
+        // its budget traces, so tracing does not change whether a budget runs
+        // out. Without a budget, large segments go to NativeLargeBlocks first.
+        if (_budget is null)
         {
-            FreeSegments();
-            ReleaseGuard();
-            return;
+            KeepLargeSegments();
         }
 
-        if (KeepLargeSegments())
-        {
-            ReleaseGuard();
-            return;
-        }
-
-        MarkSegmentsDetached();
+        FreeSegments();
+        ReleaseGuard();
     }
 
     // Disposal already proved no borrow is entered, so large segments go to
-    // NativeLargeBlocks instead of waiting for the finalizer; true when none
-    // is left to detach.
-    private bool KeepLargeSegments()
+    // NativeLargeBlocks for the next owner on any thread; the rest stay.
+    private void KeepLargeSegments()
     {
         RegionSegmentHeader* remaining = null;
         RegionSegmentHeader** tail = &remaining;
         bool kept = false;
-        bool detached = false;
         for (RegionSegmentHeader* segment = _firstSegment, next; segment != null; segment = next)
         {
             next = segment->Next;
@@ -590,13 +579,12 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
             {
                 *tail = segment;
                 tail = &segment->Next;
-                detached = true;
             }
         }
 
         if (!kept)
         {
-            return false;
+            return;
         }
 
         *tail = null;
@@ -604,7 +592,6 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
         _currentSegment = null;
         _currentCursor = null;
         _currentEnd = null;
-        return !detached;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -807,22 +794,6 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
         _currentCursor = reservation.OriginalCursor;
     }
 
-    private void MarkSegmentsDetached()
-    {
-        RegionSegmentHeader* segment = _firstSegment;
-        while (segment != null)
-        {
-            segment->Detached = 1;
-            NativeMemoryAccounting.RecordDetachedBytes(
-                segment->AllocationBytes,
-                segment->MetricsEpoch);
-            segment = segment->Next;
-        }
-
-        NativeMemoryAccounting.RecordDetachedGeneration(
-            NativeMemoryAccounting.CurrentMetricsEpoch);
-    }
-
     // Frees every segment but the kept one, which becomes the only segment;
     // with none kept, the region is left without storage. Large segments go
     // to NativeLargeBlocks.
@@ -888,13 +859,12 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
             RegionSegmentHeader* next = segment->Next;
             nuint allocationBytes = segment->AllocationBytes;
             long metricsEpoch = segment->MetricsEpoch;
-            bool detached = segment->Detached != 0;
             int allocationOrdinal = segment->AllocationOrdinal;
             NativeMemory.AlignedFree(segment);
             _budget?.Release(allocationBytes, Id, allocationOrdinal: allocationOrdinal);
             NativeMemoryAccounting.RecordFree(
                 allocationBytes,
-                detached,
+                detached: false,
                 metricsEpoch);
             segment = next;
         }
@@ -1014,8 +984,7 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
 
     void INativeFinalizationTarget.FinalizeNativeStorage() => FreeSegments();
 
-    // After the storage is actually returned, on the owner thread; detached
-    // segments keep the guard.
+    // After the storage is actually returned, on the owner thread.
     private void ReleaseGuard()
     {
         NativeFinalizationGuard? guard = _guard;
@@ -1033,7 +1002,6 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
         internal nuint Capacity;
         internal nuint AllocationBytes;
         internal long MetricsEpoch;
-        internal int Detached;
         internal int AllocationOrdinal;
     }
 

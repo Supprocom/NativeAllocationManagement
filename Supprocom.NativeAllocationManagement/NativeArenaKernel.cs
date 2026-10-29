@@ -35,9 +35,6 @@ internal sealed unsafe partial class NativeArenaKernel : INativeFinalizationTarg
     private bool _historyOverflowed;
     private int _segmentCount;
     private int _retainEpoch;
-    // Disposed and kept for reuse: its storage waits for the next arena, not
-    // for finalization, so it reports none of it detached.
-    private bool _keptForReuse;
 
     // A disposed default-policy arena kernel waits in its thread's reuse slot
     // (and nested scopes' kernels behind it) for the next NativeArena the
@@ -148,7 +145,7 @@ internal sealed unsafe partial class NativeArenaKernel : INativeFinalizationTarg
 
     // Starts the next lifetime, unless the kernel is from an older reuse or
     // measurement epoch or its segment is too short for the reservation; such
-    // a kernel is detached for its finalizer as its disposal would have been.
+    // a kernel frees its storage.
     private bool TryReactivate(NativeThreadState thread, nuint preAllocateBytes)
     {
         ArenaSegmentHeader* segment = _ordinary.First;
@@ -161,18 +158,10 @@ internal sealed unsafe partial class NativeArenaKernel : INativeFinalizationTarg
             || _scopeEpoch >= ulong.MaxValue - 1
             || Lifetime == int.MaxValue)
         {
-            // A budgeted kernel frees its storage instead: the budget counts it
-            // until it is freed.
-            if (_budget is not null)
-            {
-                ReleaseSegmentsExcept(null);
-                ReleaseGuard(thread);
-            }
-            else
-            {
-                DetachForFinalizer();
-            }
-
+            // Freed, as a disposed arena's unkept storage is; large segments go
+            // to NativeLargeBlocks when it has no budget.
+            ReleaseSegmentsExcept(null);
+            ReleaseGuard(thread);
             return false;
         }
 
@@ -184,7 +173,6 @@ internal sealed unsafe partial class NativeArenaKernel : INativeFinalizationTarg
         _scopeEpochBase = _scopeEpoch;
         _scopeEpoch++;
         _lifecycle = NativeOwnerLifecycle.Active;
-        _keptForReuse = false;
         ResetLane(ref _ordinary);
         _peakRetainedBytes = _retainedBytes;
         _initializedPayloadBytes = 0;
@@ -531,9 +519,8 @@ internal sealed unsafe partial class NativeArenaKernel : INativeFinalizationTarg
             Model = NativeOwnerModel.ThreadConfinedArena,
             HistoryOverflowed = _historyOverflowed,
             OutstandingNativeBytes = _retainedBytes,
-            DetachedNativeBytes = _lifecycle == NativeOwnerLifecycle.Disposed
-                && _returnMemoryOnDispose == NativeMemoryReturn.ToGarbageCollector
-                && !_keptForReuse ? _retainedBytes : 0,
+            // A disposed arena kept its storage for reuse or freed it.
+            DetachedNativeBytes = 0,
             PeakOutstandingNativeBytes = _peakRetainedBytes,
             InitializedPayloadBytes = _lifecycle == NativeOwnerLifecycle.Active ? _initializedPayloadBytes : 0,
             PeakInitializedPayloadBytes = _peakInitializedPayloadBytes
@@ -584,7 +571,7 @@ internal sealed unsafe partial class NativeArenaKernel : INativeFinalizationTarg
     }
 
     /// <summary>Closes the Arena and applies its cleanup policy.</summary>
-    [SuppressMessage("Usage", "CA1816", Justification = "Close disarms finalization only after actual native return; ToGarbageCollector must retain its emergency finalizer while detached backing remains.")]
+    [SuppressMessage("Usage", "CA1816", Justification = "Close disarms finalization only after actual native return; a kept kernel retains its emergency finalizer.")]
     internal void Dispose()
     {
         // The thread check also yields the thread's reuse slot and spare guard.
@@ -622,43 +609,27 @@ internal sealed unsafe partial class NativeArenaKernel : INativeFinalizationTarg
 
         if (TryRetainForReuse(thread))
         {
-            _keptForReuse = true;
             return;
         }
 
-        // A plain budgeted arena that is not kept, because its budget traces,
-        // frees its storage now, as a budgeted region does.
-        if (_budget is not null && !_prepared && !_retentionEnabled && _externalBuffer is null)
+        // What is not kept is freed now, not detached for finalization, as a
+        // region's is: disposal proved no borrow or initializer is entered. A
+        // budgeted arena is not kept when its budget traces, and an arena with
+        // a retention policy never is. Without a budget, large segments go to
+        // NativeLargeBlocks first.
+        if (_budget is null)
         {
-            FreeAllSegments();
-            ReleaseGuard(thread);
-            return;
+            KeepLargeSegments(ref _ordinary);
+            KeepLargeSegments(ref _scoped);
         }
 
-        // Nothing to finalize: the guard goes back to the thread for the next owner.
-        if (_ordinary.First == null && _scoped.First == null)
-        {
-            ReleaseGuard(thread);
-            return;
-        }
-
-        if (_budget is null && !_prepared)
-        {
-            bool kept = KeepLargeSegments(ref _ordinary);
-            kept |= KeepLargeSegments(ref _scoped);
-            if (kept && _ordinary.First == null && _scoped.First == null)
-            {
-                ReleaseGuard(thread);
-                return;
-            }
-        }
-
-        DetachForFinalizer();
+        FreeAllSegments();
+        ReleaseGuard(thread);
     }
 
     // Disposal already proved no borrow or initializer is entered, so large
-    // segments go to NativeLargeBlocks instead of waiting for the finalizer.
-    private bool KeepLargeSegments(ref ArenaLane lane)
+    // segments go to NativeLargeBlocks for the next owner on any thread.
+    private void KeepLargeSegments(ref ArenaLane lane)
     {
         ArenaSegmentHeader* remaining = null;
         ArenaSegmentHeader** tail = &remaining;
@@ -686,16 +657,6 @@ internal sealed unsafe partial class NativeArenaKernel : INativeFinalizationTarg
             lane = default;
             lane.First = remaining;
         }
-
-        return kept;
-    }
-
-    private void DetachForFinalizer()
-    {
-        MarkDetached(_ordinary);
-        MarkDetached(_scoped);
-        NativeMemoryAccounting.RecordDetachedGeneration(
-            NativeMemoryAccounting.CurrentMetricsEpoch);
     }
 
     // A plain arena's kernel, on the thread that owns it, waits in that
@@ -1283,19 +1244,6 @@ internal sealed unsafe partial class NativeArenaKernel : INativeFinalizationTarg
         return count;
     }
 
-    private static void MarkDetached(ArenaLane lane)
-    {
-        ArenaSegmentHeader* segment = lane.First;
-        while (segment != null)
-        {
-            segment->Detached = 1;
-            NativeMemoryAccounting.RecordDetachedBytes(
-                segment->AllocationBytes,
-                segment->MetricsEpoch);
-            segment = segment->Next;
-        }
-    }
-
     private void FreeAllSegments()
     {
         FreeLane(ref _ordinary);
@@ -1326,14 +1274,13 @@ internal sealed unsafe partial class NativeArenaKernel : INativeFinalizationTarg
         }
         nuint allocationBytes = segment->AllocationBytes;
         long metricsEpoch = segment->MetricsEpoch;
-        bool detached = segment->Detached != 0;
         long allocationOrdinal = segment->AllocationOrdinal;
         RecordPolicyRelease(segment);
         NativeMemory.AlignedFree(segment);
         _budget?.Release(allocationBytes, Id, traceKind, allocationOrdinal);
         NativeMemoryAccounting.RecordFree(
             allocationBytes,
-            detached,
+            detached: false,
             metricsEpoch);
         _retainedBytes -= checked((long)allocationBytes);
         _segmentCount--;
@@ -1503,7 +1450,7 @@ internal sealed unsafe partial class NativeArenaKernel : INativeFinalizationTarg
 
     void INativeFinalizationTarget.FinalizeNativeStorage() => FreeAllSegments();
 
-    // After the storage is actually returned; detached backing keeps its guard.
+    // After the storage is actually returned.
     private void ReleaseGuard(NativeThreadState thread)
     {
         NativeFinalizationGuard? guard = _guard;
@@ -1533,7 +1480,6 @@ internal sealed unsafe partial class NativeArenaKernel : INativeFinalizationTarg
         internal nuint AllocationBytes;
         internal long MetricsEpoch;
         internal long AllocationOrdinal;
-        internal int Detached;
         internal int External;
         internal byte* DataStart;
     }

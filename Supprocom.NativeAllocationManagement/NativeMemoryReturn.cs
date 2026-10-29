@@ -6,7 +6,7 @@ namespace Supprocom.NativeAllocationManagement;
 /// </summary>
 public enum NativeMemoryReturn
 {
-    /// <summary>Detaches storage for finalizable cleanup without forcing collection.</summary>
+    /// <summary>Keeps storage for reuse by later owners, without forcing a collection.</summary>
     ToGarbageCollector = 0,
 
     /// <summary>Frees native storage synchronously after the safety gate succeeds.</summary>

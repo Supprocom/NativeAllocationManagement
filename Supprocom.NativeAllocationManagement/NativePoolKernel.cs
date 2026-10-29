@@ -44,9 +44,6 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
     private long _peakRetainedBytes;
     private bool _historyOverflowed;
     private int _retainEpoch;
-    // Disposed and kept for reuse: its slabs wait for the next pool, not for
-    // finalization, so it reports none of them detached.
-    private bool _keptForReuse;
 
     // One disposed default-policy pool per thread and element type keeps its
     // slabs for the next pool the thread creates, as regions and arenas do:
@@ -531,9 +528,8 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
             Model = NativeOwnerModel.ThreadConfinedPool,
             HistoryOverflowed = _historyOverflowed,
             OutstandingNativeBytes = _retainedBytes,
-            DetachedNativeBytes = _lifecycle == NativeOwnerLifecycle.Disposed
-                && _returnMemoryOnDispose == NativeMemoryReturn.ToGarbageCollector
-                && !_keptForReuse ? _retainedBytes : 0,
+            // A disposed pool kept its slabs for reuse or freed them.
+            DetachedNativeBytes = 0,
             PeakOutstandingNativeBytes = _peakRetainedBytes,
             InitializedPayloadBytes = _requestedBytes,
             PeakInitializedPayloadBytes = _peakInitializedPayloadBytes,
@@ -557,9 +553,8 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
             Model = NativeOwnerModel.ThreadConfinedPool,
             HistoryOverflowed = _historyOverflowed,
             OutstandingNativeBytes = _retainedBytes,
-            DetachedNativeBytes = _lifecycle == NativeOwnerLifecycle.Disposed
-                && _returnMemoryOnDispose == NativeMemoryReturn.ToGarbageCollector
-                && !_keptForReuse ? _retainedBytes : 0,
+            // A disposed pool kept its slabs for reuse or freed them.
+            DetachedNativeBytes = 0,
             PeakOutstandingNativeBytes = _peakRetainedBytes,
             InitializedPayloadBytes = _requestedBytes,
             PeakInitializedPayloadBytes = _peakInitializedPayloadBytes
@@ -690,20 +685,20 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
 
         if (TryRetainForReuse(thread))
         {
-            _keptForReuse = true;
             return;
         }
 
-        // A budgeted pool that is not kept, because its budget traces, frees
-        // its slabs now, as a budgeted region does.
-        if (_budget is not null)
+        // What is not kept is freed now, not detached for finalization, as a
+        // region's is: disposal refused live leases, so no lease can reach
+        // these slabs. A budgeted pool is not kept when its budget traces.
+        // Without a budget, large slabs go to NativeLargeBlocks first.
+        if (_budget is null)
         {
-            FreeAll();
-            ReleaseGuard(thread);
-            return;
+            KeepLargeSlabs();
         }
 
-        MarkDetached();
+        FreeAll();
+        ReleaseGuard(thread);
     }
 
     // Disposal refused live leases, so no lease can reach these slabs.
@@ -834,8 +829,7 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
     }
 
     // Takes the slab table of this thread's retained pool, unless it is from
-    // an older reuse or measurement epoch; such a donor is detached for its
-    // finalizer as its disposal would have.
+    // an older reuse or measurement epoch; such a donor frees its slabs.
     private bool TryAdoptRetainedSlabs(NativeThreadState thread)
     {
         ReusablePools? reuse = thread.GetTyped<ReusablePools>(s_reuseSlot);
@@ -860,7 +854,9 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
 
         if (donor._retainEpoch != thread.ReuseEpoch || !donor.SlabsInCurrentMetricsEpoch())
         {
-            donor.MarkDetached();
+            // Freed, as a disposed pool's unkept slabs are.
+            donor.FreeAll();
+            donor.ReleaseGuard(thread);
             return false;
         }
 
@@ -1422,29 +1418,6 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
         }
     }
 
-    private void MarkDetached()
-    {
-#pragma warning disable HLQ013 // The slab's writable ref and active prefix are required.
-        for (int index = 0; index < _slabCount; index++)
-        {
-            Slab slab = _slabs[index];
-            if (slab.State == SlabState.Unused
-                || slab.AllocationBytes == 0)
-            {
-                continue;
-            }
-
-            slab.Detached = true;
-            NativeMemoryAccounting.RecordDetachedBytes(
-                slab.AllocationBytes,
-                slab.MetricsEpoch);
-        }
-#pragma warning restore HLQ013
-
-        NativeMemoryAccounting.RecordDetachedGeneration(
-            NativeMemoryAccounting.CurrentMetricsEpoch);
-    }
-
     private void FreeAll()
     {
 #pragma warning disable HLQ013 // Free only initialized slabs by writable reference.
@@ -1473,13 +1446,12 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
 
         nuint bytes = slab.AllocationBytes;
         long metricsEpoch = slab.MetricsEpoch;
-        bool detached = slab.Detached;
         long ordinal = slab.Ordinal;
         NativeMemory.AlignedFree((void*)slab.Pointer);
         _budget?.Release(bytes, Id, allocationOrdinal: ordinal);
         NativeMemoryAccounting.RecordFree(
             bytes,
-            detached,
+            detached: false,
             metricsEpoch);
         _retainedBytes -= checked((long)bytes);
         slab.Reset();
@@ -1568,7 +1540,7 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
 
     void INativeFinalizationTarget.FinalizeNativeStorage() => FreeAll();
 
-    // After the storage is actually returned; detached backing keeps its guard.
+    // After the storage is actually returned.
     private void ReleaseGuard() => ReleaseGuard(NativeThreadState.Current);
 
     private void ReleaseGuard(NativeThreadState thread)
@@ -1602,7 +1574,6 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
         internal int Index;
         internal long MetricsEpoch;
         internal long Ordinal;
-        internal bool Detached;
 
         // Keeps the slot index; every other field returns to an Unused slab.
         internal void Reset()
@@ -1619,7 +1590,6 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
             State = SlabState.Unused;
             MetricsEpoch = 0;
             Ordinal = 0;
-            Detached = false;
         }
     }
 
