@@ -5,6 +5,7 @@ namespace Supprocom.NativeAllocationManagement.Tests;
 
 // Arenas and pools are not finalizable themselves: each takes a finalization
 // guard from its thread, and a disposed owner hands it back for the next one.
+// An arena's guard belongs to its kernel, which a default arena's thread reuses.
 public sealed class NativeFinalizationGuardTests
 {
     [Fact]
@@ -25,25 +26,27 @@ public sealed class NativeFinalizationGuardTests
 
             using NativeArena second = new(64, NativeMemoryReturn.ToNativeMemory);
             Assert.Same(guard, GuardOf(second));
-            Assert.Same(second, guard.Target);
+            Assert.Same(StateOf(second), guard.Target);
         });
     }
 
     [Fact]
-    public void AnArenaThatAdoptsARetainedSegmentAdoptsItsGuard()
+    public void AnArenaThatReusesARetainedKernelKeepsItsGuard()
     {
         RunOnFreshThread(static () =>
         {
             NativeArena first = new();
             _ = first.ScratchUninitialized<int>(16);
+            object kernel = StateOf(first);
             NativeFinalizationGuard guard = GuardOf(first);
             first.Dispose();
-            Assert.Same(first, guard.Target);
+            Assert.Same(kernel, guard.Target);
 
             using NativeArena second = new();
             Assert.Equal(0, second.GetStatistics().FreshSegmentAllocationCount);
+            Assert.Same(kernel, StateOf(second));
             Assert.Same(guard, GuardOf(second));
-            Assert.Same(second, guard.Target);
+            Assert.Same(kernel, guard.Target);
         });
     }
 
@@ -75,9 +78,16 @@ public sealed class NativeFinalizationGuardTests
         Assert.NotEqual(0, budget.CaptureStatistics().CommittedBytes);
     }
 
+    // The object holding an owner's state: an arena's kernel, or the owner.
+    private static object StateOf(object owner) =>
+        owner is NativeArena
+            ? typeof(NativeArena).GetField("_kernel", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(owner)!
+            : owner;
+
     private static NativeFinalizationGuard GuardOf(object owner, bool allowNull = false)
     {
-        object? guard = owner.GetType().GetField("_guard", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(owner);
+        object state = StateOf(owner);
+        object? guard = state.GetType().GetField("_guard", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(state);
         if (!allowNull)
         {
             Assert.NotNull(guard);

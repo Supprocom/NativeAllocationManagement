@@ -31,10 +31,10 @@ internal sealed class NativeThreadState
     internal NativeRegionKernel? ReusableRegion;
     internal NativeReuseStack<NativeRegionKernel>? MoreReusableRegions;
 
-    // NativeArena: one disposed default-policy arena whose segment the next
-    // arena on this thread takes, and more behind it for nested scopes.
-    internal NativeArena? ReusableArena;
-    internal NativeReuseStack<NativeArena>? MoreReusableArenas;
+    // NativeArena: one disposed default-policy arena kernel, with its segment,
+    // for the next arena on this thread, and more behind it for nested scopes.
+    internal NativeArenaKernel? ReusableArena;
+    internal NativeReuseStack<NativeArenaKernel>? MoreReusableArenas;
 
     // NativeFinalizationGuard: one guard, still registered for finalization,
     // waiting for the next arena or pool created on this thread.

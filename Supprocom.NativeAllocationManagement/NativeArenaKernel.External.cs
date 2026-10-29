@@ -2,7 +2,7 @@ using System.Runtime.InteropServices;
 
 namespace Supprocom.NativeAllocationManagement;
 
-public sealed unsafe partial class NativeArena
+internal sealed unsafe partial class NativeArenaKernel
 {
     private NativeSegment? _externalBuffer;
     private IntPtr _externalHeaderMemory;
@@ -16,7 +16,7 @@ public sealed unsafe partial class NativeArena
     /// <param name="byteOffset">The aligned start of the declared range.</param>
     /// <param name="preparation">Ordinary and scoped bounds; the scoped start must also be 64-byte aligned.</param>
     /// <param name="budget">The admission ceiling for NAM-owned headers, not provider-owned mapped bytes.</param>
-    public NativeArena(SafeBuffer buffer, nuint byteOffset,
+    internal NativeArenaKernel(SafeBuffer buffer, nuint byteOffset,
         NativeArenaPreparation preparation, NativeMemoryBudget budget)
     {
         ArgumentNullException.ThrowIfNull(buffer);
@@ -57,13 +57,13 @@ public sealed unsafe partial class NativeArena
             if (NativeMemoryTestHooks.ConsumeForcedFailure())
             {
                 throw new NativeAllocationFailedException(headerBytes, OwnerKind,
-                    unchecked((long)_generation), "external preparation", _lifecycle);
+                    ReportedGeneration, "external preparation", _lifecycle);
             }
             headers = NativeMemory.AlignedAlloc(headerBytes, SegmentAlignment);
             if (headers == null)
             {
                 throw new NativeAllocationFailedException(headerBytes, OwnerKind,
-                    unchecked((long)_generation), "external preparation", _lifecycle);
+                    ReportedGeneration, "external preparation", _lifecycle);
             }
             _peakRetainedBytes = Math.Max(_peakRetainedBytes, prospectiveBytes);
             NativeMemory.Clear(headers, headerBytes);

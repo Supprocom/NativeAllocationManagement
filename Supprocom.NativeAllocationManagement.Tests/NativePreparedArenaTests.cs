@@ -238,7 +238,7 @@ public sealed class NativePreparedArenaTests
     {
         NativeMemoryBudget budget = new(1_024);
         using NativeArena arena = new(new NativeArenaPreparation(8, 0), budget);
-        object kernel = arena;
+        object kernel = arena.KernelForInitialization.KernelFor("test");
         kernel.GetType().GetField("_preparedSuccessCount", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(kernel, long.MaxValue);
         Assert.True(arena.TryScratch<int>(2, static writer => writer.Fill(42), out _));
         Assert.True(arena.CapturePreparedSnapshot().HistoryOverflowed);

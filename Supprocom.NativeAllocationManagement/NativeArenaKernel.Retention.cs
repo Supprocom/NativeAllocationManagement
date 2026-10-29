@@ -1,7 +1,7 @@
 namespace Supprocom.NativeAllocationManagement;
 
 // Policy selection stays on cold growth and explicit maintenance, not warm bump access.
-public sealed unsafe partial class NativeArena
+internal sealed unsafe partial class NativeArenaKernel
 {
     private readonly bool _retentionEnabled;
     private readonly NativeArenaRetentionPolicy _retentionPolicy;
@@ -15,7 +15,7 @@ public sealed unsafe partial class NativeArena
     /// <param name="retentionPolicy">The immutable ordinary growth and native idle-extent policy.</param>
     /// <param name="preAllocateBytes">The exact initial usable reservation, which may itself be an outlier.</param>
     /// <param name="returnMemoryOnDispose">The final cleanup policy.</param>
-    public NativeArena(NativeMemoryBudget budget, NativeArenaRetentionPolicy retentionPolicy,
+    internal NativeArenaKernel(NativeMemoryBudget budget, NativeArenaRetentionPolicy retentionPolicy,
         nuint preAllocateBytes, NativeMemoryReturn returnMemoryOnDispose)
     {
         ArgumentNullException.ThrowIfNull(budget);
@@ -81,7 +81,7 @@ public sealed unsafe partial class NativeArena
 
     /// <summary>Applies the explicit policy to genuinely idle segments without invalidating any live scratch.</summary>
     /// <remarks>Rejects unconfigured owners and entered borrows or initializers before release.</remarks>
-    public nuint MaintainRetention()
+    internal nuint MaintainRetention()
     {
         ValidateBoundary(nameof(NativeArena.MaintainRetention));
         if (!_retentionEnabled)

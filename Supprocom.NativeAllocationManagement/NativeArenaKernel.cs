@@ -4,7 +4,7 @@ using System.Runtime.InteropServices;
 
 namespace Supprocom.NativeAllocationManagement;
 
-public sealed unsafe partial class NativeArena : INativeFinalizationTarget
+internal sealed unsafe partial class NativeArenaKernel : INativeFinalizationTarget
 {
     private const nuint DefaultSegmentBytes = 4_096;
     private const nuint SegmentAlignment = 64;
@@ -36,14 +36,24 @@ public sealed unsafe partial class NativeArena : INativeFinalizationTarget
     private int _segmentCount;
     private int _retainEpoch;
 
-    // One disposed garbage-collector-policy arena per thread keeps its only
-    // segment for the next arena on the thread instead of detaching it for its
-    // finalizer, as a region does: an arena made for one scope then allocates
-    // no native memory, and the disposed one needs no finalization. The
-    // memory stays mapped either way.
+    // A disposed default-policy arena kernel waits in its thread's reuse slot
+    // (and nested scopes' kernels behind it) for the next NativeArena the
+    // thread creates, with its one segment if it had one: an arena made for
+    // one scope then allocates no native memory and no kernel, only the small
+    // public object. A larger segment goes to NativeLargeBlocks instead.
     private const long ReuseLimitBytes = 1024 * 1024;
 
-    private NativeArena(
+    // Each NativeArena binds one lifetime of its kernel; a reused kernel starts
+    // the next. Generations keep counting across lifetimes, so a lease of an
+    // earlier lifetime is never current again; reports count from the
+    // lifetime's start, as a new arena's would.
+    internal int Lifetime;
+    private ulong _generationBase;
+    private ulong _scopeEpochBase;
+
+    internal long Id { get; private set; }
+
+    internal NativeArenaKernel(
         nuint preAllocateBytes,
         NativeMemoryReturn returnMemoryOnDispose,
         NativeMemoryBudget? budget,
@@ -51,7 +61,7 @@ public sealed unsafe partial class NativeArena : INativeFinalizationTarget
     {
         if (requireBudget) ArgumentNullException.ThrowIfNull(budget);
         NativeMemoryReturnValidation.Validate(returnMemoryOnDispose, nameof(returnMemoryOnDispose));
-        // One thread-static read for the identity, the owner thread and the reuse slot.
+        // One thread-static read for the identity, the owner thread and the guard.
         NativeMemoryAccounting.PrepareThread();
         NativeThreadState thread = NativeThreadState.Current;
         Id = NativeOwnerIdentity.Next(thread);
@@ -59,12 +69,6 @@ public sealed unsafe partial class NativeArena : INativeFinalizationTarget
         _budget = budget;
         _ownerThreadId = thread.ManagedThreadId;
         _lifecycle = NativeOwnerLifecycle.Active;
-        if (returnMemoryOnDispose == NativeMemoryReturn.ToGarbageCollector
-            && budget is null
-            && TryAdoptRetainedSegment(thread, preAllocateBytes))
-        {
-            return;
-        }
 
         // Before any native storage: the guard is this arena's finalizer.
         _guard = NativeFinalizationGuard.Rent(thread, this);
@@ -79,49 +83,94 @@ public sealed unsafe partial class NativeArena : INativeFinalizationTarget
         }
     }
 
-    // Takes the segment of this thread's retained arena, unless it is from an
-    // older reuse or measurement epoch or too short for the reservation; such
-    // a donor is detached for its finalizer as its disposal would have.
-    private bool TryAdoptRetainedSegment(NativeThreadState thread, nuint preAllocateBytes)
+    // The kernel for a new default arena: the one this thread kept, if it
+    // fits, or a new one.
+    internal static NativeArenaKernel Acquire(nuint preAllocateBytes, NativeMemoryReturn returnMemoryOnDispose)
     {
-        NativeArena? donor = thread.ReusableArena;
-        if (donor is not null)
+        if (returnMemoryOnDispose == NativeMemoryReturn.ToGarbageCollector)
         {
-            thread.ReusableArena = null;
-        }
-        else
-        {
-            donor = thread.MoreReusableArenas?.Pop();
-            if (donor is null)
+            NativeThreadState thread = NativeThreadState.Current;
+            NativeArenaKernel? reusable = thread.ReusableArena;
+            if (reusable is not null)
             {
-                return false;
+                thread.ReusableArena = null;
+            }
+            else if (thread.MoreReusableArenas is not null)
+            {
+                reusable = TakeMoreReusable(thread);
+            }
+
+            if (reusable is not null && reusable.TryReactivate(thread, preAllocateBytes))
+            {
+                return reusable;
             }
         }
 
-        ArenaSegmentHeader* segment = donor._ordinary.First;
-        if (donor._retainEpoch != thread.ReuseEpoch
-            || segment->MetricsEpoch != NativeMemoryAccounting.CurrentMetricsEpoch
-            || segment->Capacity < preAllocateBytes)
+        return new NativeArenaKernel(preAllocateBytes, returnMemoryOnDispose, budget: null, requireBudget: false);
+    }
+
+    // A nested scope: the slot is in use, so a kernel behind it serves.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static NativeArenaKernel? TakeMoreReusable(NativeThreadState thread) =>
+        thread.MoreReusableArenas!.Pop();
+
+    // Starts the next lifetime, unless the kernel is from an older reuse or
+    // measurement epoch or its segment is too short for the reservation; such
+    // a kernel is detached for its finalizer as its disposal would have been.
+    private bool TryReactivate(NativeThreadState thread, nuint preAllocateBytes)
+    {
+        ArenaSegmentHeader* segment = _ordinary.First;
+        if (_retainEpoch != thread.ReuseEpoch
+            || (segment == null
+                ? preAllocateBytes != 0
+                : segment->MetricsEpoch != NativeMemoryAccounting.CurrentMetricsEpoch
+                    || segment->Capacity < preAllocateBytes)
+            || _generation >= ulong.MaxValue - 1
+            || _scopeEpoch >= ulong.MaxValue - 1
+            || Lifetime == int.MaxValue)
         {
-            donor.DetachForFinalizer();
+            DetachForFinalizer();
             return false;
         }
 
-        // The donor's guard, still registered, becomes this arena's.
-        _guard = donor._guard;
-        donor._guard = null;
-        _guard!.Target = this;
-        donor._ordinary = default;
-        donor._retainedBytes = 0;
-        donor._segmentCount = 0;
-        _ordinary.First = segment;
-        _ordinary.Tail = segment;
+        NativeMemoryAccounting.PrepareThread();
+        Id = NativeOwnerIdentity.Next(thread);
+        Lifetime++;
+        _generationBase = _generation;
+        _generation++;
+        _scopeEpochBase = _scopeEpoch;
+        _scopeEpoch++;
+        _lifecycle = NativeOwnerLifecycle.Active;
         ResetLane(ref _ordinary);
-        _retainedBytes = checked((long)segment->AllocationBytes);
         _peakRetainedBytes = _retainedBytes;
-        _segmentCount = 1;
+        _initializedPayloadBytes = 0;
+        _scopedInitializedPayloadBytes = 0;
+        _peakInitializedPayloadBytes = 0;
+        _trimmedBytes = 0;
+        _trimCallCount = 0;
+        _freshSegmentAllocationCount = 0;
+        _nextAllocationOrdinal = 0;
+        _historyOverflowed = false;
         return true;
     }
+
+    internal NativeOwnerLifecycle CurrentLifecycle => _lifecycle;
+
+    internal void ValidateOwnerThread(string operation) => ValidateThread(operation);
+
+    // A disposed arena's snapshot, for an arena whose kernel serves a later one.
+    internal static NativeOwnerDiagnosticSnapshot EndedSnapshot(long ownerId) =>
+        new(NativeOwnerLifecycle.Disposed, 0, 0, NativeMemoryAccounting.CurrentMetricsEpoch,
+            0, 0, 0, -1, -1, 0, 0, 0, 0, 0, 0, 0, false)
+        {
+            OwnerId = ownerId,
+            Model = NativeOwnerModel.ThreadConfinedArena
+        };
+
+    // Generation and scope epoch as a new arena counts them, from 1.
+    private long ReportedGeneration => unchecked((long)(_generation - _generationBase));
+
+    private long ReportedScopeEpoch => unchecked((long)(_scopeEpoch - _scopeEpochBase));
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ArenaLease<T> Scratch<T>(
@@ -339,7 +388,7 @@ public sealed unsafe partial class NativeArena : INativeFinalizationTarget
     }
 
     /// <summary>Invalidates all leases and reuses all retained segments.</summary>
-    public void Reset()
+    internal void Reset()
     {
         ValidateBoundary(nameof(NativeArena.Reset));
         ulong nextGeneration = GetNextEpochOrClose(
@@ -361,7 +410,7 @@ public sealed unsafe partial class NativeArena : INativeFinalizationTarget
     }
 
     /// <summary>Invalidates scoped leases and reuses scoped segments.</summary>
-    public void RecycleScoped()
+    internal void RecycleScoped()
     {
         ValidateBoundary(nameof(NativeArena.RecycleScoped));
         ulong nextScopeEpoch = GetNextEpochOrClose(
@@ -378,7 +427,7 @@ public sealed unsafe partial class NativeArena : INativeFinalizationTarget
     }
 
     /// <summary>Gets the current Arena storage statistics.</summary>
-    public NativeOwnerStatistics GetStatistics()
+    internal NativeOwnerStatistics GetStatistics()
     {
         ValidateActive(nameof(GetStatistics));
         long requestedBytes = checked(
@@ -398,7 +447,7 @@ public sealed unsafe partial class NativeArena : INativeFinalizationTarget
         }
         return new NativeOwnerStatistics(
             _lifecycle,
-            Generation: unchecked((long)_generation),
+            Generation: ReportedGeneration,
             requestedBytes,
             _retainedBytes,
             RetiredBytes: 0,
@@ -426,7 +475,7 @@ public sealed unsafe partial class NativeArena : INativeFinalizationTarget
     {
         ValidateThread(nameof(NativeArena.CaptureDiagnosticSnapshot));
         NativeOwnerDiagnosticSnapshot snapshot = new(
-            _lifecycle, unchecked((long)_generation), unchecked((long)_scopeEpoch),
+            _lifecycle, ReportedGeneration, ReportedScopeEpoch,
             NativeMemoryAccounting.CurrentMetricsEpoch,
             0, 0, 0, GetCurrentSegmentIndex(_ordinary), GetCurrentSegmentIndex(_scoped),
             _segmentCount,
@@ -491,7 +540,7 @@ public sealed unsafe partial class NativeArena : INativeFinalizationTarget
 
     /// <summary>Closes the Arena and applies its cleanup policy.</summary>
     [SuppressMessage("Usage", "CA1816", Justification = "Close disarms finalization only after actual native return; ToGarbageCollector must retain its emergency finalizer while detached backing remains.")]
-    public void Dispose()
+    internal void Dispose()
     {
         // The thread check also yields the thread's reuse slot and spare guard.
         NativeThreadState thread = NativeThreadState.Current;
@@ -596,40 +645,92 @@ public sealed unsafe partial class NativeArena : INativeFinalizationTarget
             NativeMemoryAccounting.CurrentMetricsEpoch);
     }
 
-    // A plain arena with one segment within the limit, on the thread that
-    // owns it, waits in that thread's slot for the next arena.
+    // A plain arena's kernel, on the thread that owns it, waits in that
+    // thread's slot (or behind it, for nested scopes) for the next arena,
+    // keeping its largest ordinary segment within the limit. Disposal already
+    // proved no borrow or initializer is entered, so every other segment is
+    // released now: freed, or kept in NativeLargeBlocks if large.
     private bool TryRetainForReuse(NativeThreadState thread)
     {
-        ArenaSegmentHeader* segment = _ordinary.First;
         if (_budget is not null
             || _prepared
             || _retentionEnabled
-            || segment == null
-            || segment->Next != null
-            || segment->External != 0
-            || (long)segment->Capacity > ReuseLimitBytes
-            || _scoped.First != null)
+            || _externalBuffer is not null)
         {
             return false;
         }
 
+        ArenaSegmentHeader* keep = null;
+        for (ArenaSegmentHeader* segment = _ordinary.First; segment != null; segment = segment->Next)
+        {
+            if ((long)segment->Capacity <= ReuseLimitBytes
+                && (keep == null || segment->Capacity > keep->Capacity))
+            {
+                keep = segment;
+            }
+        }
+
+        long keptBytes = keep == null ? 0 : (long)keep->Capacity;
+        if (thread.ReusableArena is not null
+            && !(thread.MoreReusableArenas ??= new()).HasRoom(keptBytes))
+        {
+            return false;
+        }
+
+        ReleaseSegmentsExcept(keep);
+        _retainEpoch = thread.ReuseEpoch;
         if (thread.ReusableArena is null)
         {
-            _retainEpoch = thread.ReuseEpoch;
             thread.ReusableArena = this;
-            return true;
         }
-
-        // A nested scope's arena waits behind the slot.
-        NativeReuseStack<NativeArena> more = thread.MoreReusableArenas ??= new();
-        if (!more.HasRoom((long)segment->Capacity))
+        else
         {
-            return false;
+            thread.MoreReusableArenas!.Push(this, keptBytes);
         }
 
-        _retainEpoch = thread.ReuseEpoch;
-        more.Push(this, (long)segment->Capacity);
         return true;
+    }
+
+    private void ReleaseSegmentsExcept(ArenaSegmentHeader* keep)
+    {
+        for (ArenaSegmentHeader* segment = _ordinary.First, next; segment != null; segment = next)
+        {
+            next = segment->Next;
+            if (segment != keep)
+            {
+                ReleaseSegment(segment);
+            }
+        }
+
+        for (ArenaSegmentHeader* segment = _scoped.First, next; segment != null; segment = next)
+        {
+            next = segment->Next;
+            ReleaseSegment(segment);
+        }
+
+        _ordinary = default;
+        _scoped = default;
+        if (keep != null)
+        {
+            keep->Next = null;
+            _ordinary.First = keep;
+            _ordinary.Tail = keep;
+        }
+    }
+
+    // A plain arena's segment: freed, or kept for later owners if large.
+    private void ReleaseSegment(ArenaSegmentHeader* segment)
+    {
+        nuint allocationBytes = segment->AllocationBytes;
+        long metricsEpoch = segment->MetricsEpoch;
+        if (!NativeLargeBlocks.TryKeep(segment, allocationBytes))
+        {
+            NativeMemory.AlignedFree(segment);
+        }
+
+        NativeMemoryAccounting.RecordFree(allocationBytes, detached: false, metricsEpoch);
+        _retainedBytes -= checked((long)allocationBytes);
+        _segmentCount--;
     }
 
     private ulong GetNextEpochOrClose(
@@ -860,7 +961,7 @@ public sealed unsafe partial class NativeArena : INativeFinalizationTarget
             if (NativeMemoryTestHooks.ConsumeForcedFailure())
             {
                 throw new NativeAllocationFailedException(allocationBytes, OwnerKind,
-                    generation: unchecked((long)_generation), operation, _lifecycle);
+                    generation: ReportedGeneration, operation, _lifecycle);
             }
             nuint keptBytes = 0;
             memory = _budget is null
@@ -907,7 +1008,7 @@ public sealed unsafe partial class NativeArena : INativeFinalizationTarget
             throw new NativeAllocationFailedException(
                 allocationBytes,
                 OwnerKind,
-                generation: unchecked((long)_generation),
+                generation: ReportedGeneration,
                 operation,
                 _lifecycle,
                 exception);
@@ -1138,8 +1239,8 @@ public sealed unsafe partial class NativeArena : INativeFinalizationTarget
         throw new NativeAllocationInUseException(
             "The arena cannot cross a lifetime boundary during an active callback or initializer.",
             OwnerKind,
-            unchecked((long)_generation),
-            unchecked((long)_generation),
+            ReportedGeneration,
+            ReportedGeneration,
             operation,
             _activeBorrowCount + _initializerActive,
             0,
@@ -1150,8 +1251,8 @@ public sealed unsafe partial class NativeArena : INativeFinalizationTarget
         throw new NativeAllocationDisposedException(
             "The native arena is disposed.",
             OwnerKind,
-            unchecked((long)_generation),
-            unchecked((long)_generation),
+            ReportedGeneration,
+            ReportedGeneration,
             operation,
             _activeBorrowCount,
             allocationId: 0,
@@ -1162,30 +1263,51 @@ public sealed unsafe partial class NativeArena : INativeFinalizationTarget
         throw new NativeAllocationStateException(
             "NativeArena is confined to its construction thread.",
             OwnerKind,
-            unchecked((long)_generation),
-            unchecked((long)_generation),
+            ReportedGeneration,
+            ReportedGeneration,
             operation,
             _activeBorrowCount,
             allocationId: 0,
             _lifecycle);
 
+    // A lease of an earlier lifetime belongs to a disposed arena.
     [DoesNotReturn]
     private void ThrowStale(
         ulong generation,
         ulong scopeEpoch,
         bool scoped,
-        string operation) =>
+        string operation)
+    {
+        if (generation <= _generationBase)
+        {
+            ThrowEnded(operation);
+        }
+
         throw new NativeAllocationReturnedException(
             scoped
                 ? "The scoped arena lease epoch is stale."
                 : "The arena generation is stale.",
             OwnerKind,
-            unchecked((long)(scoped ? scopeEpoch : generation)),
-            unchecked((long)(scoped ? _scopeEpoch : _generation)),
+            unchecked((long)(scoped ? scopeEpoch - _scopeEpochBase : generation - _generationBase)),
+            scoped ? ReportedScopeEpoch : ReportedGeneration,
             operation,
             _activeBorrowCount,
             allocationId: 0,
             _lifecycle);
+    }
+
+    // What a disposed arena throws, for an arena whose kernel has moved on.
+    [DoesNotReturn]
+    internal static void ThrowEnded(string operation) =>
+        throw new NativeAllocationDisposedException(
+            "The native arena is disposed.",
+            OwnerKind,
+            0,
+            0,
+            operation,
+            0,
+            allocationId: 0,
+            NativeOwnerLifecycle.Disposed);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static nuint CalculateByteLength<T>(int length)
@@ -1251,8 +1373,8 @@ public sealed unsafe partial class NativeArena : INativeFinalizationTarget
         throw new NativeAllocationStateException(
             "NativeArena exhausted its non-reusable lease epoch.",
             OwnerKind,
-            unchecked((long)_generation),
-            unchecked((long)_generation),
+            ReportedGeneration,
+            ReportedGeneration,
             operation,
             activeOperationCount: 0,
             allocationId: 0,

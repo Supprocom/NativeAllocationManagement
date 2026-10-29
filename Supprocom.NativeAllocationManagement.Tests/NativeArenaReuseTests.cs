@@ -1,7 +1,8 @@
 namespace Supprocom.NativeAllocationManagement.Tests;
 
-// A disposed default-policy arena keeps its only segment for the next arena on
-// its thread instead of detaching it for its finalizer.
+// A disposed default-policy arena's kernel, with its largest segment within
+// the limit, serves the next arena on its thread instead of being detached for
+// its finalizer.
 public sealed class NativeArenaReuseTests
 {
     [Fact]
@@ -36,13 +37,27 @@ public sealed class NativeArenaReuseTests
             NativeArena budgeted = new(new NativeMemoryBudget(65_536), 4096, NativeMemoryReturn.ToGarbageCollector);
             budgeted.Dispose();
             AssertNextArenaIsFresh();
+        });
+    }
 
+    // A grown arena keeps its largest segment within the limit, as a region
+    // does; one whose segments all exceed it is kept without storage.
+    [Fact]
+    public void AGrownArenaKeepsItsLargestSegmentAndALargeOneKeepsNone()
+    {
+        RunOnFreshThread(static () =>
+        {
             NativeArena grown = new();
             grown.ScratchUninitialized<byte>(3000);
             grown.ScratchUninitialized<byte>(8000);
             Assert.Equal(2, grown.GetStatistics().SegmentCount);
             grown.Dispose();
-            AssertNextArenaIsFresh();
+            using (NativeArena next = new())
+            {
+                Assert.Equal(1, next.GetStatistics().SegmentCount);
+                Assert.Equal(9, next.Scratch<byte>(8000, 9).AsSpan()[7999]);
+                Assert.Equal(0, next.GetStatistics().FreshSegmentAllocationCount);
+            }
 
             NativeArena large = new(2 * 1024 * 1024);
             large.Dispose();

@@ -425,7 +425,7 @@ public sealed class NativeArenaFastLaneTests
         NativeArena arena,
         string fieldName)
     {
-        object kernel = arena;
+        object kernel = arena.KernelForInitialization.KernelFor("test");
         FieldInfo epochField = kernel.GetType().GetField(
             fieldName,
             BindingFlags.Instance | BindingFlags.NonPublic)

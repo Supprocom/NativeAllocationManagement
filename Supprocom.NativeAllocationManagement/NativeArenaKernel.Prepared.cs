@@ -1,7 +1,7 @@
 namespace Supprocom.NativeAllocationManagement;
 
 // Preparation remains outside the ordinary bump-reservation hot path.
-public sealed unsafe partial class NativeArena
+internal sealed unsafe partial class NativeArenaKernel
 {
     private readonly bool _prepared;
     private readonly NativeArenaPreparation _preparation;
@@ -14,7 +14,7 @@ public sealed unsafe partial class NativeArena
     /// <summary>Prepares both bounded lanes and prohibits fresh backing during execution.</summary>
     /// <param name="preparation">Exact ordinary and scoped usable-byte bounds.</param>
     /// <param name="budget">The shared ceiling for complete header and aligned backing extents.</param>
-    public NativeArena(NativeArenaPreparation preparation, NativeMemoryBudget budget)
+    internal NativeArenaKernel(NativeArenaPreparation preparation, NativeMemoryBudget budget)
     {
         ArgumentNullException.ThrowIfNull(budget);
         Id = NativeOwnerIdentity.Next();

@@ -34,7 +34,7 @@ public static partial class NativeLeaseOperations
         ArgumentOutOfRangeException.ThrowIfNegative(secondLength);
         ArgumentOutOfRangeException.ThrowIfNegative(thirdLength);
         ArgumentOutOfRangeException.ThrowIfNegative(fourthLength);
-        NativeArena kernel = arena.KernelForInitialization;
+        NativeArenaKernel kernel = arena.KernelForInitialization.KernelFor(nameof(NativeLeaseOperations.InitializeScoped));
         long payloadBytes = checked((long)firstLength * Unsafe.SizeOf<TFirst>()
             + (long)secondLength * Unsafe.SizeOf<TSecond>()
             + (long)thirdLength * Unsafe.SizeOf<TThird>()
@@ -126,7 +126,7 @@ public static partial class NativeLeaseOperations
         ArgumentOutOfRangeException.ThrowIfNegative(sixthLength);
         ArgumentOutOfRangeException.ThrowIfNegative(seventhLength);
         ArgumentOutOfRangeException.ThrowIfNegative(eighthLength);
-        NativeArena kernel = arena.KernelForInitialization;
+        NativeArenaKernel kernel = arena.KernelForInitialization.KernelFor(nameof(NativeLeaseOperations.InitializeScoped));
         long payloadBytes = checked((long)firstLength * Unsafe.SizeOf<TFirst>()
             + (long)secondLength * Unsafe.SizeOf<TSecond>()
             + (long)thirdLength * Unsafe.SizeOf<TThird>()
