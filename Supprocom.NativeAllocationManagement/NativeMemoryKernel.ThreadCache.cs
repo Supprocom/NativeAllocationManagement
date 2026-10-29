@@ -979,7 +979,6 @@ internal sealed partial class NativeOwnerKernel
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void ExitCachedLeaseOperation(
-        NativeGeneration generation,
         NativeAllocation allocation,
         NativePoolThreadCache cache,
         int epoch)
@@ -997,7 +996,7 @@ internal sealed partial class NativeOwnerKernel
             cache.Exit();
         }
 
-        ExitFoldedOperation(generation, allocation, cache, epoch);
+        ExitFoldedOperation(allocation.GenerationState, allocation, cache, epoch);
     }
 
     // A fold moved this operation's count into the generation.
@@ -1275,7 +1274,7 @@ internal sealed partial class NativeOwnerKernel
     {
         if (recordEntered)
         {
-            ExitCachedLeaseOperation(generation, allocation, cache, epoch);
+            ExitCachedLeaseOperation(allocation, cache, epoch);
             return;
         }
 

@@ -8,9 +8,9 @@ namespace Supprocom.NativeAllocationManagement;
 public readonly ref struct ConcurrentPooled<T>
 {
     private readonly NativeOwnerKernel? _kernel;
-    private readonly long _generation;
     private readonly long _allocationId;
-    private readonly NativeGeneration? _generationState;
+    // The record's generation and its number are the record's own and never
+    // change, so the handle does not carry them.
     private readonly NativeAllocation? _allocationState;
     // A lease's shape is fixed when it is published, so the handle carries it
     // like an array carries its length: reading it needs no validated operation.
@@ -23,9 +23,7 @@ public readonly ref struct ConcurrentPooled<T>
     {
         NativeAllocation allocation = lease.AllocationState;
         _kernel = kernel;
-        _generation = allocation.GenerationState.Number;
         _allocationId = lease.AllocationId;
-        _generationState = allocation.GenerationState;
         _allocationState = allocation;
         _length = allocation.Length;
         _capacity = allocation.Capacity;
@@ -34,7 +32,8 @@ public readonly ref struct ConcurrentPooled<T>
     internal NativeOwnerKernel KernelForComposite =>
         GetKernel("NativeLeaseOperations.Access");
 
-    internal long GenerationForComposite => _generation;
+    internal long GenerationForComposite =>
+        GetGenerationState("NativeLeaseOperations.Access").Number;
 
     internal long AllocationIdForComposite => _allocationId;
 
@@ -264,7 +263,7 @@ public readonly ref struct ConcurrentPooled<T>
             }
             catch
             {
-                ExitCachedAfterFailure(_kernel!, _generationState!, _allocationState!, cache, epoch);
+                ExitCachedAfterFailure(_kernel!, _allocationState!, cache, epoch);
                 throw;
             }
 
@@ -296,16 +295,14 @@ public readonly ref struct ConcurrentPooled<T>
 
     /// <summary>Returns this synchronized lease exactly once.</summary>
     public void Dispose() =>
-        Return(_kernel, _generationState, _allocationState, _generation, _allocationId);
+        Return(_kernel, _allocationState, _allocationId);
 
     // One call, so the finally of a using statement over the lease stays small
     // enough for the JIT to run inline rather than as a funclet.
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static void Return(
         NativeOwnerKernel? kernel,
-        NativeGeneration? generation,
         NativeAllocation? allocation,
-        long generationNumber,
         long allocationId)
     {
         if (allocation?.CacheOwner is NativePoolThreadCache cache
@@ -314,12 +311,13 @@ public readonly ref struct ConcurrentPooled<T>
             return;
         }
 
-        if (kernel is null || generation is null || allocation is null)
+        if (kernel is null || allocation is null)
         {
             ThrowUninitializedDispose();
         }
 
-        kernel.ReturnLease(generation, allocation, generationNumber, allocationId);
+        NativeGeneration generation = allocation.GenerationState;
+        kernel.ReturnLease(generation, allocation, generation.Number, allocationId);
     }
 
     // Not NoInlining: the JIT then sees that it never returns, and Return keeps
@@ -348,7 +346,7 @@ public readonly ref struct ConcurrentPooled<T>
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void ExitCached(NativePoolThreadCache cache, int epoch) =>
-        _kernel!.ExitCachedLeaseOperation(_generationState!, _allocationState!, cache, epoch);
+        _kernel!.ExitCachedLeaseOperation(_allocationState!, cache, epoch);
 
     // A cached operation leaves inline after a normal return; only a failed
     // callback comes here, so no finally runs on every operation. Static, so
@@ -356,11 +354,10 @@ public readonly ref struct ConcurrentPooled<T>
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static void ExitCachedAfterFailure(
         NativeOwnerKernel kernel,
-        NativeGeneration generation,
         NativeAllocation allocation,
         NativePoolThreadCache cache,
         int epoch) =>
-        kernel.ExitCachedLeaseOperation(generation, allocation, cache, epoch);
+        kernel.ExitCachedLeaseOperation(allocation, cache, epoch);
 
     // The same checks as an operation token's prefix view.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -389,10 +386,7 @@ public readonly ref struct ConcurrentPooled<T>
             operation);
 
     private NativeGeneration GetGenerationState(string operation) =>
-        _generationState
-        ?? throw new NativeAllocationUninitializedException(
-            nameof(ConcurrentPooled<T>),
-            operation);
+        GetAllocationState(operation).GenerationState;
 
     private NativeAllocation GetAllocationState(string operation) =>
         _allocationState
@@ -404,7 +398,7 @@ public readonly ref struct ConcurrentPooled<T>
         GetKernel(operation).EnterOperation(
             GetGenerationState(operation),
             GetAllocationState(operation),
-            _generation,
+            GetGenerationState(operation).Number,
             _allocationId,
             operation);
 }
