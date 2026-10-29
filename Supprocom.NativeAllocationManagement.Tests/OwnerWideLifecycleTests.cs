@@ -8,7 +8,7 @@ public sealed class OwnerWideLifecycleTests
     public async Task PoolStrictReturnRejectsRetiredOperationsAndThenReleasesEveryGeneration()
     {
         NativeMemoryTestHooks.Reset();
-        using NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         BusyGenerationSet busy = StartBusyPoolGenerations(pool, 2);
         long generationBeforeReturn = pool.GenerationCounterForTest;
 
@@ -49,7 +49,7 @@ public sealed class OwnerWideLifecycleTests
     public async Task ArenaStrictReturnRejectsRetiredOperationsAndThenReleasesEveryGeneration()
     {
         NativeMemoryTestHooks.Reset();
-        using NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         BusyGenerationSet busy = StartBusyArenaGenerations(arena, 2);
 
         try
@@ -87,7 +87,7 @@ public sealed class OwnerWideLifecycleTests
     public async Task PoolStrictDisposeUsesOwnerWideAdmissionAndReleasesRetiredStorage()
     {
         NativeMemoryTestHooks.Reset();
-        NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         BusyGenerationSet busy = StartBusyPoolGenerations(pool, 2);
         long generationBeforeDispose = pool.GenerationCounterForTest;
 
@@ -119,7 +119,7 @@ public sealed class OwnerWideLifecycleTests
     public async Task ArenaStrictDisposeUsesOwnerWideAdmissionAndReleasesRetiredStorage()
     {
         NativeMemoryTestHooks.Reset();
-        NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         BusyGenerationSet busy = StartBusyArenaGenerations(arena, 2);
 
         try
@@ -149,7 +149,7 @@ public sealed class OwnerWideLifecycleTests
     public async Task PoolGarbageCollectorReturnDetachesRetiredGenerationsAndNeverReusesTheirSegments()
     {
         NativeMemoryTestHooks.Reset();
-        NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         BusyGenerationSet busy = StartBusyPoolGenerations(pool, 2);
 
         try
@@ -193,7 +193,7 @@ public sealed class OwnerWideLifecycleTests
     public async Task ArenaGarbageCollectorReturnDetachesRetiredGenerationsAndNeverReusesTheirSegments()
     {
         NativeMemoryTestHooks.Reset();
-        NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         BusyGenerationSet busy = StartBusyArenaGenerations(arena, 2);
 
         try
@@ -237,7 +237,7 @@ public sealed class OwnerWideLifecycleTests
     public async Task PoolMultipleDetachedGenerationsDoNotBlockFreshTransitions()
     {
         NativeMemoryTestHooks.Reset();
-        using NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         List<NativeGenerationOwner> retainedOwners = [];
         NativeMemoryTestHooks.SetOperationEnteredWithGenerationOwner((operation, owner) =>
         {
@@ -298,7 +298,7 @@ public sealed class OwnerWideLifecycleTests
     public async Task ArenaMultipleDetachedGenerationsDoNotBlockFreshTransitions()
     {
         NativeMemoryTestHooks.Reset();
-        using NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         List<NativeGenerationOwner> retainedOwners = [];
         NativeMemoryTestHooks.SetOperationEnteredWithGenerationOwner((operation, owner) =>
         {
@@ -359,7 +359,7 @@ public sealed class OwnerWideLifecycleTests
     public async Task DetachedPoolDrainFailureRemainsFinalizableAndOutsideAllocatorOwnership()
     {
         NativeMemoryTestHooks.Reset();
-        NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         NativeGenerationOwner? retainedOwner = null;
         NativeMemoryTestHooks.SetOperationEnteredWithGenerationOwner((operation, owner) =>
         {
@@ -411,7 +411,7 @@ public sealed class OwnerWideLifecycleTests
     public async Task DetachedArenaDrainFailureRemainsFinalizableAndOutsideAllocatorOwnership()
     {
         NativeMemoryTestHooks.Reset();
-        NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         NativeGenerationOwner? retainedOwner = null;
         NativeMemoryTestHooks.SetOperationEnteredWithGenerationOwner((operation, owner) =>
         {
@@ -547,7 +547,7 @@ public sealed class OwnerWideLifecycleTests
                 Assert.Equal(1, pool.QuarantinedGenerationCountForTest);
                 long freeBeforeReturn = NativeMemoryTestHooks.Snapshot().FreeCount;
 
-                if (policy == NativeMemoryReturn.ToNativeMemory)
+                if (policy == NativeMemoryReturn.Free)
                 {
                     pool.ReturnMemoryToNativeMemory();
                     Assert.Equal(0, pool.QuarantinedGenerationCountForTest);
@@ -598,7 +598,7 @@ public sealed class OwnerWideLifecycleTests
                 Assert.Equal(1, arena.QuarantinedGenerationCountForTest);
                 long freeBeforeReturn = NativeMemoryTestHooks.Snapshot().FreeCount;
 
-                if (policy == NativeMemoryReturn.ToNativeMemory)
+                if (policy == NativeMemoryReturn.Free)
                 {
                     arena.ReturnMemoryToNativeMemory();
                     Assert.Equal(0, arena.QuarantinedGenerationCountForTest);
@@ -632,7 +632,7 @@ public sealed class OwnerWideLifecycleTests
     public async Task PoolDetachedQuarantineIsNotFreedAgainByNativePolicyDispose()
     {
         NativeMemoryTestHooks.Reset();
-        NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         BusyGenerationSet busy = StartBusyPoolGenerations(pool, 1);
 
         try
@@ -671,7 +671,7 @@ public sealed class OwnerWideLifecycleTests
     public async Task ArenaDetachedQuarantineIsNotFreedAgainByNativePolicyDispose()
     {
         NativeMemoryTestHooks.Reset();
-        NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         BusyGenerationSet busy = StartBusyArenaGenerations(arena, 1);
 
         try

@@ -17,7 +17,7 @@ public sealed class RuntimeLifecycleTests
         empty.Dispose();
         lazy.Dispose();
 
-        NativeConcurrentPool<int> preallocated = new(preLease: 8, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentPool<int> preallocated = new(preLease: 8, returnMemoryOnDispose: NativeMemoryReturn.Free);
         ConcurrentPooled<int> lease = preallocated.Rent(3, static writer => writer.Fill(default!));
         Assert.Equal(3, lease.Length);
         Assert.Equal(8, lease.Capacity);
@@ -37,7 +37,7 @@ public sealed class RuntimeLifecycleTests
         NativeMemoryTestHooks.Reset();
         NativeConcurrentPool<int> pool = new(
             preLease: 4,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
 
         Assert.Throws<InvalidOperationException>(
             () => pool.Rent(
@@ -71,7 +71,7 @@ public sealed class RuntimeLifecycleTests
     {
         NativeConcurrentPool<int> pool = new(
             preLease: 6,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
 
         ConcurrentPooled<int> lease = pool.Rent(
             6,
@@ -102,7 +102,7 @@ public sealed class RuntimeLifecycleTests
     {
         NativeConcurrentPool<int> pool = new(
             preLease: 4,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
 
         Assert.Throws<InvalidOperationException>(
             () => pool.Rent(
@@ -143,7 +143,7 @@ public sealed class RuntimeLifecycleTests
     {
         NativeConcurrentPool<int> pool = new(
             preLease: 4,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
 
         Assert.Throws<InvalidOperationException>(
             () => pool.Rent(
@@ -182,7 +182,7 @@ public sealed class RuntimeLifecycleTests
     {
         NativeConcurrentPool<int> pool = new(
             preLease: 5,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
 
         ConcurrentPooled<int> lease = pool.Rent(
             5,
@@ -210,7 +210,7 @@ public sealed class RuntimeLifecycleTests
     {
         NativeConcurrentPool<int> values = new(
             preLease: 2,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         Assert.Throws<InvalidOperationException>(
             () => values.Rent(
                 2,
@@ -224,7 +224,7 @@ public sealed class RuntimeLifecycleTests
 
         NativeConcurrentPool<object> references = new(
             preLease: 2,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         Assert.Throws<NotSupportedException>(
             () => references.Rent(
                 2,
@@ -243,7 +243,7 @@ public sealed class RuntimeLifecycleTests
     {
         NativeConcurrentPool<object> pool = new(
             preLease: 4,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         object first = new();
         object second = new();
 
@@ -270,7 +270,7 @@ public sealed class RuntimeLifecycleTests
     {
         NativeConcurrentPool<int> pool = new(
             preLease: 6,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
 
         ConcurrentPooled<int> lease = pool.Rent(
             6,
@@ -304,7 +304,7 @@ public sealed class RuntimeLifecycleTests
     {
         NativeConcurrentPool<int> pool = new(
             preLease: 4,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         ConcurrentPooled<int> dirty = pool.Rent(
             4,
             static writer => writer.Fill(91));
@@ -356,7 +356,7 @@ public sealed class RuntimeLifecycleTests
     {
         NativeConcurrentPool<object> pool = new(
             preLease: 4,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         object first = new();
         object replacement = new();
 
@@ -395,7 +395,7 @@ public sealed class RuntimeLifecycleTests
     {
         NativeConcurrentPool<object> pool = new(
             preLease: 4,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         object marker = new();
 
         Assert.Throws<InvalidOperationException>(
@@ -456,7 +456,7 @@ public sealed class RuntimeLifecycleTests
                 Assert.Equal(preLease == 0 ? 0 : preLease, values.Capacity);
                 values.Dispose();
                 Assert.Throws<NativeAllocationStateException>(pool.LeaseFromMemory);
-                if (policy == NativeMemoryReturn.ToNativeMemory)
+                if (policy == NativeMemoryReturn.Free)
                 {
                     pool.ReturnMemoryToNativeMemory();
                 }
@@ -588,7 +588,7 @@ public sealed class RuntimeLifecycleTests
     public void NativeMemoryReturnInvalidatesOldHandlesFreesImmediatelyAndAllowsNewGeneration()
     {
         NativeMemoryTestHooks.Reset();
-        NativeConcurrentPool<int> pool = new(preLease: 4, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentPool<int> pool = new(preLease: 4, returnMemoryOnDispose: NativeMemoryReturn.Free);
         ConcurrentPooled<int> oldLease = pool.Rent(1, static writer => writer.Fill(default!));
         oldLease.Access(__namIndexedView => __namIndexedView[0] = 12);
 
@@ -670,7 +670,7 @@ public sealed class RuntimeLifecycleTests
     public void RegionLeasesMixedTypesAndReclaimsAllSegmentsTogether()
     {
         NativeMemoryTestHooks.Reset();
-        using NativeRegion region = new(preAllocateBytes: 16, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeRegion region = new(preAllocateBytes: 16, returnMemoryOnDispose: NativeMemoryReturn.Free);
         Local<byte> bytes = region.Lease<byte>(3, static writer => writer.Fill(default!));
         Local<long> longs = region.Lease<long>(2, static writer => writer.Fill(default!));
         bytes.Access(static span =>
@@ -695,7 +695,7 @@ public sealed class RuntimeLifecycleTests
     public void RegionGrowthAndGarbageCollectorCleanupUseOneLifetimeGate()
     {
         NativeMemoryTestHooks.Reset();
-        NativeRegion region = new(preAllocateBytes: 1, returnMemoryOnDispose: NativeMemoryReturn.ToGarbageCollector);
+        NativeRegion region = new(preAllocateBytes: 1, returnMemoryOnDispose: NativeMemoryReturn.Reuse);
         // Occupy this thread's region reuse slot and the regions kept behind
         // it, so the grown region is detached for finalization rather than
         // kept for the next region.
@@ -782,7 +782,7 @@ public sealed class RuntimeLifecycleTests
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The test intentionally captures arbitrary callback or worker failures for lifecycle assertions.")]
     public void CallbackExceptionsReleaseTheOperationToken()
     {
-        NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         ConcurrentPooled<int> lease = pool.Rent(2, static writer => writer.Fill(default!));
         Exception? callbackException = null;
         try
@@ -924,7 +924,7 @@ public sealed class RuntimeLifecycleTests
     public void OwnerStatisticsExposeLiveRequestsRetainedSegmentsAndTerminalRelease()
     {
         NativeMemoryTestHooks.Reset();
-        using NativeConcurrentPool<int> pool = new(preLease: 4, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentPool<int> pool = new(preLease: 4, returnMemoryOnDispose: NativeMemoryReturn.Free);
 
         NativeOwnerStatistics initial = pool.GetStatistics();
         Assert.Equal(NativeOwnerLifecycle.Active, initial.Lifecycle);
@@ -1018,7 +1018,7 @@ public sealed class RuntimeLifecycleTests
         NativeMemoryTestHooks.Reset();
         NativeConcurrentPool<object> pool = new(
             preLease: 4,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         ConcurrentPooled<object> lease = pool.Rent(
             4,
             static writer => writer.Fill(null!));
@@ -1063,7 +1063,7 @@ public sealed class RuntimeLifecycleTests
                 pool.Dispose();
                 NativeMemoryTestMetrics poolAfter = NativeMemoryTestHooks.Snapshot();
                 Assert.True(poolAfter.AllocationCount > poolBefore.AllocationCount);
-                if (policy == NativeMemoryReturn.ToNativeMemory)
+                if (policy == NativeMemoryReturn.Free)
                 {
                     Assert.True(poolAfter.FreeCount > poolBefore.FreeCount);
                 }
@@ -1073,7 +1073,7 @@ public sealed class RuntimeLifecycleTests
                 }
 
                 NativeMemoryTestMetrics regionBefore = NativeMemoryTestHooks.Snapshot();
-                bool reusesKernel = policy == NativeMemoryReturn.ToGarbageCollector
+                bool reusesKernel = policy == NativeMemoryReturn.Reuse
                     && NativeRegionKernel.HasReusableKernelForTest;
                 NativeRegion region = new((nuint)(reservationUnits * sizeof(long)), policy);
                 Local<long> local = region.Lease<long>(2, static writer => writer.Fill(default!));
@@ -1082,7 +1082,7 @@ public sealed class RuntimeLifecycleTests
                 region.Dispose();
                 NativeMemoryTestMetrics regionAfter = NativeMemoryTestHooks.Snapshot();
                 Assert.True(reusesKernel || regionAfter.AllocationCount > regionBefore.AllocationCount);
-                if (policy == NativeMemoryReturn.ToNativeMemory)
+                if (policy == NativeMemoryReturn.Free)
                 {
                     Assert.True(regionAfter.FreeCount > regionBefore.FreeCount);
                 }
@@ -1104,7 +1104,7 @@ public sealed class RuntimeLifecycleTests
         {
             NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: policy);
             ConcurrentPooled<int> stale = pool.Rent(1, static writer => writer.Fill(default!));
-            if (policy == NativeMemoryReturn.ToNativeMemory)
+            if (policy == NativeMemoryReturn.Free)
             {
                 pool.ReturnMemoryToNativeMemory();
             }
@@ -1117,7 +1117,7 @@ public sealed class RuntimeLifecycleTests
             Assert.Equal(NativeOwnerLifecycle.Returned, returned.CurrentLifecycle);
             Assert.True(returned.CurrentGeneration > returned.Generation);
             Assert.DoesNotContain("0x", returned.Message, StringComparison.OrdinalIgnoreCase);
-            if (policy == NativeMemoryReturn.ToNativeMemory)
+            if (policy == NativeMemoryReturn.Free)
             {
                 Assert.Throws<NativeAllocationReturnedException>(pool.ReturnMemoryToNativeMemory);
             }
@@ -1220,14 +1220,14 @@ public sealed class RuntimeLifecycleTests
 
     private static void RegionFallthrough()
     {
-        using NativeRegion region = new(16, NativeMemoryReturn.ToNativeMemory);
+        using NativeRegion region = new(16, NativeMemoryReturn.Free);
         Local<int> local = region.Lease<int>(1, static writer => writer.Fill(default!));
         local.Access(static values => values[0] = 1);
     }
 
     private static int RegionReturn()
     {
-        using NativeRegion region = new(16, NativeMemoryReturn.ToNativeMemory);
+        using NativeRegion region = new(16, NativeMemoryReturn.Free);
         Local<int> local = region.Lease<int>(1, static writer => writer.Fill(default!));
         return local.Process(
             2,
@@ -1240,7 +1240,7 @@ public sealed class RuntimeLifecycleTests
 
     private static void RegionGoto()
     {
-        using NativeRegion region = new(16, NativeMemoryReturn.ToNativeMemory);
+        using NativeRegion region = new(16, NativeMemoryReturn.Free);
         Local<int> local = region.Lease<int>(1, static writer => writer.Fill(default!));
         if (local.Length == 1)
         {
@@ -1254,7 +1254,7 @@ public sealed class RuntimeLifecycleTests
 
     private static void RegionLoop()
     {
-        using NativeRegion region = new(16, NativeMemoryReturn.ToNativeMemory);
+        using NativeRegion region = new(16, NativeMemoryReturn.Free);
         Local<int> local = region.Lease<int>(1, static writer => writer.Fill(default!));
         for (int index = 0; index < 2; index++)
         {
@@ -1276,7 +1276,7 @@ public sealed class RuntimeLifecycleTests
 
     private static void RegionThrow()
     {
-        using NativeRegion region = new(16, NativeMemoryReturn.ToNativeMemory);
+        using NativeRegion region = new(16, NativeMemoryReturn.Free);
         Local<int> local = region.Lease<int>(1, static writer => writer.Fill(default!));
         local.Access(static values => values[0] = 3);
         throw new InvalidOperationException("region exit");

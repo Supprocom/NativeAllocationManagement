@@ -380,7 +380,7 @@ internal static class NativePoolRetirementRegression
             using NativePool<short> pool = new(
                 preLease: Capacity,
                 returnMemoryOnDispose:
-                    NativeMemoryReturn.ToNativeMemory);
+                    NativeMemoryReturn.Free);
             _checksums[mapIndex] = RunOne(pool);
         }
 
@@ -399,7 +399,7 @@ internal static class NativePoolRetirementRegression
             using NativePool<short> pool = new(
                 preLease: Capacity,
                 returnMemoryOnDispose:
-                    NativeMemoryReturn.ToNativeMemory);
+                    NativeMemoryReturn.Free);
             Pooled<short> lease = pool.Rent(
                 Capacity,
                 static writer => writer.Fill(1));
@@ -469,7 +469,7 @@ internal static class NativePoolRetirementRegression
             private readonly NativePool<short> _pool = new(
                 preLease: Capacity,
                 returnMemoryOnDispose:
-                    NativeMemoryReturn.ToNativeMemory);
+                    NativeMemoryReturn.Free);
 #pragma warning restore CA2213
 
             internal ulong Build() => RunOne(_pool);

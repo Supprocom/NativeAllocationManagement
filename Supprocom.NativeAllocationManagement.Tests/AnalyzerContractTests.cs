@@ -628,7 +628,7 @@ public sealed class AnalyzerContractTests
 
             public sealed class Sample
             {
-                private readonly NativeConcurrentPool<int> _pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+                private readonly NativeConcurrentPool<int> _pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
             }
             """);
 
@@ -645,7 +645,7 @@ public sealed class AnalyzerContractTests
 
             public sealed class Sample : IDisposable
             {
-                private readonly NativeConcurrentPool<int> _pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+                private readonly NativeConcurrentPool<int> _pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
 
                 public void Dispose()
                 {
@@ -751,7 +751,7 @@ public sealed class AnalyzerContractTests
             {
                 public static void Run()
                 {
-                    NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+                    NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
                     ConcurrentPooled<int> values = pool.Rent(1, static writer => writer.Fill(default!));
                     try
                     {
@@ -1065,7 +1065,7 @@ public sealed class AnalyzerContractTests
             {
                 public static void Run(bool condition)
                 {
-                    NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+                    NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
                     ConcurrentPooled<int> values = pool.Rent(1, static writer => writer.Fill(default!));
                     if (condition)
                     {
@@ -1092,7 +1092,7 @@ public sealed class AnalyzerContractTests
             {
                 public static void Run(bool condition)
                 {
-                    NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+                    NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
                     ConcurrentPooled<int> values = pool.Rent(1, static writer => writer.Fill(default!));
                     try
                     {
@@ -1191,7 +1191,7 @@ public sealed class AnalyzerContractTests
 
                 public static void ReturnInsideTry(bool condition)
                 {
-                    NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+                    NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
                     ConcurrentPooled<int> value = pool.Rent(1, static writer => writer.Fill(default!));
                     try
                     {
@@ -1218,7 +1218,7 @@ public sealed class AnalyzerContractTests
 
                 public static void ThrowWithoutCleanup()
                 {
-                    NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+                    NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
                     ConcurrentPooled<int> value = pool.Rent(1, static writer => writer.Fill(default!));
                     throw new InvalidOperationException();
                 }
@@ -1241,7 +1241,7 @@ public sealed class AnalyzerContractTests
             {
                 public static void Run(bool condition)
                 {
-                    NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+                    NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
                     if (condition)
                     {
                         pool.ReturnMemoryToNativeMemory();
@@ -1737,7 +1737,7 @@ public sealed class AnalyzerContractTests
             {
                 public static void Run(bool condition)
                 {
-                    NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+                    NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
                     ConcurrentPooled<int> value = pool.Rent(1, static writer => writer.Fill(default!));
                     if (condition)
                     {
@@ -1767,7 +1767,7 @@ public sealed class AnalyzerContractTests
             {
                 public static int Run(bool condition)
                 {
-                    NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+                    NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
                     ConcurrentPooled<int> values = pool.Rent(1, static writer => writer.Fill(default!));
                     if (condition)
                     {
@@ -1802,7 +1802,7 @@ public sealed class AnalyzerContractTests
                     using (new DisposableThing())
                     {
                         NativeRegion region = new();
-                        NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+                        NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
                         ConcurrentPooled<int> values = pool.Rent(1, static writer => writer.Fill(default!));
                     }
                 }
@@ -1897,7 +1897,7 @@ public sealed class AnalyzerContractTests
 
             public sealed class Sample : IDisposable
             {
-                private readonly NativeConcurrentPool<int> _pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+                private readonly NativeConcurrentPool<int> _pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
 
                 public void Dispose()
                 {
@@ -1925,14 +1925,14 @@ public sealed class AnalyzerContractTests
 
             public sealed class Delegated : IDisposable
             {
-                private readonly NativeConcurrentPool<int> _pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+                private readonly NativeConcurrentPool<int> _pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
                 public void Dispose() => Release();
                 private void Release() => _pool.Dispose();
             }
 
             public sealed class Explicit : IDisposable
             {
-                private readonly NativeConcurrentPool<int> _pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+                private readonly NativeConcurrentPool<int> _pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
                 void IDisposable.Dispose() => _pool.Dispose();
             }
             """);
@@ -2075,7 +2075,7 @@ public sealed class AnalyzerContractTests
 
             public class Base : IDisposable
             {
-                protected readonly NativeConcurrentPool<int> BasePool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+                protected readonly NativeConcurrentPool<int> BasePool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
 
                 public void Dispose() => Dispose(disposing: true);
 
@@ -2090,7 +2090,7 @@ public sealed class AnalyzerContractTests
 
             public sealed class Derived : Base
             {
-                private readonly NativeConcurrentPool<int> _pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+                private readonly NativeConcurrentPool<int> _pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
 
                 protected override void Dispose(bool disposing)
                 {
@@ -2116,7 +2116,7 @@ public sealed class AnalyzerContractTests
 
             public sealed class Sample : IDisposable
             {
-                private readonly NativeConcurrentPool<int> _pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+                private readonly NativeConcurrentPool<int> _pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
 
                 public void Dispose()
                 {

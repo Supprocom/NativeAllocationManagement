@@ -7,7 +7,7 @@ public sealed class NativePoolMetadataTests
     [Fact]
     public void SingleSlabNeedsNoClassTableWhenTheLogicalLengthChanges()
     {
-        using NativePool<int> pool = new(8, NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(8, NativeMemoryReturn.Free);
         Assert.Equal(0, HeadCount(pool));
         using (Pooled<int> first = pool.Rent(8, 7))
         {
@@ -25,7 +25,7 @@ public sealed class NativePoolMetadataTests
     [Fact]
     public void EmptyAndTrimmedSingleSlotOwnersDoNotAcquireAClassTable()
     {
-        using NativePool<int> pool = new(0, NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(0, NativeMemoryReturn.Free);
         Assert.Equal(0, HeadCount(pool));
         using (Pooled<int> first = pool.Rent(8, 7)) { }
         Assert.Equal((nuint)0, pool.TrimRetainedMemory(0));
@@ -42,7 +42,7 @@ public sealed class NativePoolMetadataTests
     [Fact]
     public void SimultaneousSlabsPrepareTheTableBeforeEitherLeaseReturns()
     {
-        using NativePool<int> pool = new(4, NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(4, NativeMemoryReturn.Free);
         using (Pooled<int> first = pool.Rent(4, 7))
         {
             Assert.Equal(0, HeadCount(pool));
@@ -61,7 +61,7 @@ public sealed class NativePoolMetadataTests
     [Fact]
     public void FailedLargerGrowthKeepsTheOnlyAvailableSlabReachable()
     {
-        using NativePool<int> pool = new(8, NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(8, NativeMemoryReturn.Free);
         try
         {
             NativeMemoryTestHooks.FailNextAllocation();
@@ -80,7 +80,7 @@ public sealed class NativePoolMetadataTests
     {
         long bytes = checked((long)NativeAlignedAllocation.GetBackingByteLength(32));
         NativeMemoryBudget budget = new(bytes);
-        using NativePool<int> pool = new(budget, 8, preAllocateBytes: 0, NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(budget, 8, preAllocateBytes: 0, NativeMemoryReturn.Free);
         Assert.Throws<NativeMemoryBudgetExceededException>(() => pool.Rent(9, 7));
         Assert.Equal(0, HeadCount(pool));
         Assert.Equal(bytes, budget.CaptureStatistics().CommittedBytes);
@@ -93,7 +93,7 @@ public sealed class NativePoolMetadataTests
     [Fact]
     public void TypedAndRawReservationsKeepTheExistingCapacitySelection()
     {
-        using NativePool<int> pool = new(4, 24, NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(4, 24, NativeMemoryReturn.Free);
         Assert.Equal(32, HeadCount(pool));
         using Pooled<int> typed = pool.Rent(4, 7);
         using Pooled<int> raw = pool.Rent(5, 11);
@@ -105,7 +105,7 @@ public sealed class NativePoolMetadataTests
     [Fact]
     public void EmptyAndBackedLeasesRemainDistinctOccupiedRecords()
     {
-        using NativePool<int> pool = new(0, NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(0, NativeMemoryReturn.Free);
         using Pooled<int> empty = pool.Rent(0, 7);
         Assert.Equal(0, HeadCount(pool));
         using Pooled<int> backed = pool.Rent(1, 11);

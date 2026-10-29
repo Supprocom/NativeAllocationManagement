@@ -61,7 +61,7 @@ public sealed class NativeProcessDiagnosticContractTests
         try
         {
             long extent = OperatingSystem.IsWindows() ? 4 : 64;
-            using NativeConcurrentPool<int> pool = new(preLease: 1, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            using NativeConcurrentPool<int> pool = new(preLease: 1, returnMemoryOnDispose: NativeMemoryReturn.Free);
             using ConcurrentPooled<int> lease = pool.Rent(1, static writer => writer.Write(42));
             lease.Access(view =>
             {
@@ -117,7 +117,7 @@ public sealed class NativeProcessDiagnosticContractTests
     {
         long extent = OperatingSystem.IsWindows() ? 4 : 64;
         NativeMemoryBudget budget = new(128);
-        using NativeConcurrentPool<int> pool = new(budget, 1, 0, NativeMemoryReturn.ToNativeMemory, false);
+        using NativeConcurrentPool<int> pool = new(budget, 1, 0, NativeMemoryReturn.Free, false);
         using ConcurrentPooled<int> lease = pool.Rent(1, static writer => writer.Write(42));
         Assert.Equal(extent, budget.CaptureStatistics().CommittedBytes);
         lease.Access(view =>

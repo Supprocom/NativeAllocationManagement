@@ -7,7 +7,7 @@ public sealed class NativeInitializedPayloadHistoryTests
     [Fact]
     public void FastPoolPublishesDemandOnlyAfterFullInitializationAndReturnsItOnce()
     {
-        using NativePool<int> pool = new(preLease: 8, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(preLease: 8, returnMemoryOnDispose: NativeMemoryReturn.Free);
         Assert.Throws<InvalidOperationException>(() =>
         {
             using Pooled<int> failed = pool.Rent(4, writer =>
@@ -62,7 +62,7 @@ public sealed class NativeInitializedPayloadHistoryTests
     [Fact]
     public void RegionReusesItsMonotonicDemandHistoryAfterFailureAndDisposal()
     {
-        NativeRegionKernel region = new(preAllocateBytes: 128, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeRegionKernel region = new(preAllocateBytes: 128, returnMemoryOnDispose: NativeMemoryReturn.Free);
         try
         {
             Assert.Throws<InvalidOperationException>(() => region.LeaseInitialized<int>(3, writer =>
@@ -93,7 +93,7 @@ public sealed class NativeInitializedPayloadHistoryTests
     {
         using NativeArena arena = prepared
             ? new(new NativeArenaPreparation(128, 128), new NativeMemoryBudget(512))
-            : new(preAllocateBytes: 128, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            : new(preAllocateBytes: 128, returnMemoryOnDispose: NativeMemoryReturn.Free);
         _ = arena.Scratch<byte>(3, static writer => writer.Fill(1));
         _ = arena.Scratch<long>(1, static writer => writer.Write(2));
         _ = arena.ScratchScoped<byte>(2, static writer => writer.Fill(3));
@@ -123,7 +123,7 @@ public sealed class NativeInitializedPayloadHistoryTests
     [Fact]
     public void FastQuadPublishesOneLogicalSumWithoutItsAlignmentOrPendingRanges()
     {
-        using NativeArena arena = new(preAllocateBytes: 128, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeArena arena = new(preAllocateBytes: 128, returnMemoryOnDispose: NativeMemoryReturn.Free);
         ArenaLease<int> source = arena.Scratch<int>(1, static writer => writer.Write(42));
         NativeLeaseOperations.InitializeScoped<int, byte, long, byte, int>(source, arena, 1, 1, 3, 2,
             (input, a, b, c, d) =>
@@ -183,7 +183,7 @@ public sealed class NativeInitializedPayloadHistoryTests
     [Fact]
     public void SynchronizedPoolTracksOrdinaryScopedStaleAndTerminalDemand()
     {
-        using NativeConcurrentPool<int> pool = new(preLease: 8, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentPool<int> pool = new(preLease: 8, returnMemoryOnDispose: NativeMemoryReturn.Free);
         Assert.Throws<InvalidOperationException>(() =>
         {
             using ConcurrentPooled<int> failed = pool.Rent(4, writer =>
@@ -220,7 +220,7 @@ public sealed class NativeInitializedPayloadHistoryTests
     [Fact]
     public void SynchronizedReferenceSlotsUseTheirActualNativeLogicalWidth()
     {
-        using NativeConcurrentPool<object> pool = new(preLease: 3, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentPool<object> pool = new(preLease: 3, returnMemoryOnDispose: NativeMemoryReturn.Free);
         using ConcurrentPooled<object> lease = pool.Rent(3, static writer => writer.Fill(new object()));
         AssertDemand(pool.GetStatistics(), 3L * IntPtr.Size, 3L * IntPtr.Size);
         lease.Dispose();
@@ -230,7 +230,7 @@ public sealed class NativeInitializedPayloadHistoryTests
     [Fact]
     public void SynchronizedFastArenaRecyclingPreservesOrdinaryPublicationsAfterScopedOnes()
     {
-        using NativeConcurrentArena arena = new(preAllocateBytes: 128, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentArena arena = new(preAllocateBytes: 128, returnMemoryOnDispose: NativeMemoryReturn.Free);
         _ = arena.Scratch<int>(2, static writer => writer.Fill(1));
         _ = arena.ScratchScoped<int>(3, static writer => writer.Fill(2));
         _ = arena.Scratch<int>(5, static writer => writer.Fill(3));
@@ -249,7 +249,7 @@ public sealed class NativeInitializedPayloadHistoryTests
     [Fact]
     public void SynchronizedRegionPublicationUsesTheSameGaugeWithoutFastViewDuplication()
     {
-        NativeOwnerKernel kernel = NativeOwnerKernel.CreateRegion(128, "InitializedDemand", NativeMemoryReturn.ToNativeMemory, false, false);
+        NativeOwnerKernel kernel = NativeOwnerKernel.CreateRegion(128, "InitializedDemand", NativeMemoryReturn.Free, false, false);
         try
         {
             _ = kernel.LeaseBumpInitialized<int>(3, sizeof(int), NativeTypeLayout.Alignment<int>(),
@@ -269,7 +269,7 @@ public sealed class NativeInitializedPayloadHistoryTests
     [Fact]
     public void TransferSlotPreparationDoesNotPublishDemandAndAliasesReturnOnlyOnce()
     {
-        using NativeConcurrentArena arena = new(preAllocateBytes: 128, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentArena arena = new(preAllocateBytes: 128, returnMemoryOnDispose: NativeMemoryReturn.Free);
         NativeArenaTransferBatch<int> batch = arena.CreateTransferBatch<int>(2, 4);
         NativeArenaTransferBatchInitialization<int> initialization = batch.BeginInitialization(0);
         initialization.Values.Fill(42);
@@ -292,7 +292,7 @@ public sealed class NativeInitializedPayloadHistoryTests
     [Fact]
     public async Task ConcurrentPublicationsRecordTheCombinedPeakWithoutLostUpdates()
     {
-        using NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         const int count = 8;
         TaskCompletionSource allPublished = new(TaskCreationOptions.RunContinuationsAsynchronously);
         using ManualResetEventSlim release = new(false);
@@ -362,7 +362,7 @@ public sealed class NativeInitializedPayloadHistoryTests
     [Fact]
     public void WarmCaptureDoesNotAllocateAndProcessMeasurementResetDoesNotResetHistory()
     {
-        using NativeConcurrentPool<int> pool = new(preLease: 4, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentPool<int> pool = new(preLease: 4, returnMemoryOnDispose: NativeMemoryReturn.Free);
         using ConcurrentPooled<int> lease = pool.Rent(4, static writer => writer.Fill(42));
         AssertDemand(pool.CaptureDiagnosticSnapshot(), 16, 16);
         long before = GC.GetAllocatedBytesForCurrentThread();

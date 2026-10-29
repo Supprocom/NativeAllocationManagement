@@ -13,7 +13,7 @@ public sealed class MechanismRegressionTests
         Assert.NotNull(typeof(NativeAllocation).GetProperty("ReferenceRoots", BindingFlags.Instance | BindingFlags.NonPublic));
 
         NativeMemoryTestHooks.Reset();
-        NativeConcurrentPool<string> pool = new(preLease: 2, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentPool<string> pool = new(preLease: 2, returnMemoryOnDispose: NativeMemoryReturn.Free);
         try
         {
             ConcurrentPooled<string> first = pool.Rent(2, static writer => writer.Fill(default!));
@@ -41,8 +41,8 @@ public sealed class MechanismRegressionTests
     public void ReferenceContainingStructsWorkForPoolAndArenaGenerations()
     {
         NativeMemoryTestHooks.Reset();
-        NativeConcurrentPool<ReferenceCell> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentPool<ReferenceCell> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
+        NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         try
         {
             ConcurrentPooled<ReferenceCell> pooled = pool.Rent(1, static writer => writer.Fill(default!));
@@ -70,8 +70,8 @@ public sealed class MechanismRegressionTests
     public void ScopedReferenceRootsAreClearedBeforePoolAndArenaReuse()
     {
         NativeMemoryTestHooks.Reset();
-        NativeConcurrentPool<string> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentPool<string> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
+        NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         try
         {
             scoped ConcurrentPooled<string> pooled = pool.LeaseScoped(1, static writer => writer.Fill(default!));
@@ -100,7 +100,7 @@ public sealed class MechanismRegressionTests
     public void SeveralScopedLeasesAreCompletedByOneRecycleAndTheRetainedSlabIsReused()
     {
         NativeMemoryTestHooks.Reset();
-        NativeConcurrentPool<int> pool = new(preLease: 4, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentPool<int> pool = new(preLease: 4, returnMemoryOnDispose: NativeMemoryReturn.Free);
         try
         {
             ConcurrentPooled<int> staleFirst = pool.LeaseScoped(4, static writer => writer.Fill(default!));
@@ -139,7 +139,7 @@ public sealed class MechanismRegressionTests
     [Fact]
     public void IndividualPoolReturnsRetireRecordsForLongAndZeroLengthCycles()
     {
-        NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         try
         {
             for (int index = 0; index < 2_000; index++)
@@ -162,7 +162,7 @@ public sealed class MechanismRegressionTests
     public void RetiredSnapshotPreparationFailureLeavesTheActiveGenerationUntouched()
     {
         NativeMemoryTestHooks.Reset();
-        NativeConcurrentPool<int> pool = new(preLease: 1, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentPool<int> pool = new(preLease: 1, returnMemoryOnDispose: NativeMemoryReturn.Free);
         try
         {
             ConcurrentPooled<int> lease = pool.Rent(1, static writer => writer.Fill(default!));
@@ -188,7 +188,7 @@ public sealed class MechanismRegressionTests
     public async Task QuarantineReservationFailureLeavesTheActiveGenerationUntouched()
     {
         NativeMemoryTestHooks.Reset();
-        NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         using ManualResetEventSlim entered = new();
         using ManualResetEventSlim allowCallback = new();
         NativeMemoryTestHooks.SetOperationEntered(operation =>
@@ -245,7 +245,7 @@ public sealed class MechanismRegressionTests
     public void ScopeEpochOverflowIsPrecomputedBeforeScopedClear()
     {
         NativeMemoryTestHooks.Reset();
-        NativeConcurrentPool<string> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentPool<string> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         try
         {
             scoped ConcurrentPooled<string> lease = pool.LeaseScoped(1, static writer => writer.Fill(default!));
@@ -273,7 +273,7 @@ public sealed class MechanismRegressionTests
     public void DisposeGenerationOverflowIsPrecomputedBeforeClear()
     {
         NativeMemoryTestHooks.Reset();
-        NativeConcurrentPool<string> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentPool<string> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         try
         {
             ConcurrentPooled<string> lease = pool.Rent(1, static writer => writer.Fill(default!));
@@ -301,7 +301,7 @@ public sealed class MechanismRegressionTests
     public void RolloverCommitBoundaryFailuresPreserveTheActiveGenerationAndNativeValues()
     {
         NativeMemoryTestHooks.Reset();
-        NativeConcurrentPool<string> pool = new(preLease: 1, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentPool<string> pool = new(preLease: 1, returnMemoryOnDispose: NativeMemoryReturn.Free);
         try
         {
             ConcurrentPooled<string> first = pool.Rent(1, static writer => writer.Fill(default!));
@@ -339,8 +339,8 @@ public sealed class MechanismRegressionTests
     [Fact]
     public void ReturnAndScopedRecycleCommitBoundaryFailuresLeaveUsableState()
     {
-        NativeConcurrentPool<int> returnPool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        NativeConcurrentPool<int> scopedPool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentPool<int> returnPool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
+        NativeConcurrentPool<int> scopedPool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         try
         {
             ConcurrentPooled<int> returned = returnPool.Rent(1, static writer => writer.Fill(default!));
@@ -371,7 +371,7 @@ public sealed class MechanismRegressionTests
     public async Task TolerantLeaseReleaseDoesNotClearAReusedSlabUnderAnEnteredOperation()
     {
         NativeMemoryTestHooks.Reset();
-        NativeConcurrentPool<int> pool = new(preLease: 1, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentPool<int> pool = new(preLease: 1, returnMemoryOnDispose: NativeMemoryReturn.Free);
         using ManualResetEventSlim entered = new();
         using ManualResetEventSlim allowCallback = new();
         NativeMemoryTestHooks.SetOperationEntered(operation =>
@@ -416,7 +416,7 @@ public sealed class MechanismRegressionTests
     public async Task TolerantMemoryReturnKeepsEnteredDataUntilTheOperationExits()
     {
         NativeMemoryTestHooks.Reset();
-        NativeConcurrentPool<int> pool = new(preLease: 1, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentPool<int> pool = new(preLease: 1, returnMemoryOnDispose: NativeMemoryReturn.Free);
         using ManualResetEventSlim entered = new();
         using ManualResetEventSlim allowCallback = new();
         NativeMemoryTestHooks.SetOperationEntered(operation =>
@@ -462,7 +462,7 @@ public sealed class MechanismRegressionTests
     public async Task TolerantMemoryReturnDefersDetachedSegmentFreeUntilTheGenerationOwnerFinalizes()
     {
         NativeMemoryTestHooks.Reset();
-        NativeConcurrentPool<int> pool = new(preLease: 1, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentPool<int> pool = new(preLease: 1, returnMemoryOnDispose: NativeMemoryReturn.Free);
         using ManualResetEventSlim entered = new();
         using ManualResetEventSlim allowCallback = new();
         NativeGenerationOwner? retainedOwner = null;
@@ -510,7 +510,7 @@ public sealed class MechanismRegressionTests
     public async Task RetiredArenaRejoinRestoresPhysicalOrderAndTheScopedTraversalFrontier()
     {
         NativeMemoryTestHooks.Reset();
-        NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         using ManualResetEventSlim entered = new();
         using ManualResetEventSlim allowCallback = new();
         NativeMemoryTestHooks.SetOperationEntered(operation =>
@@ -553,7 +553,7 @@ public sealed class MechanismRegressionTests
     public async Task RetiredPoolRejoinPreservesReversePhysicalTrimOrder()
     {
         NativeMemoryTestHooks.Reset();
-        NativeConcurrentPool<int> pool = new(preLease: 1, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentPool<int> pool = new(preLease: 1, returnMemoryOnDispose: NativeMemoryReturn.Free);
         using ManualResetEventSlim entered = new();
         using ManualResetEventSlim allowCallback = new();
         NativeMemoryTestHooks.SetOperationEntered(operation =>
@@ -597,7 +597,7 @@ public sealed class MechanismRegressionTests
     {
         NativeMemoryTestHooks.Reset();
         Assert.Null(typeof(NativeOwnerKernel).Assembly.GetType("Supprocom.NativeAllocationManagement.NativeQuarantinedSegment"));
-        NativeConcurrentPool<int> pool = new(preLease: 1, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentPool<int> pool = new(preLease: 1, returnMemoryOnDispose: NativeMemoryReturn.Free);
         using ManualResetEventSlim entered = new();
         using ManualResetEventSlim allowCallback = new();
         NativeMemoryTestHooks.SetOperationEntered(operation =>
@@ -666,7 +666,7 @@ public sealed class MechanismRegressionTests
     public async Task RetiredDrainQuarantinesTheWholeGenerationWithMultipleBusySegments()
     {
         NativeMemoryTestHooks.Reset();
-        NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         using ManualResetEventSlim bothEntered = new();
         using ManualResetEventSlim allowCallback = new();
         int enteredCount = 0;
@@ -715,7 +715,7 @@ public sealed class MechanismRegressionTests
     public async Task RetiredDrainTransferFailureQuarantinesTheTransferredSegment()
     {
         NativeMemoryTestHooks.Reset();
-        NativeConcurrentPool<int> pool = new(preLease: 1, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentPool<int> pool = new(preLease: 1, returnMemoryOnDispose: NativeMemoryReturn.Free);
         using ManualResetEventSlim entered = new();
         using ManualResetEventSlim allowCallback = new();
         NativeMemoryTestHooks.SetOperationEntered(operation =>
@@ -771,7 +771,7 @@ public sealed class MechanismRegressionTests
     {
         const int generationCount = 6;
         NativeMemoryTestHooks.Reset();
-        NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         ManualResetEventSlim[] allows = new ManualResetEventSlim[generationCount];
         ManualResetEventSlim[] entered = new ManualResetEventSlim[generationCount];
         Task<Exception?>[] workers = new Task<Exception?>[generationCount];
@@ -852,7 +852,7 @@ public sealed class MechanismRegressionTests
     {
         const int generationCount = 6;
         NativeMemoryTestHooks.Reset();
-        NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         ManualResetEventSlim[] allows = new ManualResetEventSlim[generationCount];
         ManualResetEventSlim[] entered = new ManualResetEventSlim[generationCount];
         Task<Exception?>[] workers = new Task<Exception?>[generationCount];
@@ -931,7 +931,7 @@ public sealed class MechanismRegressionTests
     {
         const int generationCount = 6;
         NativeMemoryTestHooks.Reset();
-        NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         ManualResetEventSlim[] allows = new ManualResetEventSlim[generationCount];
         ManualResetEventSlim[] entered = new ManualResetEventSlim[generationCount];
         Task<Exception?>[] workers = new Task<Exception?>[generationCount];
@@ -1011,7 +1011,7 @@ public sealed class MechanismRegressionTests
     {
         const int generationCount = 6;
         NativeMemoryTestHooks.Reset();
-        NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         ManualResetEventSlim[] allows = new ManualResetEventSlim[generationCount];
         ManualResetEventSlim[] entered = new ManualResetEventSlim[generationCount];
         Task<Exception?>[] workers = new Task<Exception?>[generationCount];
@@ -1089,7 +1089,7 @@ public sealed class MechanismRegressionTests
     [Fact]
     public void TrimUsesLifecycleNoOpsExactPhysicalUnitsAndAllocationOrder()
     {
-        NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory, preLease: 4);
+        NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free, preLease: 4);
         ConcurrentPooled<int> initial = pool.Rent(4, static writer => writer.Fill(default!));
         ConcurrentPooled<int> growth = pool.Rent(8, static writer => writer.Fill(default!));
         growth.Dispose();
@@ -1100,7 +1100,7 @@ public sealed class MechanismRegressionTests
         Assert.Equal(NativeAlignedAllocation.GetBackingByteLength(4 * sizeof(int)), secondRelease);
         pool.Dispose();
 
-        NativeConcurrentPool<string> referencePool = new(preLease: 2, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentPool<string> referencePool = new(preLease: 2, returnMemoryOnDispose: NativeMemoryReturn.Free);
         ConcurrentPooled<string> referenceLease = referencePool.Rent(2, static writer => writer.Fill(default!));
         referenceLease.Access(__namIndexedView => __namIndexedView[0] = "root");
         referenceLease.Dispose();
@@ -1112,7 +1112,7 @@ public sealed class MechanismRegressionTests
     public void TrimLeaseSizingIncludesAlignmentAndGeometricArenaGrowth()
     {
         NativeMemoryTestHooks.Reset();
-        NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         try
         {
             ConcurrentArenaLease<byte> first = arena.Scratch<byte>(4_096, static writer => writer.Fill(default!));
@@ -1136,7 +1136,7 @@ public sealed class MechanismRegressionTests
     public void ArenaTraversalAdvancesFromTheCurrentSegmentInsteadOfRescanningTheBank()
     {
         NativeMemoryTestHooks.Reset();
-        NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         try
         {
             for (int index = 0; index < 128; index++)
@@ -1168,7 +1168,7 @@ public sealed class MechanismRegressionTests
         unleasedPool.Dispose();
         Assert.Throws<NativeAllocationDisposedException>(() => unleasedPool.TrimRetainedMemory());
 
-        NativeConcurrentPool<int> returnedPool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentPool<int> returnedPool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         returnedPool.ReturnMemoryToNativeMemory();
         Assert.Equal((nuint)0, returnedPool.TrimRetainedMemory());
         Assert.Equal((nuint)0, returnedPool.TrimRetainedMemoryByBytes(1));

@@ -18,7 +18,7 @@ public sealed class NativeFilledBumpAnalyzerParityTests
     [InlineData("using NativeArena arena = new(); { scoped ArenaLease<int> values = arena.ScratchScoped<int>(2, ACQ); values.Access(static view => view[0] = 1); }", "NAM1020")]
     [InlineData("using NativeArena arena = new(); { ArenaLease<int> values = arena.ScratchScoped<int>(2, ACQ); values.Access(static view => view[0] = 1); } arena.RecycleScoped();", "NAM1018")]
     [InlineData("using NativeArena arena = new(); { scoped ArenaLease<int> values = arena.Scratch<int>(2, ACQ); values.Access(static view => view[0] = 1); }", "NAM1019")]
-    [InlineData("using (NativeRegion region = new(4096, NativeMemoryReturn.ToNativeMemory)) { Local<int> values = region.Lease<int>(4, ACQ); values.Access(static view => view[0] = 1); }", "")]
+    [InlineData("using (NativeRegion region = new(4096, NativeMemoryReturn.Free)) { Local<int> values = region.Lease<int>(4, ACQ); values.Access(static view => view[0] = 1); }", "")]
     [InlineData("using NativeRegion region = new(); Local<int> values = region.Lease<int>(4, ACQ); values.Access(static view => view[0] = 1);", "*")]
     [InlineData("Local<int> outer = default; using (NativeRegion region = new()) { outer = region.Lease<int>(4, ACQ); } outer.Access(static view => view[0] = 1);", null)]
     public async Task FilledAcquisitionHasTheInitializerFormsDiagnostics(string body, string? expected)

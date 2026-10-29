@@ -4,8 +4,18 @@ namespace Supprocom.NativeAllocationManagement;
 
 /// <summary>Bounds the complete native backing extents acquired by participating owners.</summary>
 /// <remarks>
+/// <para>
 /// Admission includes retained, retired and detached storage until physical release.
 /// It is not a process-RSS limit. Reusing charged storage requires no budget operation.
+/// </para>
+/// <para>
+/// An owner disposed with <see cref="NativeMemoryReturn.Reuse"/> may keep its storage for the next
+/// owner with this budget on its thread; kept storage stays charged to the budget. When an admission
+/// would exceed the capacity, the budget first frees what every thread kept for it, so it refuses only
+/// when storage in use fills the capacity. Owners of a budget created with a trace capacity keep no
+/// storage: a region, arena or pool that would otherwise keep it frees it on disposal instead, so
+/// tracing does not change when the budget refuses an admission.
+/// </para>
 /// </remarks>
 public sealed partial class NativeMemoryBudget
 {

@@ -30,11 +30,11 @@ public sealed class NativeArenaReuseTests
     {
         RunOnFreshThread(static () =>
         {
-            NativeArena freed = new(4096, NativeMemoryReturn.ToNativeMemory);
+            NativeArena freed = new(4096, NativeMemoryReturn.Free);
             freed.Dispose();
             AssertNextArenaIsFresh();
 
-            NativeArena budgeted = new(new NativeMemoryBudget(65_536), 4096, NativeMemoryReturn.ToGarbageCollector);
+            NativeArena budgeted = new(new NativeMemoryBudget(65_536), 4096, NativeMemoryReturn.Reuse);
             budgeted.Dispose();
             AssertNextArenaIsFresh();
         });

@@ -13,7 +13,7 @@ public sealed class NativeOwnerBackingHistoryTests
         NativeMemoryBudget budget = new(512);
         if (arenaKind)
         {
-            using NativeArena arena = new(budget, 64, NativeMemoryReturn.ToGarbageCollector);
+            using NativeArena arena = new(budget, 64, NativeMemoryReturn.Reuse);
             long extent = budget.CaptureStatistics().CommittedBytes;
             Assert.True(extent >= 64);
             AssertBacking(arena.CaptureDiagnosticSnapshot(), extent, 0, extent);
@@ -28,7 +28,7 @@ public sealed class NativeOwnerBackingHistoryTests
         }
         else
         {
-            using NativePool<byte> pool = new(budget, 0, 64, NativeMemoryReturn.ToGarbageCollector);
+            using NativePool<byte> pool = new(budget, 0, 64, NativeMemoryReturn.Reuse);
             AssertBacking(pool.CaptureDiagnosticSnapshot(), 64, 0, 64);
             // Kept for the thread's next pool with this budget, still charged
             // and outstanding, but not detached.
@@ -67,8 +67,8 @@ public sealed class NativeOwnerBackingHistoryTests
     public void ProcessMeasurementResetDoesNotReconstructOrResetOwnerLifetimePeaks()
     {
         NativeMemoryBudget budget = new(512);
-        using NativeConcurrentPool<byte> pool = new(budget, 0, 64, NativeMemoryReturn.ToNativeMemory, false);
-        using NativeRegion region = new(budget, 64, NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentPool<byte> pool = new(budget, 0, 64, NativeMemoryReturn.Free, false);
+        using NativeRegion region = new(budget, 64, NativeMemoryReturn.Free);
         long regionExtent = region.GetStatistics().RetainedBytes;
         try
         {
@@ -95,7 +95,7 @@ public sealed class NativeOwnerBackingHistoryTests
             NativeMemoryTestHooks.FailNextAllocation();
             if (arenaKind)
             {
-                using NativeArena arena = new(budget, 0, NativeMemoryReturn.ToNativeMemory);
+                using NativeArena arena = new(budget, 0, NativeMemoryReturn.Free);
                 Assert.Throws<NativeAllocationFailedException>(() => arena.Scratch<int>(1, static writer => writer.Write(7)));
                 AssertBacking(arena.CaptureDiagnosticSnapshot(), 0, 0, 0);
                 Assert.Equal(0, budget.CaptureStatistics().CommittedBytes);
@@ -106,7 +106,7 @@ public sealed class NativeOwnerBackingHistoryTests
             }
             else
             {
-                NativeRegionKernel kernel = new(0, NativeMemoryReturn.ToNativeMemory, budget);
+                NativeRegionKernel kernel = new(0, NativeMemoryReturn.Free, budget);
                 try
                 {
                     Assert.Throws<NativeAllocationFailedException>(() => kernel.LeaseInitialized<int>(1, static writer => writer.Write(7)));
@@ -129,7 +129,7 @@ public sealed class NativeOwnerBackingHistoryTests
     public void FastPoolPeakSurvivesReturnTrimAndPhysicalDisposal()
     {
         NativeMemoryBudget budget = new(1_024);
-        using NativePool<byte> pool = new(budget, 0, 0, NativeMemoryReturn.ToNativeMemory);
+        using NativePool<byte> pool = new(budget, 0, 0, NativeMemoryReturn.Free);
         AssertBacking(pool.CaptureDiagnosticSnapshot(), 0, 0, 0);
         long first;
         long peak;
@@ -161,7 +161,7 @@ public sealed class NativeOwnerBackingHistoryTests
     public void FastArenaPeakCoversBothLanesAndSurvivesResetAndTrim()
     {
         NativeMemoryBudget budget = new(32_768);
-        using NativeArena arena = new(budget, 0, NativeMemoryReturn.ToNativeMemory);
+        using NativeArena arena = new(budget, 0, NativeMemoryReturn.Free);
         AssertBacking(arena.CaptureDiagnosticSnapshot(), 0, 0, 0);
         _ = arena.Scratch<int>(1, static writer => writer.Write(7));
         long first = arena.GetStatistics().RetainedBytes;
@@ -184,8 +184,8 @@ public sealed class NativeOwnerBackingHistoryTests
     }
 
     [Theory]
-    [InlineData(NativeMemoryReturn.ToNativeMemory)]
-    [InlineData(NativeMemoryReturn.ToGarbageCollector)]
+    [InlineData(NativeMemoryReturn.Free)]
+    [InlineData(NativeMemoryReturn.Reuse)]
     public void RegionRecordsActualBackingDespiteFailedInitializer(NativeMemoryReturn policy)
     {
         NativeMemoryBudget budget = new(256);
@@ -201,7 +201,7 @@ public sealed class NativeOwnerBackingHistoryTests
             AssertMatches(kernel.GetStatistics(), kernel.GetDiagnosticSnapshot());
             kernel.Dispose();
             // Kept for the thread's next region with this budget, still charged.
-            bool kept = policy == NativeMemoryReturn.ToGarbageCollector;
+            bool kept = policy == NativeMemoryReturn.Reuse;
             AssertBacking(kernel.GetDiagnosticSnapshot(), kept ? extent : 0, 0, extent);
             Assert.Equal(kept ? extent : 0, budget.CaptureStatistics().CommittedBytes);
         }
@@ -213,8 +213,8 @@ public sealed class NativeOwnerBackingHistoryTests
     public void SharedBudgetPeakIsNotCopiedIntoIndividualOwnerPeaks()
     {
         NativeMemoryBudget budget = new(512);
-        using NativePool<byte> first = new(budget, 0, 64, NativeMemoryReturn.ToNativeMemory);
-        using NativeConcurrentPool<byte> second = new(budget, 0, 128, NativeMemoryReturn.ToNativeMemory, false);
+        using NativePool<byte> first = new(budget, 0, 64, NativeMemoryReturn.Free);
+        using NativeConcurrentPool<byte> second = new(budget, 0, 128, NativeMemoryReturn.Free, false);
         AssertBacking(first.CaptureDiagnosticSnapshot(), 64, 0, 64);
         AssertBacking(second.CaptureDiagnosticSnapshot(), 128, 0, 128);
         Assert.Equal(192, budget.CaptureStatistics().PeakCommittedBytes);
@@ -231,8 +231,8 @@ public sealed class NativeOwnerBackingHistoryTests
     {
         NativeMemoryBudget budget = new(512);
         NativeOwnerKernel kernel = arenaKind
-            ? NativeOwnerKernel.CreateArena(64, "BackingTest", NativeMemoryReturn.ToNativeMemory, false, budget)
-            : NativeOwnerKernel.CreatePool(0, 64, sizeof(byte), "BackingTest", NativeMemoryReturn.ToNativeMemory, false, false, budget);
+            ? NativeOwnerKernel.CreateArena(64, "BackingTest", NativeMemoryReturn.Free, false, budget)
+            : NativeOwnerKernel.CreatePool(0, 64, sizeof(byte), "BackingTest", NativeMemoryReturn.Free, false, false, budget);
         try
         {
             AssertBacking(kernel.GetDiagnosticSnapshot(), 64, 0, 64);
@@ -253,7 +253,7 @@ public sealed class NativeOwnerBackingHistoryTests
     {
         NativeMemoryBudget budget = new(128);
         NativeOwnerKernel kernel = NativeOwnerKernel.CreateRegion(64, "RegionBackingTest",
-            NativeMemoryReturn.ToNativeMemory, false, false, budget);
+            NativeMemoryReturn.Free, false, false, budget);
         try
         {
             Assert.Equal(NativeOwnerModel.SynchronizedRegion, kernel.GetStatistics().Model);
@@ -270,8 +270,8 @@ public sealed class NativeOwnerBackingHistoryTests
     {
         NativeMemoryBudget refused = new(0);
         NativeMemoryBudget admitted = new(128);
-        using NativePool<int> pool = new(refused, 0, 0, NativeMemoryReturn.ToNativeMemory);
-        using NativeConcurrentPool<int> synchronized = new(admitted, 0, 0, NativeMemoryReturn.ToNativeMemory, false);
+        using NativePool<int> pool = new(refused, 0, 0, NativeMemoryReturn.Free);
+        using NativeConcurrentPool<int> synchronized = new(admitted, 0, 0, NativeMemoryReturn.Free, false);
         try
         {
             Assert.Throws<NativeMemoryBudgetExceededException>(() =>
@@ -295,8 +295,8 @@ public sealed class NativeOwnerBackingHistoryTests
     [Fact]
     public void RepeatedCapturesWithRealBackingAllocateNoManagedStorage()
     {
-        using NativeConcurrentPool<byte> pool = new(preLease: 0, preAllocateBytes: 64, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        using NativeConcurrentArena arena = new(preAllocateBytes: 64, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentPool<byte> pool = new(preLease: 0, preAllocateBytes: 64, returnMemoryOnDispose: NativeMemoryReturn.Free);
+        using NativeConcurrentArena arena = new(preAllocateBytes: 64, returnMemoryOnDispose: NativeMemoryReturn.Free);
         _ = pool.CaptureDiagnosticSnapshot();
         _ = arena.CaptureDiagnosticSnapshot();
         long before = GC.GetAllocatedBytesForCurrentThread();
@@ -359,7 +359,7 @@ public sealed class NativeOwnerBackingHistoryTests
     public void DetachedOldGenerationAndFreshStorageShareOneLifetimePeakUntilRealFree()
     {
         NativeMemoryBudget budget = new(256);
-        using NativeConcurrentPool<byte> pool = new(budget, 0, 64, NativeMemoryReturn.ToNativeMemory, false);
+        using NativeConcurrentPool<byte> pool = new(budget, 0, 64, NativeMemoryReturn.Free, false);
         NativeGenerationOwner old = CaptureAndDetach(pool);
         try
         {
@@ -381,7 +381,7 @@ public sealed class NativeOwnerBackingHistoryTests
     public void DetachedSegmentFinalizersCanDebitWhileTheOwnerAndFreshGenerationStayAlive()
     {
         NativeMemoryBudget budget = new(256);
-        using NativeConcurrentPool<byte> pool = new(budget, 0, 64, NativeMemoryReturn.ToNativeMemory, false);
+        using NativeConcurrentPool<byte> pool = new(budget, 0, 64, NativeMemoryReturn.Free, false);
         WeakReference old = AbandonDetachedGeneration(pool);
         for (int attempt = 0; attempt < 8 && pool.CaptureDiagnosticSnapshot().DetachedNativeBytes != 0; attempt++)
         {

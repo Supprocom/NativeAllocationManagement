@@ -207,7 +207,7 @@ public sealed class NativeProductionAccountingTests
         NativeMemoryTestHooks.Reset();
         try
         {
-            using NativeConcurrentPool<string> pool = new(0, 0, NativeMemoryReturn.ToNativeMemory, false);
+            using NativeConcurrentPool<string> pool = new(0, 0, NativeMemoryReturn.Free, false);
             using (ConcurrentPooled<string> value = pool.Rent(2, static writer => writer.Fill("live")))
             {
                 Assert.Equal("live", value.Read(static view => view[1]));
@@ -258,7 +258,7 @@ public sealed class NativeProductionAccountingTests
         NativeMemoryTestHooks.Reset();
         try
         {
-            using NativeConcurrentPool<string?> pool = new(0, 0, NativeMemoryReturn.ToNativeMemory, false);
+            using NativeConcurrentPool<string?> pool = new(0, 0, NativeMemoryReturn.Free, false);
             using (ConcurrentPooled<string?> value = pool.Rent(3, static writer =>
             {
                 writer.Write("live");
@@ -292,7 +292,7 @@ public sealed class NativeProductionAccountingTests
         NativeMemoryTestHooks.Reset();
         try
         {
-            using NativeConcurrentPool<string> pool = new(0, 0, NativeMemoryReturn.ToNativeMemory, false);
+            using NativeConcurrentPool<string> pool = new(0, 0, NativeMemoryReturn.Free, false);
             Assert.Throws<InvalidOperationException>(() => pool.Rent(3, static writer => writer.Write("prefix")));
             NativeMemoryStatistics cleanup = NativeMemoryDiagnostics.Snapshot();
             Assert.Equal(1, cleanup.StorageClearCount);
@@ -537,7 +537,7 @@ public sealed class NativeProductionAccountingTests
         try
         {
             Assert.Throws<ArgumentOutOfRangeException>(() => new NativeWorkspace<int>(preLease: 0));
-            using NativePool<int> pool = new(0, 0, NativeMemoryReturn.ToNativeMemory);
+            using NativePool<int> pool = new(0, 0, NativeMemoryReturn.Free);
             using (Pooled<int> empty = pool.Rent(0, static writer => writer.Fill(42)))
             {
                 empty.Access(static view => view.Clear());

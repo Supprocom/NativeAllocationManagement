@@ -15,7 +15,7 @@ public sealed class NativePoolColdAccountingTests
         {
             Assert.Null(ThreadAccounting());
             NativeMemoryStatistics before = NativeMemoryDiagnostics.Snapshot();
-            using (NativePool<int> pool = new(length, NativeMemoryReturn.ToNativeMemory))
+            using (NativePool<int> pool = new(length, NativeMemoryReturn.Free))
             {
                 Assert.Null(ThreadAccounting());
                 using (Pooled<int> filled = pool.Rent(length, 7))
@@ -51,7 +51,7 @@ public sealed class NativePoolColdAccountingTests
         {
             OnFreshThread(() =>
             {
-                using NativePool<int> pool = new(preLease: 4, NativeMemoryReturn.ToNativeMemory);
+                using NativePool<int> pool = new(preLease: 4, NativeMemoryReturn.Free);
                 Assert.Null(ThreadAccounting());
                 if (string.Equals(operation, "InitializerCopy", StringComparison.Ordinal))
                 {
@@ -96,7 +96,7 @@ public sealed class NativePoolColdAccountingTests
         OnFreshThread(static () =>
         {
             NativeMemoryStatistics before = NativeMemoryDiagnostics.Snapshot();
-            using NativePool<int> pool = new(preLease: 0, NativeMemoryReturn.ToNativeMemory);
+            using NativePool<int> pool = new(preLease: 0, NativeMemoryReturn.Free);
             using Pooled<int> empty = pool.Rent(0, 7);
             empty.Clear();
             empty.CopyFrom([]);
@@ -120,7 +120,7 @@ public sealed class NativePoolColdAccountingTests
         {
             OnFreshThread(() =>
             {
-                using NativePool<int> pool = new(preLease: 4, NativeMemoryReturn.ToNativeMemory);
+                using NativePool<int> pool = new(preLease: 4, NativeMemoryReturn.Free);
                 using Pooled<int> values = pool.Rent(4, 7);
                 Assert.Null(ThreadAccounting());
                 NativeMemoryTestHooks.FailAccountingClaimAt(boundary);

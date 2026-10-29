@@ -6,7 +6,7 @@ public sealed class NativeSpecializedPreparedCompositeTests
     public void EveryAccessShapeUnwindsAllEnteredBorrowsWhenTheCallbackThrows()
     {
         using NativePreparedPool<int> pool = new(new NativePoolPreparation(3, 1, 3), budget: null);
-        using NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         using PreparedPooled<int> a = pool.Rent(1, static writer => writer.Write(7));
         using PreparedPooled<int> b = pool.Rent(1, static writer => writer.Write(11));
         using PreparedPooled<int> c = pool.Rent(1, static writer => writer.Write(13));
@@ -41,7 +41,7 @@ public sealed class NativeSpecializedPreparedCompositeTests
     public void ScopedInitializationPublishesFourCompleteRangesAndFailureReturnsTheSourceBorrow()
     {
         using NativePreparedPool<int> pool = new(new NativePoolPreparation(1, 1, 1), budget: null);
-        using NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         using PreparedPooled<int> source = pool.Rent(1, static writer => writer.Write(7));
         NativeLeaseOperations.InitializeScoped<int, int, int, int, int>(source, arena, 1, 1, 1, 1,
             static (input, a, b, c, d) => { a.Fill(input[0]); b.Fill(11); c.Fill(13); d.Fill(17); },

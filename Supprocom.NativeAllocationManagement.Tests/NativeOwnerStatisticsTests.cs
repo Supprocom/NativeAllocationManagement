@@ -9,7 +9,7 @@ public sealed class NativeOwnerStatisticsTests
     {
         using NativePool<int> pool = new(
             preLease: 64,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
 
         NativeOwnerStatistics reserved = pool.GetStatistics();
         Assert.Equal(NativeOwnerLifecycle.Active, reserved.Lifecycle);
@@ -41,7 +41,7 @@ public sealed class NativeOwnerStatisticsTests
     {
         using NativeArena arena = new(
             preAllocateBytes: 4_096,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         long generation;
         {
             ArenaLease<byte> bytes = arena.Scratch<byte>(128, static writer => writer.Fill(default!));
@@ -68,7 +68,7 @@ public sealed class NativeOwnerStatisticsTests
         using NativeArena arena = new(
             preAllocateBytes: 4_096,
             returnMemoryOnDispose:
-                NativeMemoryReturn.ToNativeMemory);
+                NativeMemoryReturn.Free);
         NativeOwnerStatistics initial = arena.GetStatistics();
         {
             ArenaLease<byte> bytes =
@@ -98,7 +98,7 @@ public sealed class NativeOwnerStatisticsTests
     {
         using (NativeRegion region = new(
             preAllocateBytes: 4_096,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory))
+            returnMemoryOnDispose: NativeMemoryReturn.Free))
         {
             Local<long> values = region.Lease<long>(32, static writer => writer.Fill(default!));
             NativeOwnerStatistics active = region.GetStatistics();

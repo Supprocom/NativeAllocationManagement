@@ -11,7 +11,7 @@ public sealed class NativePoolSimpleTests
     {
         using NativePool<int> pool = new(
             preLease: 8,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
 
         Pooled<int> lease = pool.Rent(
             8,
@@ -44,7 +44,7 @@ public sealed class NativePoolSimpleTests
     {
         using NativePool<int> pool = new(
             preLease: 4,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
 
         Assert.Throws<MarkerException>(() => pool.Rent(
             4,
@@ -70,7 +70,7 @@ public sealed class NativePoolSimpleTests
     {
         using NativePool<int> pool = new(
             preLease: 4,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
 
         InvalidOperationException exception =
             Assert.Throws<InvalidOperationException>(() => pool.Rent(
@@ -96,7 +96,7 @@ public sealed class NativePoolSimpleTests
     {
         using NativePool<int> pool = new(
             preLease: 4,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         Pooled<int> first = pool.Rent(
             4,
             static writer => writer.Fill(1));
@@ -134,7 +134,7 @@ public sealed class NativePoolSimpleTests
     {
         using NativePool<int> pool = new(
             preLease: 1,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         FieldInfo tokenField = typeof(NativePool<int>).GetField(
             "_leaseTokenCounter",
             BindingFlags.Instance | BindingFlags.NonPublic)!;
@@ -158,7 +158,7 @@ public sealed class NativePoolSimpleTests
     {
         using NativePool<int> pool = new(
             preLease: 1,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         Pooled<int> lease = pool.Rent(
             1,
             static writer => writer.Write(3));
@@ -178,7 +178,7 @@ public sealed class NativePoolSimpleTests
     {
         using NativePool<int> pool = new(
             preLease: 8,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         Pooled<int> lease = pool.Rent(
             8,
             static writer => writer.Fill(0));
@@ -224,7 +224,7 @@ public sealed class NativePoolSimpleTests
     {
         using NativePool<int> pool = new(
             preLease: 4,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         Pooled<int> lease = pool.Rent(
             4,
             static writer => writer.Fill(0));
@@ -263,7 +263,7 @@ public sealed class NativePoolSimpleTests
     {
         using NativePool<int> pool = new(
             preLease: 4,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         Pooled<int> lease = pool.Rent(
             4,
             static writer => writer.Fill(0));
@@ -301,7 +301,7 @@ public sealed class NativePoolSimpleTests
     {
         using NativePool<int> pool = new(
             preLease: 2,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         Exception? failure = null;
         Thread thread = new(() =>
         {
@@ -327,7 +327,7 @@ public sealed class NativePoolSimpleTests
         using NativePool<int> pool = new(
             preLease: 4,
             preAllocateBytes: 24,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         using (Pooled<int> lease = pool.Rent(4, static writer => writer.Fill(1)))
         {
             nuint released = pool.TrimRetainedMemory();
@@ -344,7 +344,7 @@ public sealed class NativePoolSimpleTests
     {
         using NativePool<int> pool = new(
             preLease: 8,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         Pooled<int> large = pool.Rent(
             8,
             static writer => writer.Fill(1));
@@ -377,7 +377,7 @@ public sealed class NativePoolSimpleTests
     {
         using NativePool<int> pool = new(
             preLease: 8,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         Pooled<int> first = pool.Rent(
             8,
             static writer => writer.Fill(1));
@@ -407,7 +407,7 @@ public sealed class NativePoolSimpleTests
     public unsafe void RentsCyclingThroughSizesReuseOneSlabPerSize()
     {
         using NativePool<int> pool = new(
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         int[] lengths = [16, 100, 1000, 5000];
         nint[] addresses = new nint[lengths.Length];
         for (int cycle = 0; cycle < 4; cycle++)
@@ -441,7 +441,7 @@ public sealed class NativePoolSimpleTests
         NativeMemoryTestHooks.Reset();
         NativePool<int> pool = new(
             preLease: 16,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         Pooled<int> lease = pool.Rent(
             16,
             static writer => writer.Fill(7));
@@ -482,7 +482,7 @@ public sealed class NativePoolSimpleTests
     {
         NativePool<int> pool = new(
             preLease: 4,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         InvalidOperationException? initializerFailure = null;
         Pooled<int> lease = pool.Rent(
             4,
@@ -512,7 +512,7 @@ public sealed class NativePoolSimpleTests
     {
         NativePool<int> pool = new(
             preLease: 4,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         pool.Retire();
 
         Assert.Throws<NativeAllocationDisposedException>(() => pool.Rent(
@@ -533,7 +533,7 @@ public sealed class NativePoolSimpleTests
     {
         using NativePool<int> pool = new(
             preLease: 4,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
 
         Assert.Throws<InvalidOperationException>(
             pool.ReleaseRetiredStorage);
@@ -546,7 +546,7 @@ public sealed class NativePoolSimpleTests
     {
         NativePool<int> pool = new(
             preLease: 4,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         ConcurrentQueue<Exception> failures = new();
         Thread thread = new(() =>
         {
@@ -587,7 +587,7 @@ public sealed class NativePoolSimpleTests
         NativeMemoryTestHooks.Reset();
         NativePool<int> pool = new(
             preLease: 16,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         pool.Retire();
         ConcurrentQueue<Exception> failures = new();
         Thread[] coordinators = Enumerable.Range(0, 2)
@@ -755,7 +755,7 @@ public sealed class NativePoolSimpleTests
     {
         NativePool<int> pool = new(
             preLease: 16,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         pool.Retire();
         return new WeakReference(pool);
     }
@@ -787,7 +787,7 @@ public sealed class NativePoolSimpleTests
 #pragma warning disable CA2213
         private readonly NativePool<short> _pool = new(
             preLease: Capacity,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
 #pragma warning restore CA2213
 
         internal int Build()

@@ -19,7 +19,7 @@ public sealed class NativeRegionSimpleTests
     {
         using NativeRegion region = new(
             4_096,
-            NativeMemoryReturn.ToNativeMemory);
+            NativeMemoryReturn.Free);
 
         Local<byte> bytes = region.Lease<byte>(3, FillBytes);
         Local<int> integers = region.Lease<int>(2, FillIntegers);
@@ -47,7 +47,7 @@ public sealed class NativeRegionSimpleTests
         NativeMemoryTestHooks.Reset();
         using NativeRegion region = new(
             65_536,
-            NativeMemoryReturn.ToNativeMemory);
+            NativeMemoryReturn.Free);
         Local<int> warm = region.Lease<int>(4, FillIntegers);
         _ = warm.Read(static view => view[0]);
         _ = warm.Process(0, ProcessIteration);
@@ -78,7 +78,7 @@ public sealed class NativeRegionSimpleTests
 
         using NativeRegion growthRegion = new(
             1,
-            NativeMemoryReturn.ToNativeMemory);
+            NativeMemoryReturn.Free);
         _ = growthRegion.Lease<byte>(1, FillBytes);
         NativeLeaseInitializer<long> longInitializer = FillLongs;
         beforeBytes = GC.GetAllocatedBytesForCurrentThread();
@@ -100,7 +100,7 @@ public sealed class NativeRegionSimpleTests
         NativeMemoryTestHooks.Reset();
         using NativeRegion region = new(
             4_096,
-            NativeMemoryReturn.ToNativeMemory);
+            NativeMemoryReturn.Free);
         NativeOwnerStatistics before = region.GetStatistics();
 
         Exception? failure = null;
@@ -132,7 +132,7 @@ public sealed class NativeRegionSimpleTests
         NativeMemoryTestHooks.Reset();
         using NativeRegion region = new(
             64,
-            NativeMemoryReturn.ToNativeMemory);
+            NativeMemoryReturn.Free);
         Local<int> first = region.Lease<int>(1, FillIntegers);
         NativeOwnerStatistics before = region.GetStatistics();
 
@@ -163,7 +163,7 @@ public sealed class NativeRegionSimpleTests
         NativeMemoryTestHooks.Reset();
         NativeRegion region = new(
             1,
-            NativeMemoryReturn.ToNativeMemory);
+            NativeMemoryReturn.Free);
         Local<int> first = region.Lease<int>(1, FillIntegers);
         Local<long> second = region.Lease<long>(1_024, FillLongs);
         long freeBefore = NativeMemoryTestHooks.Snapshot().FreeCount;
@@ -189,7 +189,7 @@ public sealed class NativeRegionSimpleTests
     {
         NativeRegionKernel kernel = new(
             64,
-            NativeMemoryReturn.ToNativeMemory);
+            NativeMemoryReturn.Free);
         Exception? failure = null;
         Thread worker = new(() =>
         {
@@ -214,7 +214,7 @@ public sealed class NativeRegionSimpleTests
     {
         NativeRegionKernel kernel = new(
             64,
-            NativeMemoryReturn.ToNativeMemory);
+            NativeMemoryReturn.Free);
         Local<int> local = kernel.LeaseInitialized<int>(
             1,
             FillIntegers);
@@ -234,7 +234,7 @@ public sealed class NativeRegionSimpleTests
     {
         NativeRegionKernel kernel = new(
             64,
-            NativeMemoryReturn.ToNativeMemory);
+            NativeMemoryReturn.Free);
         Local<int> local = kernel.LeaseInitialized<int>(
             1,
             FillIntegers);
@@ -351,7 +351,7 @@ public sealed class NativeRegionSimpleTests
     {
         NativeRegionKernel kernel = new(
             64,
-            NativeMemoryReturn.ToNativeMemory);
+            NativeMemoryReturn.Free);
         Local<int> local = kernel.LeaseInitialized<int>(
             1,
             FillIntegers);
@@ -475,11 +475,11 @@ public sealed class NativeRegionSimpleTests
     {
         RunOnFreshThread(static () =>
         {
-            NativeRegion freed = new(256, NativeMemoryReturn.ToNativeMemory);
+            NativeRegion freed = new(256, NativeMemoryReturn.Free);
             freed.Dispose();
             Assert.False(NativeRegionKernel.HasReusableKernelForTest);
 
-            NativeRegion budgeted = new(new NativeMemoryBudget(65_536), 256, NativeMemoryReturn.ToGarbageCollector);
+            NativeRegion budgeted = new(new NativeMemoryBudget(65_536), 256, NativeMemoryReturn.Reuse);
             budgeted.Dispose();
             Assert.False(NativeRegionKernel.HasReusableKernelForTest);
         });

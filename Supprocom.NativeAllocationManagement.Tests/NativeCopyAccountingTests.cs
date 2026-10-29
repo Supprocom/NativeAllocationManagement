@@ -102,7 +102,7 @@ public sealed class NativeCopyAccountingTests
                 Assert.Equal(0, NativeMemoryDiagnostics.Snapshot().CopiedBytes);
                 Assert.Equal(42, value.Read(static view => view[3]));
             }
-            using NativePool<int> emptyPool = new(0, 0, NativeMemoryReturn.ToNativeMemory);
+            using NativePool<int> emptyPool = new(0, 0, NativeMemoryReturn.Free);
             using Pooled<int> empty = emptyPool.Rent(0, static writer => writer.Write(ReadOnlySpan<int>.Empty));
             empty.Access(static view =>
             {
@@ -137,7 +137,7 @@ public sealed class NativeCopyAccountingTests
         NativeMemoryTestHooks.Reset();
         try
         {
-            using NativePool<int> pool = new(0, 0, NativeMemoryReturn.ToNativeMemory);
+            using NativePool<int> pool = new(0, 0, NativeMemoryReturn.Free);
             Assert.Throws<InvalidOperationException>(() => pool.Rent(4, static writer =>
             {
                 writer.Write(Input.AsSpan(0, 2));
@@ -176,7 +176,7 @@ public sealed class NativeCopyAccountingTests
         NativeMemoryTestHooks.Reset();
         try
         {
-            using NativeConcurrentPool<int> pool = new(8, NativeMemoryReturn.ToNativeMemory);
+            using NativeConcurrentPool<int> pool = new(8, NativeMemoryReturn.Free);
             using ConcurrentPooled<int> value = pool.Rent(4, static writer => writer.Write(Input.AsSpan()));
             Assert.Equal(16, NativeMemoryDiagnostics.Snapshot().CopiedBytes);
             int[] exported = new int[4];
@@ -207,7 +207,7 @@ public sealed class NativeCopyAccountingTests
         NativeMemoryTestHooks.Reset();
         try
         {
-            using NativePool<int> pool = new(0, 0, NativeMemoryReturn.ToNativeMemory);
+            using NativePool<int> pool = new(0, 0, NativeMemoryReturn.Free);
             using Pooled<int> value = pool.Rent(4, static writer =>
             {
                 writer.Write(Input.AsSpan());
@@ -226,7 +226,7 @@ public sealed class NativeCopyAccountingTests
         NativeMemoryTestHooks.Reset();
         try
         {
-            using NativePool<int> pool = new(0, 0, NativeMemoryReturn.ToNativeMemory);
+            using NativePool<int> pool = new(0, 0, NativeMemoryReturn.Free);
             using Pooled<int> value = pool.Rent(4, static writer => writer.Fill(42));
             bool rejectedSource = false;
             try { value.CopyFrom(Input.AsSpan(0, 2)); }
@@ -248,7 +248,7 @@ public sealed class NativeCopyAccountingTests
         NativeMemoryTestHooks.Reset();
         try
         {
-            using NativeConcurrentPool<string> pool = new(0, NativeMemoryReturn.ToNativeMemory);
+            using NativeConcurrentPool<string> pool = new(0, NativeMemoryReturn.Free);
             using ConcurrentPooled<string> value = pool.Rent(2, static writer =>
             {
                 writer.Write("first");
@@ -271,7 +271,7 @@ public sealed class NativeCopyAccountingTests
         try
         {
             long epoch = NativeMemoryDiagnostics.Snapshot().MetricsEpoch;
-            using (NativePool<int> pool = new(0, 0, NativeMemoryReturn.ToNativeMemory))
+            using (NativePool<int> pool = new(0, 0, NativeMemoryReturn.Free))
             {
                 using Pooled<int> value = pool.Rent(4, static writer =>
                 {
@@ -287,7 +287,7 @@ public sealed class NativeCopyAccountingTests
             Assert.Equal(epoch + 1, reset.MetricsEpoch);
             Assert.Equal(0, reset.CopiedBytes);
             Assert.False(reset.HistoryOverflowed);
-            using NativePool<int> nextPool = new(0, 0, NativeMemoryReturn.ToNativeMemory);
+            using NativePool<int> nextPool = new(0, 0, NativeMemoryReturn.Free);
             using Pooled<int> next = nextPool.Rent(4, static writer => writer.Write(Input.AsSpan()));
             Assert.Equal(16, NativeMemoryDiagnostics.Snapshot().CopiedBytes);
             Assert.Equal(17, next.Read(static view => view[0]));

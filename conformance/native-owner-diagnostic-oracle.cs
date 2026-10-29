@@ -81,7 +81,7 @@ internal static class NativeOwnerDiagnosticOracle
         long epoch = NativeMemoryDiagnostics.Snapshot().MetricsEpoch;
         long extent = OperatingSystem.IsWindows() ? 16 : 64;
         NativeMemoryBudget budget = new(extent, traceCapacity);
-        NativePool<int> pool = new(budget, 4, 0, NativeMemoryReturn.ToNativeMemory);
+        NativePool<int> pool = new(budget, 4, 0, NativeMemoryReturn.Free);
         Statistics expected = Statistics.Active(pool.Id, NativeOwnerModel.ThreadConfinedPool, extent, 16, 1);
         try
         {
@@ -178,7 +178,7 @@ internal static class NativeOwnerDiagnosticOracle
         long extent = NativeCapacityDiagnosticOracle.ArenaExtent(16);
         NativeMemoryBudget budget = new(extent, traceCapacity);
         bool exactOutput;
-        using (NativeRegion region = new(budget, 16, NativeMemoryReturn.ToNativeMemory))
+        using (NativeRegion region = new(budget, 16, NativeMemoryReturn.Free))
         {
             Statistics expected = Statistics.Active(region.Id, NativeOwnerModel.ThreadConfinedRegion, extent, 16, 1);
             VerifyBoth(region.GetStatistics(), region.CaptureDiagnosticSnapshot(), expected, Structural.From(expected, epoch) with { OrdinaryTraversalIndex = 0 });
@@ -196,7 +196,7 @@ internal static class NativeOwnerDiagnosticOracle
         long epoch = NativeMemoryDiagnostics.Snapshot().MetricsEpoch;
         long extent = OperatingSystem.IsWindows() ? 2L * IntPtr.Size : 64;
         NativeMemoryBudget budget = new(extent, traceCapacity);
-        NativeConcurrentPool<string> pool = new(budget, 2, 0, NativeMemoryReturn.ToNativeMemory, false);
+        NativeConcurrentPool<string> pool = new(budget, 2, 0, NativeMemoryReturn.Free, false);
         Statistics expected = Statistics.Active(pool.Id, NativeOwnerModel.SynchronizedPool, extent, 2L * IntPtr.Size, 1);
         try
         {

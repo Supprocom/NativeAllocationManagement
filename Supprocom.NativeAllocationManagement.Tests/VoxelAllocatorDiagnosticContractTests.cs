@@ -51,7 +51,7 @@ public sealed class VoxelAllocatorDiagnosticContractTests
     [VoxelDemonstrationFact]
     public void RootedScopedAndFastStatesMapEveryFieldWithoutInventingRecords()
     {
-        using NativeConcurrentArena arena = new(preAllocateBytes: 128, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentArena arena = new(preAllocateBytes: 128, returnMemoryOnDispose: NativeMemoryReturn.Free);
         VerifyCompleteMapping(arena.CaptureDiagnosticSnapshot());
         ConcurrentArenaLease<string> ordinary = arena.Scratch<string>(1, static writer => writer.Write("ordinary"));
         ConcurrentArenaLease<string> scoped = arena.ScratchScoped<string>(1, static writer => writer.Write("scoped"));
@@ -81,7 +81,7 @@ public sealed class VoxelAllocatorDiagnosticContractTests
         arena.Dispose();
         VerifyNativeCleanup(arena.CaptureDiagnosticSnapshot());
 
-        using NativeArena fast = new(preAllocateBytes: 128, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeArena fast = new(preAllocateBytes: 128, returnMemoryOnDispose: NativeMemoryReturn.Free);
         _ = fast.Scratch<int>(1, static writer => writer.Write(17));
         _ = fast.ScratchScoped<int>(1, static writer => writer.Write(19));
         PressureAllocatorDiagnosticSnapshot fastActive = VerifyCompleteMapping(fast.CaptureDiagnosticSnapshot());
@@ -105,7 +105,7 @@ public sealed class VoxelAllocatorDiagnosticContractTests
     public void RetiredAndQuarantinedBanksKeepTheirRealChargeAndHealthyCurrentFlag()
     {
         NativeMemoryBudget budget = new(128);
-        using NativeConcurrentPool<int> pool = new(budget, 1, 0, NativeMemoryReturn.ToNativeMemory, false);
+        using NativeConcurrentPool<int> pool = new(budget, 1, 0, NativeMemoryReturn.Free, false);
         long extent = budget.CaptureStatistics().CommittedBytes;
         Assert.True(extent > 0);
         try
@@ -156,7 +156,7 @@ public sealed class VoxelAllocatorDiagnosticContractTests
     public void SaturatedHistoryAndMetricsResetPreserveOwnerPeaksAfterPhysicalCleanup()
     {
         NativeMemoryBudget budget = new(512);
-        using NativeConcurrentPool<int> pool = new(budget, 0, 0, NativeMemoryReturn.ToNativeMemory, false);
+        using NativeConcurrentPool<int> pool = new(budget, 0, 0, NativeMemoryReturn.Free, false);
         NativeOwnerKernel kernel = pool.KernelForTransfer;
         typeof(NativeOwnerKernel).GetField("_freshSegmentAllocationCount", BindingFlags.NonPublic | BindingFlags.Instance)!
             .SetValue(kernel, long.MaxValue);
@@ -198,7 +198,7 @@ public sealed class VoxelAllocatorDiagnosticContractTests
     [VoxelDemonstrationFact]
     public void DetachedBackingRemainsMeasuredAndChargedUntilActualFinalization()
     {
-        using NativePool<byte> pool = new(preLease: 1, NativeMemoryReturn.ToGarbageCollector);
+        using NativePool<byte> pool = new(preLease: 1, NativeMemoryReturn.Reuse);
         HoldSlabs(pool, 9);
         long retained = pool.GetStatistics().RetainedBytes;
         Assert.True(retained > 1024 * 1024);

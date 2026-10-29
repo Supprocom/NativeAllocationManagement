@@ -9,7 +9,7 @@ public sealed partial class NativeUninitializedAcquisitionTests
     [Fact]
     public void PoolRentalSkipsTheFillButKeepsLeaseAuthority()
     {
-        using NativePool<int> pool = new(preLease: 8, NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(preLease: 8, NativeMemoryReturn.Free);
         Pooled<int> first = pool.RentUninitialized(8);
         Pooled<int> stale = first;
         first.AsSpan().Fill(5);
@@ -38,7 +38,7 @@ public sealed partial class NativeUninitializedAcquisitionTests
 
         arena.RecycleScoped();
         arena.Reset();
-        using (NativeRegion region = new(256, NativeMemoryReturn.ToNativeMemory))
+        using (NativeRegion region = new(256, NativeMemoryReturn.Free))
         {
             Local<double> values = region.LeaseUninitialized<double>(3);
             values.AsSpan().Fill(0.5);
@@ -72,8 +72,8 @@ public sealed partial class NativeUninitializedAcquisitionTests
     [InlineData("using NativeArena arena = new(); Span<int> s = SCRATCH(4).AsSpan(); s[0] = 1; arena.Reset();", "")]
     [InlineData("NativeArena arena = new(); { scoped ArenaLease<int> values = SCOPED(2); values.AsSpan()[0] = 1; } arena.RecycleScoped(); arena.Dispose();", "")]
     [InlineData("using NativeArena arena = new(); { ArenaLease<int> values = SCOPED(2); values.AsSpan()[0] = 1; } arena.RecycleScoped();", "NAM1018")]
-    [InlineData("using (NativeRegion region = new(4096, NativeMemoryReturn.ToNativeMemory)) { LEASE(4).AsSpan()[0] = 1; }", "")]
-    [InlineData("Span<int> s = default; using (NativeRegion region = new(64, NativeMemoryReturn.ToNativeMemory)) { s = LEASE(4).AsSpan(); } s[0] = 1;", "NAM1051")]
+    [InlineData("using (NativeRegion region = new(4096, NativeMemoryReturn.Free)) { LEASE(4).AsSpan()[0] = 1; }", "")]
+    [InlineData("Span<int> s = default; using (NativeRegion region = new(64, NativeMemoryReturn.Free)) { s = LEASE(4).AsSpan(); } s[0] = 1;", "NAM1051")]
     [InlineData("using NativePool<int> pool = new(4); using Pooled<int> lease = RENT(4); lease.AsSpan()[0] = 1;", "")]
     [InlineData("using NativePool<int> pool = new(4); Pooled<int> lease = RENT(4); lease.AsSpan()[0] = 1;", "NAM1003")]
     [InlineData("using NativePool<int> pool = new(4); Span<int> s = RENT(4).AsSpan();", "NAM1013")]

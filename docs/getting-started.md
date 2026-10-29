@@ -526,7 +526,7 @@ using Supprocom.NativeAllocationManagement;
 
 using (NativeRegion region = new(
     preAllocateBytes: 4_096,
-    returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory))
+    returnMemoryOnDispose: NativeMemoryReturn.Free))
 {
     Local<int> identifiers = region.Lease<int>(
         64,
@@ -652,7 +652,7 @@ using Supprocom.NativeAllocationManagement;
 
 NativeConcurrentPool<int> pool = new(
     preLease: 256,
-    returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+    returnMemoryOnDispose: NativeMemoryReturn.Free);
 
 try
 {

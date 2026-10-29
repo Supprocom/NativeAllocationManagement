@@ -81,7 +81,7 @@ internal static class NativePreparedPageMeasurement
                 if (prepared)
                     preparedPool = new(new NativePoolPreparation(SlotCount, SlotBytes, SlotsPerPage), budget);
                 else
-                    pool = new(0, NativeMemoryReturn.ToNativeMemory);
+                    pool = new(0, NativeMemoryReturn.Free);
             }
             phases[0] = clock.End("preparation", 1, 0, process);
 

@@ -237,7 +237,7 @@ public sealed class NativePreparedPoolTests
     [Fact]
     public void OrdinaryPoolOrdinalProbeReadsActualAcquisitionIdentities()
     {
-        using NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         Assert.Empty(pool.CurrentSegmentOrdinalsForTest);
         using (Pooled<int> first = pool.Rent(1, static writer => writer.Write(1)))
         {

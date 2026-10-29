@@ -256,7 +256,7 @@ public sealed class NativePoolThreadCacheTests
     public void ABudgetedPoolReusesASlabAnotherThreadCachesBeforeGrowing()
     {
         NativeMemoryBudget budget = new(64);
-        using NativeConcurrentPool<int> pool = new(budget, 0, 0, NativeMemoryReturn.ToNativeMemory, false);
+        using NativeConcurrentPool<int> pool = new(budget, 0, 0, NativeMemoryReturn.Free, false);
         Thread owner = new(() =>
         {
             using ConcurrentPooled<int> lease = pool.Rent(16, static writer => writer.Fill(1));

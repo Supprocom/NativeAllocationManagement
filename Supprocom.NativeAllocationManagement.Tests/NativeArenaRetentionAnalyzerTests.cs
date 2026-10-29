@@ -15,7 +15,7 @@ public sealed class NativeArenaRetentionAnalyzerTests
             {
                 public static int Run()
                 {
-                    using NativeArena arena = new(new NativeMemoryBudget(512), new NativeArenaRetentionPolicy(256, 0), 256, NativeMemoryReturn.ToNativeMemory);
+                    using NativeArena arena = new(new NativeMemoryBudget(512), new NativeArenaRetentionPolicy(256, 0), 256, NativeMemoryReturn.Free);
                     ArenaLease<int> value = arena.Scratch<int>(1, static writer => writer.Write(42));
                     arena.MaintainRetention();
                     _ = arena.CaptureRetentionSnapshot();
@@ -36,7 +36,7 @@ public sealed class NativeArenaRetentionAnalyzerTests
             {
                 public static void Run()
                 {
-                    using NativeArena arena = new(new NativeMemoryBudget(512), new NativeArenaRetentionPolicy(256, 0), 256, NativeMemoryReturn.ToNativeMemory);
+                    using NativeArena arena = new(new NativeMemoryBudget(512), new NativeArenaRetentionPolicy(256, 0), 256, NativeMemoryReturn.Free);
                     ArenaLease<int> value = arena.Scratch<int>(1, static writer => writer.Write(42));
                     value.Access(view => { arena.MaintainRetention(); view[0] = 17; });
                 }
@@ -55,7 +55,7 @@ public sealed class NativeArenaRetentionAnalyzerTests
             {
                 public static void Run()
                 {
-                    NativeArena arena = new(new NativeMemoryBudget(512), new NativeArenaRetentionPolicy(256, 0), 256, NativeMemoryReturn.ToNativeMemory);
+                    NativeArena arena = new(new NativeMemoryBudget(512), new NativeArenaRetentionPolicy(256, 0), 256, NativeMemoryReturn.Free);
                     arena.Dispose();
                     arena.MaintainRetention();
                 }

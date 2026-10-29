@@ -55,7 +55,7 @@ public sealed class NativeFilledBumpTests
     [Fact]
     public void FilledRegionLeasePublishesValuesAndEndsWithTheRegion()
     {
-        NativeRegion region = new(256, NativeMemoryReturn.ToNativeMemory);
+        NativeRegion region = new(256, NativeMemoryReturn.Free);
         Local<double> values = region.Lease<double>(4, 0.5);
         Local<int> grown = region.Lease<int>(1_000, 2);
         Assert.Equal(2d, values.Read(static view => view[0] + view[1] + view[2] + view[3]));

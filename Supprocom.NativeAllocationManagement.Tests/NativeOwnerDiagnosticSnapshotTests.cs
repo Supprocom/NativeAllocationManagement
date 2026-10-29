@@ -9,7 +9,7 @@ public sealed class NativeOwnerDiagnosticSnapshotTests
     public void MissingGenerationHasExplicitTraversalSentinelsAndNoStorage()
     {
         using NativeConcurrentArena arena = new(
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory,
+            returnMemoryOnDispose: NativeMemoryReturn.Free,
             doNotLeaseOnDeclaration: true);
         AssertMissingGeneration(arena.CaptureDiagnosticSnapshot(), NativeOwnerLifecycle.Unleased);
 
@@ -31,7 +31,7 @@ public sealed class NativeOwnerDiagnosticSnapshotTests
     {
         using NativeConcurrentPool<string> pool = new(
             preLease: 2,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         NativeOwnerDiagnosticSnapshot reserved = pool.CaptureDiagnosticSnapshot();
         Assert.Equal(1, reserved.RetainedSegmentCount);
         Assert.Equal(1, reserved.AvailableSegmentCount);
@@ -71,7 +71,7 @@ public sealed class NativeOwnerDiagnosticSnapshotTests
     [Fact]
     public void ArenaSnapshotDistinguishesTraversalAndGroupedScopedRecords()
     {
-        using NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         _ = arena.Scratch<byte>(4_096, static writer => writer.Fill(1));
         _ = arena.Scratch<byte>(4_096, static writer => writer.Fill(2));
         NativeOwnerDiagnosticSnapshot ordinary = arena.CaptureDiagnosticSnapshot();
@@ -98,7 +98,7 @@ public sealed class NativeOwnerDiagnosticSnapshotTests
     [Fact]
     public void MaterializedCompositeRecordsAreCountedOnceAndScopedRecordsExpire()
     {
-        using NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         ConcurrentArenaLease<int> ordinary = arena.Scratch<int>(2, static writer => writer.Fill(1));
         ConcurrentArenaLease<long> scoped = arena.ScratchScoped<long>(2, static writer => writer.Fill(2));
         Assert.Equal(1, arena.CaptureDiagnosticSnapshot().ActiveRecords);
@@ -122,7 +122,7 @@ public sealed class NativeOwnerDiagnosticSnapshotTests
         Assert.All(
             typeof(NativeOwnerDiagnosticSnapshot).GetProperties(BindingFlags.Public | BindingFlags.Instance),
             property => Assert.True(property.PropertyType.IsValueType));
-        using NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         _ = pool.CaptureDiagnosticSnapshot();
         long before = GC.GetAllocatedBytesForCurrentThread();
         for (int iteration = 0; iteration < 1_024; iteration++)

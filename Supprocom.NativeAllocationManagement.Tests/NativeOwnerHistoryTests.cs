@@ -10,7 +10,7 @@ public sealed class NativeOwnerHistoryTests
     public void ATrimHistoryAloneReportsItsOwnOverflowWithoutAnEarlierOverflow(string field)
     {
         NativeMemoryBudget budget = new(512);
-        using NativePool<int> pool = new(budget, 0, 0, NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(budget, 0, 0, NativeMemoryReturn.Free);
         using (Pooled<int> value = pool.Rent(1, static writer => writer.Write(42)))
         {
             Assert.Equal(42, value.Read(static view => view[0]));
@@ -33,7 +33,7 @@ public sealed class NativeOwnerHistoryTests
     public void ExactMaximumIsNotAnOverflowUntilAnotherRealAcquisitionOccurs()
     {
         NativeMemoryBudget budget = new(512);
-        using NativePool<int> pool = new(budget, 0, 0, NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(budget, 0, 0, NativeMemoryReturn.Free);
         SetHistory(GetKernel(pool), "_freshSegmentAllocationCount", long.MaxValue - 1);
         using Pooled<int> first = pool.Rent(1, static writer => writer.Write(17));
         Assert.Equal(long.MaxValue, pool.GetStatistics().FreshSegmentAllocationCount);
@@ -50,7 +50,7 @@ public sealed class NativeOwnerHistoryTests
     public void PoolAcquisitionIdentityIsIndependentOfSaturatedCompletedHistory()
     {
         NativeMemoryBudget budget = new(512, traceCapacity: 16);
-        using NativePool<int> pool = new(budget, 0, 0, NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(budget, 0, 0, NativeMemoryReturn.Free);
         object kernel = GetKernel(pool);
         SetHistory(kernel, "_freshSegmentAllocationCount", long.MaxValue);
         using (Pooled<int> value = pool.Rent(1, static writer => writer.Write(42)))
@@ -78,7 +78,7 @@ public sealed class NativeOwnerHistoryTests
     public void ArenaAcquisitionAndWholeSegmentTrimSurviveSaturatedHistory()
     {
         NativeMemoryBudget budget = new(16_384);
-        using NativeArena arena = new(budget, 0, NativeMemoryReturn.ToNativeMemory);
+        using NativeArena arena = new(budget, 0, NativeMemoryReturn.Free);
         object kernel = GetKernel(arena);
         SetHistory(kernel, "_freshSegmentAllocationCount", long.MaxValue);
         ArenaLease<int> value = arena.Scratch<int>(1, static writer => writer.Write(42));
@@ -104,7 +104,7 @@ public sealed class NativeOwnerHistoryTests
     public void RegionPublicationAndCleanupDoNotThrowAfterSuccessfulBackingAcquisition()
     {
         NativeMemoryBudget budget = new(8_192);
-        NativeRegionKernel kernel = new(0, NativeMemoryReturn.ToNativeMemory, budget);
+        NativeRegionKernel kernel = new(0, NativeMemoryReturn.Free, budget);
         try
         {
             Assert.Throws<InvalidOperationException>(() => kernel.LeaseInitialized<int>(2, static writer => writer.Write(42)));
@@ -131,7 +131,7 @@ public sealed class NativeOwnerHistoryTests
     public void RegionCheckedOrdinalExhaustionPrecedesAdmissionAndRetainsPriorStorage()
     {
         NativeMemoryBudget budget = new(65_536);
-        NativeRegionKernel kernel = new(64, NativeMemoryReturn.ToNativeMemory, budget);
+        NativeRegionKernel kernel = new(64, NativeMemoryReturn.Free, budget);
         FieldInfo count = typeof(NativeRegionKernel).GetField("_segmentCount", BindingFlags.Instance | BindingFlags.NonPublic)!;
         try
         {
@@ -161,7 +161,7 @@ public sealed class NativeOwnerHistoryTests
     public void RegionFailedBackingAcquisitionDoesNotAdvanceAuthoritativeHistory()
     {
         NativeMemoryBudget budget = new(512);
-        NativeRegionKernel kernel = new(0, NativeMemoryReturn.ToNativeMemory, budget);
+        NativeRegionKernel kernel = new(0, NativeMemoryReturn.Free, budget);
         try
         {
             NativeMemoryTestHooks.FailNextAllocation();
@@ -182,8 +182,8 @@ public sealed class NativeOwnerHistoryTests
     }
 
     [Theory]
-    [InlineData(NativeMemoryReturn.ToNativeMemory)]
-    [InlineData(NativeMemoryReturn.ToGarbageCollector)]
+    [InlineData(NativeMemoryReturn.Free)]
+    [InlineData(NativeMemoryReturn.Reuse)]
     public void RegionAppendHistoryMatchesRealAcquisitionsAndTerminalBackingPolicy(NativeMemoryReturn policy)
     {
         NativeMemoryBudget budget = new(65_536);
@@ -208,7 +208,7 @@ public sealed class NativeOwnerHistoryTests
             Assert.Equal(statistics.PeakOutstandingNativeBytes, terminal.PeakOutstandingNativeBytes);
             Assert.Equal(0, terminal.DetachedNativeBytes);
             object? segmentCount = typeof(NativeRegionKernel).GetField("_segmentCount", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(kernel);
-            if (policy == NativeMemoryReturn.ToNativeMemory)
+            if (policy == NativeMemoryReturn.Free)
             {
                 Assert.Equal(0, terminal.RetainedSegmentCount);
                 Assert.Equal(0, terminal.OutstandingNativeBytes);
@@ -237,7 +237,7 @@ public sealed class NativeOwnerHistoryTests
     public void SynchronizedPoolHistoryCannotPreventPhysicalTrimOrReuse()
     {
         NativeMemoryBudget budget = new(8_192);
-        using NativeConcurrentPool<int> pool = new(budget, 0, 0, NativeMemoryReturn.ToNativeMemory, false);
+        using NativeConcurrentPool<int> pool = new(budget, 0, 0, NativeMemoryReturn.Free, false);
         object kernel = GetKernel(pool);
         SetHistory(kernel, "_freshSegmentAllocationCount", long.MaxValue);
         using (ConcurrentPooled<int> value = pool.Rent(1, static writer => writer.Write(42)))
@@ -259,7 +259,7 @@ public sealed class NativeOwnerHistoryTests
     public void IdentityExhaustionRejectsBeforeBudgetAdmissionOrProducerExecution()
     {
         NativeMemoryBudget budget = new(512);
-        using NativePool<int> pool = new(budget, 0, 0, NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(budget, 0, 0, NativeMemoryReturn.Free);
         object kernel = GetKernel(pool);
         SetHistory(kernel, "_nextAllocationOrdinal", long.MaxValue);
         bool invoked = false;

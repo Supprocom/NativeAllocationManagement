@@ -63,7 +63,7 @@ internal static class NativeAllocationDiagnosticDescriptors
     internal static readonly DiagnosticDescriptor FieldDisposal = Create(
         "NAM1015",
         "Deterministic field pool requires disposal",
-        "Field pool '{0}' uses ToNativeMemory but its containing type does not expose a recognized IDisposable release path for that exact field.");
+        "Field pool '{0}' uses NativeMemoryReturn.Free but its containing type does not expose a recognized IDisposable release path for that exact field.");
 
     internal static readonly DiagnosticDescriptor UnknownCall = Create(
         "NAM1016",

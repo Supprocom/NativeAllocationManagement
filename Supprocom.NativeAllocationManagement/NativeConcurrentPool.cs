@@ -64,7 +64,7 @@ public sealed class NativeConcurrentPool<T> : IDisposable
     public NativeConcurrentPool(
         int preLease = 0,
         NativeMemoryReturn returnMemoryOnDispose =
-            NativeMemoryReturn.ToGarbageCollector,
+            NativeMemoryReturn.Reuse,
         bool doNotLeaseOnDeclaration = false)
         : this(
             preLease,
@@ -84,7 +84,7 @@ public sealed class NativeConcurrentPool<T> : IDisposable
         int preLease,
         nuint preAllocateBytes,
         NativeMemoryReturn returnMemoryOnDispose =
-            NativeMemoryReturn.ToGarbageCollector,
+            NativeMemoryReturn.Reuse,
         bool doNotLeaseOnDeclaration = false)
     {
         NativeMemoryReturnValidation.Validate(

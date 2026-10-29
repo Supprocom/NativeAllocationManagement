@@ -89,7 +89,7 @@ public sealed class NativeSharingDiagnosticContractTests
         // Internal region-to-transfer construction exercises the actual provider
         // path; this is not a claim that a new public conversion API exists.
         using ProviderBuffer provider = new(128);
-        using NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         NativeOwnerKernel kernel = arena.KernelForInitialization;
         Assert.Equal((nuint)128, kernel.ReserveExternalMemory(provider, 0, 128));
         NativeRegionAllocation allocation = kernel.LeaseBumpInitialized(1, sizeof(int), sizeof(int), false, false,

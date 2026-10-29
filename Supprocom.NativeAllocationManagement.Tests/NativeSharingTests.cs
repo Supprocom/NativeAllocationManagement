@@ -484,7 +484,7 @@ public sealed class NativeSharingTests
     public void PooledPayloadPinProtectsBackingUntilReturnThenAllowsSlotReuse()
     {
         NativeMemoryBudget budget = new(1_024);
-        using NativeConcurrentPool<int> pool = new(budget, 4, 0, NativeMemoryReturn.ToNativeMemory, false);
+        using NativeConcurrentPool<int> pool = new(budget, 4, 0, NativeMemoryReturn.Free, false);
         NativeTransfer<int>? source = pool.RentTransferable(1, static writer => writer.Write(42));
         NativeShared<int> owner = NativeShared<int>.Create(ref source, new(1, 1));
         Assert.True(owner.TryDowngrade(out NativeWeak<int> weak, out _));
@@ -504,7 +504,7 @@ public sealed class NativeSharingTests
     public void NativeGenerationReturnRejectsTheSharedLifetimeBeforeChangingBacking()
     {
         NativeMemoryBudget budget = new(1_024);
-        using NativeConcurrentPool<int> pool = new(budget, 4, 0, NativeMemoryReturn.ToNativeMemory, false);
+        using NativeConcurrentPool<int> pool = new(budget, 4, 0, NativeMemoryReturn.Free, false);
         NativeTransfer<int>? source = pool.RentTransferable(1, static writer => writer.Write(42));
         NativeShared<int> owner = NativeShared<int>.Create(ref source, new(1, 0));
         long extent = budget.CaptureStatistics().CommittedBytes;
@@ -520,7 +520,7 @@ public sealed class NativeSharingTests
     public void DeferredGenerationReturnKeepsSharedReadsValidUntilTheirRealPinEnds()
     {
         NativeMemoryBudget budget = new(1_024);
-        using NativeConcurrentPool<int> pool = new(budget, 4, 0, NativeMemoryReturn.ToNativeMemory, false);
+        using NativeConcurrentPool<int> pool = new(budget, 4, 0, NativeMemoryReturn.Free, false);
         NativeShared<int> owner = CreatePooledSharedForCollection(pool);
         Assert.True(owner.TryDowngrade(out NativeWeak<int> weak, out _));
         long extent = budget.CaptureStatistics().CommittedBytes;
@@ -556,7 +556,7 @@ public sealed class NativeSharingTests
     public void QuarantinedDrainStaysChargedAndPayloadReturnNeverClaimsAPhysicalFree()
     {
         NativeMemoryBudget budget = new(1_024);
-        NativeConcurrentPool<int> pool = new(budget, 4, 0, NativeMemoryReturn.ToNativeMemory, false);
+        NativeConcurrentPool<int> pool = new(budget, 4, 0, NativeMemoryReturn.Free, false);
         try
         {
             NativeTransfer<int>? source = pool.RentTransferable(1, static writer => writer.Write(42));

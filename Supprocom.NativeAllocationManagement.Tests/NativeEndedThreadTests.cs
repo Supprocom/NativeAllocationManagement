@@ -182,17 +182,17 @@ public sealed class NativeEndedThreadTests
         NativeMemoryBudget budget = new(1 << 20);
         NativeThreadState state = TestThread.Run(() =>
         {
-            using (NativeRegion region = new(budget, 0, NativeMemoryReturn.ToGarbageCollector))
+            using (NativeRegion region = new(budget, 0, NativeMemoryReturn.Reuse))
             {
                 _ = region.LeaseUninitialized<byte>(10_000);
             }
 
-            using (NativeArena arena = new(budget, 0, NativeMemoryReturn.ToGarbageCollector))
+            using (NativeArena arena = new(budget, 0, NativeMemoryReturn.Reuse))
             {
                 _ = arena.ScratchUninitialized<byte>(10_000);
             }
 
-            using NativePool<byte> pool = new(budget, 0, 0, NativeMemoryReturn.ToGarbageCollector);
+            using NativePool<byte> pool = new(budget, 0, 0, NativeMemoryReturn.Reuse);
             using Pooled<byte> lease = pool.RentUninitialized(10_000);
         });
 

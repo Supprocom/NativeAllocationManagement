@@ -83,7 +83,7 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
             return AcquireBudgeted(preAllocateBytes, returnMemoryOnDispose, budget);
         }
 
-        if (returnMemoryOnDispose == NativeMemoryReturn.ToGarbageCollector)
+        if (returnMemoryOnDispose == NativeMemoryReturn.Reuse)
         {
             NativeThreadState thread = NativeThreadState.Current;
             NativeRegionKernel? reusable = thread.ReusableRegion;
@@ -114,7 +114,7 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
         NativeMemoryReturn returnMemoryOnDispose,
         NativeMemoryBudget budget)
     {
-        if (returnMemoryOnDispose == NativeMemoryReturn.ToGarbageCollector)
+        if (returnMemoryOnDispose == NativeMemoryReturn.Reuse)
         {
             NativeThreadState thread = NativeThreadState.Current;
             NativeRegionKernel? kept = NativeKeptStorage.Take(ref thread.KeptBudgetedRegion, budget);
@@ -506,7 +506,7 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
             HistoryOverflowed = false,
             OutstandingNativeBytes = _retainedBytes,
             DetachedNativeBytes = _lifecycle == NativeOwnerLifecycle.Disposed
-                && _returnMemoryOnDispose == NativeMemoryReturn.ToGarbageCollector
+                && _returnMemoryOnDispose == NativeMemoryReturn.Reuse
                 && !_retainedForReuse ? _retainedBytes : 0,
             PeakOutstandingNativeBytes = _peakRetainedBytes,
             InitializedPayloadBytes = _lifecycle == NativeOwnerLifecycle.Active ? _requestedBytes : 0,
@@ -537,7 +537,7 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
         }
 
         _lifecycle = NativeOwnerLifecycle.Disposed;
-        if (_returnMemoryOnDispose == NativeMemoryReturn.ToNativeMemory)
+        if (_returnMemoryOnDispose == NativeMemoryReturn.Free)
         {
             FreeSegments();
             ReleaseGuard();

@@ -9,7 +9,7 @@ public sealed class NativeSynchronizedBackingCorrelationTests
     public void PoolReuseKeepsThePhysicalIdentityAndEveryFreeMatchesItsAcquisition()
     {
         NativeMemoryBudget budget = new(4096, traceCapacity: 64);
-        using NativeConcurrentPool<int> pool = new(budget, 0, 0, NativeMemoryReturn.ToNativeMemory, false);
+        using NativeConcurrentPool<int> pool = new(budget, 0, 0, NativeMemoryReturn.Free, false);
         using ConcurrentPooled<int> first = pool.Rent(1, static writer => writer.Write(11));
         using ConcurrentPooled<int> second = pool.Rent(1, static writer => writer.Write(42));
         Assert.Equal(2, budget.CaptureStatistics().AllocationCount);
@@ -28,7 +28,7 @@ public sealed class NativeSynchronizedBackingCorrelationTests
     public void ArenaGenerationsDoNotResetBackingIdentityOrInventAllocationOnReuse()
     {
         NativeMemoryBudget budget = new(16_384, traceCapacity: 64);
-        using NativeConcurrentArena arena = new(budget, 64, NativeMemoryReturn.ToNativeMemory, false);
+        using NativeConcurrentArena arena = new(budget, 64, NativeMemoryReturn.Free, false);
         ConcurrentArenaLease<int> first = arena.Scratch<int>(1, static writer => writer.Write(11));
         Assert.Equal(11, first.Read(static view => view[0]));
         arena.ReleaseLeasesToNativeMemory();
@@ -68,7 +68,7 @@ public sealed class NativeSynchronizedBackingCorrelationTests
     public void SynchronizedOrdinalExhaustionOccursBeforeBudgetAdmission()
     {
         NativeMemoryBudget budget = new(4096, traceCapacity: 16);
-        using NativeConcurrentPool<int> pool = new(budget, 0, 0, NativeMemoryReturn.ToNativeMemory, false);
+        using NativeConcurrentPool<int> pool = new(budget, 0, 0, NativeMemoryReturn.Free, false);
         typeof(NativeOwnerKernel).GetField("_nextSegmentOrdinal", BindingFlags.NonPublic | BindingFlags.Instance)!
             .SetValue(pool.KernelForTransfer, long.MaxValue);
         NativeMemoryBudgetStatistics before = budget.CaptureStatistics();
@@ -80,7 +80,7 @@ public sealed class NativeSynchronizedBackingCorrelationTests
     public void ExternalOrdinalExhaustionDoesNotAcquireAProviderReference()
     {
         using AddressOnlyBuffer buffer = new();
-        using NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         NativeOwnerKernel kernel = Assert.IsType<NativeOwnerKernel>(typeof(NativeConcurrentArena)
             .GetField("_kernel", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(arena));
         typeof(NativeOwnerKernel).GetField("_nextSegmentOrdinal", BindingFlags.NonPublic | BindingFlags.Instance)!
@@ -97,7 +97,7 @@ public sealed class NativeSynchronizedBackingCorrelationTests
     public void SharedAndExpiredWeakEventsKeepTheOriginalBackingIdentity(bool pooled)
     {
         NativeMemoryBudget budget = new(4096, traceCapacity: 64);
-        using NativeConcurrentPool<int> pool = new(budget, 0, 0, NativeMemoryReturn.ToNativeMemory, false);
+        using NativeConcurrentPool<int> pool = new(budget, 0, 0, NativeMemoryReturn.Free, false);
         using NativeBuilder<int> builder = new(budget, 0);
         NativeTransfer<int>? unique;
         long ownerId;

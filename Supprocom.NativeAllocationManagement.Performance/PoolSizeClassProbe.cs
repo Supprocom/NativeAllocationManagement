@@ -16,7 +16,7 @@ internal static class PoolSizeClassProbe
         using NativePool<byte> pool = new(
             preLease: 0,
             preAllocateBytes: ReservedBytes,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
 
         long warmupChecksum = RunIterations(pool, WarmupIterations);
         NativeOwnerStatistics before = pool.GetStatistics();

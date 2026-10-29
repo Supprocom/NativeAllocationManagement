@@ -8764,13 +8764,13 @@ internal sealed partial class NativeOwnerKernel
         }
     }
 
-    internal void ReturnMemoryToNativeMemory() => ReturnMemory(NativeMemoryReturn.ToNativeMemory, "ReturnMemoryToNativeMemory");
+    internal void ReturnMemoryToNativeMemory() => ReturnMemory(NativeMemoryReturn.Free, "ReturnMemoryToNativeMemory");
 
-    internal void ReturnMemoryToGarbageCollector() => ReturnMemory(NativeMemoryReturn.ToGarbageCollector, "ReturnMemoryToGarbageCollector");
+    internal void ReturnMemoryToGarbageCollector() => ReturnMemory(NativeMemoryReturn.Reuse, "ReturnMemoryToGarbageCollector");
 
-    internal void ReleaseLeasesToNativeMemory() => ReleaseLeases(NativeMemoryReturn.ToNativeMemory, "ReleaseLeasesToNativeMemory");
+    internal void ReleaseLeasesToNativeMemory() => ReleaseLeases(NativeMemoryReturn.Free, "ReleaseLeasesToNativeMemory");
 
-    internal void ReleaseLeasesToGarbageCollector() => ReleaseLeases(NativeMemoryReturn.ToGarbageCollector, "ReleaseLeasesToGarbageCollector");
+    internal void ReleaseLeasesToGarbageCollector() => ReleaseLeases(NativeMemoryReturn.Reuse, "ReleaseLeasesToGarbageCollector");
 
     internal void LeaseFromMemory()
     {
@@ -9262,7 +9262,7 @@ internal sealed partial class NativeOwnerKernel
 
                 if (_lifecycle == NativeOwnerLifecycle.Unleased)
                 {
-                    if (_returnMemoryOnDispose == NativeMemoryReturn.ToNativeMemory)
+                    if (_returnMemoryOnDispose == NativeMemoryReturn.Free)
                     {
                         ReleaseOwnerWideStorageLocked();
                     }
@@ -9293,7 +9293,7 @@ internal sealed partial class NativeOwnerKernel
                     ClearOwnerWideAllocationsLocked(skipActiveOperations: false);
                     _lifecycle = NativeOwnerLifecycle.Returning;
                     InvalidateOwnerWideGenerationsLocked();
-                    if (_returnMemoryOnDispose == NativeMemoryReturn.ToNativeMemory)
+                    if (_returnMemoryOnDispose == NativeMemoryReturn.Free)
                     {
                         ReleaseOwnerWideStorageLocked();
                     }
@@ -9323,7 +9323,7 @@ internal sealed partial class NativeOwnerKernel
                 ClearOwnerWideAllocationsLocked(skipActiveOperations: false);
                 _lifecycle = NativeOwnerLifecycle.Returning;
                 InvalidateOwnerWideGenerationsLocked();
-                if (_returnMemoryOnDispose == NativeMemoryReturn.ToNativeMemory)
+                if (_returnMemoryOnDispose == NativeMemoryReturn.Free)
                 {
                     ReleaseOwnerWideStorageLocked();
                 }
@@ -9691,7 +9691,7 @@ internal sealed partial class NativeOwnerKernel
                 throw CreateInUseException(operation, _generation, 0, 0, "Another lifecycle transition is already using the owner gate.");
             }
 
-            bool tolerant = policy == NativeMemoryReturn.ToGarbageCollector;
+            bool tolerant = policy == NativeMemoryReturn.Reuse;
             NativeGeneration generation = _current!;
             BeginArenaFastBoundary();
             generation.CloseOperationAdmission();
@@ -9805,7 +9805,7 @@ internal sealed partial class NativeOwnerKernel
             try
             {
                 bool tolerant =
-                    policy == NativeMemoryReturn.ToGarbageCollector;
+                    policy == NativeMemoryReturn.Reuse;
                 if (current.LeaseReturnsInProgress != 0
                     || current.InitializationsInProgress != 0
                     || HasArenaFastInitializer()

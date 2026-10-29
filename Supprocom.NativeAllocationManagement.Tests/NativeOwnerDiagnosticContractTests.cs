@@ -93,7 +93,7 @@ public sealed class NativeOwnerDiagnosticContractTests
         long epoch = NativeMemoryDiagnostics.Snapshot().MetricsEpoch;
         long extent = OperatingSystem.IsWindows() ? 4 : 64;
         NativeMemoryBudget budget = new(128);
-        NativeConcurrentPool<int> pool = new(budget, 1, 0, NativeMemoryReturn.ToNativeMemory, false);
+        NativeConcurrentPool<int> pool = new(budget, 1, 0, NativeMemoryReturn.Free, false);
         NativeOwnerDiagnosticOracle.Statistics expected = new()
         {
             OwnerId = pool.Id,

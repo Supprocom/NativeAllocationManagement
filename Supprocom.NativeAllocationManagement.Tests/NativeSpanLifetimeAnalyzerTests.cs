@@ -15,7 +15,7 @@ public sealed class NativeSpanLifetimeAnalyzerTests
     [InlineData("using NativeArena arena = new(); Span<int> s = arena.Scratch<int>(4, 0).AsSpan(); arena.Reset(); s[0] = 1;")]
     [InlineData("NativeArena arena = new(); Span<int> s = arena.Scratch<int>(4, 0).AsSpan(); arena.Dispose(); s.Clear();")]
     [InlineData("using NativeArena arena = new(); Span<int> s = arena.ScratchScoped<int>(4, 0).AsSpan(); arena.RecycleScoped(); s[0] = 1;")]
-    [InlineData("Span<int> s = default; using (NativeRegion region = new(64, NativeMemoryReturn.ToNativeMemory)) { Local<int> local = region.Lease<int>(4, 0); s = local.AsSpan(); } s[0] = 1;")]
+    [InlineData("Span<int> s = default; using (NativeRegion region = new(64, NativeMemoryReturn.Free)) { Local<int> local = region.Lease<int>(4, 0); s = local.AsSpan(); } s[0] = 1;")]
     public async Task SpanUseAfterItsLeaseEndsIsRejected(string body)
     {
         string[] ids = await NativeIdsAsync(body);
@@ -29,7 +29,7 @@ public sealed class NativeSpanLifetimeAnalyzerTests
     [InlineData("using NativeArena arena = new(); ArenaLease<int> a = arena.Scratch<int>(4, 0); Span<int> s = a.AsSpan(); s[0] = 1; arena.Reset();")]
     [InlineData("using NativeArena arena = new(); Span<int> s = arena.Scratch<int>(4, 0).AsSpan(); arena.RecycleScoped(); s[0] = 1; arena.Reset();")]
     [InlineData("using NativeArena arena = new(); for (int i = 0; i < 3; i++) { Span<int> s = arena.Scratch<int>(4, 0).AsSpan(); s[0] = i; arena.Reset(); }")]
-    [InlineData("using (NativeRegion region = new(64, NativeMemoryReturn.ToNativeMemory)) { Local<int> local = region.Lease<int>(4, 0); Span<int> s = local.AsSpan(); s[0] = 1; }")]
+    [InlineData("using (NativeRegion region = new(64, NativeMemoryReturn.Free)) { Local<int> local = region.Lease<int>(4, 0); Span<int> s = local.AsSpan(); s[0] = 1; }")]
     public async Task SpanUseWhileItsLeaseIsCurrentIsAccepted(string body)
     {
         string[] ids = await NativeIdsAsync(body);

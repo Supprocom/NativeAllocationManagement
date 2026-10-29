@@ -35,10 +35,10 @@ public sealed class NativePoolReservationTests
         using NativePool<byte> pool = new(
             preLease: 0,
             preAllocateBytes: 30,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         using NativeArena arena = new(
             preAllocateBytes: 30,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
 
         Assert.Equal((long)NativeAlignedAllocation.GetBackingByteLength(30), pool.GetStatistics().RetainedBytes);
         Assert.Equal((long)NativeAlignedAllocation.GetBackingByteLength(30 + 64), arena.GetStatistics().RetainedBytes);
@@ -47,7 +47,7 @@ public sealed class NativePoolReservationTests
 
         using (NativeRegion region = new(
             preAllocateBytes: 30,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory))
+            returnMemoryOnDispose: NativeMemoryReturn.Free))
         {
             Assert.Equal((long)NativeAlignedAllocation.GetBackingByteLength(30 + 64), region.GetStatistics().RetainedBytes);
             Assert.Equal(30, region.GetStatistics().UsableCapacityBytes);
@@ -59,7 +59,7 @@ public sealed class NativePoolReservationTests
     {
         using NativePool<int> pool = new(
             preLease: 7,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
 
         NativeOwnerStatistics reserved = pool.GetStatistics();
         Assert.Equal((long)NativeAlignedAllocation.GetBackingByteLength(7 * sizeof(int)), reserved.RetainedBytes);
@@ -82,7 +82,7 @@ public sealed class NativePoolReservationTests
         using NativePool<int> pool = new(
             preLease: 0,
             preAllocateBytes: 30,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
 
         NativeOwnerStatistics reserved = pool.GetStatistics();
         Assert.Equal((long)NativeAlignedAllocation.GetBackingByteLength(30), reserved.RetainedBytes);
@@ -105,7 +105,7 @@ public sealed class NativePoolReservationTests
         using NativePool<int> pool = new(
             preLease: 8,
             preAllocateBytes: 18,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
 
         NativeOwnerStatistics reserved = pool.GetStatistics();
         Assert.Equal((long)(NativeAlignedAllocation.GetBackingByteLength(32) + NativeAlignedAllocation.GetBackingByteLength(18)), reserved.RetainedBytes);
@@ -132,7 +132,7 @@ public sealed class NativePoolReservationTests
         using NativePool<int> pool = new(
             preLease: 8,
             preAllocateBytes: 20,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         long freshSegments =
             pool.GetStatistics().FreshSegmentAllocationCount;
 

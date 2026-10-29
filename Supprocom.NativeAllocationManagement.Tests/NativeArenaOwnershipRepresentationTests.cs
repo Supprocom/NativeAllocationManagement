@@ -128,9 +128,9 @@ public sealed class NativeArenaOwnershipRepresentationTests
         {
             using NativeArena owner = overload switch
             {
-                0 => new(null!, 8, NativeMemoryReturn.ToNativeMemory),
+                0 => new(null!, 8, NativeMemoryReturn.Free),
                 1 => new(new NativeArenaPreparation(8, 0), null!),
-                _ => new(null!, new NativeArenaRetentionPolicy(4096, 4096), 8, NativeMemoryReturn.ToNativeMemory)
+                _ => new(null!, new NativeArenaRetentionPolicy(4096, 4096), 8, NativeMemoryReturn.Free)
             };
         });
         Assert.Equal("budget", failure.ParamName);
@@ -142,7 +142,7 @@ public sealed class NativeArenaOwnershipRepresentationTests
         NativeMemoryBudget budget = new(128);
         ArgumentOutOfRangeException failure = Assert.Throws<ArgumentOutOfRangeException>(() =>
         {
-            using NativeArena owner = new(budget, default(NativeArenaRetentionPolicy), 8, NativeMemoryReturn.ToNativeMemory);
+            using NativeArena owner = new(budget, default(NativeArenaRetentionPolicy), 8, NativeMemoryReturn.Free);
         });
         Assert.Equal("retentionPolicy", failure.ParamName);
         Assert.Equal(0, budget.CaptureStatistics().AllocationCount);
@@ -154,7 +154,7 @@ public sealed class NativeArenaOwnershipRepresentationTests
     private static ArenaLease<int> CreateLeaseOnlyOwner(bool prepared, out WeakReference<NativeArenaKernel> weak)
     {
         NativeArena owner = prepared ? new(new NativeArenaPreparation(8, 0), new NativeMemoryBudget(128))
-            : new(8, NativeMemoryReturn.ToNativeMemory);
+            : new(8, NativeMemoryReturn.Free);
         try
         {
             weak = new(owner.KernelForInitialization.KernelFor("test"));

@@ -209,7 +209,7 @@ public sealed class NativeAdmissionDiagnosticContractTests
     public void ProviderUniqueSnapshotCountsRegisteredExtentAndActualAuthorityReturn()
     {
         using ProviderBuffer provider = new(128);
-        using NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         NativeOwnerKernel kernel = arena.KernelForInitialization;
         Assert.Equal((nuint)128, kernel.ReserveExternalMemory(provider, 0, 128));
         NativeRegionAllocation allocation = kernel.LeaseBumpInitialized(1, sizeof(int), sizeof(int), false, false,

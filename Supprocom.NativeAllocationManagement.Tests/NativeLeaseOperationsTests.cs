@@ -8,9 +8,9 @@ public sealed class NativeLeaseOperationsTests
     public void EveryCompositeOverloadUsesDirectBoundedStorage()
     {
         NativeMemoryTestHooks.Reset();
-        using NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        using NativeConcurrentPool<int> secondPool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        using NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
+        using NativeConcurrentPool<int> secondPool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
+        using NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
 
         ConcurrentPooled<int> first = pool.Rent(2, static writer => writer.Fill(default!));
         ConcurrentPooled<int> second = pool.Rent(2, static writer => writer.Fill(default!));
@@ -89,8 +89,8 @@ public sealed class NativeLeaseOperationsTests
     public void LaterEntryFailureReleasesEarlierTokensAndCallbackFailureCleansUp()
     {
         NativeMemoryTestHooks.Reset();
-        using NativeConcurrentPool<int> goodPool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        using NativeConcurrentPool<int> stalePool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentPool<int> goodPool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
+        using NativeConcurrentPool<int> stalePool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         ConcurrentPooled<int> good = goodPool.Rent(1, static writer => writer.Fill(default!));
         ConcurrentPooled<int> stale = stalePool.Rent(1, static writer => writer.Fill(default!));
         stalePool.ReturnMemoryToNativeMemory();
@@ -133,8 +133,8 @@ public sealed class NativeLeaseOperationsTests
     public void EveryCompositeOverloadReleasesEarlierTokensAfterLateEntryFailure()
     {
         NativeMemoryTestHooks.Reset();
-        using NativeConcurrentPool<int> tripleFirstPool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        using NativeConcurrentPool<int> tripleSecondPool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentPool<int> tripleFirstPool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
+        using NativeConcurrentPool<int> tripleSecondPool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         ConcurrentPooled<int> tripleFirst = tripleFirstPool.Rent(1, static writer => writer.Fill(default!));
         ConcurrentPooled<int> tripleStale = tripleSecondPool.Rent(1, static writer => writer.Fill(default!));
         ConcurrentPooled<int> tripleThird = tripleSecondPool.Rent(1, static writer => writer.Fill(default!));
@@ -152,8 +152,8 @@ public sealed class NativeLeaseOperationsTests
         tripleFirst.Access(__namIndexedView => __namIndexedView[0] = 11);
         Assert.Equal(11, tripleFirst.Read(__namIndexedView => __namIndexedView[0]));
 
-        using NativeConcurrentPool<int> pooledFirstPool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        using NativeConcurrentArena staleArena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentPool<int> pooledFirstPool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
+        using NativeConcurrentArena staleArena = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         ConcurrentPooled<int> pooledFirst = pooledFirstPool.Rent(1, static writer => writer.Fill(default!));
         ConcurrentArenaLease<int> staleArenaLease = staleArena.Scratch<int>(1, static writer => writer.Fill(default!));
         staleArena.ReturnMemoryToNativeMemory();
@@ -170,9 +170,9 @@ public sealed class NativeLeaseOperationsTests
         pooledFirst.Access(__namIndexedView => __namIndexedView[0] = 12);
         Assert.Equal(12, pooledFirst.Read(__namIndexedView => __namIndexedView[0]));
 
-        using NativeConcurrentPool<int> quintuplePool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        using NativeConcurrentArena goodArena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        using NativeConcurrentArena lateArena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentPool<int> quintuplePool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
+        using NativeConcurrentArena goodArena = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
+        using NativeConcurrentArena lateArena = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         ConcurrentPooled<int> first = quintuplePool.Rent(1, static writer => writer.Fill(default!));
         ConcurrentPooled<int> second = quintuplePool.Rent(1, static writer => writer.Fill(default!));
         ConcurrentPooled<int> third = quintuplePool.Rent(1, static writer => writer.Fill(default!));
@@ -203,9 +203,9 @@ public sealed class NativeLeaseOperationsTests
     public void EveryCompositeOverloadCleansUpAllTokensWhenTheCallbackThrows()
     {
         NativeMemoryTestHooks.Reset();
-        using NativeConcurrentPool<int> firstPool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        using NativeConcurrentPool<int> secondPool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        using NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentPool<int> firstPool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
+        using NativeConcurrentPool<int> secondPool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
+        using NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         ConcurrentPooled<int> first = firstPool.Rent(1, static writer => writer.Fill(default!));
         ConcurrentPooled<int> second = firstPool.Rent(1, static writer => writer.Fill(default!));
         ConcurrentPooled<int> third = secondPool.Rent(1, static writer => writer.Fill(default!));
@@ -286,7 +286,7 @@ public sealed class NativeLeaseOperationsTests
     public void SameOwnerAliasAndLifecycleTransitionsAreSafeAroundCompositeEntry()
     {
         NativeMemoryTestHooks.Reset();
-        using NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         ConcurrentPooled<int> lease = pool.Rent(1, static writer => writer.Fill(default!));
 
         NativeLeaseOperations.Access(lease, lease, (first, second) =>
@@ -321,7 +321,7 @@ public sealed class NativeLeaseOperationsTests
     public void SameOwnerCompositeValidationIsFailureAtomic()
     {
         NativeMemoryTestHooks.Reset();
-        using NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         ConcurrentPooled<int> first = pool.Rent(1, static writer => writer.Fill(default!));
         ConcurrentPooled<int> ended = pool.Rent(1, static writer => writer.Fill(default!));
         ended.Dispose();
@@ -347,7 +347,7 @@ public sealed class NativeLeaseOperationsTests
     public void SameOwnerCompositeAdmissionProtectsEveryViewBeforeNotification()
     {
         NativeMemoryTestHooks.Reset();
-        using NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         ConcurrentPooled<int> first = pool.Rent(1, static writer => writer.Fill(default!));
         ConcurrentPooled<int> second = pool.Rent(1, static writer => writer.Fill(default!));
         NativeOwnerKernel expectedKernel = first.KernelForComposite;
@@ -394,7 +394,7 @@ public sealed class NativeLeaseOperationsTests
     public void ReferenceSlotsAndStaleHandlesRemainCorrectAfterTolerantTransition()
     {
         NativeMemoryTestHooks.Reset();
-        using NativeConcurrentPool<string> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentPool<string> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         ConcurrentPooled<string> values = pool.Rent(2, static writer => writer.Fill(default!));
         values.Access(__namIndexedView => __namIndexedView[0] = "first");
         NativeLeaseOperations.Access(values, values, (first, second) =>
@@ -425,10 +425,10 @@ public sealed class NativeLeaseOperationsTests
     {
         NativeMemoryTestHooks.Reset();
         using NativeConcurrentPool<int> pool = new(
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         using NativeConcurrentArena arena = new(
             preAllocateBytes: 4096,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         ConcurrentPooled<int> source = pool.Rent(
             4,
             static writer =>
@@ -492,7 +492,7 @@ public sealed class NativeLeaseOperationsTests
         NativeMemoryTestHooks.Reset();
         using NativeConcurrentArena arena = new(
             preAllocateBytes: 4096,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         ConcurrentArenaLease<int> source = arena.Scratch<int>(
             2,
             static writer =>
@@ -576,7 +576,7 @@ public sealed class NativeLeaseOperationsTests
         NativeMemoryTestHooks.Reset();
         using NativeConcurrentArena arena = new(
             preAllocateBytes: 4096,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         ConcurrentArenaLease<int> source = arena.Scratch<int>(
             1,
             static writer => writer.Write(12));
@@ -673,7 +673,7 @@ public sealed class NativeLeaseOperationsTests
         NativeMemoryTestHooks.Reset();
         using NativeConcurrentArena arena = new(
             preAllocateBytes: 4096,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         ConcurrentArenaLease<int> source = arena.Scratch<int>(
             1,
             static writer => writer.Write(9));
@@ -759,7 +759,7 @@ public sealed class NativeLeaseOperationsTests
         NativeMemoryTestHooks.Reset();
         using NativeConcurrentArena arena = new(
             preAllocateBytes: 4096,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         ConcurrentArenaLease<int> source = arena.ScratchScoped<int>(
             1,
             static writer => writer.Write(9));
@@ -805,7 +805,7 @@ public sealed class NativeLeaseOperationsTests
         NativeMemoryTestHooks.Reset();
         using NativeConcurrentArena arena = new(
             preAllocateBytes: 4096,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         ConcurrentArenaLease<int> source = arena.Scratch<int>(
             2,
             static writer =>
@@ -918,7 +918,7 @@ public sealed class NativeLeaseOperationsTests
         NativeMemoryTestHooks.Reset();
         using NativeConcurrentArena arena = new(
             preAllocateBytes: 4096,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         ConcurrentArenaLease<int> source = arena.Scratch<int>(
             1,
             static writer => writer.Write(21));
@@ -988,10 +988,10 @@ public sealed class NativeLeaseOperationsTests
     {
         NativeMemoryTestHooks.Reset();
         using NativeConcurrentPool<int> pool = new(
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         using NativeConcurrentArena arena = new(
             preAllocateBytes: 4096,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         ConcurrentPooled<int> source = pool.Rent(
             1,
             static writer => writer.Write(7));
@@ -1077,7 +1077,7 @@ public sealed class NativeLeaseOperationsTests
     {
         NativeMemoryTestHooks.Reset();
         using NativeConcurrentArena arena = new(
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         ConcurrentArenaLease<int> first = arena.Scratch<int>(
             1,
             static writer => writer.Write(1));
@@ -1168,7 +1168,7 @@ public sealed class NativeLeaseOperationsTests
     {
         NativeMemoryTestHooks.Reset();
         using NativeConcurrentArena arena = new(
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         ConcurrentArenaLease<int> first = arena.Scratch<int>(
             1,
             static writer => writer.Write(1));
@@ -1256,7 +1256,7 @@ public sealed class NativeLeaseOperationsTests
     {
         NativeMemoryTestHooks.Reset();
         using NativeConcurrentArena arena = new(
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         ConcurrentArenaLease<int> first = arena.Scratch<int>(
             1,
             static writer => writer.Write(1));
@@ -1351,7 +1351,7 @@ public sealed class NativeLeaseOperationsTests
         NativeMemoryTestHooks.Reset();
         using NativeConcurrentArena arena = new(
             preAllocateBytes: 4096,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         ConcurrentArenaLease<int> source = arena.Scratch<int>(
             2,
             static writer =>

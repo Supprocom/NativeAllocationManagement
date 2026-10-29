@@ -139,7 +139,7 @@ internal static class ArenaPerformanceRegression
                 * ReservationBytesPerSlot));
         NativeArena arena = new(
             reservation,
-            NativeMemoryReturn.ToNativeMemory);
+            NativeMemoryReturn.Free);
         WarmArena(arena);
         arena.Reset();
         NativeOwnerStatistics beforeStatistics =
@@ -319,7 +319,7 @@ internal static class ArenaPerformanceRegression
     {
         using NativeArena arena = new(
             32_000,
-            NativeMemoryReturn.ToNativeMemory);
+            NativeMemoryReturn.Free);
         WarmArena(arena);
     }
 

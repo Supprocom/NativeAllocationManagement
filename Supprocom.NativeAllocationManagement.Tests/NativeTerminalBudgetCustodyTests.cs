@@ -68,7 +68,7 @@ public sealed class NativeTerminalBudgetCustodyTests
     [InlineData(6)]
     public void EmptyActiveOwnersKeepTheirDomainForFutureGrowth(int model)
     {
-        using IDisposable owner = CreateClassWithOnlyWeakDomain(model, NativeMemoryReturn.ToNativeMemory,
+        using IDisposable owner = CreateClassWithOnlyWeakDomain(model, NativeMemoryReturn.Free,
             out WeakReference<NativeMemoryBudget> budget);
         Collect();
         Assert.True(IsAlive(budget));
@@ -85,7 +85,7 @@ public sealed class NativeTerminalBudgetCustodyTests
     public void FailedPoolClosureDoesNotLoseItsLiveDomain()
     {
         using NativePool<int> owner = (NativePool<int>)CreateClassWithOnlyWeakDomain(0,
-            NativeMemoryReturn.ToNativeMemory, out WeakReference<NativeMemoryBudget> budget);
+            NativeMemoryReturn.Free, out WeakReference<NativeMemoryBudget> budget);
         using (Pooled<int> lease = owner.Rent(1, static writer => writer.Write(42)))
         {
             Assert.Throws<InvalidOperationException>(owner.Dispose);
@@ -206,7 +206,7 @@ public sealed class NativeTerminalBudgetCustodyTests
     {
         NativeMemoryBudget budget = new(1_048_576, traceCapacity);
         observed = new(budget);
-        IDisposable owner = CreateClass(model, budget, NativeMemoryReturn.ToNativeMemory);
+        IDisposable owner = CreateClass(model, budget, NativeMemoryReturn.Free);
         using (owner) { }
         terminal = budget.CaptureStatistics();
         GC.KeepAlive(budget);
@@ -243,7 +243,7 @@ public sealed class NativeTerminalBudgetCustodyTests
     {
         NativeMemoryBudget budget = new(1_048_576, traceCapacity);
         observed = new(budget);
-        using NativeRegion owner = new(budget, empty ? 0U : 64U, NativeMemoryReturn.ToNativeMemory);
+        using NativeRegion owner = new(budget, empty ? 0U : 64U, NativeMemoryReturn.Free);
         owner.Dispose();
         terminal = budget.CaptureStatistics();
         GC.KeepAlive(budget);
@@ -290,7 +290,7 @@ public sealed class NativeTerminalBudgetCustodyTests
     private static void DisposeTracedOwner(int model, out WeakReference<NativeMemoryBudget> budget,
         out WeakReference<IDisposable> observedOwner)
     {
-        using IDisposable owner = CreateClassWithOnlyWeakDomain(model, NativeMemoryReturn.ToGarbageCollector, out budget);
+        using IDisposable owner = CreateClassWithOnlyWeakDomain(model, NativeMemoryReturn.Reuse, out budget);
         owner.Dispose();
         observedOwner = new(owner);
         AssertReturned(Observe(budget));
@@ -304,7 +304,7 @@ public sealed class NativeTerminalBudgetCustodyTests
     private static void AbandonHeldDetachedOwner(int model, out WeakReference<NativeMemoryBudget> budget,
         out WeakReference<IDisposable> observedOwner)
     {
-        using IDisposable owner = CreateClassWithOnlyWeakDomain(model, NativeMemoryReturn.ToGarbageCollector, out budget);
+        using IDisposable owner = CreateClassWithOnlyWeakDomain(model, NativeMemoryReturn.Reuse, out budget);
         owner.Dispose();
         observedOwner = new(owner);
         Collect();
@@ -350,7 +350,7 @@ public sealed class NativeTerminalBudgetCustodyTests
     {
         NativeMemoryBudget budget = new(64, 128);
         observed = new(budget);
-        using (owner = new(budget, 4, 0, NativeMemoryReturn.ToNativeMemory, false))
+        using (owner = new(budget, 4, 0, NativeMemoryReturn.Free, false))
         {
             NativeTransfer<int> transfer = owner.RentTransferable(1, static writer => writer.Write(42));
             Assert.Equal(42, transfer.Read(static view => view[0]));

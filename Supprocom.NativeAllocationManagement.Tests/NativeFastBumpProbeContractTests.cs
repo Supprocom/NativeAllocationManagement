@@ -34,7 +34,7 @@ public sealed class NativeFastBumpProbeContractTests
     [Fact]
     public void LiveRegionRangesAndTerminalStorageNeverBecomeAllocationRecords()
     {
-        using NativeRegion region = new(64, NativeMemoryReturn.ToNativeMemory);
+        using NativeRegion region = new(64, NativeMemoryReturn.Free);
         Verify(region, NativeOwnerLifecycle.Active);
         Local<int> first = region.Lease<int>(3, static writer => writer.Fill(19));
         Local<long> second = region.Lease<long>(1, static writer => writer.Write(23));
@@ -58,7 +58,7 @@ public sealed class NativeFastBumpProbeContractTests
     [Fact]
     public void RegionIncompleteInitializationPreservesRealLifecycleAndReusesReservation()
     {
-        using NativeRegion region = new(64, NativeMemoryReturn.ToNativeMemory);
+        using NativeRegion region = new(64, NativeMemoryReturn.Free);
         bool denied = false;
         try { _ = region.Lease<int>(2, static writer => writer.Write(29)); }
         catch (InvalidOperationException failure)
@@ -81,7 +81,7 @@ public sealed class NativeFastBumpProbeContractTests
     [Fact]
     public void ArenaRangesEnteredCallbacksAndScopeReuseHaveNoRecordTable()
     {
-        using NativeArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         Verify(arena, NativeOwnerLifecycle.Active);
         ArenaLease<int> ordinary = arena.Scratch<int>(2, static writer => writer.Fill(37));
         ArenaLease<int> scoped = arena.ScratchScoped<int>(1, static writer => writer.Write(41));
@@ -119,7 +119,7 @@ public sealed class NativeFastBumpProbeContractTests
     {
         using NativeArena arena = prepared
             ? new NativeArena(new NativeArenaPreparation(64, 64), new NativeMemoryBudget(4096))
-            : new NativeArena(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            : new NativeArena(returnMemoryOnDispose: NativeMemoryReturn.Free);
         Verify(arena, NativeOwnerLifecycle.Active);
         Assert.Throws<OperationCanceledException>(() => arena.Scratch<int>(2, writer =>
         {
@@ -146,7 +146,7 @@ public sealed class NativeFastBumpProbeContractTests
     [Fact]
     public void InitializationKernelPropertyIsAuthorityNotNumericTelemetry()
     {
-        using NativeArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         NativeArena kernel = arena.KernelForInitialization;
         Assert.Same(arena, kernel);
         Assert.Equal(arena.Id, kernel.Id);

@@ -8,7 +8,7 @@ public sealed class NativeFastPoolProbeContractTests
     [Fact]
     public void PrivateScopesAreRealOccupiedRecordsAndActiveOperations()
     {
-        using NativePool<int> pool = new(preLease: 2, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(preLease: 2, returnMemoryOnDispose: NativeMemoryReturn.Free);
         Assert.Equal(10, pool.Process(2, 5, 0, (values, _) =>
         {
             Verify(pool, new() { Records = 1, Operations = 1, Ordinals = [1] });
@@ -29,7 +29,7 @@ public sealed class NativeFastPoolProbeContractTests
     [Fact]
     public void CompleteOrdinaryProbeStateTracksInitializationAndNestedBorrows()
     {
-        using NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         Verify(pool, new());
         using (Pooled<int> first = pool.Rent(1, static writer => writer.Write(17)))
         {
@@ -68,7 +68,7 @@ public sealed class NativeFastPoolProbeContractTests
     [Fact]
     public void FailedAndEmptyInitializationDoNotInventPublicationOrPhysicalStorage()
     {
-        using NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         Assert.Throws<InvalidOperationException>(() => pool.Rent(2, writer =>
         {
             Verify(pool, new() { Records = 1, Initializations = 1, Operations = 1, Ordinals = [1] });
@@ -134,7 +134,7 @@ public sealed class NativeFastPoolProbeContractTests
     [Fact]
     public void OrdinalObservationsAreIndependentCopiesAndReuseDoesNotResurrectIdentity()
     {
-        using NativePool<int> pool = new(preLease: 1, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(preLease: 1, returnMemoryOnDispose: NativeMemoryReturn.Free);
         Verify(pool, new() { Ordinals = [1] });
         long[] saved = pool.CurrentSegmentOrdinalsForTest;
         saved[0] = long.MaxValue;
@@ -157,7 +157,7 @@ public sealed class NativeFastPoolProbeContractTests
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000", Justification = "This test transfers the pool to its retired coordinator contract. Finally unconditionally releases retired storage, or disposes the still-active owner. IDisposable.Dispose deliberately rejects retired cleanup; using cannot represent this tested lifecycle.")]
     public void RetiredAndReleasedProbesCannotGrantFreshLeaseAuthority()
     {
-        NativePool<int> pool = new(preLease: 1, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativePool<int> pool = new(preLease: 1, returnMemoryOnDispose: NativeMemoryReturn.Free);
         bool retired = false;
         try
         {
@@ -179,7 +179,7 @@ public sealed class NativeFastPoolProbeContractTests
     [Fact]
     public void MissingGenerationMutationHooksStayUnsupportedWithoutChangingRealZeros()
     {
-        using NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         Assert.Throws<NotSupportedException>(() => pool.SetScopeEpochForTest(long.MaxValue));
         Assert.Throws<NotSupportedException>(() => pool.SetGenerationCounterForTest(long.MaxValue));
         Verify(pool, new());
@@ -194,7 +194,7 @@ public sealed class NativeFastPoolProbeContractTests
     [InlineData(true)]
     public void OrdinalCaptureRequiresOwnerThreadEvenAfterRelease(bool disposed)
     {
-        using NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         if (disposed) pool.Dispose();
         Exception? failure = null;
         Thread other = new(() =>

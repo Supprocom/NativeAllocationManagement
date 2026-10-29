@@ -111,7 +111,7 @@ internal static class NativeRegionPhaseBenchmark
         {
             kernel = new NativeRegionKernel(
                 64,
-                NativeMemoryReturn.ToNativeMemory);
+                NativeMemoryReturn.Free);
         }
 
         long elapsed = Stopwatch.GetTimestamp() - start;
@@ -170,7 +170,7 @@ internal static class NativeRegionPhaseBenchmark
     {
         NativeRegionKernel kernel = new(
             checked((nuint)LeaseIterations * 16u),
-            NativeMemoryReturn.ToNativeMemory);
+            NativeMemoryReturn.Free);
         try
         {
             return Measure(
@@ -236,7 +236,7 @@ internal static class NativeRegionPhaseBenchmark
     {
         NativeRegionKernel kernel = new(
             1_024,
-            NativeMemoryReturn.ToNativeMemory);
+            NativeMemoryReturn.Free);
         Local<int> values = kernel.LeaseInitialized(
             64,
             FillIntegers);
@@ -316,7 +316,7 @@ internal static class NativeRegionPhaseBenchmark
     {
         NativeRegionKernel kernel = new(
             64,
-            NativeMemoryReturn.ToNativeMemory);
+            NativeMemoryReturn.Free);
         Local<int> values = kernel.LeaseInitialized(
             1,
             FillIntegers);
@@ -388,7 +388,7 @@ internal static class NativeRegionPhaseBenchmark
         {
             kernel = new NativeRegionKernel(
                 1,
-                NativeMemoryReturn.ToNativeMemory);
+                NativeMemoryReturn.Free);
         }
 
         try
@@ -467,7 +467,7 @@ internal static class NativeRegionPhaseBenchmark
         {
             kernel = new NativeRegionKernel(
                 64,
-                NativeMemoryReturn.ToNativeMemory);
+                NativeMemoryReturn.Free);
         }
 
         return MeasurePreparedDisposal(
@@ -558,7 +558,7 @@ internal static class NativeRegionPhaseBenchmark
     {
         using NativeRegion region = new(
             checked((nuint)LeaseIterations * 16u),
-            NativeMemoryReturn.ToNativeMemory);
+            NativeMemoryReturn.Free);
         long checksum = 0;
         for (int index = 0; index < LeaseIterations; index++)
         {
@@ -597,7 +597,7 @@ internal static class NativeRegionPhaseBenchmark
             checked(
                 (nuint)CombinedIterations
                 * CombinedReservationBytes),
-            NativeMemoryReturn.ToNativeMemory);
+            NativeMemoryReturn.Free);
         long checksum = 0;
         for (int index = 0; index < CombinedIterations; index++)
         {
@@ -753,7 +753,7 @@ internal static class NativeRegionPhaseBenchmark
         NativeOwnerKernel.CreateRegion(
             preAllocateBytes,
             "general Region kernel",
-            NativeMemoryReturn.ToNativeMemory,
+            NativeMemoryReturn.Free,
             containsReferences: false,
             doNotLeaseOnDeclaration: false);
 

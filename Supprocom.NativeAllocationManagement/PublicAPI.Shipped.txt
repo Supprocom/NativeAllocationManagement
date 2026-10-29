@@ -95,7 +95,7 @@ Supprocom.NativeAllocationManagement.NativeAllocationUninitializedException
 Supprocom.NativeAllocationManagement.NativeArena
 Supprocom.NativeAllocationManagement.NativeArena.Dispose() -> void
 Supprocom.NativeAllocationManagement.NativeArena.GetStatistics() -> Supprocom.NativeAllocationManagement.NativeOwnerStatistics
-Supprocom.NativeAllocationManagement.NativeArena.NativeArena(nuint preAllocateBytes = 0, Supprocom.NativeAllocationManagement.NativeMemoryReturn returnMemoryOnDispose = Supprocom.NativeAllocationManagement.NativeMemoryReturn.ToGarbageCollector) -> void
+Supprocom.NativeAllocationManagement.NativeArena.NativeArena(nuint preAllocateBytes = 0, Supprocom.NativeAllocationManagement.NativeMemoryReturn returnMemoryOnDispose = Supprocom.NativeAllocationManagement.NativeMemoryReturn.Reuse) -> void
 Supprocom.NativeAllocationManagement.NativeArena.RecycleScoped() -> void
 Supprocom.NativeAllocationManagement.NativeArena.Reset() -> void
 Supprocom.NativeAllocationManagement.NativeArena.Scratch<T>(int length, Supprocom.NativeAllocationManagement.NativeLeaseInitializer<T>! initializer) -> Supprocom.NativeAllocationManagement.ArenaLease<T>
@@ -140,7 +140,7 @@ Supprocom.NativeAllocationManagement.NativeConcurrentArena
 Supprocom.NativeAllocationManagement.NativeConcurrentArena.Dispose() -> void
 Supprocom.NativeAllocationManagement.NativeConcurrentArena.GetStatistics() -> Supprocom.NativeAllocationManagement.NativeOwnerStatistics
 Supprocom.NativeAllocationManagement.NativeConcurrentArena.LeaseFromMemory() -> void
-Supprocom.NativeAllocationManagement.NativeConcurrentArena.NativeConcurrentArena(nuint preAllocateBytes = 0, Supprocom.NativeAllocationManagement.NativeMemoryReturn returnMemoryOnDispose = Supprocom.NativeAllocationManagement.NativeMemoryReturn.ToGarbageCollector, bool doNotLeaseOnDeclaration = false) -> void
+Supprocom.NativeAllocationManagement.NativeConcurrentArena.NativeConcurrentArena(nuint preAllocateBytes = 0, Supprocom.NativeAllocationManagement.NativeMemoryReturn returnMemoryOnDispose = Supprocom.NativeAllocationManagement.NativeMemoryReturn.Reuse, bool doNotLeaseOnDeclaration = false) -> void
 Supprocom.NativeAllocationManagement.NativeConcurrentArena.RecycleScoped() -> void
 Supprocom.NativeAllocationManagement.NativeConcurrentArena.ReleaseLeasesToGarbageCollector() -> void
 Supprocom.NativeAllocationManagement.NativeConcurrentArena.ReleaseLeasesToNativeMemory() -> void
@@ -158,8 +158,8 @@ Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>.Dispose() -> void
 Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>.GetStatistics() -> Supprocom.NativeAllocationManagement.NativeOwnerStatistics
 Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>.LeaseFromMemory() -> void
 Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>.LeaseScoped(int length, Supprocom.NativeAllocationManagement.NativeLeaseInitializer<T>! initializer) -> Supprocom.NativeAllocationManagement.ConcurrentPooled<T>
-Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>.NativeConcurrentPool(int preLease = 0, Supprocom.NativeAllocationManagement.NativeMemoryReturn returnMemoryOnDispose = Supprocom.NativeAllocationManagement.NativeMemoryReturn.ToGarbageCollector, bool doNotLeaseOnDeclaration = false) -> void
-Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>.NativeConcurrentPool(int preLease, nuint preAllocateBytes, Supprocom.NativeAllocationManagement.NativeMemoryReturn returnMemoryOnDispose = Supprocom.NativeAllocationManagement.NativeMemoryReturn.ToGarbageCollector, bool doNotLeaseOnDeclaration = false) -> void
+Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>.NativeConcurrentPool(int preLease = 0, Supprocom.NativeAllocationManagement.NativeMemoryReturn returnMemoryOnDispose = Supprocom.NativeAllocationManagement.NativeMemoryReturn.Reuse, bool doNotLeaseOnDeclaration = false) -> void
+Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>.NativeConcurrentPool(int preLease, nuint preAllocateBytes, Supprocom.NativeAllocationManagement.NativeMemoryReturn returnMemoryOnDispose = Supprocom.NativeAllocationManagement.NativeMemoryReturn.Reuse, bool doNotLeaseOnDeclaration = false) -> void
 Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>.RecycleScoped() -> void
 Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>.ReleaseLeasesToGarbageCollector() -> void
 Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>.ReleaseLeasesToNativeMemory() -> void
@@ -273,8 +273,8 @@ Supprocom.NativeAllocationManagement.NativeOwnerStatistics.TrimmedBytes.init -> 
 Supprocom.NativeAllocationManagement.NativePool<T>
 Supprocom.NativeAllocationManagement.NativePool<T>.Dispose() -> void
 Supprocom.NativeAllocationManagement.NativePool<T>.GetStatistics() -> Supprocom.NativeAllocationManagement.NativeOwnerStatistics
-Supprocom.NativeAllocationManagement.NativePool<T>.NativePool(int preLease = 0, Supprocom.NativeAllocationManagement.NativeMemoryReturn returnMemoryOnDispose = Supprocom.NativeAllocationManagement.NativeMemoryReturn.ToGarbageCollector) -> void
-Supprocom.NativeAllocationManagement.NativePool<T>.NativePool(int preLease, nuint preAllocateBytes, Supprocom.NativeAllocationManagement.NativeMemoryReturn returnMemoryOnDispose = Supprocom.NativeAllocationManagement.NativeMemoryReturn.ToGarbageCollector) -> void
+Supprocom.NativeAllocationManagement.NativePool<T>.NativePool(int preLease = 0, Supprocom.NativeAllocationManagement.NativeMemoryReturn returnMemoryOnDispose = Supprocom.NativeAllocationManagement.NativeMemoryReturn.Reuse) -> void
+Supprocom.NativeAllocationManagement.NativePool<T>.NativePool(int preLease, nuint preAllocateBytes, Supprocom.NativeAllocationManagement.NativeMemoryReturn returnMemoryOnDispose = Supprocom.NativeAllocationManagement.NativeMemoryReturn.Reuse) -> void
 Supprocom.NativeAllocationManagement.NativePool<T>.ReleaseRetiredStorage() -> void
 Supprocom.NativeAllocationManagement.NativePool<T>.Rent(int length, Supprocom.NativeAllocationManagement.NativeLeaseInitializer<T>! initializer) -> Supprocom.NativeAllocationManagement.Pooled<T>
 Supprocom.NativeAllocationManagement.NativePool<T>.Retire() -> void
@@ -286,7 +286,7 @@ Supprocom.NativeAllocationManagement.NativeRegion.Dispose() -> void
 Supprocom.NativeAllocationManagement.NativeRegion.GetStatistics() -> Supprocom.NativeAllocationManagement.NativeOwnerStatistics
 Supprocom.NativeAllocationManagement.NativeRegion.Lease<T>(int length, Supprocom.NativeAllocationManagement.NativeLeaseInitializer<T>! initializer) -> Supprocom.NativeAllocationManagement.Local<T>
 Supprocom.NativeAllocationManagement.NativeRegion.NativeRegion() -> void
-Supprocom.NativeAllocationManagement.NativeRegion.NativeRegion(nuint preAllocateBytes = 0, Supprocom.NativeAllocationManagement.NativeMemoryReturn returnMemoryOnDispose = Supprocom.NativeAllocationManagement.NativeMemoryReturn.ToGarbageCollector) -> void
+Supprocom.NativeAllocationManagement.NativeRegion.NativeRegion(nuint preAllocateBytes = 0, Supprocom.NativeAllocationManagement.NativeMemoryReturn returnMemoryOnDispose = Supprocom.NativeAllocationManagement.NativeMemoryReturn.Reuse) -> void
 Supprocom.NativeAllocationManagement.NativeSequentialLeaseWriter<T>
 Supprocom.NativeAllocationManagement.NativeSequentialLeaseWriter<T>.Complete() -> void
 Supprocom.NativeAllocationManagement.NativeSequentialLeaseWriter<T>.Fill(int length, T value) -> void

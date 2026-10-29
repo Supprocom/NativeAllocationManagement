@@ -50,7 +50,7 @@ public sealed unsafe class NativeLargeBlockTests
     public void ANativeMemoryArenaFreesItsLargeSegment()
     {
         nint address;
-        using (NativeArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory))
+        using (NativeArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.Free))
         {
             address = Address(arena.ScratchUninitialized<byte>(Bytes).AsSpan());
         }
@@ -63,7 +63,7 @@ public sealed unsafe class NativeLargeBlockTests
     {
         NativeMemoryBudget budget = new(64 * 1024 * 1024);
         nint address;
-        using (NativeArena arena = new(budget, 0, NativeMemoryReturn.ToGarbageCollector))
+        using (NativeArena arena = new(budget, 0, NativeMemoryReturn.Reuse))
         {
             address = Address(arena.ScratchUninitialized<byte>(Bytes).AsSpan());
         }

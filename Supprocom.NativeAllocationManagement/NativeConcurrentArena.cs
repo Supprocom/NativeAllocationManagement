@@ -67,7 +67,7 @@ public sealed class NativeConcurrentArena : IDisposable
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "RS0027", Justification = "Preserve the published optional signature; the budget-first overload has only required arguments and strictly greater arity, so it cannot capture any existing call.")]
     public NativeConcurrentArena(
         nuint preAllocateBytes = 0,
-        NativeMemoryReturn returnMemoryOnDispose = NativeMemoryReturn.ToGarbageCollector,
+        NativeMemoryReturn returnMemoryOnDispose = NativeMemoryReturn.Reuse,
         bool doNotLeaseOnDeclaration = false)
     {
         NativeMemoryReturnValidation.Validate(returnMemoryOnDispose, nameof(returnMemoryOnDispose));

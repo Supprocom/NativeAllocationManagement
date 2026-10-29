@@ -48,7 +48,7 @@ public sealed class VoxelHandoffBenchmarkTests
     [VoxelDemonstrationFact]
     public void NativePreparationCoversEverySimultaneousChannelOwner()
     {
-        using NativeConcurrentPool<uint> pool = new(8_192, NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentPool<uint> pool = new(8_192, NativeMemoryReturn.Free);
         VoxelHandoffBenchmark.PrepareNativeHandoffStorage(pool, 8_192, static writer => writer.Fill(42));
         long preparedAllocations = pool.GetStatistics().FreshSegmentAllocationCount;
         using (NativeTransfer<uint> consumed = pool.RentTransferable(8_192, static writer => writer.Fill(43)))
@@ -67,7 +67,7 @@ public sealed class VoxelHandoffBenchmarkTests
     [VoxelDemonstrationFact]
     public void OnePreleasedPayloadDoesNotCoverTheChannelOwnershipBound()
     {
-        using NativeConcurrentPool<uint> pool = new(8_192, NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentPool<uint> pool = new(8_192, NativeMemoryReturn.Free);
         long initialAllocations = pool.GetStatistics().FreshSegmentAllocationCount;
         using NativeTransfer<uint> consumed = pool.RentTransferable(8_192, static writer => writer.Fill(43));
         using NativeTransfer<uint> queued = pool.RentTransferable(8_192, static writer => writer.Fill(47));

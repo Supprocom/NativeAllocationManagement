@@ -21,7 +21,7 @@ public sealed class NativeArena : IDisposable
     public NativeArena(
         nuint preAllocateBytes = 0,
         NativeMemoryReturn returnMemoryOnDispose =
-            NativeMemoryReturn.ToGarbageCollector)
+            NativeMemoryReturn.Reuse)
         : this(NativeArenaKernel.Acquire(preAllocateBytes, returnMemoryOnDispose))
     {
     }

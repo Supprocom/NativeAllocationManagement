@@ -61,11 +61,11 @@ public sealed class NativePoolReuseTests
     {
         RunOnFreshThread(static () =>
         {
-            NativePool<int> freed = new(16, NativeMemoryReturn.ToNativeMemory);
+            NativePool<int> freed = new(16, NativeMemoryReturn.Free);
             freed.Dispose();
             AssertNextPoolIsFresh();
 
-            NativePool<int> budgeted = new(new NativeMemoryBudget(65_536), 16, 0, NativeMemoryReturn.ToGarbageCollector);
+            NativePool<int> budgeted = new(new NativeMemoryBudget(65_536), 16, 0, NativeMemoryReturn.Reuse);
             budgeted.Dispose();
             AssertNextPoolIsFresh();
 

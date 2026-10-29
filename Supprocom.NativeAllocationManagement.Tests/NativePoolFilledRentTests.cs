@@ -13,7 +13,7 @@ public sealed class NativePoolFilledRentTests
     [InlineData(9)]
     public void FilledRentsPublishCompleteRangesAcrossReservationReuseAndGrowth(int length)
     {
-        using NativePool<int> pool = new(8, NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(8, NativeMemoryReturn.Free);
         using (Pooled<int> lease = pool.Rent(length, 42))
         {
             Assert.Equal(length, lease.Length);
@@ -46,7 +46,7 @@ public sealed class NativePoolFilledRentTests
         // Exactly one two-element slab fits.
         long slabBytes = (long)NativeAlignedAllocation.GetBackingByteLength(8);
         NativeMemoryBudget budget = new(slabBytes);
-        using NativePool<int> pool = new(budget, 2, 0, NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(budget, 2, 0, NativeMemoryReturn.Free);
         using Pooled<int> current = pool.Rent(2, 7);
         Assert.Throws<ArgumentOutOfRangeException>(() => { using Pooled<int> invalid = pool.Rent(-1, 42); });
         Assert.Throws<NativeMemoryBudgetExceededException>(() => { using Pooled<int> invalid = pool.Rent(2, 42); });
@@ -60,7 +60,7 @@ public sealed class NativePoolFilledRentTests
     public void NativeAllocationFailureRollsBackBeforeAnyFilledAuthorityIsPublished()
     {
         NativeMemoryBudget budget = new(128);
-        using NativePool<int> pool = new(budget, 0, 0, NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(budget, 0, 0, NativeMemoryReturn.Free);
         NativeMemoryTestHooks.FailNextAllocation();
         Assert.Throws<NativeAllocationFailedException>(() => { using Pooled<int> invalid = pool.Rent(8, 7); });
         Assert.Equal(0, pool.CurrentAllocationRecordCountForTest);
@@ -72,7 +72,7 @@ public sealed class NativePoolFilledRentTests
     [Fact]
     public void ExhaustedTokensCannotTakeAFreeSlab()
     {
-        using NativePool<int> pool = new(2, NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(2, NativeMemoryReturn.Free);
         using (Pooled<int> lease = pool.Rent(2, 7)) { }
         NativeOwnerStatistics before = pool.GetStatistics();
         typeof(NativePool<int>).GetField("_leaseTokenCounter", BindingFlags.NonPublic | BindingFlags.Instance)!.SetValue(pool, long.MaxValue);
@@ -84,7 +84,7 @@ public sealed class NativePoolFilledRentTests
     [Fact]
     public void MoveReuseAndEnteredBorrowsRetainTheirOriginalAuthorityChecks()
     {
-        using NativePool<int> pool = new(2, NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(2, NativeMemoryReturn.Free);
         Pooled<int> source = pool.Rent(2, 7);
         Pooled<int> stale = source;
         using (Pooled<int> moved = Pooled<int>.Move(ref source))
@@ -107,7 +107,7 @@ public sealed class NativePoolFilledRentTests
     [Fact]
     public void CallbackFailureStillRollsBackWhileNestedFilledRentRemainsIndependent()
     {
-        using NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         Assert.Throws<OperationCanceledException>(() =>
         {
             using Pooled<int> unpublished = pool.Rent(2, writer =>
@@ -128,7 +128,7 @@ public sealed class NativePoolFilledRentTests
     [Fact]
     public void ThreadAndDisposedChecksRunBeforeFill()
     {
-        using NativePool<int> pool = new(2, NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(2, NativeMemoryReturn.Free);
         Exception? failure = null;
         Thread worker = new(() => failure = Record.Exception(() =>
         {
@@ -154,7 +154,7 @@ public sealed class NativePoolFilledRentTests
             {
                 public static void Run()
                 {
-                    using NativePool<int> pool = new(2, NativeMemoryReturn.ToNativeMemory);
+                    using NativePool<int> pool = new(2, NativeMemoryReturn.Free);
                     {{body}}
                 }
             }
@@ -167,7 +167,7 @@ public sealed class NativePoolFilledRentTests
 
     private static void CheckFilled<T>(T value) where T : unmanaged
     {
-        using NativePool<T> pool = new(8, NativeMemoryReturn.ToNativeMemory);
+        using NativePool<T> pool = new(8, NativeMemoryReturn.Free);
         using Pooled<T> lease = pool.Rent(8, value);
         Assert.All(lease.Read(static view => view.AsSpan().ToArray()), item => Assert.Equal(value, item));
         Assert.Equal(8, pool.GetStatistics().RequestedBytes / Unsafe.SizeOf<T>());

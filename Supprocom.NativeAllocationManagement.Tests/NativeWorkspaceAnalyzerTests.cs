@@ -299,7 +299,7 @@ public sealed class NativeWorkspaceAnalyzerTests
                     using NativeConcurrentPool<float> pool = new(
                         preLease: 51_200,
                         returnMemoryOnDispose:
-                            NativeMemoryReturn.ToNativeMemory);
+                            NativeMemoryReturn.Free);
                     using NativeWorkspace<float> workspace =
                         new NativeWorkspace<float>(preLease: 51_200);
                     int lastValue = 0;

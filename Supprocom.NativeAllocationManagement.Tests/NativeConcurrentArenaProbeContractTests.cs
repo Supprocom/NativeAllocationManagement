@@ -10,7 +10,7 @@ public sealed class NativeConcurrentArenaProbeContractTests
     [InlineData(4)]
     public void FastInitializationReportsRealReservationAndRollback(int length)
     {
-        using NativeConcurrentArena arena = new(preAllocateBytes: 128, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentArena arena = new(preAllocateBytes: 128, returnMemoryOnDispose: NativeMemoryReturn.Free);
         _ = arena.Scratch<int>(length, writer =>
         {
             Assert.Equal(1, arena.CurrentInitializationCountForTest);
@@ -28,7 +28,7 @@ public sealed class NativeConcurrentArenaProbeContractTests
     [Fact]
     public void FastNestedBorrowsReportDepthWithoutInventingAllocationRecords()
     {
-        using NativeConcurrentArena arena = new(preAllocateBytes: 128, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentArena arena = new(preAllocateBytes: 128, returnMemoryOnDispose: NativeMemoryReturn.Free);
         ConcurrentArenaLease<int> outer = arena.Scratch<int>(1, static writer => writer.Write(29));
         int result = outer.Read(view =>
         {
@@ -58,7 +58,7 @@ public sealed class NativeConcurrentArenaProbeContractTests
     [Fact]
     public void CompactInitializersAndPreparedPublicationKeepTheirActualCounts()
     {
-        using NativeConcurrentArena arena = new(preAllocateBytes: 128, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentArena arena = new(preAllocateBytes: 128, returnMemoryOnDispose: NativeMemoryReturn.Free);
         NativeArenaTransferBatch<int> batch = arena.CreateTransferBatch<int>(3, 1);
         using NativeArenaTransferBatchInitialization<int> first = batch.BeginInitialization(0);
         Assert.Equal(1, arena.CurrentInitializationCountForTest);
@@ -90,7 +90,7 @@ public sealed class NativeConcurrentArenaProbeContractTests
     [Fact]
     public void CompactAndFastNestedBorrowsAreBothVisibleAndCloseExactly()
     {
-        using NativeConcurrentArena arena = new(preAllocateBytes: 128, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentArena arena = new(preAllocateBytes: 128, returnMemoryOnDispose: NativeMemoryReturn.Free);
         NativeArenaTransferBatch<int> batch = arena.CreateTransferBatch<int>(1, 1);
         using NativeArenaTransferBatchInitialization<int> initialization = batch.BeginInitialization(0);
         initialization.Values.Fill(43);
@@ -121,7 +121,7 @@ public sealed class NativeConcurrentArenaProbeContractTests
     [Fact]
     public void TraversalDistinguishesRealSynchronizedFrontierFromFastCacheAndReset()
     {
-        using NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         for (int index = 0; index < 8; index++)
             _ = arena.Scratch<byte>(4096, static writer => writer.Fill(53));
         NativeOwnerDiagnosticSnapshot ordinary = arena.CaptureDiagnosticSnapshot();
@@ -146,7 +146,7 @@ public sealed class NativeConcurrentArenaProbeContractTests
     [Fact]
     public void AbsentAndClosedGenerationZerosDoNotResurrectNativeAuthority()
     {
-        using NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory, doNotLeaseOnDeclaration: true);
+        using NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.Free, doNotLeaseOnDeclaration: true);
         Assert.Equal(0, arena.CurrentInitializationCountForTest);
         Assert.Equal(0, arena.CurrentGenerationActiveOperationsForTest);
         Assert.Equal((0, -1, 0), arena.CurrentBumpTraversalForTest);

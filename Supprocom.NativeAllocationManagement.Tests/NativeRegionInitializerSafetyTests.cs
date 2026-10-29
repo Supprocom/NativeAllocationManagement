@@ -9,7 +9,7 @@ public sealed class NativeRegionInitializerSafetyTests
     public void IncompleteInitializationKeepsExactFailureAndReusesTheWholeReservedRange(int written)
     {
         NativeMemoryBudget budget = new(512);
-        NativeRegionKernel region = new(16, NativeMemoryReturn.ToNativeMemory, budget);
+        NativeRegionKernel region = new(16, NativeMemoryReturn.Free, budget);
         try
         {
             InvalidOperationException failure = Assert.Throws<InvalidOperationException>(() =>
@@ -34,7 +34,7 @@ public sealed class NativeRegionInitializerSafetyTests
     public void EmptyReservationsDoNotAcquireBackingAndTheFirstNonemptyLeaseStillGrows()
     {
         NativeMemoryBudget budget = new(16_384);
-        using NativeRegion region = new(budget, 0, NativeMemoryReturn.ToNativeMemory);
+        using NativeRegion region = new(budget, 0, NativeMemoryReturn.Free);
         Local<byte> empty = region.Lease<byte>(0, static writer => writer.Fill(0));
         Assert.Equal(0, empty.Read(static view => view.Length));
         Assert.Equal(0, budget.CaptureStatistics().AllocationCount);
@@ -60,7 +60,7 @@ public sealed class NativeRegionInitializerSafetyTests
     public void AlignmentBeyondAnOddSegmentEndGrowsWithoutUnsignedRemainingCapacity(int prefix)
     {
         NativeMemoryBudget budget = new(16_384);
-        using NativeRegion region = new(budget, (nuint)(prefix + 1), NativeMemoryReturn.ToNativeMemory);
+        using NativeRegion region = new(budget, (nuint)(prefix + 1), NativeMemoryReturn.Free);
         Local<byte> first = region.Lease<byte>(prefix, static writer => writer.Fill(17));
         Local<long> second = region.Lease<long>(1, static writer => writer.Write(42));
         Assert.Equal(17, first.Read(static view => view[0]));
@@ -74,7 +74,7 @@ public sealed class NativeRegionInitializerSafetyTests
     public void FailedBackendReservationLeavesAdmissionOpenForTheNextInitializer()
     {
         NativeMemoryBudget budget = new(256);
-        NativeRegionKernel region = new(0, NativeMemoryReturn.ToNativeMemory, budget);
+        NativeRegionKernel region = new(0, NativeMemoryReturn.Free, budget);
         try
         {
             NativeMemoryTestHooks.FailNextAllocation();
@@ -104,7 +104,7 @@ public sealed class NativeRegionInitializerSafetyTests
     public void RefusedBackingDoesNotPreventGuardedZeroLengthInitialization()
     {
         NativeMemoryBudget budget = new(0);
-        NativeRegionKernel region = new(0, NativeMemoryReturn.ToNativeMemory, budget);
+        NativeRegionKernel region = new(0, NativeMemoryReturn.Free, budget);
         try
         {
             Assert.Throws<NativeMemoryBudgetExceededException>(() =>
@@ -130,8 +130,8 @@ public sealed class NativeRegionInitializerSafetyTests
     }
 
     [Theory]
-    [InlineData(NativeMemoryReturn.ToNativeMemory)]
-    [InlineData(NativeMemoryReturn.ToGarbageCollector)]
+    [InlineData(NativeMemoryReturn.Free)]
+    [InlineData(NativeMemoryReturn.Reuse)]
     public void InitializerCannotCloseItsBackingBeforePublication(NativeMemoryReturn policy)
     {
         NativeMemoryBudget budget = new(512);
@@ -154,7 +154,7 @@ public sealed class NativeRegionInitializerSafetyTests
     public void NestedInitializationRejectsBeforeChangingTheCursorOrLogicalDemand()
     {
         NativeMemoryBudget budget = new(512);
-        NativeRegionKernel region = new(16, NativeMemoryReturn.ToNativeMemory, budget);
+        NativeRegionKernel region = new(16, NativeMemoryReturn.Free, budget);
         Local<int> value = region.LeaseInitialized<int>(1, writer =>
         {
             NativeAllocationInUseException failure = Assert.Throws<NativeAllocationInUseException>(() =>
@@ -178,7 +178,7 @@ public sealed class NativeRegionInitializerSafetyTests
     public void FailedInitializerRollsBackAndReopensAdmission()
     {
         NativeMemoryBudget budget = new(512);
-        NativeRegionKernel region = new(16, NativeMemoryReturn.ToNativeMemory, budget);
+        NativeRegionKernel region = new(16, NativeMemoryReturn.Free, budget);
         Assert.Throws<InvalidOperationException>(() =>
         {
             region.LeaseInitialized<int>(2, static writer =>
@@ -200,7 +200,7 @@ public sealed class NativeRegionInitializerSafetyTests
     public void ExistingInitializedAccessAndOrdinaryBorrowAllocationRemainPermitted()
     {
         NativeMemoryBudget budget = new(512);
-        NativeRegionKernel region = new(32, NativeMemoryReturn.ToNativeMemory, budget);
+        NativeRegionKernel region = new(32, NativeMemoryReturn.Free, budget);
         Local<int> first = region.LeaseInitialized<int>(1, static writer => writer.Write(17));
         first.Access(_ =>
         {
@@ -220,7 +220,7 @@ public sealed class NativeRegionInitializerSafetyTests
     [Fact]
     public void InitializerCanEnterABoundedBorrowAndReportsBothActiveOperations()
     {
-        NativeRegionKernel region = new(32, NativeMemoryReturn.ToNativeMemory);
+        NativeRegionKernel region = new(32, NativeMemoryReturn.Free);
         Local<int> value = region.LeaseInitialized<int>(1, writer =>
         {
             region.EnterBorrow("initializer bounded borrow test", region.Generation);
@@ -241,7 +241,7 @@ public sealed class NativeRegionInitializerSafetyTests
     public void InitializationAdmissionDoesNotAllocateDuringBoundedOrdinaryExecution()
     {
         NativeMemoryBudget budget = new(8_192);
-        using NativeRegion region = new(budget, 4_004, NativeMemoryReturn.ToNativeMemory);
+        using NativeRegion region = new(budget, 4_004, NativeMemoryReturn.Free);
         NativeLeaseInitializer<int> fill = static writer => writer.Write(42);
         NativeLeaseFunc<int, int> read = static view => view[0];
         Assert.Equal(42, region.Lease(1, fill).Read(read));

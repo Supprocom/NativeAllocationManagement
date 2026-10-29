@@ -14,18 +14,18 @@ public sealed class NativeFinalizationGuardTests
     {
         RunOnFreshThread(static () =>
         {
-            NativeArena first = new(64, NativeMemoryReturn.ToNativeMemory);
+            NativeArena first = new(64, NativeMemoryReturn.Free);
             NativeFinalizationGuard guard = GuardOf(first);
             first.Dispose();
             Assert.Null(GuardOf(first, allowNull: true));
             Assert.Null(guard.Target);
 
-            NativePool<int> pool = new(16, NativeMemoryReturn.ToNativeMemory);
+            NativePool<int> pool = new(16, NativeMemoryReturn.Free);
             Assert.Same(guard, GuardOf(pool));
             Assert.Same(pool, guard.Target);
             pool.Dispose();
 
-            using NativeArena second = new(64, NativeMemoryReturn.ToNativeMemory);
+            using NativeArena second = new(64, NativeMemoryReturn.Free);
             Assert.Same(guard, GuardOf(second));
             Assert.Same(StateOf(second), guard.Target);
         });
@@ -57,18 +57,18 @@ public sealed class NativeFinalizationGuardTests
         Assert.Equal(typeof(object), typeof(NativeRegionKernel).GetMethod("Finalize", BindingFlags.Instance | BindingFlags.NonPublic)!.DeclaringType);
         RunOnFreshThread(static () =>
         {
-            NativeArena arena = new(64, NativeMemoryReturn.ToNativeMemory);
+            NativeArena arena = new(64, NativeMemoryReturn.Free);
             NativeFinalizationGuard guard = GuardOf(arena);
             arena.Dispose();
 
-            NativeRegionKernel region = new(64, NativeMemoryReturn.ToNativeMemory);
+            NativeRegionKernel region = new(64, NativeMemoryReturn.Free);
             Assert.Same(guard, GuardOf(region));
             Assert.Same(region, guard.Target);
             region.Dispose();
             Assert.Null(GuardOf(region, allowNull: true));
             Assert.Null(guard.Target);
 
-            using NativePool<int> pool = new(16, NativeMemoryReturn.ToNativeMemory);
+            using NativePool<int> pool = new(16, NativeMemoryReturn.Free);
             Assert.Same(guard, GuardOf(pool));
         });
     }
@@ -107,7 +107,7 @@ public sealed class NativeFinalizationGuardTests
         NativeRegionKernel[] regions = new NativeRegionKernel[4];
         foreach (ref NativeRegionKernel region in regions.AsSpan())
         {
-            region = new(200_000, NativeMemoryReturn.ToGarbageCollector);
+            region = new(200_000, NativeMemoryReturn.Reuse);
         }
 
         NativeFinalizationGuard guard = GuardOf(regions[3]);
@@ -138,14 +138,14 @@ public sealed class NativeFinalizationGuardTests
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000", Justification = "The owners are leaked on purpose: their guards must return the storage.")]
     private static void LeakArenaPoolAndRegion(NativeMemoryBudget budget)
     {
-        NativeArena arena = new(budget, 256, NativeMemoryReturn.ToNativeMemory);
+        NativeArena arena = new(budget, 256, NativeMemoryReturn.Free);
         _ = arena.ScratchUninitialized<int>(16);
-        NativePool<int> pool = new(budget, 16, 0, NativeMemoryReturn.ToNativeMemory);
+        NativePool<int> pool = new(budget, 16, 0, NativeMemoryReturn.Free);
         using (pool.RentUninitialized(16))
         {
         }
 
-        _ = new NativeRegionKernel(256, NativeMemoryReturn.ToNativeMemory, budget);
+        _ = new NativeRegionKernel(256, NativeMemoryReturn.Free, budget);
 
         Assert.NotEqual(0, budget.CaptureStatistics().CommittedBytes);
     }

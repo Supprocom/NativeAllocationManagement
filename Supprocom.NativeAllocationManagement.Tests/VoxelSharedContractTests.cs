@@ -3590,7 +3590,7 @@ public sealed class VoxelSharedContractTests
     [VoxelDemonstrationFact]
     public void NamDiagnosticMappingPreservesTheRealOwnerIdentity()
     {
-        using NativeConcurrentArena arena = new(preAllocateBytes: 64, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentArena arena = new(preAllocateBytes: 64, returnMemoryOnDispose: NativeMemoryReturn.Free);
         _ = arena.Scratch<byte>(12, static writer => writer.Fill(42));
         NativeOwnerDiagnosticSnapshot source = arena.CaptureDiagnosticSnapshot();
         PressureAllocatorDiagnosticSnapshot mapped =

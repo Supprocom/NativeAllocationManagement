@@ -189,7 +189,7 @@ public sealed class NativeArenaThreadLaneTests
     public void ABudgetedArenaTakesBackAnotherThreadsChunkTailBeforeGrowing()
     {
         NativeMemoryBudget budget = new(64 * 1024);
-        using NativeConcurrentArena arena = new(budget, 0, NativeMemoryReturn.ToNativeMemory, false);
+        using NativeConcurrentArena arena = new(budget, 0, NativeMemoryReturn.Free, false);
         Thread first = new(() => _ = arena.Scratch<byte>(16, static writer => writer.Fill(1)));
         first.Start();
         Assert.True(first.Join(Timeout));

@@ -89,7 +89,7 @@ public sealed class NativeBackingCorrelationTests
         NativeMemoryBudget budget = new(65_536, traceCapacity: 16);
         long ownerId;
         long retained;
-        using (NativeRegion region = new(budget, (nuint)(prefix + 1), NativeMemoryReturn.ToNativeMemory))
+        using (NativeRegion region = new(budget, (nuint)(prefix + 1), NativeMemoryReturn.Free))
         {
             ownerId = region.Id;
             Local<byte> first = region.Lease<byte>(prefix, static writer => writer.Fill(17));
@@ -127,7 +127,7 @@ public sealed class NativeBackingCorrelationTests
     public void RegionOrdinalExhaustionPrecedesAdmissionAndPreservesEarlierOutput()
     {
         NativeMemoryBudget budget = new(8192, traceCapacity: 16);
-        NativeRegionKernel kernel = new(1, NativeMemoryReturn.ToNativeMemory, budget);
+        NativeRegionKernel kernel = new(1, NativeMemoryReturn.Free, budget);
         try
         {
             Local<byte> first = kernel.LeaseInitialized<byte>(1, static writer => writer.Write(11));
@@ -168,7 +168,7 @@ public sealed class NativeBackingCorrelationTests
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static long AbandonRegionBacking(NativeMemoryBudget budget)
     {
-        using NativeRegion region = new(budget, 8, NativeMemoryReturn.ToGarbageCollector);
+        using NativeRegion region = new(budget, 8, NativeMemoryReturn.Reuse);
         _ = region.Lease<byte>(1, static writer => writer.Write(17));
         return region.Id;
     }

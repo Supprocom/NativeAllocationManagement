@@ -83,7 +83,7 @@ internal static class NativeTraceDiagnosticOracle
         nuint extent = OperatingSystem.IsWindows() ? 4u : 64u;
         NativeMemoryBudget budget = new(64, traceCapacity: 16);
         long before = Stopwatch.GetTimestamp();
-        NativeConcurrentPool<int> pool = new(budget, 1, 0, NativeMemoryReturn.ToNativeMemory, false);
+        NativeConcurrentPool<int> pool = new(budget, 1, 0, NativeMemoryReturn.Free, false);
         long owner = pool.Id;
         try { pool.ReturnMemoryToNativeMemory(); }
         finally { pool.Dispose(); }

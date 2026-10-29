@@ -7,7 +7,7 @@ public sealed class NativeArenaTransferBatchTests
     {
         using NativeConcurrentArena arena = new(
             preAllocateBytes: 128,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         NativeArenaTransferBatch<int> batch =
             arena.CreateTransferBatch<int>(2, 4);
         NativeArenaTransferBatchLease<int> source =
@@ -43,7 +43,7 @@ public sealed class NativeArenaTransferBatchTests
     {
         using NativeConcurrentArena arena = new(
             preAllocateBytes: 128,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         NativeArenaTransferBatch<int> batch =
             arena.CreateTransferBatch<int>(2, 4);
 
@@ -67,7 +67,7 @@ public sealed class NativeArenaTransferBatchTests
     {
         NativeConcurrentArena arena = new(
             preAllocateBytes: 128,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         NativeArenaTransferBatch<int> batch =
             arena.CreateTransferBatch<int>(1, 4);
         NativeArenaTransferBatchInitialization<int> initialization =
@@ -92,7 +92,7 @@ public sealed class NativeArenaTransferBatchTests
     {
         using NativeConcurrentArena arena = new(
             preAllocateBytes: 128,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         NativeArenaTransferBatch<int> batch =
             arena.CreateTransferBatch<int>(1, 4);
         NativeArenaTransferBatchInitialization<int> initialization =
@@ -115,7 +115,7 @@ public sealed class NativeArenaTransferBatchTests
     {
         using NativeConcurrentArena arena = new(
             preAllocateBytes: 128,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         NativeArenaTransferBatch<int> batch =
             arena.CreateTransferBatch<int>(1, 8);
         NativeArenaTransferBatchLease<int> lease =
@@ -153,7 +153,7 @@ public sealed class NativeArenaTransferBatchTests
     {
         NativeConcurrentArena arena = new(
             preAllocateBytes: 128,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         NativeArenaTransferBatch<int> batch =
             arena.CreateTransferBatch<int>(1, 8);
         NativeArenaTransferBatchLease<int> lease =
@@ -203,7 +203,7 @@ public sealed class NativeArenaTransferBatchTests
     {
         NativeConcurrentArena arena = new(
             preAllocateBytes: 128,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         NativeArenaTransferBatch<int> batch =
             arena.CreateTransferBatch<int>(1, 8);
         using NativeArenaTransferBatchInitialization<int>
@@ -223,7 +223,7 @@ public sealed class NativeArenaTransferBatchTests
     {
         using NativeConcurrentArena arena = new(
             preAllocateBytes: 4_096,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         NativeArenaTransferBatch<int> batch =
             arena.CreateTransferBatch<int>(1, 8);
         using ManualResetEventSlim entered = new();
@@ -272,7 +272,7 @@ public sealed class NativeArenaTransferBatchTests
     {
         using NativeConcurrentArena arena = new(
             preAllocateBytes: 128,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         NativeArenaTransferBatch<int> batch =
             arena.CreateTransferBatch<int>(1, 8);
         NativeArenaTransferBatchLease<int> lease =
@@ -312,7 +312,7 @@ public sealed class NativeArenaTransferBatchTests
     {
         using NativeConcurrentArena arena = new(
             preAllocateBytes: 128,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         NativeArenaTransferBatch<int> batch =
             arena.CreateTransferBatch<int>(1, 8);
         NativeArenaTransferBatchLease<int> lease =
@@ -341,7 +341,7 @@ public sealed class NativeArenaTransferBatchTests
         const int length = 256;
         using NativeConcurrentArena arena = new(
             preAllocateBytes: slotCount * length * sizeof(long),
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         NativeArenaTransferBatch<long> batch =
             arena.CreateTransferBatch<long>(slotCount, length);
         NativeArenaTransferBatchLease<long>[] leases =

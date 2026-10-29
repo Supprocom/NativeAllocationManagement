@@ -13,7 +13,7 @@ public sealed class NativeArenaFastLaneTests
     [Fact]
     public void SynchronizedLaneCountsActualGrowthAttemptsButNotWarmedReuse()
     {
-        using NativeConcurrentArena arena = new(128, NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentArena arena = new(128, NativeMemoryReturn.Free);
         _ = arena.Scratch<byte>(1, static writer => writer.Write(7));
         long warm = arena.CurrentFastLaneSlowPathCountForTest;
         _ = arena.Scratch<byte>(1, static writer => writer.Write(7));
@@ -41,7 +41,7 @@ public sealed class NativeArenaFastLaneTests
         NativeMemoryTestHooks.Reset();
         using NativeArena arena = new(
             preAllocateBytes: 65_536,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         ArenaLease<int> warm = arena.Scratch<int>(4, FillSeven);
         Assert.Equal(28, warm.Read(SumFour));
 
@@ -72,7 +72,7 @@ public sealed class NativeArenaFastLaneTests
     {
         using NativeArena arena = new(
             preAllocateBytes: 4_096,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         ArenaLease<int> ordinary = arena.Scratch<int>(
             1,
             static writer => writer.Write(17));
@@ -92,7 +92,7 @@ public sealed class NativeArenaFastLaneTests
     {
         using NativeArena arena = new(
             preAllocateBytes: 4_096,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         ArenaLease<int> ordinary = arena.Scratch<int>(
             1,
             static writer => writer.Write(17));
@@ -113,7 +113,7 @@ public sealed class NativeArenaFastLaneTests
     {
         NativeArena arena = new(
             preAllocateBytes: 4_096,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         ArenaLease<int> lease = arena.Scratch<int>(
             1,
             static writer => writer.Write(17));
@@ -136,7 +136,7 @@ public sealed class NativeArenaFastLaneTests
     {
         NativeArena arena = new(
             preAllocateBytes: 4_096,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         ArenaLease<int> ordinary = arena.Scratch<int>(
             1,
             static writer => writer.Write(17));
@@ -165,7 +165,7 @@ public sealed class NativeArenaFastLaneTests
         NativeMemoryTestHooks.Reset();
         using NativeArena arena = new(
             preAllocateBytes: 4_096,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         NativeOwnerStatistics before = arena.GetStatistics();
 
         Assert.Throws<InvalidOperationException>(
@@ -205,7 +205,7 @@ public sealed class NativeArenaFastLaneTests
         NativeMemoryTestHooks.Reset();
         using NativeArena arena = new(
             preAllocateBytes: 128,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         _ = arena.Scratch<byte>(
             128,
             static writer => writer.Fill(3));
@@ -244,7 +244,7 @@ public sealed class NativeArenaFastLaneTests
         NativeMemoryTestHooks.Reset();
         using NativeArena arena = new(
             preAllocateBytes: 128,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         _ = arena.Scratch<byte>(
             128,
             static writer => writer.Fill(3));
@@ -284,7 +284,7 @@ public sealed class NativeArenaFastLaneTests
     public void EmptyFailedInitializerDoesNotCorruptArena()
     {
         using NativeArena arena = new(
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
 
         Assert.Throws<InvalidOperationException>(
             () => arena.Scratch<int>(
@@ -303,7 +303,7 @@ public sealed class NativeArenaFastLaneTests
     {
         using NativeArena arena = new(
             preAllocateBytes: 4_096,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         ArenaLease<int> lease = arena.Scratch<int>(
             1,
             static writer => writer.Write(5));
@@ -324,7 +324,7 @@ public sealed class NativeArenaFastLaneTests
     {
         using NativeArena arena = new(
             preAllocateBytes: 4_096,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
 
         Exception? exception = null;
         Thread thread = new(() =>
@@ -341,7 +341,7 @@ public sealed class NativeArenaFastLaneTests
         NativeMemoryTestHooks.Reset();
         using NativeArena arena = new(
             preAllocateBytes: 128,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         _ = arena.Scratch<byte>(
             8_192,
             static writer => writer.Fill(3));
@@ -361,7 +361,7 @@ public sealed class NativeArenaFastLaneTests
     {
         using NativeArena arena = new(
             preAllocateBytes: 4_096,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         ArenaLease<byte> bytes = arena.Scratch<byte>(
             3,
             static writer => writer.Fill(0xA5));
@@ -393,7 +393,7 @@ public sealed class NativeArenaFastLaneTests
     {
         NativeArena arena = new(
             preAllocateBytes: 4_096,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         ArenaLease<int> lease = arena.Scratch<int>(
             1,
             static writer => writer.Write(7));

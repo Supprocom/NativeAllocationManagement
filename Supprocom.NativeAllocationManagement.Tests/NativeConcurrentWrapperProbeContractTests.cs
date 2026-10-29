@@ -8,7 +8,7 @@ public sealed class NativeConcurrentWrapperProbeContractTests
     [Fact]
     public void PoolInitializerAndNestedBorrowsReportTheirDistinctActualUnits()
     {
-        using NativeConcurrentPool<string> pool = new(preLease: 2, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentPool<string> pool = new(preLease: 2, returnMemoryOnDispose: NativeMemoryReturn.Free);
         Assert.Equal(0, pool.CurrentAllocationRecordCountForTest);
         using ConcurrentPooled<string> lease = pool.Rent(2, writer =>
         {
@@ -48,7 +48,7 @@ public sealed class NativeConcurrentWrapperProbeContractTests
     [Fact]
     public void PoolFailureAndEmptyPublicationDoNotInventBackingOrActiveBorrows()
     {
-        using NativeConcurrentPool<string> pool = new(preLease: 2, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentPool<string> pool = new(preLease: 2, returnMemoryOnDispose: NativeMemoryReturn.Free);
         long[] physical = pool.CurrentSegmentOrdinalsForTest;
         Assert.Collection(physical, static ordinal => Assert.True(ordinal > 0));
         Assert.Throws<OperationCanceledException>(() => pool.Rent(2, writer =>
@@ -86,7 +86,7 @@ public sealed class NativeConcurrentWrapperProbeContractTests
     [Fact]
     public void PoolPhysicalOrdinalsAreDetachedCopiesAndMetadataCapacitiesAreNotCounts()
     {
-        using NativeConcurrentPool<int> pool = new(preLease: 4, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentPool<int> pool = new(preLease: 4, returnMemoryOnDispose: NativeMemoryReturn.Free);
         Assert.Equal([1L], pool.CurrentSegmentOrdinalsForTest);
         var capacities = pool.CurrentBankCapacitiesForTest;
         Assert.True(capacities.Slabs >= 1);
@@ -116,7 +116,7 @@ public sealed class NativeConcurrentWrapperProbeContractTests
     [Fact]
     public void ArenaPhysicalOrdinalsAreDetachedCopiesAndRootedStorageHasRealRoots()
     {
-        using NativeConcurrentArena arena = new(preAllocateBytes: 128, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentArena arena = new(preAllocateBytes: 128, returnMemoryOnDispose: NativeMemoryReturn.Free);
         long[] saved = arena.CurrentSegmentOrdinalsForTest;
         Assert.Equal([1L], saved);
         saved[0] = long.MaxValue;
@@ -144,8 +144,8 @@ public sealed class NativeConcurrentWrapperProbeContractTests
     [Fact]
     public void KernelAuthorityIdentityDoesNotResurrectReturnedOrDisposedOwners()
     {
-        using NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        using NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
+        using NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         NativeOwnerKernel poolAuthority = pool.KernelForTransfer;
         NativeOwnerKernel arenaAuthority = arena.KernelForInitialization;
         Assert.NotSame(poolAuthority, arenaAuthority);
@@ -172,7 +172,7 @@ public sealed class NativeConcurrentWrapperProbeContractTests
     [Fact]
     public void CurrentPoolEpochAndGenerationIdentityFollowActualLifecycleNotPhysicalOrdinals()
     {
-        using NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory, doNotLeaseOnDeclaration: true);
+        using NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free, doNotLeaseOnDeclaration: true);
         Assert.Equal(NativeOwnerLifecycle.Unleased, pool.CurrentLifecycle);
         Assert.Equal(0, pool.CurrentScopeEpochForTest);
         Assert.Equal(0, pool.GenerationCounterForTest);
@@ -196,7 +196,7 @@ public sealed class NativeConcurrentWrapperProbeContractTests
     [Fact]
     public void CompactMetricsSeparateRejectedAttemptsLifetimeSlotsAndCurrentDictionaryRecords()
     {
-        using NativeConcurrentArena arena = new(preAllocateBytes: 128, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentArena arena = new(preAllocateBytes: 128, returnMemoryOnDispose: NativeMemoryReturn.Free);
         NativeArenaTransferBatch<int> batch = arena.CreateTransferBatch<int>(2, 1);
         Assert.Equal((0L, 2L, 0), arena.CurrentTransferMetricsForTest);
         using (NativeArenaTransferBatchInitialization<int> held = batch.BeginInitialization(0))

@@ -11,12 +11,12 @@ internal static class NativeRegionJitProbe
     {
         NativeRegionKernel region = new(
             4_096,
-            NativeMemoryReturn.ToNativeMemory);
+            NativeMemoryReturn.Free);
         NativeOwnerKernel legacy =
             NativeOwnerKernel.CreateRegion(
                 4_096,
                 "general Region kernel",
-                NativeMemoryReturn.ToNativeMemory,
+                NativeMemoryReturn.Free,
                 containsReferences: false,
                 doNotLeaseOnDeclaration: false);
         try

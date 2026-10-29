@@ -5,8 +5,8 @@ public sealed class NativeLeaseWriterRootedLengthTests
     [Fact]
     public void RootedWriterLengthRemainsDeclaredAcrossNestedIndependentInitialization()
     {
-        using NativeConcurrentPool<string> outer = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        using NativeConcurrentPool<string> inner = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentPool<string> outer = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
+        using NativeConcurrentPool<string> inner = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         using (ConcurrentPooled<string> lease = outer.Rent(7, writer =>
         {
             writer.Write("first");

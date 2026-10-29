@@ -174,7 +174,7 @@ public sealed class NativeTransferDiagnosticsTests
     public void ReturnedAliasesDoNotRetainDetachedPooledPayloadStorage()
     {
         NativeMemoryBudget budget = new(128);
-        using NativeConcurrentPool<int> pool = new(budget, 4, 0, NativeMemoryReturn.ToNativeMemory, false);
+        using NativeConcurrentPool<int> pool = new(budget, 4, 0, NativeMemoryReturn.Free, false);
         NativeTransfer<int> alias = CreatePooledForCollection(pool);
         long extent = budget.CaptureStatistics().CommittedBytes;
         Assert.Equal(pool.Id, alias.CaptureSnapshot().OwnerId);
@@ -231,7 +231,7 @@ public sealed class NativeTransferDiagnosticsTests
     public void ReturnedControlKeepsScalarIdentityButNoDescriptorCustody(int acquisition, int length, bool share)
     {
         NativeMemoryBudget budget = new(1_024, 32);
-        using NativeConcurrentPool<int> pool = new(budget, 4, 0, NativeMemoryReturn.ToNativeMemory, false);
+        using NativeConcurrentPool<int> pool = new(budget, 4, 0, NativeMemoryReturn.Free, false);
         NativeTransfer<int>? source = AcquireDescriptorControl(acquisition, length, budget, pool);
         NativeTransfer<int> observed = source.Value;
         NativeTransferStatistics initial = observed.CaptureSnapshot();
@@ -298,7 +298,7 @@ public sealed class NativeTransferDiagnosticsTests
     public void AllocatorNativeReturnRevokesAuthorityWithoutInventingControlCleanup()
     {
         NativeMemoryBudget budget = new(128);
-        using NativeConcurrentPool<int> pool = new(budget, 4, 0, NativeMemoryReturn.ToNativeMemory, false);
+        using NativeConcurrentPool<int> pool = new(budget, 4, 0, NativeMemoryReturn.Free, false);
         NativeTransfer<int> owner = pool.RentTransferable(1, static writer => writer.Write(42));
         long extent = owner.CaptureSnapshot().OwnedBackingBytes;
         pool.ReturnMemoryToNativeMemory();
@@ -321,7 +321,7 @@ public sealed class NativeTransferDiagnosticsTests
     public void EnteredBorrowAcrossGcDetachRemainsInitializedWithoutLiveBindingAuthority()
     {
         NativeMemoryBudget budget = new(128);
-        using NativeConcurrentPool<int> pool = new(budget, 4, 0, NativeMemoryReturn.ToNativeMemory, false);
+        using NativeConcurrentPool<int> pool = new(budget, 4, 0, NativeMemoryReturn.Free, false);
         NativeTransfer<int> owner = pool.RentTransferable(1, static writer => writer.Write(42));
         long extent = owner.CaptureSnapshot().OwnedBackingBytes;
         owner.Access(view =>

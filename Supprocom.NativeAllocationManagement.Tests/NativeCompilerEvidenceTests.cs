@@ -39,7 +39,7 @@ public sealed class NativeCompilerEvidenceTests
         {
             string binding = abandonLease ? "Pooled<int>" : "using Pooled<int>";
             await File.WriteAllTextAsync(source, "using Supprocom.NativeAllocationManagement; public static class Consumer { public static int Work() { "
-                + "using NativePool<int> pool = new(0, 0, NativeMemoryReturn.ToNativeMemory); "
+                + "using NativePool<int> pool = new(0, 0, NativeMemoryReturn.Free); "
                 + binding + " lease = pool.Rent(1, static writer => writer.Write(17)); "
                 + "return lease.Read(static view => view[0]); } }").ConfigureAwait(true);
             string[] framework = ((string?)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES"))!
@@ -153,7 +153,7 @@ public sealed class NativeCompilerEvidenceTests
         for (int method = 0; method < 256; method++)
         {
             source.Append("public static int Work").Append(method).Append("() {")
-                .Append("using NativePool<int> pool = new(0, 0, NativeMemoryReturn.ToNativeMemory);")
+                .Append("using NativePool<int> pool = new(0, 0, NativeMemoryReturn.Free);")
                 .Append("using Pooled<int> lease = pool.Rent(1, static writer => writer.Write(17));")
                 .Append("return lease.Read(static view => view[0]); }");
         }

@@ -20,7 +20,7 @@ internal static partial class NativeGeneratedScenarios
             int payload = random.Next(1, 1000);
             trace($"generation seed={seed} iteration={iteration} readers=2 firstExit={firstExit} quarantine={quarantine} payload={payload} extent={totalExtent} tracing={traceCapacity}");
             NativeMemoryBudget budget = new(totalExtent, traceCapacity);
-            NativeConcurrentPool<int> pool = new(budget, 1, 0, NativeMemoryReturn.ToNativeMemory, false);
+            NativeConcurrentPool<int> pool = new(budget, 1, 0, NativeMemoryReturn.Free, false);
             using CountdownEvent entered = new(2);
             using ManualResetEventSlim releaseFirst = new(false);
             using ManualResetEventSlim releaseSecond = new(false);

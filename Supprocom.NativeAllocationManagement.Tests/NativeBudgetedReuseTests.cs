@@ -17,7 +17,7 @@ public sealed class NativeBudgetedReuseTests
             NativeMemoryBudget budget = new(2 * (Lease + 4096));
             for (int index = 0; index < 1_000; index++)
             {
-                using NativeRegion region = new(budget, 0, NativeMemoryReturn.ToGarbageCollector);
+                using NativeRegion region = new(budget, 0, NativeMemoryReturn.Reuse);
                 region.LeaseUninitialized<byte>(Lease).AsSpan()[^1] = 1;
                 if (index != 0)
                 {
@@ -27,7 +27,7 @@ public sealed class NativeBudgetedReuseTests
 
             for (int index = 0; index < 1_000; index++)
             {
-                using NativeArena arena = new(budget, 0, NativeMemoryReturn.ToGarbageCollector);
+                using NativeArena arena = new(budget, 0, NativeMemoryReturn.Reuse);
                 arena.ScratchUninitialized<byte>(Lease).AsSpan()[^1] = 1;
                 if (index != 0)
                 {
@@ -37,7 +37,7 @@ public sealed class NativeBudgetedReuseTests
 
             for (int index = 0; index < 1_000; index++)
             {
-                using NativePool<byte> pool = new(budget, 0, 0, NativeMemoryReturn.ToGarbageCollector);
+                using NativePool<byte> pool = new(budget, 0, 0, NativeMemoryReturn.Reuse);
                 using Pooled<byte> lease = pool.RentUninitialized(Lease);
                 lease.AsSpan()[^1] = 1;
                 if (index != 0)
@@ -56,7 +56,7 @@ public sealed class NativeBudgetedReuseTests
         RunOnFreshThread(static () =>
         {
             NativeMemoryBudget budget = new(3 * Lease);
-            using (NativeRegion region = new(budget, 0, NativeMemoryReturn.ToGarbageCollector))
+            using (NativeRegion region = new(budget, 0, NativeMemoryReturn.Reuse))
             {
                 _ = region.LeaseUninitialized<byte>(2 * Lease);
             }
@@ -65,7 +65,7 @@ public sealed class NativeBudgetedReuseTests
             Assert.NotEqual(0, budget.CaptureStatistics().CommittedBytes);
 
             // Fits only once the kept region's storage is back in the budget.
-            using NativeArena arena = new(budget, 0, NativeMemoryReturn.ToGarbageCollector);
+            using NativeArena arena = new(budget, 0, NativeMemoryReturn.Reuse);
             _ = arena.ScratchUninitialized<byte>(2 * Lease);
             Assert.Null(NativeThreadState.Current.KeptBudgetedRegion);
         });
@@ -87,7 +87,7 @@ public sealed class NativeBudgetedReuseTests
             {
                 keeper = NativeThreadState.Current;
                 // A slab of 65,536 bytes: pools round capacity up to a power of two.
-                pool = new NativePool<byte>(budget, 0, 0, NativeMemoryReturn.ToGarbageCollector);
+                pool = new NativePool<byte>(budget, 0, 0, NativeMemoryReturn.Reuse);
                 using (pool.RentUninitialized(Lease))
                 {
                 }
@@ -112,7 +112,7 @@ public sealed class NativeBudgetedReuseTests
             {
                 // The disposed pool stays disposed, and the next one starts afresh.
                 Assert.Throws<NativeAllocationDisposedException>(() => pool!.GetStatistics());
-                using NativePool<byte> next = new(budget, 0, 0, NativeMemoryReturn.ToGarbageCollector);
+                using NativePool<byte> next = new(budget, 0, 0, NativeMemoryReturn.Reuse);
                 using Pooled<byte> lease = next.RentUninitialized(16);
                 Assert.Equal(1, next.GetStatistics().FreshSegmentAllocationCount);
             }
@@ -129,7 +129,7 @@ public sealed class NativeBudgetedReuseTests
         Assert.Null(failure);
 
         // Fits only once the other thread's kept slab is back in the budget.
-        using (NativeRegion region = new(budget, 0, NativeMemoryReturn.ToGarbageCollector))
+        using (NativeRegion region = new(budget, 0, NativeMemoryReturn.Reuse))
         {
             _ = region.LeaseUninitialized<byte>(2 * Lease);
             Assert.Equal(1, budget.CaptureStatistics().ActiveAllocationCount);
@@ -149,11 +149,11 @@ public sealed class NativeBudgetedReuseTests
         RunOnFreshThread(() =>
         {
             keeper = NativeThreadState.Current;
-            using NativeArena arena = new(budget, 0, NativeMemoryReturn.ToGarbageCollector);
+            using NativeArena arena = new(budget, 0, NativeMemoryReturn.Reuse);
             _ = arena.ScratchUninitialized<byte>(2 * Lease);
         });
 
-        using (NativeRegion region = new(budget, 0, NativeMemoryReturn.ToNativeMemory))
+        using (NativeRegion region = new(budget, 0, NativeMemoryReturn.Free))
         {
             _ = region.LeaseUninitialized<byte>(2 * Lease);
         }
@@ -165,11 +165,11 @@ public sealed class NativeBudgetedReuseTests
     public void ABudgetWithNothingKeptStillRefuses()
     {
         NativeMemoryBudget budget = new(2 * Lease);
-        using NativeRegion live = new(budget, 0, NativeMemoryReturn.ToGarbageCollector);
+        using NativeRegion live = new(budget, 0, NativeMemoryReturn.Reuse);
         _ = live.LeaseUninitialized<byte>(Lease);
         Assert.Throws<NativeMemoryBudgetExceededException>(() =>
         {
-            using NativeArena arena = new(budget, 0, NativeMemoryReturn.ToGarbageCollector);
+            using NativeArena arena = new(budget, 0, NativeMemoryReturn.Reuse);
             _ = arena.ScratchUninitialized<byte>(Lease);
         });
     }
@@ -180,7 +180,7 @@ public sealed class NativeBudgetedReuseTests
         RunOnFreshThread(static () =>
         {
             NativeMemoryBudget budget = new(1 << 20);
-            NativeRegion region = new(budget, 0, NativeMemoryReturn.ToGarbageCollector);
+            NativeRegion region = new(budget, 0, NativeMemoryReturn.Reuse);
             NativeRegion copy = region;
             _ = region.LeaseUninitialized<byte>(64);
             region.Dispose();
@@ -198,7 +198,7 @@ public sealed class NativeBudgetedReuseTests
             Assert.NotNull(ended);
             copy.Dispose();
 
-            NativeArena arena = new(budget, 0, NativeMemoryReturn.ToGarbageCollector);
+            NativeArena arena = new(budget, 0, NativeMemoryReturn.Reuse);
             _ = arena.ScratchUninitialized<byte>(64);
             arena.Dispose();
             Assert.NotNull(NativeThreadState.Current.KeptBudgetedArena);
@@ -217,17 +217,17 @@ public sealed class NativeBudgetedReuseTests
         RunOnFreshThread(static () =>
         {
             NativeMemoryBudget budget = new(1 << 20, traceCapacity: 64);
-            using (NativeRegion region = new(budget, 0, NativeMemoryReturn.ToGarbageCollector))
+            using (NativeRegion region = new(budget, 0, NativeMemoryReturn.Reuse))
             {
                 _ = region.LeaseUninitialized<byte>(64);
             }
 
-            using (NativeArena arena = new(budget, 0, NativeMemoryReturn.ToGarbageCollector))
+            using (NativeArena arena = new(budget, 0, NativeMemoryReturn.Reuse))
             {
                 _ = arena.ScratchUninitialized<byte>(64);
             }
 
-            using (NativePool<byte> pool = new(budget, 0, 0, NativeMemoryReturn.ToGarbageCollector))
+            using (NativePool<byte> pool = new(budget, 0, 0, NativeMemoryReturn.Reuse))
             {
                 using Pooled<byte> lease = pool.RentUninitialized(64);
             }
@@ -248,12 +248,12 @@ public sealed class NativeBudgetedReuseTests
         {
             NativeMemoryBudget first = new(1 << 20);
             NativeMemoryBudget second = new(1 << 20);
-            using (NativeRegion region = new(first, 0, NativeMemoryReturn.ToGarbageCollector))
+            using (NativeRegion region = new(first, 0, NativeMemoryReturn.Reuse))
             {
                 _ = region.LeaseUninitialized<byte>(64);
             }
 
-            using (NativeRegion other = new(second, 0, NativeMemoryReturn.ToGarbageCollector))
+            using (NativeRegion other = new(second, 0, NativeMemoryReturn.Reuse))
             {
                 _ = other.LeaseUninitialized<byte>(64);
                 Assert.Equal(1, other.GetStatistics().FreshSegmentAllocationCount);

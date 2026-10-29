@@ -55,7 +55,7 @@ public sealed class NativePoolBorrowLifetimeTests
     [SuppressMessage("Reliability", "CA2000", Justification = "This adversarial helper transfers the only strong owner through a lease. The caller intentionally abandons that lease after its final callback, then verifies actual emergency finalization and exact budget reclamation. Construction failure still disposes deterministically.")]
     private static Pooled<int> CreateLease(NativeMemoryBudget budget, out WeakReference<NativePool<int>> weak)
     {
-        NativePool<int> owner = new(budget, 8, 0, NativeMemoryReturn.ToNativeMemory);
+        NativePool<int> owner = new(budget, 8, 0, NativeMemoryReturn.Free);
         try
         {
             weak = new(owner);

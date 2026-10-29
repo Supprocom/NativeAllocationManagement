@@ -139,7 +139,7 @@ public sealed class NativeCapacityDiagnosticContractTests
         long extent = NativeCapacityDiagnosticOracle.ArenaExtent(64);
         long tailExtent = NativeCapacityDiagnosticOracle.ArenaExtent(128);
         NativeMemoryBudget budget = new(extent + tailExtent);
-        using NativeArena arena = new(budget, 64, NativeMemoryReturn.ToNativeMemory);
+        using NativeArena arena = new(budget, 64, NativeMemoryReturn.Free);
         NativeCapacityDiagnosticOracle.Retention expected = new()
         { OwnerId = arena.Id, Lifecycle = NativeOwnerLifecycle.Active, RetainedBytes = extent, IdleBytes = extent };
         NativeCapacityDiagnosticOracle.Verify(arena.CaptureRetentionSnapshot(), expected, "disabled-policy-real-idle-storage");
@@ -229,7 +229,7 @@ public sealed class NativeCapacityDiagnosticContractTests
         else
         {
             long extent = NativeCapacityDiagnosticOracle.ArenaExtent(128);
-            using NativeArena arena = new(budget, new NativeArenaRetentionPolicy(64, 0), 128, NativeMemoryReturn.ToNativeMemory);
+            using NativeArena arena = new(budget, new NativeArenaRetentionPolicy(64, 0), 128, NativeMemoryReturn.Free);
             SetCounter(arena, "_retentionMaintenanceCount");
             SetCounter(arena, "_retentionReleasedBytes");
             arena.Reset();

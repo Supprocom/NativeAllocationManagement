@@ -28,7 +28,7 @@ public sealed class NativeExceptionDiagnosticContractTests
     public void ReturnedDecisionPreservesSourceIdentityAfterRolloverAndDisposal()
     {
         NativeMemoryBudget budget = new(4096);
-        using NativeConcurrentPool<int> pool = new(budget, 0, 0, NativeMemoryReturn.ToNativeMemory, false);
+        using NativeConcurrentPool<int> pool = new(budget, 0, 0, NativeMemoryReturn.Free, false);
         ConcurrentPooled<int> value = pool.Rent(1, static writer => writer.Write(42));
         pool.ReleaseLeasesToNativeMemory();
         NativeAllocationReturnedException? held = null;
@@ -54,7 +54,7 @@ public sealed class NativeExceptionDiagnosticContractTests
     [Fact]
     public void UnleasedAndAlreadyActiveFailuresDoNotChangeTheObservedDecision()
     {
-        using NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory, doNotLeaseOnDeclaration: true);
+        using NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free, doNotLeaseOnDeclaration: true);
         NativeAllocationStateException unleased = Assert.Throws<NativeAllocationStateException>(() => pool.Rent(1, static writer => writer.Write(7)));
         Verify(unleased, PoolKind, 0, 0, "Rent", 0, 0, NativeOwnerLifecycle.Unleased);
         pool.LeaseFromMemory();
@@ -68,7 +68,7 @@ public sealed class NativeExceptionDiagnosticContractTests
     [Fact]
     public void NestedBorrowRefusalReportsEnteredOperationsNotLeaseCount()
     {
-        using NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         using ConcurrentPooled<int> first = pool.Rent(1, static writer => writer.Write(11));
         first.Access(view =>
         {
@@ -91,7 +91,7 @@ public sealed class NativeExceptionDiagnosticContractTests
     [Fact]
     public void UnpublishedInitializerIsARealOwnerWideReturnObligationNotABorrow()
     {
-        using NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         using ConcurrentPooled<int> value = pool.Rent(1, writer =>
         {
             NativeAllocationInUseException failure = Assert.Throws<NativeAllocationInUseException>(pool.Dispose);
@@ -109,7 +109,7 @@ public sealed class NativeExceptionDiagnosticContractTests
     {
         NativeMemoryTestHooks.Reset();
         NativeMemoryBudget budget = new(4096);
-        NativeConcurrentPool<int> pool = new(budget, 0, 0, NativeMemoryReturn.ToNativeMemory, false);
+        NativeConcurrentPool<int> pool = new(budget, 0, 0, NativeMemoryReturn.Free, false);
         try
         {
             ConcurrentPooled<int> value = pool.Rent(1, static writer => writer.Write(42));

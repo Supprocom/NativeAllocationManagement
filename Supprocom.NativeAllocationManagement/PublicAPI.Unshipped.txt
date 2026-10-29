@@ -9,3 +9,5 @@ Supprocom.NativeAllocationManagement.NativeWeak<T>.TryProcess<TState, TResult, T
 Supprocom.NativeAllocationManagement.NativeWeak<T>.TryRead<TResult>(Supprocom.NativeAllocationManagement.NativeReadOnlyLeaseFunc<T, TResult>! action, out TResult result) -> bool
 Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>.Process<TState, TResult, TProcessor>(int length, T value, scoped in TState state) -> TResult
 Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>.Process<TState, TResult>(int length, T value, TState state, Supprocom.NativeAllocationManagement.NativeSpanStateProcessor<T, TState, TResult>! processor) -> TResult
+Supprocom.NativeAllocationManagement.NativeMemoryReturn.Free = 1 -> Supprocom.NativeAllocationManagement.NativeMemoryReturn
+Supprocom.NativeAllocationManagement.NativeMemoryReturn.Reuse = 0 -> Supprocom.NativeAllocationManagement.NativeMemoryReturn

@@ -9,7 +9,7 @@ public sealed class NativeAllocatorBudgetTests
     {
         long expected = OperatingSystem.IsWindows() ? 17 : 64;
         NativeMemoryBudget budget = new(expected);
-        using NativePool<byte> pool = new(budget, 0, 17, NativeMemoryReturn.ToNativeMemory);
+        using NativePool<byte> pool = new(budget, 0, 17, NativeMemoryReturn.Free);
         NativeOwnerStatistics statistics = pool.GetStatistics();
         Assert.Equal(expected, statistics.RetainedBytes);
         Assert.Equal(17, statistics.UsableCapacityBytes);
@@ -24,7 +24,7 @@ public sealed class NativeAllocatorBudgetTests
     {
         long extent = OperatingSystem.IsWindows() ? sizeof(int) : 64;
         NativeMemoryBudget budget = new(extent);
-        using NativePool<int> pool = new(budget, 1, 0, NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(budget, 1, 0, NativeMemoryReturn.Free);
         using (Pooled<int> lease = pool.Rent(1, static writer => writer.Write(42)))
         {
             Assert.Equal(42, lease.Read(static view => view[0]));
@@ -41,7 +41,7 @@ public sealed class NativeAllocatorBudgetTests
     public void PoolCeilingRefusesBeforeInitializerOrNativeFailureConsumption()
     {
         NativeMemoryBudget budget = new(0);
-        using NativePool<int> pool = new(budget, 0, 0, NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(budget, 0, 0, NativeMemoryReturn.Free);
         bool initialized = false;
         NativeMemoryTestHooks.FailNextAllocation();
         try
@@ -71,7 +71,7 @@ public sealed class NativeAllocatorBudgetTests
     {
         long extent = OperatingSystem.IsWindows() ? 64 + sizeof(int) + 3 : 128;
         NativeMemoryBudget budget = new(extent);
-        using NativeArena arena = new(budget, 0, NativeMemoryReturn.ToNativeMemory);
+        using NativeArena arena = new(budget, 0, NativeMemoryReturn.Free);
         ArenaLease<int> lease = arena.Scratch<int>(1, static writer => writer.Write(42));
         Assert.Equal(42, lease.Read(static view => view[0]));
         Assert.Equal(extent, arena.GetStatistics().RetainedBytes);
@@ -85,7 +85,7 @@ public sealed class NativeAllocatorBudgetTests
     {
         long extent = OperatingSystem.IsWindows() ? 64 + sizeof(int) : 128;
         NativeMemoryBudget budget = new(extent);
-        using (NativeRegion region = new(budget, 0, NativeMemoryReturn.ToNativeMemory))
+        using (NativeRegion region = new(budget, 0, NativeMemoryReturn.Free))
         {
             Local<int> lease = region.Lease<int>(1, static writer => writer.Write(42));
             Assert.Equal(42, lease.Read(static view => view[0]));
@@ -101,7 +101,7 @@ public sealed class NativeAllocatorBudgetTests
     public void SynchronizedArenaFallbackDoesNotReserveMetadataForRefusedGrowth()
     {
         NativeMemoryBudget budget = new(64);
-        using NativeConcurrentArena arena = new(budget, 0, NativeMemoryReturn.ToNativeMemory, false);
+        using NativeConcurrentArena arena = new(budget, 0, NativeMemoryReturn.Free, false);
         ConcurrentArenaLease<byte> lease = arena.Scratch<byte>(1, static writer => writer.Write(42));
         Assert.Equal(42, lease.Read(static view => view[0]));
         Assert.Equal(OperatingSystem.IsWindows() ? 1 : 64, budget.CaptureStatistics().CommittedBytes);
@@ -123,8 +123,8 @@ public sealed class NativeAllocatorBudgetTests
         long arenaExtent = OperatingSystem.IsWindows() ? 65 : 128;
         NativeMemoryBudget budget = new(64 + pooledExtent + arenaExtent);
         using NativeBuilder<int> builder = new(budget, 16);
-        using NativePool<byte> pool = new(budget, 0, 17, NativeMemoryReturn.ToNativeMemory);
-        using NativeArena arena = new(budget, 1, NativeMemoryReturn.ToNativeMemory);
+        using NativePool<byte> pool = new(budget, 0, 17, NativeMemoryReturn.Free);
+        using NativeArena arena = new(budget, 1, NativeMemoryReturn.Free);
         builder.Append(42);
         Assert.Equal(budget.CapacityBytes, budget.CaptureStatistics().CommittedBytes);
         Assert.False(builder.TryEnsureCapacity(17));
@@ -151,7 +151,7 @@ public sealed class NativeAllocatorBudgetTests
         long extent = OperatingSystem.IsWindows() ? sizeof(int) : 64;
         NativeMemoryBudget budget = new(extent);
         Assert.Throws<NativeMemoryBudgetExceededException>(() =>
-            new NativeConcurrentPool<int>(budget, 1, 4, NativeMemoryReturn.ToNativeMemory, false));
+            new NativeConcurrentPool<int>(budget, 1, 4, NativeMemoryReturn.Free, false));
         NativeMemoryBudgetStatistics statistics = budget.CaptureStatistics();
         Assert.Equal(0, statistics.CommittedBytes);
         Assert.Equal(0, statistics.ReservedBytes);
@@ -164,8 +164,8 @@ public sealed class NativeAllocatorBudgetTests
     public void DeferredSynchronizedOwnersDoNotAcquireBeforeActivation()
     {
         NativeMemoryBudget budget = new(0);
-        using NativeConcurrentPool<int> pool = new(budget, 4, 0, NativeMemoryReturn.ToNativeMemory, true);
-        using NativeConcurrentArena arena = new(budget, 64, NativeMemoryReturn.ToNativeMemory, true);
+        using NativeConcurrentPool<int> pool = new(budget, 4, 0, NativeMemoryReturn.Free, true);
+        using NativeConcurrentArena arena = new(budget, 64, NativeMemoryReturn.Free, true);
         Assert.Equal(NativeOwnerLifecycle.Unleased, pool.GetStatistics().Lifecycle);
         Assert.Equal(NativeOwnerLifecycle.Unleased, arena.GetStatistics().Lifecycle);
         Assert.Equal(0, budget.CaptureStatistics().CommittedBytes);
@@ -180,7 +180,7 @@ public sealed class NativeAllocatorBudgetTests
     {
         using AlignedBuffer buffer = new(128);
         NativeMemoryBudget budget = new(0);
-        using NativeConcurrentArena arena = new(budget, 0, NativeMemoryReturn.ToNativeMemory, false);
+        using NativeConcurrentArena arena = new(budget, 0, NativeMemoryReturn.Free, false);
         Assert.Equal((nuint)128, arena.ReserveExternalMemory(buffer, 0, 128));
         buffer.Dispose();
         ConcurrentArenaLease<int> lease = arena.Scratch<int>(4, static writer => writer.Fill(42));
@@ -201,7 +201,7 @@ public sealed class NativeAllocatorBudgetTests
     {
         using AlignedBuffer buffer = new(128);
         NativeMemoryBudget budget = new(0);
-        using NativeConcurrentArena arena = new(budget, 0, NativeMemoryReturn.ToNativeMemory, false);
+        using NativeConcurrentArena arena = new(budget, 0, NativeMemoryReturn.Free, false);
         arena.ReserveExternalMemory(buffer, 0, 128);
         buffer.Dispose();
         using ManualResetEventSlim entered = new();
@@ -254,7 +254,7 @@ public sealed class NativeAllocatorBudgetTests
         NativeMemoryTestHooks.Reset();
         long extent = OperatingSystem.IsWindows() ? sizeof(int) : 64;
         NativeMemoryBudget budget = new(extent);
-        using NativeConcurrentPool<int> pool = new(budget, 1, 0, NativeMemoryReturn.ToNativeMemory, false);
+        using NativeConcurrentPool<int> pool = new(budget, 1, 0, NativeMemoryReturn.Free, false);
         using ManualResetEventSlim entered = new();
         using ManualResetEventSlim allowCallback = new();
         NativeMemoryTestHooks.SetOperationEntered(operation =>

@@ -254,7 +254,7 @@ public sealed class NativePreparedArenaTests
     [Fact]
     public void UnpreparedOwnersDoNotPromiseAGrowthFreeTryContract()
     {
-        using NativeArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         Assert.Throws<InvalidOperationException>(() => arena.TryScratch<int>(1, static writer => writer.Write(42), out _));
         Assert.Throws<InvalidOperationException>(() => arena.CapturePreparedSnapshot());
     }

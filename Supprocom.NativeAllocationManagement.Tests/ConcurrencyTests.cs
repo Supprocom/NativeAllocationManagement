@@ -7,7 +7,7 @@ public sealed class ConcurrencyTests
     [Fact]
     public async Task ReturnFailsAfterAnOperationTokenWinsAndLeavesGenerationUsable()
     {
-        NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         using ManualResetEventSlim entered = new();
         using ManualResetEventSlim release = new();
         NativeMemoryTestHooks.SetOperationEntered(operation =>
@@ -57,7 +57,7 @@ public sealed class ConcurrencyTests
 
         NativeConcurrentPool<int> pool = new(
             preLease: 1,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         using ManualResetEventSlim entered = new();
         using ManualResetEventSlim release = new();
         NativeMemoryTestHooks.SetOperationEntered(operation =>

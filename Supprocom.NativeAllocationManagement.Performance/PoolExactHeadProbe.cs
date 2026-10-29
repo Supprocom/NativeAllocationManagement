@@ -22,7 +22,7 @@ internal static class PoolExactHeadProbe
         using NativePool<byte> pool = new(
             preLease: 1,
             preAllocateBytes: 0,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
 
         long warmupChecksum = RunIterations(pool, warmupIterations);
         NativeOwnerStatistics before = pool.GetStatistics();

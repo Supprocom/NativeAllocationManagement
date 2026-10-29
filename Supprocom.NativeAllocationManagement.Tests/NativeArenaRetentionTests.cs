@@ -8,7 +8,7 @@ public sealed class NativeArenaRetentionTests
     public void BothIdleLanesUseOneCeilingAndKeepTheFittingOrdinaryPrefix()
     {
         NativeMemoryBudget budget = new(16_384);
-        using NativeArena arena = new(budget, new NativeArenaRetentionPolicy(4_096, 4_160), 4_096, NativeMemoryReturn.ToNativeMemory);
+        using NativeArena arena = new(budget, new NativeArenaRetentionPolicy(4_096, 4_160), 4_096, NativeMemoryReturn.Free);
         ArenaLease<int> ordinary = arena.Scratch<int>(1, static writer => writer.Write(17));
         ArenaLease<int> scoped = arena.ScratchScoped<int>(1, static writer => writer.Write(23));
         Assert.Equal(17, ordinary.Read(static view => view[0]));
@@ -31,7 +31,7 @@ public sealed class NativeArenaRetentionTests
     public void MaintenanceHistoryOverflowCannotWrapOrPreventARealRelease()
     {
         NativeMemoryBudget budget = new(512);
-        using NativeArena arena = new(budget, new NativeArenaRetentionPolicy(256, 0), 256, NativeMemoryReturn.ToNativeMemory);
+        using NativeArena arena = new(budget, new NativeArenaRetentionPolicy(256, 0), 256, NativeMemoryReturn.Free);
         object kernel = arena.KernelForInitialization.KernelFor("test");
         kernel.GetType().GetField("_retentionMaintenanceCount", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(kernel, long.MaxValue);
         Assert.False(arena.CaptureRetentionSnapshot().HistoryOverflowed);
@@ -48,7 +48,7 @@ public sealed class NativeArenaRetentionTests
     public void NormalOutlierNormalPreservesTheFittingNormalWorkingSet()
     {
         NativeMemoryBudget budget = new(2_000_000);
-        using NativeArena arena = new(budget, new NativeArenaRetentionPolicy(4_096, 4_160), 0, NativeMemoryReturn.ToNativeMemory);
+        using NativeArena arena = new(budget, new NativeArenaRetentionPolicy(4_096, 4_160), 0, NativeMemoryReturn.Free);
         ArenaLease<int> normal = arena.Scratch<int>(1, static writer => writer.Write(17));
         ArenaLease<byte> outlier = arena.Scratch<byte>(65_536, static writer => writer.Fill(23));
         Assert.Equal(17, normal.Read(static view => view[0]));
@@ -78,7 +78,7 @@ public sealed class NativeArenaRetentionTests
     public void OutlierDoesNotBecomeTheNextOrdinaryGrowthBasis()
     {
         NativeMemoryBudget budget = new(2_000_000);
-        using NativeArena arena = new(budget, new NativeArenaRetentionPolicy(4_096, 8_320), 0, NativeMemoryReturn.ToNativeMemory);
+        using NativeArena arena = new(budget, new NativeArenaRetentionPolicy(4_096, 8_320), 0, NativeMemoryReturn.Free);
         ArenaLease<byte> outlier = arena.Scratch<byte>(65_536, static writer => writer.Fill(1));
         ArenaLease<int> normal = arena.Scratch<int>(1, static writer => writer.Write(42));
         Assert.Equal(42, normal.Read(static view => view[0]));
@@ -94,7 +94,7 @@ public sealed class NativeArenaRetentionTests
     public void ScopedMaintenanceCannotEvictOccupiedOrdinaryStorage()
     {
         NativeMemoryBudget budget = new(2_000_000);
-        using NativeArena arena = new(budget, new NativeArenaRetentionPolicy(4_096, 0), 0, NativeMemoryReturn.ToNativeMemory);
+        using NativeArena arena = new(budget, new NativeArenaRetentionPolicy(4_096, 0), 0, NativeMemoryReturn.Free);
         ArenaLease<int> ordinary = arena.Scratch<int>(1, static writer => writer.Write(42));
         ArenaLease<byte> scoped = arena.ScratchScoped<byte>(65_536, static writer => writer.Fill(7));
         Assert.Equal(7, scoped.Read(static view => view[0]));
@@ -112,7 +112,7 @@ public sealed class NativeArenaRetentionTests
     public void ExactReservationAndTighterGrowthReconcileAtTheNativeCap()
     {
         NativeMemoryBudget budget = new(512);
-        using NativeArena arena = new(budget, new NativeArenaRetentionPolicy(4_096, 0), 0, NativeMemoryReturn.ToNativeMemory);
+        using NativeArena arena = new(budget, new NativeArenaRetentionPolicy(4_096, 0), 0, NativeMemoryReturn.Free);
         ArenaLease<byte> exact = arena.Scratch<byte>(448, static writer => writer.Fill(42));
         Assert.Equal(42, exact.Read(static view => view[447]));
         Assert.Equal(512, budget.CaptureStatistics().CommittedBytes);
@@ -128,7 +128,7 @@ public sealed class NativeArenaRetentionTests
     public void IncompleteOutlierRemainsChargedUntilActualIdleMaintenance()
     {
         NativeMemoryBudget budget = new(2_000_000);
-        using NativeArena arena = new(budget, new NativeArenaRetentionPolicy(4_096, 4_160), 0, NativeMemoryReturn.ToNativeMemory);
+        using NativeArena arena = new(budget, new NativeArenaRetentionPolicy(4_096, 4_160), 0, NativeMemoryReturn.Free);
         ArenaLease<int> ordinary = arena.Scratch<int>(1, static writer => writer.Write(17));
         Assert.Throws<InvalidOperationException>(() => arena.Scratch<byte>(65_536, static writer => writer.Write(1)));
         Assert.Equal(4, arena.GetStatistics().RequestedBytes);
@@ -143,7 +143,7 @@ public sealed class NativeArenaRetentionTests
     public void EnteredBorrowRejectsMaintenanceBeforePhysicalRelease()
     {
         NativeMemoryBudget budget = new(512);
-        using NativeArena arena = new(budget, new NativeArenaRetentionPolicy(256, 0), 256, NativeMemoryReturn.ToNativeMemory);
+        using NativeArena arena = new(budget, new NativeArenaRetentionPolicy(256, 0), 256, NativeMemoryReturn.Free);
         ArenaLease<int> value = arena.Scratch<int>(1, static writer => writer.Write(42));
         value.Access(view =>
         {
@@ -160,7 +160,7 @@ public sealed class NativeArenaRetentionTests
     public void SustainedOutliersKeepBoundedRetentionWithoutNormalChurn()
     {
         NativeMemoryBudget budget = new(2_000_000);
-        using NativeArena arena = new(budget, new NativeArenaRetentionPolicy(4_096, 4_160), 4_096, NativeMemoryReturn.ToNativeMemory);
+        using NativeArena arena = new(budget, new NativeArenaRetentionPolicy(4_096, 4_160), 4_096, NativeMemoryReturn.Free);
         for (int iteration = 0; iteration < 20; iteration++)
         {
             ArenaLease<int> normal = arena.Scratch<int>(1, static writer => writer.Write(17));
@@ -179,7 +179,7 @@ public sealed class NativeArenaRetentionTests
     public void PolicySnapshotAndWarmResetRequireNoManagedAllocation()
     {
         NativeMemoryBudget budget = new(512);
-        using NativeArena arena = new(budget, new NativeArenaRetentionPolicy(256, 320), 256, NativeMemoryReturn.ToNativeMemory);
+        using NativeArena arena = new(budget, new NativeArenaRetentionPolicy(256, 320), 256, NativeMemoryReturn.Free);
         NativeLeaseInitializer<int> initialize = static writer => writer.Fill(42);
         ArenaLease<int> warm = arena.Scratch<int>(1, initialize);
         Assert.Equal(42, warm.Read(static view => view[0]));
@@ -201,7 +201,7 @@ public sealed class NativeArenaRetentionTests
     public void ReleasedHistorySaturatesButActualChargesAndPeaksStayExact()
     {
         NativeMemoryBudget budget = new(512);
-        using NativeArena arena = new(budget, new NativeArenaRetentionPolicy(256, 0), 256, NativeMemoryReturn.ToNativeMemory);
+        using NativeArena arena = new(budget, new NativeArenaRetentionPolicy(256, 0), 256, NativeMemoryReturn.Free);
         object kernel = arena.KernelForInitialization.KernelFor("test");
         kernel.GetType().GetField("_retentionReleasedBytes", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(kernel, long.MaxValue);
         arena.Reset();
@@ -216,7 +216,7 @@ public sealed class NativeArenaRetentionTests
     [Fact]
     public void DisabledPolicyHasRealInvariantHistoryAndCannotBeApplied()
     {
-        using NativeArena arena = new(256, NativeMemoryReturn.ToNativeMemory);
+        using NativeArena arena = new(256, NativeMemoryReturn.Free);
         NativeArenaRetentionStatistics initial = arena.CaptureRetentionSnapshot();
         Assert.False(initial.Enabled);
         Assert.Equal(default, initial.Policy);
@@ -233,7 +233,7 @@ public sealed class NativeArenaRetentionTests
     public void FinalCleanupReleasesCurrentGaugesWithoutInventingPolicyFreeCredit()
     {
         NativeMemoryBudget budget = new(2_000_000);
-        NativeArena arena = new(budget, new NativeArenaRetentionPolicy(4_096, 0), 65_536, NativeMemoryReturn.ToNativeMemory);
+        NativeArena arena = new(budget, new NativeArenaRetentionPolicy(4_096, 0), 65_536, NativeMemoryReturn.Free);
         Assert.Equal(65_600, arena.CaptureRetentionSnapshot().OversizedBytes);
         arena.Dispose();
         NativeArenaRetentionStatistics closed = arena.CaptureRetentionSnapshot();
@@ -251,7 +251,7 @@ public sealed class NativeArenaRetentionTests
     public void PolicyTrimTraceRecordsTheRealExtentOwnerAndBackingIdentity()
     {
         NativeMemoryBudget budget = new(2_000_000, 8);
-        using NativeArena arena = new(budget, new NativeArenaRetentionPolicy(4_096, 4_160), 4_096, NativeMemoryReturn.ToNativeMemory);
+        using NativeArena arena = new(budget, new NativeArenaRetentionPolicy(4_096, 4_160), 4_096, NativeMemoryReturn.Free);
         _ = arena.Scratch<byte>(65_536, static writer => writer.Fill(23));
         arena.Reset();
         Span<NativeMemoryTraceEvent> events = stackalloc NativeMemoryTraceEvent[8];
@@ -269,10 +269,10 @@ public sealed class NativeArenaRetentionTests
     {
         NativeMemoryBudget budget = new(512);
         Assert.Throws<ArgumentOutOfRangeException>(() => new NativeArenaRetentionPolicy(0, 0));
-        Assert.Throws<ArgumentOutOfRangeException>(() => new NativeArena(budget, default(NativeArenaRetentionPolicy), 256, NativeMemoryReturn.ToNativeMemory));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new NativeArena(budget, default(NativeArenaRetentionPolicy), 256, NativeMemoryReturn.Free));
         Assert.Equal(0, budget.CaptureStatistics().AllocationCount);
         Assert.Equal(0, budget.CaptureStatistics().ReservedBytes);
-        using NativeArena arena = new(budget, new NativeArenaRetentionPolicy(256, 320), 256, NativeMemoryReturn.ToNativeMemory);
+        using NativeArena arena = new(budget, new NativeArenaRetentionPolicy(256, 320), 256, NativeMemoryReturn.Free);
         Exception? snapshotFailure = null;
         Exception? maintenanceFailure = null;
         Thread other = new(() =>

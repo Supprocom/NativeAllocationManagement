@@ -42,7 +42,7 @@ public sealed class NativeOrdinaryPooledMoveAnalyzerTests
         {
             public static void Run(bool condition)
             {
-                using NativePool<int> pool = new(2, NativeMemoryReturn.ToNativeMemory);
+                using NativePool<int> pool = new(2, NativeMemoryReturn.Free);
                 {{body}}
             }
         }

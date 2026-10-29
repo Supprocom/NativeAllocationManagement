@@ -449,7 +449,7 @@ public sealed class PackageSmokeTests
                         using NativePool<int> pool = new(
                             preLease: 4,
                             returnMemoryOnDispose:
-                                NativeMemoryReturn.ToNativeMemory);
+                                NativeMemoryReturn.Free);
                         Pooled<int> lease = pool.Rent(
                             4,
                             static writer => writer.Fill(3));
@@ -610,7 +610,7 @@ public sealed class PackageSmokeTests
                     public static int Main()
                     {
                         NativeMemoryBudget budget = new(64, traceCapacity: 8);
-                        using (NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory))
+                        using (NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free))
                         {
                             NativeOwnerDiagnosticSnapshot poolSnapshot = pool.CaptureDiagnosticSnapshot();
                             if (poolSnapshot.OwnerId != pool.Id
@@ -954,7 +954,7 @@ public sealed class PackageSmokeTests
                         if (mappedBudget.CaptureStatistics().CommittedBytes != 0) return 10;
                         System.Console.WriteLine("mapped-group-output=19; final-charge=0");
                         NativeMemoryBudget regionBudget = new(512);
-                        using (NativeRegion region = new(regionBudget, 16, NativeMemoryReturn.ToNativeMemory))
+                        using (NativeRegion region = new(regionBudget, 16, NativeMemoryReturn.Free))
                         {
                             Local<int> value = region.Lease<int>(1, static writer => writer.Write(23));
                             if (value.Read(static view => view[0]) != 23) return 12;
@@ -1074,7 +1074,7 @@ public sealed class PackageSmokeTests
                             || layoutBudget.CaptureStatistics().AllocationCount != 2 || layoutBudget.CaptureStatistics().FreeCount != 2) return 41;
                         System.Console.WriteLine("typed-layout-output=101; fields=2; copied-bytes=8; final-charge=0");
                         NativeMemoryBudget retentionBudget = new(2_000_000);
-                        using (NativeArena retention = new(retentionBudget, new NativeArenaRetentionPolicy(4096, 4160), 0, NativeMemoryReturn.ToNativeMemory))
+                        using (NativeArena retention = new(retentionBudget, new NativeArenaRetentionPolicy(4096, 4160), 0, NativeMemoryReturn.Free))
                         {
                             {
                                 ArenaLease<int> normal = retention.Scratch<int>(1, static writer => writer.Write(17));
@@ -2209,7 +2209,7 @@ public sealed class PackageSmokeTests
                 {
                     public static int Main()
                     {
-                        NativeConcurrentPool<int> deferredPool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+                        NativeConcurrentPool<int> deferredPool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
                         ConcurrentPooled<int> borrowed = deferredPool.Rent(1, static writer => writer.Fill(default!));
                         bool callbackCompleted = false;
                         borrowed.Access(span =>
@@ -2243,7 +2243,7 @@ public sealed class PackageSmokeTests
                         current.Dispose();
                         deferredPool.Dispose();
 
-                        NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+                        NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
                         ConcurrentPooled<int> stale = pool.Rent(1, static writer => writer.Fill(default!));
                         pool.ReturnMemoryToNativeMemory();
                         try
@@ -2257,7 +2257,7 @@ public sealed class PackageSmokeTests
                             stale.Dispose();
                         }
 
-                        NativeConcurrentPool<int> guardedPool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+                        NativeConcurrentPool<int> guardedPool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
                         ConcurrentPooled<int> guarded = guardedPool.Rent(1, static writer => writer.Fill(default!));
                         try
                         {
@@ -2310,7 +2310,7 @@ public sealed class PackageSmokeTests
                 {
                     public static int Main()
                     {
-                        NativeConcurrentPool<int> strictPool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+                        NativeConcurrentPool<int> strictPool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
                         ConcurrentPooled<int> strictBorrow = strictPool.Rent(1, static writer => writer.Fill(default!));
                         bool strictRejected = false;
                         strictBorrow.Access(span =>
@@ -2337,7 +2337,7 @@ public sealed class PackageSmokeTests
                         strictPool.ReturnMemoryToNativeMemory();
                         strictPool.Dispose();
 
-                        NativeConcurrentPool<int> gcPool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+                        NativeConcurrentPool<int> gcPool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
                         ConcurrentPooled<int> detachedBorrow = gcPool.Rent(1, static writer => writer.Fill(default!));
                         bool detachedOperationWasValid = false;
                         detachedBorrow.Access(span =>

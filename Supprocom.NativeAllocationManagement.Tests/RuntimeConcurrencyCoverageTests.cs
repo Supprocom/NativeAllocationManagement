@@ -422,7 +422,7 @@ public sealed class RuntimeConcurrencyCoverageTests
             Task worker = Task.Run(() => ExecuteOperation(pool, operation));
             Assert.True(entered.Wait(TimeSpan.FromSeconds(10)), $"Operation {operation} did not enter.");
 
-            if (policy == NativeMemoryReturn.ToNativeMemory)
+            if (policy == NativeMemoryReturn.Free)
             {
                 NativeAllocationInUseException exception =
                     Assert.Throws<NativeAllocationInUseException>(pool.ReturnMemoryToNativeMemory);
@@ -482,7 +482,7 @@ public sealed class RuntimeConcurrencyCoverageTests
             Assert.True(entered.Wait(TimeSpan.FromSeconds(10)), $"Arena operation {operation} did not enter.");
             if (returnMemory)
             {
-                if (policy == NativeMemoryReturn.ToNativeMemory)
+                if (policy == NativeMemoryReturn.Free)
                 {
                     NativeAllocationInUseException exception = Assert.Throws<NativeAllocationInUseException>(arena.ReturnMemoryToNativeMemory);
                     Assert.Equal(NativeOwnerLifecycle.Active, exception.CurrentLifecycle);
@@ -496,7 +496,7 @@ public sealed class RuntimeConcurrencyCoverageTests
             }
             else
             {
-                if (policy == NativeMemoryReturn.ToNativeMemory)
+                if (policy == NativeMemoryReturn.Free)
                 {
                     NativeAllocationInUseException exception = Assert.Throws<NativeAllocationInUseException>(arena.ReleaseLeasesToNativeMemory);
                     Assert.Equal(NativeOwnerLifecycle.Active, exception.CurrentLifecycle);
@@ -514,7 +514,7 @@ public sealed class RuntimeConcurrencyCoverageTests
 
             if (returnMemory)
             {
-                if (policy == NativeMemoryReturn.ToNativeMemory)
+                if (policy == NativeMemoryReturn.Free)
                 {
                     arena.ReturnMemoryToNativeMemory();
                 }
@@ -523,7 +523,7 @@ public sealed class RuntimeConcurrencyCoverageTests
                     arena.LeaseFromMemory();
                 }
             }
-            else if (policy == NativeMemoryReturn.ToNativeMemory)
+            else if (policy == NativeMemoryReturn.Free)
             {
                 arena.ReleaseLeasesToNativeMemory();
             }
@@ -572,7 +572,7 @@ public sealed class RuntimeConcurrencyCoverageTests
             Assert.True(beforeEntry.Wait(TimeSpan.FromSeconds(10)), $"Arena operation {operation} did not reach its entry barrier.");
             if (returnMemory)
             {
-                if (policy == NativeMemoryReturn.ToNativeMemory)
+                if (policy == NativeMemoryReturn.Free)
                 {
                     arena.ReturnMemoryToNativeMemory();
                 }
@@ -581,7 +581,7 @@ public sealed class RuntimeConcurrencyCoverageTests
                     arena.ReturnMemoryToGarbageCollector();
                 }
             }
-            else if (policy == NativeMemoryReturn.ToNativeMemory)
+            else if (policy == NativeMemoryReturn.Free)
             {
                 arena.ReleaseLeasesToNativeMemory();
             }
@@ -627,7 +627,7 @@ public sealed class RuntimeConcurrencyCoverageTests
 
     private static void Return(NativeConcurrentPool<int> pool, NativeMemoryReturn policy)
     {
-        if (policy == NativeMemoryReturn.ToNativeMemory)
+        if (policy == NativeMemoryReturn.Free)
         {
             pool.ReturnMemoryToNativeMemory();
         }
@@ -757,7 +757,7 @@ public sealed class RuntimeConcurrencyCoverageTests
             });
 
             Assert.True(beforeEntry.Wait(TimeSpan.FromSeconds(10)), $"Operation {operation} did not reach its entry barrier.");
-            if (policy == NativeMemoryReturn.ToNativeMemory)
+            if (policy == NativeMemoryReturn.Free)
             {
                 pool.ReturnMemoryToNativeMemory();
             }

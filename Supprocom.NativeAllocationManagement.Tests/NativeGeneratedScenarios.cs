@@ -397,7 +397,7 @@ internal static partial class NativeGeneratedScenarios
     {
         SeededRandom random = new(seed);
         NativeMemoryBudget budget = new(2_000_000);
-        using NativeArena arena = new(budget, new NativeArenaRetentionPolicy(4096, 4160), 0, NativeMemoryReturn.ToNativeMemory);
+        using NativeArena arena = new(budget, new NativeArenaRetentionPolicy(4096, 4160), 0, NativeMemoryReturn.Free);
         long released = 0;
         for (int step = 0; step < steps; step++)
         {

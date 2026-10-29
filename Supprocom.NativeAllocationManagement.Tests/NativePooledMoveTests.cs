@@ -204,8 +204,8 @@ public sealed class NativePooledMoveTests
     }
 
     private static NativePool<int> CreatePool(NativeMemoryBudget? budget) =>
-        budget is null ? new(2, NativeMemoryReturn.ToNativeMemory)
-            : new(budget, 2, 0, NativeMemoryReturn.ToNativeMemory);
+        budget is null ? new(2, NativeMemoryReturn.Free)
+            : new(budget, 2, 0, NativeMemoryReturn.Free);
 
     private static void AssertUninitialized(scoped Pooled<int> value)
     {

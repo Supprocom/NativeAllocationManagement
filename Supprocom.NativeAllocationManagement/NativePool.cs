@@ -97,7 +97,7 @@ public sealed partial class NativePool<T> : IDisposable
     public NativePool(
         int preLease = 0,
         NativeMemoryReturn returnMemoryOnDispose =
-            NativeMemoryReturn.ToGarbageCollector)
+            NativeMemoryReturn.Reuse)
         : this(
             preLease,
             preAllocateBytes: 0,
@@ -114,7 +114,7 @@ public sealed partial class NativePool<T> : IDisposable
         int preLease,
         nuint preAllocateBytes,
         NativeMemoryReturn returnMemoryOnDispose =
-            NativeMemoryReturn.ToGarbageCollector)
+            NativeMemoryReturn.Reuse)
         : this(preLease, preAllocateBytes, returnMemoryOnDispose, budget: null, requireBudget: false)
     {
     }

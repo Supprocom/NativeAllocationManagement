@@ -18,7 +18,7 @@ internal sealed unsafe partial class NativeArenaKernel
     {
         ArgumentNullException.ThrowIfNull(budget);
         Id = NativeOwnerIdentity.Next();
-        _returnMemoryOnDispose = NativeMemoryReturn.ToNativeMemory;
+        _returnMemoryOnDispose = NativeMemoryReturn.Free;
         _budget = budget;
         _ownerThreadId = NativeThreadIdentity.Current;
         _lifecycle = NativeOwnerLifecycle.Active;

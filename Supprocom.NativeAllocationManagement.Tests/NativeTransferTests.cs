@@ -12,7 +12,7 @@ public sealed class NativeTransferTests
     public void MoveInvalidatesTheSourceAndAllOldAliases()
     {
         using NativeConcurrentPool<int> pool = new(
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         NativeTransfer<int>? source = pool.RentTransferable(
             4,
             static writer => writer.Write([1, 2, 3, 4]));
@@ -48,7 +48,7 @@ public sealed class NativeTransferTests
     public void BoundedChannelTransfersTheLeaseAcrossThreads()
     {
         using NativeConcurrentPool<uint> pool = new(
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         NativeTransfer<uint>? source = pool.RentTransferable(
             4,
             static writer => writer.Write([3U, 5U, 7U, 11U]));
@@ -106,7 +106,7 @@ public sealed class NativeTransferTests
     public async Task ConcurrentMovesPublishExactlyOneDestination()
     {
         using NativeConcurrentPool<int> pool = new(
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         NativeTransfer<int>? original = pool.RentTransferable(
             1,
             static writer => writer.Write(37));
@@ -151,7 +151,7 @@ public sealed class NativeTransferTests
     public async Task MoveDuringAccessConsumesAndReturnsTheSource()
     {
         using NativeConcurrentPool<int> pool = new(
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         NativeTransfer<int>? source = pool.RentTransferable(
             1,
             static writer => writer.Write(41));
@@ -184,7 +184,7 @@ public sealed class NativeTransferTests
     public void CallbackExceptionKeepsTheDestinationUsable()
     {
         using NativeConcurrentPool<int> pool = new(
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         NativeTransfer<int>? source = pool.RentTransferable(
             2,
             static writer => writer.Write([13, 17]));
@@ -206,7 +206,7 @@ public sealed class NativeTransferTests
     public void InitializerExceptionReturnsTheUnpublishedLease()
     {
         using NativeConcurrentPool<int> pool = new(
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
 
         Assert.Throws<TransferMarkerException>(
             () => pool.RentTransferable(
@@ -231,7 +231,7 @@ public sealed class NativeTransferTests
     public async Task CanceledChannelWriteReturnsTheMovedDestination()
     {
         using NativeConcurrentPool<int> pool = new(
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         Channel<NativeTransfer<int>> channel =
             Channel.CreateBounded<NativeTransfer<int>>(1);
         NativeTransfer<int>? firstSource = pool.RentTransferable(
@@ -265,7 +265,7 @@ public sealed class NativeTransferTests
     public async Task OwnerShutdownRejectsAnActiveReceiverCallback()
     {
         NativeConcurrentPool<int> pool = new(
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         NativeTransfer<int> transfer = pool.RentTransferable(
             1,
             static writer => writer.Write(23));
@@ -297,7 +297,7 @@ public sealed class NativeTransferTests
     public void IdleOwnerShutdownInvalidatesTheLiveTransfer()
     {
         NativeConcurrentPool<int> pool = new(
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         NativeTransfer<int> transfer = pool.RentTransferable(
             1,
             static writer => writer.Write(29));
@@ -315,7 +315,7 @@ public sealed class NativeTransferTests
     public void OwnerDisposalBeforeMovePublishesNoDestination()
     {
         NativeConcurrentPool<int> pool = new(
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         NativeTransfer<int>? source = pool.RentTransferable(
             1,
             static writer => writer.Write(31));
@@ -336,7 +336,7 @@ public sealed class NativeTransferTests
     {
         NativeMemoryTestHooks.Reset();
         NativeConcurrentPool<int> pool = new(
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         NativeTransfer<int>? source = pool.RentTransferable(
             1,
             static writer => writer.Write(43));
@@ -394,7 +394,7 @@ public sealed class NativeTransferTests
     public void AbandonedReceiverFinalizerReturnsTheLease()
     {
         using NativeConcurrentPool<int> pool = new(
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         WeakReference abandoned = CreateAbandonedReceiver(pool);
 
         for (int attempt = 0;

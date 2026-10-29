@@ -43,7 +43,7 @@ public sealed class NativeSpanProcessorTests
         Assert.Equal(3 + 2, scratch.Process<int, int, WriteIndexPlusState>(in state));
         Assert.Equal(2 + 3 + 4 + 5, scratch.Process<int, int, SumValues>(in state));
 
-        using (NativeRegion region = new(256, NativeMemoryReturn.ToNativeMemory))
+        using (NativeRegion region = new(256, NativeMemoryReturn.Free))
         {
             Local<int> local = region.Lease<int>(3, 1);
             Assert.Equal(2 + 2, local.Process<int, int, WriteIndexPlusState>(in state));
@@ -104,7 +104,7 @@ public sealed class NativeSpanProcessorTests
     [InlineData("int s = 1; using NativePool<int> pool = new(4); _ = pool.Process<int, int, P>(4, 0, in s);")]
     [InlineData("int s = 1; using NativePool<int> pool = new(4); using Pooled<int> lease = pool.Rent(4, 0); _ = lease.Process<int, int, P>(4, in s);")]
     [InlineData("int s = 1; using NativeArena arena = new(); { ArenaLease<int> lease = arena.Scratch<int>(4, 0); _ = lease.Process<int, int, P>(in s); } arena.Reset();")]
-    [InlineData("int s = 1; using (NativeRegion region = new(64, NativeMemoryReturn.ToNativeMemory)) { Local<int> lease = region.Lease<int>(4, 0); _ = lease.Process<int, int, P>(in s); }")]
+    [InlineData("int s = 1; using (NativeRegion region = new(64, NativeMemoryReturn.Free)) { Local<int> lease = region.Lease<int>(4, 0); _ = lease.Process<int, int, P>(in s); }")]
     [InlineData("int s = 1; using NativeWorkspace<int> workspace = new(4); _ = workspace.Process<int, int, P>(4, in s);")]
     public async Task StaticProcessorsAreAcceptedOwnershipShapes(string body)
     {

@@ -151,7 +151,7 @@ public sealed class NativeTransferValueTests
         NativeMemoryBudget budget = new(1_024);
         using NativeBuilder<int> builder = new(budget, 4);
         builder.Append(42);
-        using NativeConcurrentPool<int> pool = new(budget, 0, 0, NativeMemoryReturn.ToNativeMemory, false);
+        using NativeConcurrentPool<int> pool = new(budget, 0, 0, NativeMemoryReturn.Free, false);
         NativeTransfer<int>? source = pooled
             ? pool.RentTransferable(1, static writer => writer.Fill(42))
             : builder.Complete();

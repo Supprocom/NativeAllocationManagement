@@ -171,7 +171,7 @@ internal static class NativeCapacityDiagnosticOracle
         long normalExtent = ArenaExtent(64);
         long outlierExtent = ArenaExtent(128);
         NativeMemoryBudget budget = new(normalExtent + outlierExtent, traceCapacity);
-        NativeArena arena = new(budget, new NativeArenaRetentionPolicy(64, (nuint)normalExtent), 64, NativeMemoryReturn.ToNativeMemory);
+        NativeArena arena = new(budget, new NativeArenaRetentionPolicy(64, (nuint)normalExtent), 64, NativeMemoryReturn.Free);
         Retention expected = new()
         {
             OwnerId = arena.Id,

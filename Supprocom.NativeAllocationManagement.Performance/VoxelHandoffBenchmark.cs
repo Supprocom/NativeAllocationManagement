@@ -154,7 +154,7 @@ internal static class VoxelHandoffBenchmark
             implementation == VoxelHandoffImplementation.Native
                 ? new NativeConcurrentPool<uint>(
                     options.WordCount,
-                    NativeMemoryReturn.ToNativeMemory)
+                    NativeMemoryReturn.Free)
                 : null;
         TransferInitializer? initializer = null;
         if (implementation == VoxelHandoffImplementation.Native)
@@ -322,7 +322,7 @@ internal static class VoxelHandoffBenchmark
         ArgumentNullException.ThrowIfNull(expected);
         using NativeConcurrentPool<uint> pool = new(
             source.Count,
-            NativeMemoryReturn.ToNativeMemory);
+            NativeMemoryReturn.Free);
         TransferInitializer initializer = new(source);
         NativeTransfer<uint> transfer = pool.RentTransferable(
             source.Count,

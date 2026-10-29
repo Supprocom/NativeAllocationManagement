@@ -14,7 +14,7 @@ internal static class DetailedCountersProbe
             liveOutstanding = NativeMemoryDiagnostics.Snapshot().OutstandingNativeBytes;
         }
 
-        using (NativePool<int> pool = new(preLease: 8, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory))
+        using (NativePool<int> pool = new(preLease: 8, returnMemoryOnDispose: NativeMemoryReturn.Free))
         {
             using Pooled<int> lease = pool.Rent(8, 1);
             lease.Clear();

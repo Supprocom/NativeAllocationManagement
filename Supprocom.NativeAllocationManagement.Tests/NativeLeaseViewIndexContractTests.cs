@@ -8,7 +8,7 @@ public sealed class NativeLeaseViewIndexContractTests
     [InlineData(4)]
     public void DirectPoolViewPreservesLogicalBoundsAndValues(int length)
     {
-        using NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         using Pooled<int> lease = pool.Rent(length, static writer => writer.Fill(17));
         lease.Read(view =>
         {
@@ -32,7 +32,7 @@ public sealed class NativeLeaseViewIndexContractTests
     [InlineData(4)]
     public void DirectRegionViewPreservesLogicalBoundsAndValues(int length)
     {
-        using NativeRegion region = new(64, NativeMemoryReturn.ToNativeMemory);
+        using NativeRegion region = new(64, NativeMemoryReturn.Free);
         Local<long> lease = region.Lease<long>(length, static writer => writer.Fill(71));
         lease.Read(view =>
         {
@@ -55,7 +55,7 @@ public sealed class NativeLeaseViewIndexContractTests
     [InlineData(4)]
     public void ExplicitRootedPrefixDoesNotExposeOrModifyTheBackingSuffix(int length)
     {
-        using NativeConcurrentPool<string> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentPool<string> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         using ConcurrentPooled<string> lease = pool.Rent(4, static writer => writer.Fill("original"));
         Assert.Equal(4, pool.CurrentReferenceRootCountForTest);
         int processed = lease.Process(length, length, static (view, expectedLength) =>
@@ -90,7 +90,7 @@ public sealed class NativeLeaseViewIndexContractTests
     [InlineData(4)]
     public void ExplicitDirectPrefixDoesNotExposeOrModifyTheBackingSuffix(int length)
     {
-        using NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         using ConcurrentPooled<int> lease = pool.Rent(4, static writer => writer.Fill(17));
         _ = lease.Process(length, length, static (view, expectedLength) =>
         {
@@ -110,7 +110,7 @@ public sealed class NativeLeaseViewIndexContractTests
     [Fact]
     public void DirectMultifieldValuesRoundTripWithoutChangingTheirRepresentation()
     {
-        using NativePool<decimal> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativePool<decimal> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         using Pooled<decimal> lease = pool.Rent(2, static writer => writer.Fill(17.25m));
         lease.Read(static view =>
         {

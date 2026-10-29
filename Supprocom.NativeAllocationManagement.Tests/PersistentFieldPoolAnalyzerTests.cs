@@ -260,7 +260,7 @@ public sealed class PersistentFieldPoolAnalyzerTests
                 private readonly NativePool<short> pool = new(
                     preLease: 153_600,
                     returnMemoryOnDispose:
-                        NativeMemoryReturn.ToNativeMemory);
+                        NativeMemoryReturn.Free);
 
                 public int Build()
                 {
@@ -409,7 +409,7 @@ public sealed class PersistentFieldPoolAnalyzerTests
             {
                 private readonly NativePool<int> pool = new(
                     returnMemoryOnDispose:
-                        NativeMemoryReturn.ToNativeMemory);
+                        NativeMemoryReturn.Free);
 
                 public NativePool<int> Publish() => pool;
 
@@ -439,7 +439,7 @@ public sealed class PersistentFieldPoolAnalyzerTests
             {
                 private readonly NativePool<int> pool = new(
                     returnMemoryOnDispose:
-                        NativeMemoryReturn.ToNativeMemory);
+                        NativeMemoryReturn.Free);
             }
 
             public static class Coordinator

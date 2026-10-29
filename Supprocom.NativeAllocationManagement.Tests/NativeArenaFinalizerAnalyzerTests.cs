@@ -17,7 +17,7 @@ public sealed class NativeArenaFinalizerAnalyzerTests
             {
                 public static void Run()
                 {
-                    using NativeArena owner = new(8, NativeMemoryReturn.ToGarbageCollector);
+                    using NativeArena owner = new(8, NativeMemoryReturn.Reuse);
                     {{operation}}
                 }
                 {{helper}}

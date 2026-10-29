@@ -5,7 +5,7 @@ public sealed class NativePoolInitializerGrowthTests
     [Fact]
     public void SuccessfulInitializerPublishesInTheCurrentMetadataBank()
     {
-        using NativePool<int> pool = new(2, NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(2, NativeMemoryReturn.Free);
         using (Pooled<int> outer = pool.Rent(2, writer =>
         {
             using Pooled<int> first = pool.Rent(2, 11);
@@ -36,7 +36,7 @@ public sealed class NativePoolInitializerGrowthTests
     [InlineData(true)]
     public void IncompleteAndThrowingInitializersRollBackTheCurrentBank(bool throws)
     {
-        using NativePool<int> pool = new(2, NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(2, NativeMemoryReturn.Free);
         OperationCanceledException expected = new("nested initialization failure");
         Exception? actual = Record.Exception(() =>
         {

@@ -39,7 +39,7 @@ public sealed class NativeLeaseWriterDirectInitializationTests
     {
         using NativeConcurrentPool<int> pool = new(
             preLease: 16,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
 
         InvalidOperationException exception = Assert.Throws<
             InvalidOperationException>(
@@ -67,7 +67,7 @@ public sealed class NativeLeaseWriterDirectInitializationTests
     {
         using NativeConcurrentPool<int> pool = new(
             preLease: 16,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         using CancellationTokenSource cancellation = new();
         cancellation.Cancel();
 

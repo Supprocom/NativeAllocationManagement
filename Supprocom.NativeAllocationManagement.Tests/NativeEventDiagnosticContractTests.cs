@@ -99,7 +99,7 @@ public sealed class NativeEventDiagnosticContractTests
         nuint extent = OperatingSystem.IsWindows() ? 4u : 64u;
         NativeMemoryBudget budget = new(128, 64);
         long before = Stopwatch.GetTimestamp();
-        NativeConcurrentPool<int> pool = new(budget, 1, 0, NativeMemoryReturn.ToNativeMemory, false);
+        NativeConcurrentPool<int> pool = new(budget, 1, 0, NativeMemoryReturn.Free, false);
         long owner = pool.Id;
         try
         {
@@ -185,7 +185,7 @@ public sealed class NativeEventDiagnosticContractTests
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static long DetachGeneration(NativeMemoryBudget budget)
     {
-        using NativeConcurrentPool<int> pool = new(budget, 1, 0, NativeMemoryReturn.ToGarbageCollector, false);
+        using NativeConcurrentPool<int> pool = new(budget, 1, 0, NativeMemoryReturn.Reuse, false);
         long owner = pool.Id;
         pool.ReturnMemoryToGarbageCollector();
         return owner;

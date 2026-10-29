@@ -11,7 +11,7 @@ public sealed class ArenaLifecycleTests
         NativeMemoryTestHooks.Reset();
         using AlignedTestBuffer buffer = new(4096);
         using NativeConcurrentArena arena = new(
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         long allocationCount =
             NativeMemoryTestHooks.Snapshot().AllocationCount;
 
@@ -50,7 +50,7 @@ public sealed class ArenaLifecycleTests
         NativeMemoryTestHooks.Reset();
         AlignedTestBuffer buffer = new(4096);
         NativeConcurrentArena arena = new(
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         Assert.Equal(
             (nuint)4096,
             arena.ReserveExternalMemory(
@@ -75,7 +75,7 @@ public sealed class ArenaLifecycleTests
         NativeMemoryTestHooks.Reset();
         AlignedTestBuffer buffer = new(4096);
         NativeConcurrentArena arena = new(
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
 
         Assert.Throws<ArgumentException>(
             () => arena.ReserveExternalMemory(
@@ -100,7 +100,7 @@ public sealed class ArenaLifecycleTests
     public void ArenaSharesOneHeterogeneousGenerationAndInvalidatesEveryLeaseOnRelease()
     {
         NativeMemoryTestHooks.Reset();
-        NativeConcurrentArena arena = new(preAllocateBytes: 128, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentArena arena = new(preAllocateBytes: 128, returnMemoryOnDispose: NativeMemoryReturn.Free);
         ConcurrentArenaLease<int> numbers = arena.Scratch<int>(4, static writer => writer.Fill(default!));
         ConcurrentArenaLease<string> names = arena.Scratch<string>(2, static writer => writer.Fill(default!));
         numbers.Access(__namIndexedView => __namIndexedView[0] = 17);
@@ -132,7 +132,7 @@ public sealed class ArenaLifecycleTests
         NativeMemoryTestHooks.Reset();
         NativeConcurrentArena arena = new(
             preAllocateBytes: 256,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
 
         {
             ConcurrentArenaLease<byte> first = arena.ScratchScoped<byte>(32, static writer => writer.Fill(default!));
@@ -168,7 +168,7 @@ public sealed class ArenaLifecycleTests
         NativeMemoryTestHooks.Reset();
         NativeConcurrentArena arena = new(
             preAllocateBytes: PayloadBytes + 4096,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
 
         ConcurrentArenaLease<byte> stalePayload;
         ConcurrentArenaLease<ulong> staleOccupancy;
@@ -227,7 +227,7 @@ public sealed class ArenaLifecycleTests
         NativeMemoryTestHooks.Reset();
         NativeConcurrentArena arena = new(
             preAllocateBytes: 4096,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         long allocationCount =
             NativeMemoryTestHooks.Snapshot().AllocationCount;
 
@@ -261,7 +261,7 @@ public sealed class ArenaLifecycleTests
     {
         NativeConcurrentArena arena = new(
             preAllocateBytes: 4096,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
 
         ConcurrentArenaLease<byte> first = arena.ScratchScoped<byte>(
             32,
@@ -299,7 +299,7 @@ public sealed class ArenaLifecycleTests
     {
         NativeConcurrentArena arena = new(
             preAllocateBytes: 4096,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
 
         for (int iteration = 0; iteration < 32; iteration++)
         {
@@ -369,7 +369,7 @@ public sealed class ArenaLifecycleTests
     public void FailedScopedGrowthDoesNotPublishAStorageUnitOrPendingBaseline()
     {
         NativeMemoryTestHooks.Reset();
-        NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         NativeMemoryTestHooks.FailNextAllocation();
 
         Assert.Throws<NativeAllocationFailedException>(() => arena.ScratchScoped<int>(1, static writer => writer.Fill(default!)));
@@ -424,13 +424,13 @@ public sealed class ArenaLifecycleTests
         GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
         GC.WaitForPendingFinalizers();
         Assert.False(weak.IsAlive);
-        NativeConcurrentPool<object> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentPool<object> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         ConcurrentPooled<object> reused = pool.LeaseScoped(1, static writer => writer.Fill(default!));
         Assert.Null(reused.Read(__namIndexedView => __namIndexedView[0]));
         pool.RecycleScoped();
         pool.Dispose();
 
-        NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         ConcurrentArenaLease<int> ordinary = arena.Scratch<int>(1, static writer => writer.Fill(default!));
         ordinary.Access(__namIndexedView => __namIndexedView[0] = 9);
         ConcurrentArenaLease<int> scoped = arena.ScratchScoped<int>(4, static writer => writer.Fill(default!));
@@ -460,7 +460,7 @@ public sealed class ArenaLifecycleTests
 
     private static WeakReference CreateRecycledReference()
     {
-        NativeConcurrentPool<object> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentPool<object> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         ConcurrentPooled<object> pooled = pool.LeaseScoped(1, static writer => writer.Fill(default!));
         object held = new();
         WeakReference weak = new(held);
@@ -478,7 +478,7 @@ public sealed class ArenaLifecycleTests
         object held = new();
         WeakReference weak = new(held);
         lease.Access(__namIndexedView => __namIndexedView[0] = held);
-        if (policy == NativeMemoryReturn.ToNativeMemory)
+        if (policy == NativeMemoryReturn.Free)
         {
             pool.ReturnMemoryToNativeMemory();
         }
@@ -499,7 +499,7 @@ public sealed class ArenaLifecycleTests
         object held = new();
         WeakReference weak = new(held);
         lease.Access(__namIndexedView => __namIndexedView[0] = held);
-        if (policy == NativeMemoryReturn.ToNativeMemory)
+        if (policy == NativeMemoryReturn.Free)
         {
             arena.ReturnMemoryToNativeMemory();
         }
@@ -517,7 +517,7 @@ public sealed class ArenaLifecycleTests
     public void TrimReleasesOnlyIdleRetainedArenaSegmentsAndGrowsAgainOnDemand()
     {
         NativeMemoryTestHooks.Reset();
-        NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         ConcurrentArenaLease<byte> large = arena.Scratch<byte>(16_384, static writer => writer.Fill(default!));
         large.Access(__namIndexedView => __namIndexedView[0] = 5);
         arena.ReleaseLeasesToNativeMemory();
@@ -543,7 +543,7 @@ public sealed class ArenaLifecycleTests
 
         foreach (Func<NativeConcurrentPool<int>, nuint> trim in poolTrims)
         {
-            NativeConcurrentPool<int> pool = new(preLease: 8, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            NativeConcurrentPool<int> pool = new(preLease: 8, returnMemoryOnDispose: NativeMemoryReturn.Free);
             nuint released = trim(pool);
             Assert.True(released >= (nuint)(8 * sizeof(int)));
             ConcurrentPooled<int> lease = pool.Rent(1, static writer => writer.Fill(default!));
@@ -561,7 +561,7 @@ public sealed class ArenaLifecycleTests
 
         foreach (Func<NativeConcurrentArena, nuint> trim in arenaTrims)
         {
-            NativeConcurrentArena arena = new(4096, NativeMemoryReturn.ToNativeMemory);
+            NativeConcurrentArena arena = new(4096, NativeMemoryReturn.Free);
             ConcurrentArenaLease<int> lease = arena.Scratch<int>(1, static writer => writer.Fill(default!));
             lease.Access(__namIndexedView => __namIndexedView[0] = 9);
             arena.ReleaseLeasesToNativeMemory();
@@ -577,7 +577,7 @@ public sealed class ArenaLifecycleTests
     public void ScopedRecycleRewindsAHighEndSegmentWithoutMovingItsOrdinaryPrefix()
     {
         NativeMemoryTestHooks.Reset();
-        NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         ConcurrentArenaLease<byte> ordinaryPrefix = arena.Scratch<byte>(4_096, static writer => writer.Fill(default!));
         scoped ConcurrentArenaLease<byte> scopedTail = arena.ScratchScoped<byte>(2_048, static writer => writer.Fill(default!));
         Assert.Equal(2, NativeMemoryTestHooks.Snapshot().AllocationCount);
@@ -614,7 +614,7 @@ public sealed class ArenaLifecycleTests
 
     private static (NativeConcurrentArena Arena, WeakReference Weak) CreatePendingArenaReference()
     {
-        NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         scoped ConcurrentArenaLease<object> pending = arena.ScratchScoped<object>(1, static writer => writer.Fill(default!));
         object held = new();
         WeakReference weak = new(held);
@@ -631,7 +631,7 @@ public sealed class ArenaLifecycleTests
     public void TolerantArenaLeaseReleaseRetiresBusyStorageUntilTheEnteredOperationExits()
     {
         NativeMemoryTestHooks.Reset();
-        NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         using ManualResetEventSlim entered = new();
         using ManualResetEventSlim release = new();
         NativeMemoryTestHooks.SetOperationEntered(operation =>

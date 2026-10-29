@@ -46,7 +46,7 @@ public sealed class NativePoolTerminalBackingTests
     [SuppressMessage("Reliability", "CA2000", Justification = "This adversarial helper intentionally releases the last strong owner in the abandoned path; the test observes actual emergency finalization and exact budget return. Other paths dispose deterministically or exercise the explicit GC-return policy, with live leases returned in finally.")]
     private static WeakReference ReleaseMultipleSlabs(NativeMemoryBudget budget, int path, out NativeOwnerDiagnosticSnapshot terminal)
     {
-        NativePool<byte> pool = new(budget, 1, 0, path == 0 ? NativeMemoryReturn.ToNativeMemory : NativeMemoryReturn.ToGarbageCollector);
+        NativePool<byte> pool = new(budget, 1, 0, path == 0 ? NativeMemoryReturn.Free : NativeMemoryReturn.Reuse);
         try
         {
             using (Pooled<byte> middle = pool.Rent(65, static writer => writer.Fill(7)))

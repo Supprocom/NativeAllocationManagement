@@ -8,7 +8,7 @@ public sealed class NativeLeaseWriterContractTests
     [InlineData(4)]
     public void DirectWriterKeepsLogicalLengthAndSequentialBounds(int length)
     {
-        using NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         using Pooled<int> lease = pool.Rent(length, writer =>
         {
             Assert.Equal(length, writer.Length);
@@ -37,7 +37,7 @@ public sealed class NativeLeaseWriterContractTests
     [InlineData(4)]
     public void RootedWriterKeepsLogicalLengthWithoutDirectSpanAccess(int length)
     {
-        using NativeConcurrentPool<string> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentPool<string> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         using ConcurrentPooled<string> lease = pool.Rent(length, writer =>
         {
             Assert.Equal(length, writer.Length);
@@ -84,7 +84,7 @@ public sealed class NativeLeaseWriterContractTests
     public void DirectSpanCallbackFailureDoesNotPublishItsPartiallyWrittenPrefix()
     {
         NativeMemoryBudget budget = new(512);
-        using NativeRegion region = new(budget, 16, NativeMemoryReturn.ToNativeMemory);
+        using NativeRegion region = new(budget, 16, NativeMemoryReturn.Free);
         try
         {
             _ = region.Lease<int>(4, static writer =>

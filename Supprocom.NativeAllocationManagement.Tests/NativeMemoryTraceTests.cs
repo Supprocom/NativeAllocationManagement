@@ -154,7 +154,7 @@ public sealed class NativeMemoryTraceTests
     [Fact]
     public void FastPoolInitializationProbeReportsTheActualActiveState()
     {
-        using NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         int observed = 0;
         using Pooled<int> lease = pool.Rent(1, writer =>
         {
@@ -181,8 +181,8 @@ public sealed class NativeMemoryTraceTests
     [Fact]
     public void OwnerSnapshotsKeepIdentityAcrossGenerationChangesAndDisposal()
     {
-        using NativeConcurrentArena first = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        using NativeConcurrentArena second = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentArena first = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
+        using NativeConcurrentArena second = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         long id = first.Id;
         Assert.True(id > 0);
         Assert.NotEqual(id, second.Id);
@@ -282,7 +282,7 @@ public sealed class NativeMemoryTraceTests
     [Fact]
     public void FastPoolMetadataCapacitiesDoNotPretendToBeUsageCounts()
     {
-        using NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         var before = pool.CurrentBankCapacitiesForTest;
         Assert.True(before.Slabs > 0);
         Assert.Equal(before.Slabs, before.AvailableSlabs);
@@ -295,8 +295,8 @@ public sealed class NativeMemoryTraceTests
     [Fact]
     public void FastOwnerIdentitiesAreDistinctAndCarriedIntoStorageSnapshots()
     {
-        using NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        using NativeArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
+        using NativeArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         using NativeRegion region = new();
         using NativeWorkspace<int> workspace = new(1);
         Assert.True(pool.Id > 0);
@@ -312,7 +312,7 @@ public sealed class NativeMemoryTraceTests
     public void InitialGenerationZeroRecordsRealCleanupAndDoesNotEnlargeTraceValues()
     {
         NativeMemoryBudget budget = new(128, traceCapacity: 16);
-        NativeConcurrentPool<int> pool = new(budget, 1, 0, NativeMemoryReturn.ToNativeMemory, false);
+        NativeConcurrentPool<int> pool = new(budget, 1, 0, NativeMemoryReturn.Free, false);
         long ownerId = pool.Id;
         long extent = budget.CaptureStatistics().CommittedBytes;
         try { pool.ReturnMemoryToNativeMemory(); }
@@ -339,7 +339,7 @@ public sealed class NativeMemoryTraceTests
     public void SuccessiveGenerationsKeepOwnerLineageAndDoNotReuseGenerationZero()
     {
         NativeMemoryBudget budget = new(128, traceCapacity: 32);
-        using NativeConcurrentPool<int> pool = new(budget, 1, 0, NativeMemoryReturn.ToNativeMemory, false);
+        using NativeConcurrentPool<int> pool = new(budget, 1, 0, NativeMemoryReturn.Free, false);
         long ownerId = pool.Id;
         pool.ReturnMemoryToNativeMemory();
         pool.LeaseFromMemory();
@@ -364,7 +364,7 @@ public sealed class NativeMemoryTraceTests
     public void RetiredGenerationRejoinsWithoutInventingAPhysicalFree()
     {
         NativeMemoryBudget budget = new(128, traceCapacity: 32);
-        using NativeConcurrentPool<int> pool = new(budget, 1, 0, NativeMemoryReturn.ToNativeMemory, false);
+        using NativeConcurrentPool<int> pool = new(budget, 1, 0, NativeMemoryReturn.Free, false);
         long extent = budget.CaptureStatistics().CommittedBytes;
         using ConcurrentPooled<int> lease = pool.Rent(1, static writer => writer.Write(42));
         lease.Access(view =>
@@ -399,7 +399,7 @@ public sealed class NativeMemoryTraceTests
     {
         NativeMemoryTestHooks.Reset();
         NativeMemoryBudget budget = new(128, traceCapacity: 64);
-        NativeConcurrentPool<int> pool = new(budget, 1, 0, NativeMemoryReturn.ToNativeMemory, false);
+        NativeConcurrentPool<int> pool = new(budget, 1, 0, NativeMemoryReturn.Free, false);
         long extent = budget.CaptureStatistics().CommittedBytes;
         try
         {
@@ -495,7 +495,7 @@ public sealed class NativeMemoryTraceTests
     public void GenerationEventsShareTheBoundedRingAndExhaustionCannotBreakCleanup()
     {
         NativeMemoryBudget budget = new(128, traceCapacity: 1);
-        using (NativeConcurrentPool<int> pool = new(budget, 1, 0, NativeMemoryReturn.ToNativeMemory, false))
+        using (NativeConcurrentPool<int> pool = new(budget, 1, 0, NativeMemoryReturn.Free, false))
         {
             pool.ReturnMemoryToNativeMemory();
         }
@@ -504,7 +504,7 @@ public sealed class NativeMemoryTraceTests
         Assert.Equal(0, completed.Generation);
         Assert.Equal(3, budget.CaptureStatistics().DroppedTraceEventCount);
         SetTraceCounter(budget, "_traceSequence", long.MaxValue);
-        using (NativeConcurrentPool<int> pool = new(budget, 1, 0, NativeMemoryReturn.ToNativeMemory, false))
+        using (NativeConcurrentPool<int> pool = new(budget, 1, 0, NativeMemoryReturn.Free, false))
         {
             Assert.True(budget.CaptureStatistics().CommittedBytes > 0);
         }
@@ -528,7 +528,7 @@ public sealed class NativeMemoryTraceTests
         });
         try
         {
-            using NativeConcurrentPool<int> pool = new(budget, 1, 0, NativeMemoryReturn.ToNativeMemory, false);
+            using NativeConcurrentPool<int> pool = new(budget, 1, 0, NativeMemoryReturn.Free, false);
             using ConcurrentPooled<int> lease = pool.Rent(1, static writer => writer.Write(42));
             lease.Access(static view => Assert.Equal(42, view[0]));
             Assert.NotNull(retainedOwner);

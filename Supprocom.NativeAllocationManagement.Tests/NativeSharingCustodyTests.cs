@@ -12,7 +12,7 @@ public sealed class NativeSharingCustodyTests
     public void SharedCustodyDoesNotReportAPublicUniqueOwner(int acquisition)
     {
         NativeMemoryBudget budget = new(1_024);
-        using NativeConcurrentPool<int> pool = new(budget, 4, 0, NativeMemoryReturn.ToNativeMemory, false);
+        using NativeConcurrentPool<int> pool = new(budget, 4, 0, NativeMemoryReturn.Free, false);
         NativeTransfer<int>? source = Acquire(acquisition, budget, pool);
         NativeTransfer<int> observed = source.Value;
         using NativeShared<int> shared = NativeShared<int>.Create(ref source, new(1, 0));
@@ -37,7 +37,7 @@ public sealed class NativeSharingCustodyTests
     public void EarlierGenuineUniqueBorrowsKeepTheirPeakAfterSharing(int acquisition)
     {
         NativeMemoryBudget budget = new(1_024);
-        using NativeConcurrentPool<int> pool = new(budget, 4, 0, NativeMemoryReturn.ToNativeMemory, false);
+        using NativeConcurrentPool<int> pool = new(budget, 4, 0, NativeMemoryReturn.Free, false);
         NativeTransfer<int>? source = Acquire(acquisition, budget, pool);
         NativeTransfer<int> observed = source.Value;
         observed.Access(_ => observed.Access(static _ => { }));
@@ -59,7 +59,7 @@ public sealed class NativeSharingCustodyTests
     {
         NativeMemoryTestHooks.Reset();
         NativeMemoryBudget budget = new(1_024);
-        using NativeConcurrentPool<int> pool = new(budget, 4, 0, NativeMemoryReturn.ToNativeMemory, false);
+        using NativeConcurrentPool<int> pool = new(budget, 4, 0, NativeMemoryReturn.Free, false);
         NativeTransfer<int>? source = Acquire(acquisition, budget, pool);
         NativeTransfer<int> observed = source.Value;
         NativeShared<int> shared = NativeShared<int>.Create(ref source, new(1, 1));
@@ -98,7 +98,7 @@ public sealed class NativeSharingCustodyTests
     {
         NativeMemoryTestHooks.Reset();
         NativeMemoryBudget budget = new(1_024);
-        using NativeConcurrentPool<int> pool = new(budget, 4, 0, NativeMemoryReturn.ToNativeMemory, false);
+        using NativeConcurrentPool<int> pool = new(budget, 4, 0, NativeMemoryReturn.Free, false);
         NativeTransfer<int>? source = Acquire(acquisition, budget, pool);
         NativeTransfer<int> observed = source.Value;
         NativeShared<int> shared = NativeShared<int>.Create(ref source, new(1, 1));
@@ -137,7 +137,7 @@ public sealed class NativeSharingCustodyTests
     public void SharedPayloadReusesAcquisitionCustodyWithoutAnotherPublicUniqueCapability(int acquisition)
     {
         NativeMemoryBudget budget = new(1_024);
-        using NativeConcurrentPool<int> pool = new(budget, 4, 0, NativeMemoryReturn.ToNativeMemory, false);
+        using NativeConcurrentPool<int> pool = new(budget, 4, 0, NativeMemoryReturn.Free, false);
         NativeTransfer<int>? source = Acquire(acquisition, budget, pool);
         object? custody = source.Value.ControlForTest;
         using NativeShared<int> shared = NativeShared<int>.Create(ref source, new(1, 1));
@@ -155,7 +155,7 @@ public sealed class NativeSharingCustodyTests
     public void SharingPinIsNotInventedAsAnEnteredUniqueBorrow(int acquisition)
     {
         NativeMemoryBudget budget = new(1_024);
-        using NativeConcurrentPool<int> pool = new(budget, 4, 0, NativeMemoryReturn.ToNativeMemory, false);
+        using NativeConcurrentPool<int> pool = new(budget, 4, 0, NativeMemoryReturn.Free, false);
         NativeTransfer<int>? source = Acquire(acquisition, budget, pool);
         NativeTransfer<int> observed = source.Value;
         Assert.Equal(0, observed.CaptureSnapshot().PeakBorrowCount);
@@ -192,7 +192,7 @@ public sealed class NativeSharingCustodyTests
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static (NativeWeak<int> Weak, WeakReference Custody) AbandonShared(int acquisition, NativeMemoryBudget budget)
     {
-        using NativeConcurrentPool<int> pool = new(budget, 4, 0, NativeMemoryReturn.ToNativeMemory, false);
+        using NativeConcurrentPool<int> pool = new(budget, 4, 0, NativeMemoryReturn.Free, false);
         NativeTransfer<int>? source = Acquire(acquisition, budget, pool);
         NativeTransfer<int> stale = source.Value;
         NativeShared<int> owner = NativeShared<int>.Create(ref source, new(1, 1));
@@ -240,7 +240,7 @@ public sealed class NativeSharingCustodyTests
         WeakReference Budget, WeakReference Pool) ReturnSharedWithAliases(int acquisition)
     {
         NativeMemoryBudget budget = new(1_024, 32);
-        using NativeConcurrentPool<int> pool = new(budget, 4, 0, NativeMemoryReturn.ToNativeMemory, false);
+        using NativeConcurrentPool<int> pool = new(budget, 4, 0, NativeMemoryReturn.Free, false);
         NativeTransfer<int>? source = Acquire(acquisition, budget, pool);
         NativeTransfer<int> stale = source.Value;
         NativeShared<int> shared = NativeShared<int>.Create(ref source, new(1, 1));
@@ -253,7 +253,7 @@ public sealed class NativeSharingCustodyTests
     public void FailedPooledPinReturnsConsumedCustodyWithoutInventingASharedBorrow()
     {
         NativeMemoryBudget budget = new(1_024);
-        using NativeConcurrentPool<int> pool = new(budget, 4, 0, NativeMemoryReturn.ToNativeMemory, false);
+        using NativeConcurrentPool<int> pool = new(budget, 4, 0, NativeMemoryReturn.Free, false);
         NativeTransfer<int>? source = Acquire(1, budget, pool);
         NativeTransfer<int> stale = source.Value;
         NativeMemoryTestHooks.SetBeforeOperationEntry(static operation =>
@@ -280,7 +280,7 @@ public sealed class NativeSharingCustodyTests
     public void PinAndCleanupFailureNeverReopensOrReportsAPublicUniqueOwner()
     {
         NativeMemoryBudget budget = new(1_024);
-        using NativeConcurrentPool<int> pool = new(budget, 4, 0, NativeMemoryReturn.ToNativeMemory, false);
+        using NativeConcurrentPool<int> pool = new(budget, 4, 0, NativeMemoryReturn.Free, false);
         NativeTransfer<int>? source = Acquire(1, budget, pool);
         NativeTransfer<int> stale = source.Value;
         NativeTransferControl<int> custody = (NativeTransferControl<int>)stale.ControlForTest!;
@@ -341,7 +341,7 @@ public sealed class NativeSharingCustodyTests
     public void PublishedRetryCannotStrandReturnOrReportSuccessBeforeCompletion(int acquisition, int boundary)
     {
         NativeMemoryBudget budget = new(1_024);
-        using NativeConcurrentPool<int> pool = new(budget, 4, 0, NativeMemoryReturn.ToNativeMemory, false);
+        using NativeConcurrentPool<int> pool = new(budget, 4, 0, NativeMemoryReturn.Free, false);
         NativeTransfer<int>? source = Acquire(acquisition, budget, pool);
         NativeTransfer<int> stale = source.Value;
         NativeTransferControl<int> custody = (NativeTransferControl<int>)stale.ControlForTest!;
@@ -397,7 +397,7 @@ public sealed class NativeSharingCustodyTests
     public void DeferringABusyCustodyClaimDoesNotReportSuccessOrStrandTheRetry(int acquisition, int busyState)
     {
         NativeMemoryBudget budget = new(1_024);
-        using NativeConcurrentPool<int> pool = new(budget, 4, 0, NativeMemoryReturn.ToNativeMemory, false);
+        using NativeConcurrentPool<int> pool = new(budget, 4, 0, NativeMemoryReturn.Free, false);
         NativeTransfer<int>? source = Acquire(acquisition, budget, pool);
         NativeTransfer<int> stale = source.Value;
         NativeTransferControl<int> custody = (NativeTransferControl<int>)stale.ControlForTest!;

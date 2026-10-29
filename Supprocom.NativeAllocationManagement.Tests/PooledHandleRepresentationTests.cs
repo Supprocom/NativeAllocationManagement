@@ -21,7 +21,7 @@ public sealed class PooledHandleRepresentationTests
     [Fact]
     public void StaleLeaseStaysReturnedAfterItsSlotHoldsANewSlab()
     {
-        using NativePool<int> pool = new(preLease: 2, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(preLease: 2, returnMemoryOnDispose: NativeMemoryReturn.Free);
         Pooled<int> initial = pool.Rent(2, 7);
         Pooled<int> stale = initial;
         initial.Dispose();
@@ -35,7 +35,7 @@ public sealed class PooledHandleRepresentationTests
     [Fact]
     public void ReusedSlotStillRejectsOldAuthorityAndResolvesActualEnteredStorage()
     {
-        using NativePool<int> pool = new(preLease: 2, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(preLease: 2, returnMemoryOnDispose: NativeMemoryReturn.Free);
         Pooled<int> initial = pool.Rent(2, static writer => writer.Fill(7));
         Pooled<int> stale = initial;
         initial.Dispose();
@@ -85,7 +85,7 @@ public sealed class PooledHandleRepresentationTests
     [Fact]
     public void ProcessCannotExposeUninitializedCapacityBeyondThePublishedLogicalLength()
     {
-        using NativePool<int> pool = new(preLease: 4, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(preLease: 4, returnMemoryOnDispose: NativeMemoryReturn.Free);
         using Pooled<int> lease = pool.Rent(1, static writer => writer.Write(42));
         int calls = 0;
         bool rejected = false;

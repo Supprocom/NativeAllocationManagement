@@ -5,7 +5,7 @@ public sealed class NativeFastOwnerDiagnosticTests
     [Fact]
     public void EmptyPoolLeaseIsARealRecordButNotAPhysicalSegment()
     {
-        using NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         using (Pooled<int> empty = pool.Rent(0, static writer => writer.Fill(0)))
         {
             NativeOwnerDiagnosticSnapshot snapshot = pool.CaptureDiagnosticSnapshot();
@@ -25,7 +25,7 @@ public sealed class NativeFastOwnerDiagnosticTests
     [Fact]
     public void PoolCaptureReadsInitializingStateAndActualReturnedCacheCandidate()
     {
-        using NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         Assert.Equal(-1, pool.CaptureDiagnosticSnapshot().OrdinaryTraversalIndex);
         using (Pooled<int> lease = pool.Rent(1, writer =>
         {
@@ -50,7 +50,7 @@ public sealed class NativeFastOwnerDiagnosticTests
     [Fact]
     public void ArenaCaptureReportsRealLaneIndicesAndEpochTransitionsWithoutInventingRecords()
     {
-        using NativeArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         NativeOwnerDiagnosticSnapshot empty = arena.CaptureDiagnosticSnapshot();
         Assert.Equal(NativeOwnerModel.ThreadConfinedArena, empty.Model);
         Assert.Equal(-1, empty.OrdinaryTraversalIndex);
@@ -79,7 +79,7 @@ public sealed class NativeFastOwnerDiagnosticTests
     [Fact]
     public void RegionCaptureReportsActualIdleReservationAndTerminalCleanup()
     {
-        using NativeRegion region = new(64, NativeMemoryReturn.ToNativeMemory);
+        using NativeRegion region = new(64, NativeMemoryReturn.Free);
         NativeOwnerDiagnosticSnapshot reserved = region.CaptureDiagnosticSnapshot();
         Assert.Equal(NativeOwnerModel.ThreadConfinedRegion, reserved.Model);
         Assert.Equal(region.Id, reserved.OwnerId);
@@ -103,8 +103,8 @@ public sealed class NativeFastOwnerDiagnosticTests
     [Fact]
     public void DisposedFastOwnersRemainObservableWithoutGrantingBorrowAuthority()
     {
-        using NativePool<int> pool = new(preLease: 4, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        using NativeArena arena = new(preAllocateBytes: 64, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(preLease: 4, returnMemoryOnDispose: NativeMemoryReturn.Free);
+        using NativeArena arena = new(preAllocateBytes: 64, returnMemoryOnDispose: NativeMemoryReturn.Free);
         pool.Dispose();
         arena.Dispose();
         NativeOwnerDiagnosticSnapshot poolSnapshot = pool.CaptureDiagnosticSnapshot();
@@ -122,9 +122,9 @@ public sealed class NativeFastOwnerDiagnosticTests
     [Fact]
     public void RepeatedFastCaptureDoesNotAllocateOrChangeMeasurementEpoch()
     {
-        using NativePool<int> pool = new(preLease: 4, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        using NativeArena arena = new(preAllocateBytes: 64, returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        using NativeRegion region = new(64, NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(preLease: 4, returnMemoryOnDispose: NativeMemoryReturn.Free);
+        using NativeArena arena = new(preAllocateBytes: 64, returnMemoryOnDispose: NativeMemoryReturn.Free);
+        using NativeRegion region = new(64, NativeMemoryReturn.Free);
         long epoch = pool.CaptureDiagnosticSnapshot().MetricsEpoch;
         _ = arena.CaptureDiagnosticSnapshot();
         _ = region.CaptureDiagnosticSnapshot();
@@ -144,8 +144,8 @@ public sealed class NativeFastOwnerDiagnosticTests
     [Fact]
     public void SynchronizedSnapshotsIdentifyTheirActualDifferentModel()
     {
-        using NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        using NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativeConcurrentPool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
+        using NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         Assert.Equal(NativeOwnerModel.SynchronizedPool, pool.CaptureDiagnosticSnapshot().Model);
         Assert.Equal(NativeOwnerModel.SynchronizedArena, arena.CaptureDiagnosticSnapshot().Model);
         Assert.Equal(pool.CaptureDiagnosticSnapshot().Model, pool.GetStatistics().Model);
@@ -155,7 +155,7 @@ public sealed class NativeFastOwnerDiagnosticTests
     [Fact]
     public void RegionInitializerFailureRestoresTheActualIdleAvailability()
     {
-        using NativeRegion region = new(64, NativeMemoryReturn.ToNativeMemory);
+        using NativeRegion region = new(64, NativeMemoryReturn.Free);
         bool failed = false;
         try
         {
@@ -178,8 +178,8 @@ public sealed class NativeFastOwnerDiagnosticTests
     [Fact]
     public void FastSnapshotCallsRetainTheirConstructionThreadBoundary()
     {
-        using NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
-        using NativeArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
+        using NativeArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         Exception? poolFailure = null;
         Exception? arenaFailure = null;
         Thread thread = new(() =>

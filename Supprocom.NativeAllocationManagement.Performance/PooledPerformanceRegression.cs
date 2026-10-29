@@ -1286,13 +1286,13 @@ internal static class PooledPerformanceRegression
             new(
                 preLease: _workload.MaximumOpaqueLength,
                 returnMemoryOnDispose:
-                    NativeMemoryReturn.ToNativeMemory);
+                    NativeMemoryReturn.Free);
 
         private NativePool<ushort> CreateTransparentPool() =>
             new(
                 preLease: _workload.MaximumTransparentLength,
                 returnMemoryOnDispose:
-                    NativeMemoryReturn.ToNativeMemory);
+                    NativeMemoryReturn.Free);
     }
 
     private sealed class BoundaryWorkload

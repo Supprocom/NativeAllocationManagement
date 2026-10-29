@@ -13,7 +13,7 @@ public sealed class NativePoolProcessTests
     [InlineData(9)]
     public void FilledScopePublishesExactPrefixAndReturnsAfterResult(int length)
     {
-        using NativePool<int> pool = new(8, NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(8, NativeMemoryReturn.Free);
         int result = pool.Process(length, 42, 11, (values, state) =>
         {
             Assert.Equal(length, values.Length);
@@ -37,7 +37,7 @@ public sealed class NativePoolProcessTests
     [Fact]
     public void FailureReturnsTheScopeAfterNestedGrowthReplacesTheMetadataBank()
     {
-        using NativePool<int> pool = new(2, NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(2, NativeMemoryReturn.Free);
         OperationCanceledException expected = new("processor failure");
         OperationCanceledException actual = Assert.Throws<OperationCanceledException>(() =>
             pool.Process<int, int>(2, 7, 0, (values, _) =>
@@ -64,7 +64,7 @@ public sealed class NativePoolProcessTests
     [Fact]
     public void NestedScopesRemainActiveAcrossInnerSuccessAndFailure()
     {
-        using NativePool<int> pool = new(2, NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(2, NativeMemoryReturn.Free);
         int result = pool.Process(2, 7, 0, (outer, _) =>
         {
             Assert.Equal(22, pool.Process(2, 11, 0, (inner, _) =>
@@ -89,7 +89,7 @@ public sealed class NativePoolProcessTests
     [Fact]
     public void OldTokensCannotBorrowOrReturnThePrivateRental()
     {
-        using NativePool<int> pool = new(2, NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(2, NativeMemoryReturn.Free);
         using (Pooled<int> old = pool.Rent(2, 5)) { }
         Assert.Equal(14, pool.Process(2, 7, 0, (values, _) =>
         {
@@ -111,7 +111,7 @@ public sealed class NativePoolProcessTests
     {
         // Exactly one two-element slab fits.
         NativeMemoryBudget budget = new((long)NativeAlignedAllocation.GetBackingByteLength(8));
-        using NativePool<int> pool = new(budget, 2, 0, NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(budget, 2, 0, NativeMemoryReturn.Free);
         int calls = 0;
         int CountCall(scoped Span<int> _, int __) => ++calls;
         Assert.Throws<ArgumentNullException>(() => pool.Process<int, int>(2, 7, 0, null!));
@@ -127,7 +127,7 @@ public sealed class NativePoolProcessTests
     [Fact]
     public void PrivateScopesDoNotConsumeOrDependOnPublicLeaseTokens()
     {
-        using NativePool<int> pool = new(2, NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(2, NativeMemoryReturn.Free);
         FieldInfo counter = typeof(NativePool<int>).GetField("_leaseTokenCounter", BindingFlags.NonPublic | BindingFlags.Instance)!;
         Assert.Equal(14, pool.Process(2, 7, 0, static (values, _) => values[0] + values[1]));
         Assert.Throws<OperationCanceledException>(() => pool.Process<int, int>(2, 11, 0,
@@ -150,7 +150,7 @@ public sealed class NativePoolProcessTests
     public void FailedBackingAdmissionRollsBackBeforeProcessorEntry()
     {
         NativeMemoryBudget budget = new(128);
-        using NativePool<int> pool = new(budget, 0, 0, NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(budget, 0, 0, NativeMemoryReturn.Free);
         NativeMemoryTestHooks.FailNextAllocation();
         Assert.Throws<NativeAllocationFailedException>(() => pool.Process(2, 7, 0, static (_, _) => 1));
         Assert.Equal(0, budget.CaptureStatistics().CommittedBytes);
@@ -161,7 +161,7 @@ public sealed class NativePoolProcessTests
     [Fact]
     public void WrongThreadAndDisposedOwnerCannotEnterAProcessor()
     {
-        using NativePool<int> pool = new(2, NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(2, NativeMemoryReturn.Free);
         Exception? failure = null;
         Thread worker = new(() => failure = Record.Exception(() => pool.Process(2, 7, 0, static (_, _) => 1)));
         worker.Start();
@@ -184,7 +184,7 @@ public sealed class NativePoolProcessTests
             {
                 public static int Run()
                 {
-                    using NativePool<int> pool = new(2, NativeMemoryReturn.ToNativeMemory);
+                    using NativePool<int> pool = new(2, NativeMemoryReturn.Free);
                     {{before}}
                     int direct = pool.Process(2, 7, 0, static (values, state) => values[0] + values[1] + state);
                     return direct + Helper(pool);
@@ -214,7 +214,7 @@ public sealed class NativePoolProcessTests
             {
                 public static int Run()
                 {
-                    NativePool<int> pool = new(2, NativeMemoryReturn.ToNativeMemory);
+                    NativePool<int> pool = new(2, NativeMemoryReturn.Free);
                     try
                     {
                         return pool.Process(2, 7, 0, (values, _) =>
@@ -270,7 +270,7 @@ public sealed class NativePoolProcessTests
             {
                 public static Span<int> Run()
                 {
-                    using NativePool<int> pool = new(2, NativeMemoryReturn.ToNativeMemory);
+                    using NativePool<int> pool = new(2, NativeMemoryReturn.Free);
                     return pool.Process(2, 7, 0, static (values, _) => values);
                 }
             }

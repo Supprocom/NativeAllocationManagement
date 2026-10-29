@@ -318,7 +318,7 @@ public sealed class ConcurrentPooledStateProcessTests
     public async Task OwnerDisposalFailsDuringProcessAndLeavesTheOwnerUsable()
     {
         NativeConcurrentPool<int> pool = new(
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         using ManualResetEventSlim entered = new();
         using ManualResetEventSlim release = new();
         ProcessWaitState state = new(entered, release);

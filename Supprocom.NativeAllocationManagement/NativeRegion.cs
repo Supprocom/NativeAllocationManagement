@@ -18,7 +18,7 @@ public readonly ref struct NativeRegion
     {
         _kernel = NativeRegionKernel.Acquire(
             preAllocateBytes: 0,
-            NativeMemoryReturn.ToGarbageCollector);
+            NativeMemoryReturn.Reuse);
         _generation = _kernel.Generation;
     }
 
@@ -28,7 +28,7 @@ public readonly ref struct NativeRegion
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "RS0027", Justification = "Preserve the published optional signature; the budget-first overload has only required arguments and strictly greater arity, so it cannot capture any existing call.")]
     public NativeRegion(
         nuint preAllocateBytes = 0,
-        NativeMemoryReturn returnMemoryOnDispose = NativeMemoryReturn.ToGarbageCollector)
+        NativeMemoryReturn returnMemoryOnDispose = NativeMemoryReturn.Reuse)
     {
         NativeMemoryReturnValidation.Validate(
             returnMemoryOnDispose,

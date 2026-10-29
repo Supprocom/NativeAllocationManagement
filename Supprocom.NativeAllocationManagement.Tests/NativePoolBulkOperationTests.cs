@@ -11,7 +11,7 @@ public sealed class NativePoolBulkOperationTests
     [InlineData(4)]
     public void BulkOperationsPreserveExactRangesAndActualHistories(int length)
     {
-        using NativePool<int> pool = new(4, NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(4, NativeMemoryReturn.Free);
         using Pooled<int> lease = pool.Rent(length, 42);
         NativeMemoryStatistics before = NativeMemoryDiagnostics.Snapshot();
         Span<int> output = stackalloc int[5];
@@ -39,7 +39,7 @@ public sealed class NativePoolBulkOperationTests
         // A Pooled<T> is a ref struct, so safe code cannot carry one to another
         // thread; lease operations rely on Rent's owner-thread check instead.
         Assert.Throws<NativeAllocationUninitializedException>(() => Execute(default, operation));
-        using NativePool<int> pool = new(4, NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(4, NativeMemoryReturn.Free);
         using (Pooled<int> original = pool.Rent(4, 42))
         {
             Assert.Equal(-1, original.Read(static view => view.AsSpan().IndexOfAnyExcept(42)));
@@ -58,7 +58,7 @@ public sealed class NativePoolBulkOperationTests
     [Fact]
     public void SameStartBulkCopiesPreserveTheOuterBorrowAndDoNotInventHistory()
     {
-        using NativePool<int> pool = new(4, NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(4, NativeMemoryReturn.Free);
         using Pooled<int> lease = pool.Rent(4, 42);
         long before = NativeMemoryDiagnostics.Snapshot().CopiedBytes;
         lease.Access(view =>
@@ -83,7 +83,7 @@ public sealed class NativePoolBulkOperationTests
             Pooled<int> value = default;
             value.CopyFrom(Input);
         });
-        using NativePool<int> pool = new(4, NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> pool = new(4, NativeMemoryReturn.Free);
         using Pooled<int> current = pool.Rent(4, 42);
         Assert.Throws<ArgumentException>(() =>
         {

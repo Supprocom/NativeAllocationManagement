@@ -42,7 +42,7 @@ public sealed class NativePoolOwnershipRepresentationTests
             Assert.Null(owner.GetMethod(method, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic));
         Assert.DoesNotContain(owner.GetConstructors(), static constructor =>
             constructor.GetParameters().Any(static parameter => parameter.ParameterType == typeof(NativePoolPreparation)));
-        using NativePool<int> ordinary = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        using NativePool<int> ordinary = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         Assert.Equal((4, 4, 0, 0), ordinary.CurrentBankCapacitiesForTest);
         using NativePreparedPool<int> prepared = new(new NativePoolPreparation(3, 2, 2), budget: null);
         Assert.Equal((3, 3, 0, 2), prepared.CurrentBankCapacitiesForTest);
@@ -51,8 +51,8 @@ public sealed class NativePoolOwnershipRepresentationTests
 
     [Theory]
     [InlineData("using NativePool<int> pool = new(new NativePoolPreparation(2, 4, 2), null);", "CS1503")]
-    [InlineData("using NativePool<int> pool = new(4, NativeMemoryReturn.ToNativeMemory); _ = pool.TryRent(4, static writer => writer.Fill(42), out Pooled<int> lease, out _);", "CS1061")]
-    [InlineData("using NativePool<int> pool = new(4, NativeMemoryReturn.ToNativeMemory); _ = pool.CapturePreparedSnapshot();", "CS1061")]
+    [InlineData("using NativePool<int> pool = new(4, NativeMemoryReturn.Free); _ = pool.TryRent(4, static writer => writer.Fill(42), out Pooled<int> lease, out _);", "CS1061")]
+    [InlineData("using NativePool<int> pool = new(4, NativeMemoryReturn.Free); _ = pool.CapturePreparedSnapshot();", "CS1061")]
     public void LegacyFixedShapeSurfaceFailsAtCompilation(string body, string expected)
     {
         string source = $$"""
@@ -120,7 +120,7 @@ public sealed class NativePoolOwnershipRepresentationTests
     {
         ArgumentNullException failure = Assert.Throws<ArgumentNullException>(() =>
         {
-            using NativePool<int> owner = new(null!, 2, 8, NativeMemoryReturn.ToNativeMemory);
+            using NativePool<int> owner = new(null!, 2, 8, NativeMemoryReturn.Free);
         });
         Assert.Equal("budget", failure.ParamName);
     }
@@ -129,7 +129,7 @@ public sealed class NativePoolOwnershipRepresentationTests
     [SuppressMessage("Reliability", "CA2000", Justification = "This adversarial lifetime helper transfers the sole owning lease to the calling test, which returns it and disposes the exact owner through its weak identity in finally. The intentional absence of another strong owner reference is the behavior under test.")]
     private static Pooled<int> CreateLeaseOnlyOwner(out WeakReference<NativePool<int>> weak)
     {
-        NativePool<int> owner = new(2, NativeMemoryReturn.ToNativeMemory);
+        NativePool<int> owner = new(2, NativeMemoryReturn.Free);
         try
         {
             weak = new(owner);

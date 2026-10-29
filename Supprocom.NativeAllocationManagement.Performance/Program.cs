@@ -639,9 +639,9 @@ internal static class Program
 
     private static void RunNativePool(CallbackMeasurement callback)
     {
-        NativePool<Coordinate> coordinatePool = new(CoordinateElements, NativeMemoryReturn.ToNativeMemory);
-        NativePool<Voxel> voxelPool = new(VoxelElements, NativeMemoryReturn.ToNativeMemory);
-        NativePool<byte> uploadPool = new(UploadElements, NativeMemoryReturn.ToNativeMemory);
+        NativePool<Coordinate> coordinatePool = new(CoordinateElements, NativeMemoryReturn.Free);
+        NativePool<Voxel> voxelPool = new(VoxelElements, NativeMemoryReturn.Free);
+        NativePool<byte> uploadPool = new(UploadElements, NativeMemoryReturn.Free);
         try
         {
             for (int iteration = 0; iteration < WorkloadIterations; iteration++)
@@ -673,7 +673,7 @@ internal static class Program
                 (nuint)(CoordinateElements * NativeTypeLayout.StorageSize<Coordinate>()
                     + VoxelElements * NativeTypeLayout.StorageSize<Voxel>()
                     + UploadElements * NativeTypeLayout.StorageSize<byte>()));
-            using (NativeRegion region = new(reservation, NativeMemoryReturn.ToNativeMemory))
+            using (NativeRegion region = new(reservation, NativeMemoryReturn.Free))
             {
                 Local<Coordinate> coordinates = region.Lease<Coordinate>(CoordinateElements, static writer => writer.Fill(default!));
                 Local<Voxel> voxels = region.Lease<Voxel>(VoxelElements, static writer => writer.Fill(default!));
@@ -688,7 +688,7 @@ internal static class Program
     private static void RunNativeArena(CallbackMeasurement callback)
     {
         NativeArena arena = new(
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         try
         {
             for (int iteration = 0; iteration < WorkloadIterations; iteration++)
@@ -710,7 +710,7 @@ internal static class Program
 
     private static void RunNativeArenaSpikeEvidence(CallbackMeasurement callback)
     {
-        NativeArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+        NativeArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
         try
         {
             ArenaLease<byte> firstSpike = arena.Scratch<byte>(3 * 1024 * 1024, static writer => writer.Fill(default!));
@@ -739,7 +739,7 @@ internal static class Program
         const int measuredIterations = 1_000_000;
         NativeConcurrentArena arena = new(
             preAllocateBytes: 4_096,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         try
         {
             ConcurrentArenaLease<byte> source = arena.Scratch<byte>(
@@ -859,7 +859,7 @@ internal static class Program
         using NativeConcurrentArena arena = new(
             preAllocateBytes: 4_096,
             returnMemoryOnDispose:
-                NativeMemoryReturn.ToNativeMemory);
+                NativeMemoryReturn.Free);
         ConcurrentArenaLease<byte> source = arena.Scratch<byte>(
             1,
             static writer => writer.Fill(1));
@@ -987,7 +987,7 @@ internal static class Program
         const int measuredIterations = 1_000_000;
         using NativeConcurrentArena arena = new(
             preAllocateBytes: 4_096,
-            returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+            returnMemoryOnDispose: NativeMemoryReturn.Free);
         ConcurrentArenaLease<byte> first = arena.Scratch<byte>(
             1,
             static writer => writer.Write(1));

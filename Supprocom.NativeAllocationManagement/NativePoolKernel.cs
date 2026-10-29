@@ -146,7 +146,7 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
         _budget = budget;
         _ownerThreadId = thread.ManagedThreadId;
         _lifecycle = NativeOwnerLifecycle.Active;
-        if (returnMemoryOnDispose == NativeMemoryReturn.ToGarbageCollector
+        if (returnMemoryOnDispose == NativeMemoryReturn.Reuse
             && preLease == 0
             && preAllocateBytes == 0
             && (budget is null
@@ -532,7 +532,7 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
             HistoryOverflowed = _historyOverflowed,
             OutstandingNativeBytes = _retainedBytes,
             DetachedNativeBytes = _lifecycle == NativeOwnerLifecycle.Disposed
-                && _returnMemoryOnDispose == NativeMemoryReturn.ToGarbageCollector
+                && _returnMemoryOnDispose == NativeMemoryReturn.Reuse
                 && !_keptForReuse ? _retainedBytes : 0,
             PeakOutstandingNativeBytes = _peakRetainedBytes,
             InitializedPayloadBytes = _requestedBytes,
@@ -558,7 +558,7 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
             HistoryOverflowed = _historyOverflowed,
             OutstandingNativeBytes = _retainedBytes,
             DetachedNativeBytes = _lifecycle == NativeOwnerLifecycle.Disposed
-                && _returnMemoryOnDispose == NativeMemoryReturn.ToGarbageCollector
+                && _returnMemoryOnDispose == NativeMemoryReturn.Reuse
                 && !_keptForReuse ? _retainedBytes : 0,
             PeakOutstandingNativeBytes = _peakRetainedBytes,
             InitializedPayloadBytes = _requestedBytes,
@@ -674,7 +674,7 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
         }
 
         _lifecycle = NativeOwnerLifecycle.Disposed;
-        if (_returnMemoryOnDispose == NativeMemoryReturn.ToNativeMemory)
+        if (_returnMemoryOnDispose == NativeMemoryReturn.Free)
         {
             FreeAll();
             ReleaseGuard(thread);

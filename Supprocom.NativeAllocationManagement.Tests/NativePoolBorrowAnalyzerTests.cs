@@ -17,7 +17,7 @@ public sealed class NativePoolBorrowAnalyzerTests
             {
                 public static void Run()
                 {
-                    using NativePool<int> owner = new(2, NativeMemoryReturn.ToGarbageCollector);
+                    using NativePool<int> owner = new(2, NativeMemoryReturn.Reuse);
                     {{operation}}
                 }
                 {{helper}}

@@ -90,7 +90,7 @@ internal sealed unsafe partial class NativeArenaKernel : INativeFinalizationTarg
     // fits, or a new one.
     internal static NativeArenaKernel Acquire(nuint preAllocateBytes, NativeMemoryReturn returnMemoryOnDispose)
     {
-        if (returnMemoryOnDispose == NativeMemoryReturn.ToGarbageCollector)
+        if (returnMemoryOnDispose == NativeMemoryReturn.Reuse)
         {
             NativeThreadState thread = NativeThreadState.Current;
             NativeArenaKernel? reusable = thread.ReusableArena;
@@ -117,7 +117,7 @@ internal sealed unsafe partial class NativeArenaKernel : INativeFinalizationTarg
     internal static NativeArenaKernel AcquireBudgeted(NativeMemoryBudget budget, nuint preAllocateBytes, NativeMemoryReturn returnMemoryOnDispose)
     {
         ArgumentNullException.ThrowIfNull(budget);
-        if (returnMemoryOnDispose == NativeMemoryReturn.ToGarbageCollector)
+        if (returnMemoryOnDispose == NativeMemoryReturn.Reuse)
         {
             NativeThreadState thread = NativeThreadState.Current;
             NativeArenaKernel? kept = NativeKeptStorage.Take(ref thread.KeptBudgetedArena, budget);
@@ -532,7 +532,7 @@ internal sealed unsafe partial class NativeArenaKernel : INativeFinalizationTarg
             HistoryOverflowed = _historyOverflowed,
             OutstandingNativeBytes = _retainedBytes,
             DetachedNativeBytes = _lifecycle == NativeOwnerLifecycle.Disposed
-                && _returnMemoryOnDispose == NativeMemoryReturn.ToGarbageCollector
+                && _returnMemoryOnDispose == NativeMemoryReturn.Reuse
                 && !_keptForReuse ? _retainedBytes : 0,
             PeakOutstandingNativeBytes = _peakRetainedBytes,
             InitializedPayloadBytes = _lifecycle == NativeOwnerLifecycle.Active ? _initializedPayloadBytes : 0,
@@ -584,7 +584,7 @@ internal sealed unsafe partial class NativeArenaKernel : INativeFinalizationTarg
     }
 
     /// <summary>Closes the Arena and applies its cleanup policy.</summary>
-    [SuppressMessage("Usage", "CA1816", Justification = "Close disarms finalization only after actual native return; ToGarbageCollector must retain its emergency finalizer while detached backing remains.")]
+    [SuppressMessage("Usage", "CA1816", Justification = "Close disarms finalization only after actual native return; Reuse must retain its emergency finalizer while detached backing remains.")]
     internal void Dispose()
     {
         // The thread check also yields the thread's reuse slot and spare guard.
@@ -613,7 +613,7 @@ internal sealed unsafe partial class NativeArenaKernel : INativeFinalizationTarg
     {
         _lifecycle = NativeOwnerLifecycle.Disposed;
         if (_returnMemoryOnDispose
-            == NativeMemoryReturn.ToNativeMemory)
+            == NativeMemoryReturn.Free)
         {
             FreeAllSegments();
             ReleaseGuard(thread);

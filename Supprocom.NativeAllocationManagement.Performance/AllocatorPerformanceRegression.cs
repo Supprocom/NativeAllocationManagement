@@ -144,7 +144,7 @@ internal static class AllocatorPerformanceRegression
                 * RegionReservationBytesPerIteration));
         NativeRegion region = new(
             reservation,
-            NativeMemoryReturn.ToNativeMemory);
+            NativeMemoryReturn.Free);
         NativeOwnerStatistics beforeStatistics =
             region.GetStatistics();
         int gen0Before = GC.CollectionCount(0);
@@ -312,7 +312,7 @@ internal static class AllocatorPerformanceRegression
     {
         NativeRegion region = new(
             32_000,
-            NativeMemoryReturn.ToNativeMemory);
+            NativeMemoryReturn.Free);
         for (int iteration = 0; iteration < 32; iteration++)
         {
             Local<byte> bytes = region.Lease<byte>(32, FillBytes);

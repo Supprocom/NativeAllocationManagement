@@ -129,7 +129,7 @@ public sealed class NativeSpecializedPreparedSafetyAnalyzerTests
                 public static void Run()
                 {
                     using NativePreparedPool<int> pool = new(new NativePoolPreparation(2, 2, 2), null);
-                    using NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.ToNativeMemory);
+                    using NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
                     using PreparedPooled<int> first = pool.Rent(1, static writer => writer.Write(7));
                     using PreparedPooled<int> second = pool.Rent(1, static writer => writer.Write(11));
                     NativeLeaseOperations.Access(first, second, static (a, b) => a[0] = b[0]);
