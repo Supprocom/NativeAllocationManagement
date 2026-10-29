@@ -23,7 +23,8 @@ internal interface INativeKeptKernel
 //
 // A budget that traces never has storage kept for it: kept storage would
 // serve owners with other identities than the one its trace recorded. Its
-// owners detach their storage for finalization, as documented.
+// owners free their storage when disposed instead, so tracing does not change
+// whether a budget runs out.
 internal static class NativeKeptStorage
 {
     private static volatile bool s_keptAny;

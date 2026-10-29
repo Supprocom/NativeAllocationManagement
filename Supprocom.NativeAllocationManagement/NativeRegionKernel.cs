@@ -549,7 +549,17 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
             return;
         }
 
-        if (_budget is null && KeepLargeSegments())
+        // A budgeted region that is not kept, because its budget traces,
+        // frees its storage now: kept or freed, a disposed region makes room
+        // in its budget, so tracing does not change whether a budget runs out.
+        if (_budget is not null)
+        {
+            FreeSegments();
+            ReleaseGuard();
+            return;
+        }
+
+        if (KeepLargeSegments())
         {
             ReleaseGuard();
             return;

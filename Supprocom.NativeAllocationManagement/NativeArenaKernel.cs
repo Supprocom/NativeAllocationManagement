@@ -626,6 +626,15 @@ internal sealed unsafe partial class NativeArenaKernel : INativeFinalizationTarg
             return;
         }
 
+        // A plain budgeted arena that is not kept, because its budget traces,
+        // frees its storage now, as a budgeted region does.
+        if (_budget is not null && !_prepared && !_retentionEnabled && _externalBuffer is null)
+        {
+            FreeAllSegments();
+            ReleaseGuard(thread);
+            return;
+        }
+
         // Nothing to finalize: the guard goes back to the thread for the next owner.
         if (_ordinary.First == null && _scoped.First == null)
         {

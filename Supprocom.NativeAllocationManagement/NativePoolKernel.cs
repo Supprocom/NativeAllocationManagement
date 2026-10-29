@@ -694,6 +694,15 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
             return;
         }
 
+        // A budgeted pool that is not kept, because its budget traces, frees
+        // its slabs now, as a budgeted region does.
+        if (_budget is not null)
+        {
+            FreeAll();
+            ReleaseGuard(thread);
+            return;
+        }
+
         MarkDetached();
     }
 

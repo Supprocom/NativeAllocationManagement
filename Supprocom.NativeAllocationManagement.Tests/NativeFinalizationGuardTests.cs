@@ -73,32 +73,51 @@ public sealed class NativeFinalizationGuardTests
         });
     }
 
-    // A budgeted region that is not kept for reuse (a budget that traces keeps
-    // nothing) detaches its storage on disposal with the garbage-collector
-    // policy; it stays charged to its budget until its guard's finalizer
-    // frees it.
+    // A region its thread cannot keep for reuse, because the thread's reuse
+    // stack is full, detaches its storage on disposal with the
+    // garbage-collector policy; its guard's finalizer frees it.
     [Fact]
     public void ADetachedRegionIsFreedByItsGuardsFinalizer()
     {
-        NativeMemoryBudget budget = new(1 << 20, traceCapacity: 16);
-        DisposeDetachedRegion(budget);
-        for (int attempt = 0; attempt < 20 && budget.CaptureStatistics().CommittedBytes != 0; attempt++)
+        NativeMemoryTestHooks.Reset();
+        try
         {
-            GC.Collect(2, GCCollectionMode.Forced, blocking: true);
-            GC.WaitForPendingFinalizers();
-        }
+            TestThread.Run(DisposeDetachedRegion);
+            for (int attempt = 0; attempt < 20 && NativeMemoryTestHooks.Snapshot().DetachedNativeBytes != 0; attempt++)
+            {
+                GC.Collect(2, GCCollectionMode.Forced, blocking: true);
+                GC.WaitForPendingFinalizers();
+            }
 
-        Assert.Equal(0, budget.CaptureStatistics().CommittedBytes);
+            Assert.Equal(0, NativeMemoryTestHooks.Snapshot().DetachedNativeBytes);
+        }
+        finally
+        {
+            NativeEndedThreads.ReleaseEndedForTest();
+            NativeMemoryTestHooks.Reset();
+        }
     }
 
+    // The thread keeps the first region in its slot and the next two on its
+    // reuse stack, which then holds 400,000 of its 512 KiB; the fourth does
+    // not fit, and its segment is too small for the large-block cache.
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static void DisposeDetachedRegion(NativeMemoryBudget budget)
+    private static void DisposeDetachedRegion()
     {
-        NativeRegionKernel region = new(256, NativeMemoryReturn.ToGarbageCollector, budget);
-        NativeFinalizationGuard guard = GuardOf(region);
-        region.Dispose();
-        Assert.Same(region, guard.Target);
-        Assert.NotEqual(0, budget.CaptureStatistics().CommittedBytes);
+        NativeRegionKernel[] regions = new NativeRegionKernel[4];
+        foreach (ref NativeRegionKernel region in regions.AsSpan())
+        {
+            region = new(200_000, NativeMemoryReturn.ToGarbageCollector);
+        }
+
+        NativeFinalizationGuard guard = GuardOf(regions[3]);
+        foreach (NativeRegionKernel region in regions)
+        {
+            region.Dispose();
+        }
+
+        Assert.Same(regions[3], guard.Target);
+        Assert.NotEqual(0, NativeMemoryTestHooks.Snapshot().DetachedNativeBytes);
     }
 
     [Fact]

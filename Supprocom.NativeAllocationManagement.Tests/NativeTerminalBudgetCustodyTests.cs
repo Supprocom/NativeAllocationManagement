@@ -100,12 +100,26 @@ public sealed class NativeTerminalBudgetCustodyTests
         GC.KeepAlive(owner);
     }
 
+    // A budgeted pool or plain arena disposed with the garbage-collector policy
+    // no longer detaches: a budget that traces keeps nothing for reuse, so the
+    // owner frees its storage and the domain is returned at disposal.
     [Theory]
     [InlineData(1)]
     [InlineData(3)]
-    public void DetachedFastStorageKeepsTheDomainUntilActualFinalizerReturn(int model)
+    public void TracedFastStorageReturnsItsDomainAtDisposal(int model)
     {
-        AbandonHeldDetachedOwner(model, out WeakReference<NativeMemoryBudget> budget, out WeakReference<IDisposable> owner);
+        DisposeTracedOwner(model, out WeakReference<NativeMemoryBudget> budget, out WeakReference<IDisposable> owner);
+        Collect();
+        Assert.False(IsAlive(budget));
+        Assert.False(owner.TryGetTarget(out _));
+    }
+
+    // An arena with a retention policy is never kept for reuse, so with the
+    // garbage-collector policy it still detaches its storage for finalization.
+    [Fact]
+    public void DetachedFastStorageKeepsTheDomainUntilActualFinalizerReturn()
+    {
+        AbandonHeldDetachedOwner(12, out WeakReference<NativeMemoryBudget> budget, out WeakReference<IDisposable> owner);
         Collect();
         Assert.False(IsAlive(budget));
         Assert.False(owner.TryGetTarget(out _));
@@ -209,6 +223,7 @@ public sealed class NativeTerminalBudgetCustodyTests
         9 => new NativeArena(new NativeArenaPreparation(64, 64), budget),
         10 => new NativeConcurrentPool<int>(budget, 0, 0, policy, true),
         11 => new NativeConcurrentArena(budget, 0, policy, true),
+        12 => new NativeArena(budget, new NativeArenaRetentionPolicy(64, 0), 64U, policy),
         _ => throw new ArgumentOutOfRangeException(nameof(model))
     };
 
@@ -269,6 +284,20 @@ public sealed class NativeTerminalBudgetCustodyTests
             default:
                 throw new ArgumentException("Unknown owner model.", nameof(owner));
         }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void DisposeTracedOwner(int model, out WeakReference<NativeMemoryBudget> budget,
+        out WeakReference<IDisposable> observedOwner)
+    {
+        using IDisposable owner = CreateClassWithOnlyWeakDomain(model, NativeMemoryReturn.ToGarbageCollector, out budget);
+        owner.Dispose();
+        observedOwner = new(owner);
+        AssertReturned(Observe(budget));
+        Assert.Equal(1, Observe(budget).FreeCount);
+        Assert.Equal(NativeOwnerLifecycle.Disposed, Snapshot(owner).Lifecycle);
+        Assert.Equal(0, Snapshot(owner).DetachedNativeBytes);
+        GC.KeepAlive(owner);
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]

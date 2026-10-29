@@ -209,9 +209,10 @@ public sealed class NativeBudgetedReuseTests
     }
 
     // Kept storage would serve owners other than the one a trace recorded, so a
-    // budget that traces keeps nothing: its owners detach as documented.
+    // budget that traces keeps nothing. Its owners free their storage when
+    // disposed instead, so tracing does not change whether the budget runs out.
     [Fact]
-    public void ABudgetThatTracesNeverKeeps()
+    public void ABudgetThatTracesKeepsNothingAndGetsItsBytesBackOnDisposal()
     {
         RunOnFreshThread(static () =>
         {
@@ -233,8 +234,10 @@ public sealed class NativeBudgetedReuseTests
 
             Assert.Null(NativeThreadState.Current.KeptBudgetedRegion);
             Assert.Null(NativeThreadState.Current.KeptBudgetedArena);
-            Assert.NotEqual(0, budget.CaptureStatistics().CommittedBytes);
-            Assert.Equal(0, budget.CaptureStatistics().FreeCount);
+            NativeMemoryBudgetStatistics statistics = budget.CaptureStatistics();
+            Assert.Equal(0, statistics.CommittedBytes);
+            Assert.NotEqual(0, statistics.AllocationCount);
+            Assert.Equal(statistics.AllocationCount, statistics.FreeCount);
         });
     }
 

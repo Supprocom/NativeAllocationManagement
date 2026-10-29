@@ -19,12 +19,15 @@ public sealed class NativePoolTerminalBackingTests
         long total = first + (long)NativeAlignedAllocation.GetBackingByteLength(128) + (long)NativeAlignedAllocation.GetBackingByteLength(256);
         Assert.Equal(total, terminal.PeakOutstandingNativeBytes);
         Assert.Equal(0, terminal.InitializedPayloadBytes);
-        Assert.Equal(path == 0 ? 0 : path == 3 ? total - first : total, terminal.OutstandingNativeBytes);
-        Assert.Equal(path is 1 or 3 ? terminal.OutstandingNativeBytes : 0, terminal.DetachedNativeBytes);
+        // The budget traces, so the pool keeps nothing for reuse: disposed with
+        // either policy it frees its slabs (path 3 trimmed one first). Only the
+        // abandoned pool (path 2) leaves them to its guard's finalizer.
+        Assert.Equal(path == 2 ? total : 0, terminal.OutstandingNativeBytes);
+        Assert.Equal(0, terminal.DetachedNativeBytes);
         Assert.Equal(path == 2 ? NativeOwnerLifecycle.Active : NativeOwnerLifecycle.Disposed, terminal.Lifecycle);
         NativeMemoryBudgetStatistics before = budget.CaptureStatistics();
         Assert.Equal(3, before.AllocationCount);
-        Assert.Equal(path == 0 ? 3 : path == 3 ? 1 : 0, before.FreeCount);
+        Assert.Equal(path == 2 ? 0 : 3, before.FreeCount);
         for (int attempt = 0; attempt < 8 && (owner.IsAlive || budget.CaptureStatistics().CommittedBytes != 0); attempt++)
         {
             GC.Collect();
