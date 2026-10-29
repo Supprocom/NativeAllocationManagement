@@ -909,7 +909,9 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
         _peakRetainedBytes = _retainedBytes;
         _nextAllocationOrdinal = donor._nextAllocationOrdinal;
         _leaseTokenCounter = donor._leaseTokenCounter;
-        donor._slabs = [];
+        // Null, not an empty table: storing null needs no write barrier. The
+        // donor is disposed, and with no slabs counted nothing indexes it.
+        donor._slabs = null!;
         donor._slabCount = 0;
         donor._freeHeads = [];
         donor._nonEmptyFreeClasses = 0;
