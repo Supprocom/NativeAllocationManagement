@@ -53,8 +53,14 @@ public sealed partial class NativePool<T> : IDisposable
 
     internal NativeOwnerLifecycle CurrentLifecycle => _lifecycle;
 
-    internal int CurrentAllocationRecordCountForTest =>
-        _liveLeaseCount;
+    internal int CurrentAllocationRecordCountForTest
+    {
+        get
+        {
+            SettleDeferredReturn();
+            return _liveLeaseCount;
+        }
+    }
 
     internal (int Slabs, int AvailableSlabs, int Bumps, int OwnerSegments)
         CurrentBankCapacitiesForTest => (_slabs.Length, _slabs.Length, 0, 0);

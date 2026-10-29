@@ -36,6 +36,11 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
     private int _returnedSpan;
     private int _liveLeaseCount;
     private int _retirementState;
+    // A returned lease still counted in _liveLeaseCount and _requestedBytes:
+    // its payload bytes plus one, and zero when there is none. The next rent
+    // takes its place in the totals (AccountRent); whatever reads them settles
+    // it first (SettleDeferredReturn).
+    private long _deferredReturn;
     private long _leaseTokenCounter;
     private long _requestedBytes;
     private long _peakInitializedPayloadBytes;
@@ -258,9 +263,7 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
         new Span<T>((void*)slab.Pointer, length).Fill(value);
         slab.Token = token;
         slab.State = SlabState.Leased;
-        _liveLeaseCount++;
-        _requestedBytes += checked((long)CalculateByteLength(length));
-        _peakInitializedPayloadBytes = Math.Max(_peakInitializedPayloadBytes, _requestedBytes);
+        AccountRent(length);
         return new Pooled<T>(this, slab, token, length, slab.Capacity);
     }
 
@@ -281,9 +284,7 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
         Slab slab = _slabs[slabIndex];
         slab.Token = token;
         slab.State = SlabState.Leased;
-        _liveLeaseCount++;
-        _requestedBytes += checked((long)CalculateByteLength(length));
-        _peakInitializedPayloadBytes = Math.Max(_peakInitializedPayloadBytes, _requestedBytes);
+        AccountRent(length);
         return new Pooled<T>(this, slab, token, length, slab.Capacity);
     }
 
@@ -313,8 +314,13 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
         // No public lease escapes this frame. A distinct state rejects every
         // public token without creating lease authority or a borrow record.
         slab.State = SlabState.Processing;
+        // A one-shot rental accounts directly, after settling a deferred
+        // return so that the peak is taken from exact totals: deferring its
+        // own return measured slower here (Process with a processor struct,
+        // 14.6 -> 16.7 ns).
+        SettleDeferredReturn();
         _liveLeaseCount++;
-        _requestedBytes += checked((long)CalculateByteLength(length));
+        _requestedBytes += (long)CalculateByteLength(length);
         _peakInitializedPayloadBytes = Math.Max(_peakInitializedPayloadBytes, _requestedBytes);
         try
         {
@@ -325,7 +331,7 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
             // Only this frame owns the rental; a callback cannot return it.
             slab.State = SlabState.Free;
             _liveLeaseCount--;
-            _requestedBytes -= checked((long)CalculateByteLength(length));
+            _requestedBytes -= (long)CalculateByteLength(length);
             CacheReturnedSlab(slab);
         }
     }
@@ -354,8 +360,13 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
         Span<T> values = new((void*)slab.Pointer, length);
         values.Fill(value);
         slab.State = SlabState.Processing;
+        // A one-shot rental accounts directly, after settling a deferred
+        // return so that the peak is taken from exact totals: deferring its
+        // own return measured slower here (Process with a processor struct,
+        // 14.6 -> 16.7 ns).
+        SettleDeferredReturn();
         _liveLeaseCount++;
-        _requestedBytes += checked((long)CalculateByteLength(length));
+        _requestedBytes += (long)CalculateByteLength(length);
         _peakInitializedPayloadBytes = Math.Max(_peakInitializedPayloadBytes, _requestedBytes);
         try
         {
@@ -365,7 +376,7 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
         {
             slab.State = SlabState.Free;
             _liveLeaseCount--;
-            _requestedBytes -= checked((long)CalculateByteLength(length));
+            _requestedBytes -= (long)CalculateByteLength(length);
             CacheReturnedSlab(slab);
         }
     }
@@ -375,11 +386,22 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
     private Slab InitializeSlab(int slabIndex, long token, int length,
         NativeLeaseInitializer<T> initializer)
     {
-
         Slab slab = _slabs[slabIndex];
         slab.State = SlabState.Initializing;
         slab.Token = token;
-        _liveLeaseCount++;
+        // This lease takes a deferred return's place in the live count at
+        // once. The returned lease's bytes leave now, and this lease's join
+        // after initialization.
+        long deferred = _deferredReturn;
+        if (deferred != 0)
+        {
+            _deferredReturn = 0;
+            _requestedBytes -= deferred - 1;
+        }
+        else
+        {
+            _liveLeaseCount++;
+        }
 
         int initializedLength = 0;
         try
@@ -396,6 +418,9 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
                     length);
             }
 
+            // A return nested in the initializer may still be counted: settle
+            // it, so the peak is taken from exact totals.
+            SettleDeferredReturn();
             _requestedBytes += checked((long)CalculateByteLength(length));
             _peakInitializedPayloadBytes = Math.Max(_peakInitializedPayloadBytes, _requestedBytes);
             // Nested rentals can grow the slot table, but this slab object stays put.
@@ -510,8 +535,7 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
         }
 
         slab.State = SlabState.Free;
-        _liveLeaseCount--;
-        _requestedBytes -= checked((long)CalculateByteLength(length));
+        DeferReturn(length);
         CacheReturnedSlab(slab);
     }
 
@@ -530,6 +554,7 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
     public NativeOwnerStatistics GetStatistics()
     {
         ValidateOwner(nameof(GetStatistics));
+        SettleDeferredReturn();
         var counts = GetStorageCounts();
 
         return new NativeOwnerStatistics(
@@ -561,6 +586,7 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
     internal NativeOwnerDiagnosticSnapshot GetDiagnosticSnapshot()
     {
         ValidateThread(nameof(NativePool<T>.CaptureDiagnosticSnapshot));
+        SettleDeferredReturn();
         var counts = GetStorageCounts();
         NativeOwnerDiagnosticSnapshot snapshot = new(
             _lifecycle, 0, 0, NativeMemoryAccounting.CurrentMetricsEpoch,
@@ -638,6 +664,7 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
     public void Retire()
     {
         ValidateOwner(nameof(NativePool<T>.Retire));
+        SettleDeferredReturn();
         if (_liveLeaseCount != 0 || HasInFlightSlab())
         {
             ThrowLiveRetirementState();
@@ -684,6 +711,7 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
             return;
         }
 
+        SettleDeferredReturn();
         if (_liveLeaseCount != 0)
         {
             ThrowLiveLease();
@@ -1265,6 +1293,71 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
             Index = index
         };
         _unusedHead = index;
+    }
+
+    // A rent's live count and payload bytes. A deferred return gives this
+    // lease its place: the count stands, and the bytes change by the
+    // difference, so a rent of the size returned last changes neither. The
+    // totals are exact after either branch, and so is the peak. The byte
+    // count of a rented length fits a long, so the conversions here and in
+    // DeferReturn are unchecked: a checked one costs a branch.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void AccountRent(int length)
+    {
+        long bytes = (long)CalculateByteLength(length);
+        long deferred = _deferredReturn;
+        if (deferred == bytes + 1)
+        {
+            _deferredReturn = 0;
+            return;
+        }
+
+        AccountChangedRent(bytes, deferred);
+    }
+
+    // A rent of another size than the deferred return, or with none.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void AccountChangedRent(long bytes, long deferred)
+    {
+        if (deferred != 0)
+        {
+            _deferredReturn = 0;
+            bytes -= deferred - 1;
+        }
+        else
+        {
+            _liveLeaseCount++;
+        }
+
+        _requestedBytes += bytes;
+        _peakInitializedPayloadBytes = Math.Max(_peakInitializedPayloadBytes, _requestedBytes);
+    }
+
+    // Leaves a returned lease counted for the next rent to replace (see
+    // AccountRent). One deferred earlier, by a second return with no rent
+    // between them, leaves the totals now.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void DeferReturn(int length)
+    {
+        long previous = _deferredReturn;
+        _deferredReturn = (long)CalculateByteLength(length) + 1;
+        if (previous != 0)
+        {
+            _liveLeaseCount--;
+            _requestedBytes -= previous - 1;
+        }
+    }
+
+    // Takes a deferred return out of the totals before anything reads them.
+    private void SettleDeferredReturn()
+    {
+        long deferred = _deferredReturn;
+        if (deferred != 0)
+        {
+            _deferredReturn = 0;
+            _liveLeaseCount--;
+            _requestedBytes -= deferred - 1;
+        }
     }
 
     private void RollBackRent(int slabIndex, int length)
