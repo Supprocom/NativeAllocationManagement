@@ -14,7 +14,7 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
 
     private readonly NativeMemoryReturn _returnMemoryOnDispose;
     private NativeMemoryBudget? _budget;
-    private readonly int _ownerThreadId;
+    private NativeOwnerThread _owner;
     // A thread's shared pool proves ownership by sitting in that thread's
     // slot, which the Shared getter has just read: no second thread-static
     // lookup on its rents.
@@ -150,7 +150,7 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
             _budget = budget;
         }
 
-        _ownerThreadId = thread.ManagedThreadId;
+        _owner = new NativeOwnerThread(thread);
         _lifecycle = NativeOwnerLifecycle.Active;
         if (returnMemoryOnDispose == NativeMemoryReturn.Reuse
             && preLease == 0
@@ -658,7 +658,7 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
     {
         // The thread check also yields the thread's reuse slot and spare guard.
         NativeThreadState thread = NativeThreadState.Current;
-        if (_isShared ? !ReferenceEquals(t_shared, this) : thread.ManagedThreadId != _ownerThreadId)
+        if (_isShared ? !ReferenceEquals(t_shared, this) : thread.Serial != _owner.Serial)
         {
             ThrowWrongThread(nameof(Dispose));
         }
@@ -1308,7 +1308,7 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
     {
         if (_isShared
             ? ReferenceEquals(t_shared, this)
-            : NativeThreadIdentity.Current == _ownerThreadId)
+            : _owner.IsCurrent())
         {
             return;
         }

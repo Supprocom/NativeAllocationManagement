@@ -21,7 +21,7 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
     private readonly NativeMemoryReturn _returnMemoryOnDispose;
     private NativeMemoryBudget? _budget;
     internal long Id { get; private set; } = NativeOwnerIdentity.Next();
-    private readonly int _ownerThreadId;
+    private NativeOwnerThread _owner;
     // The construction thread's state: disposal reaches its reuse slot without a TLS read.
     private readonly NativeThreadState _ownerThread;
     private NativeOwnerLifecycle _lifecycle;
@@ -51,7 +51,7 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
         _returnMemoryOnDispose = returnMemoryOnDispose;
         _budget = budget;
         _ownerThread = NativeThreadState.Current;
-        _ownerThreadId = _ownerThread.ManagedThreadId;
+        _owner = new NativeOwnerThread(_ownerThread);
         _lifecycle = NativeOwnerLifecycle.Active;
 
         // Before any native storage: the guard is this kernel's finalizer.
@@ -394,7 +394,7 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
             throw CreateDisposed(operation);
         }
 
-        if (NativeThreadIdentity.Current != _ownerThreadId)
+        if (!_owner.IsCurrent())
         {
             throw CreateState(
                 operation,
@@ -475,7 +475,7 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
 
     internal NativeOwnerDiagnosticSnapshot GetDiagnosticSnapshot()
     {
-        if (NativeThreadIdentity.Current != _ownerThreadId)
+        if (!_owner.IsCurrent())
         {
             throw CreateState(nameof(NativeRegion.CaptureDiagnosticSnapshot),
                 "NativeRegion is confined to its construction thread.");

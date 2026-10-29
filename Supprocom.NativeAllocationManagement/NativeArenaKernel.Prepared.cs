@@ -20,9 +20,10 @@ internal sealed unsafe partial class NativeArenaKernel
         Id = NativeOwnerIdentity.Next();
         _returnMemoryOnDispose = NativeMemoryReturn.Free;
         _budget = budget;
-        _ownerThreadId = NativeThreadIdentity.Current;
+        NativeThreadState thread = NativeThreadState.Current;
+        _owner = new NativeOwnerThread(thread);
         _lifecycle = NativeOwnerLifecycle.Active;
-        _guard = NativeFinalizationGuard.Rent(NativeThreadState.Current, this);
+        _guard = NativeFinalizationGuard.Rent(thread, this);
         _prepared = true;
         _preparation = preparation;
         nuint ordinaryExtent = PreparedExtent(preparation.OrdinaryBytes);

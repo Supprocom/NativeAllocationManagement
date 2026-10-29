@@ -15,7 +15,7 @@ internal sealed unsafe partial class NativeArenaKernel : INativeFinalizationTarg
 
     private readonly NativeMemoryReturn _returnMemoryOnDispose;
     private NativeMemoryBudget? _budget;
-    private readonly int _ownerThreadId;
+    private NativeOwnerThread _owner;
     private ArenaLane _ordinary;
     private ArenaLane _scoped;
     private NativeOwnerLifecycle _lifecycle;
@@ -67,7 +67,7 @@ internal sealed unsafe partial class NativeArenaKernel : INativeFinalizationTarg
         Id = NativeOwnerIdentity.Next(thread);
         _returnMemoryOnDispose = returnMemoryOnDispose;
         _budget = budget;
-        _ownerThreadId = thread.ManagedThreadId;
+        _owner = new NativeOwnerThread(thread);
         _lifecycle = NativeOwnerLifecycle.Active;
 
         // Before any native storage: the guard is this arena's finalizer.
@@ -576,7 +576,7 @@ internal sealed unsafe partial class NativeArenaKernel : INativeFinalizationTarg
     {
         // The thread check also yields the thread's reuse slot and spare guard.
         NativeThreadState thread = NativeThreadState.Current;
-        if (thread.ManagedThreadId != _ownerThreadId)
+        if (thread.Serial != _owner.Serial)
         {
             ThrowWrongThread(nameof(Dispose));
         }
@@ -1203,7 +1203,7 @@ internal sealed unsafe partial class NativeArenaKernel : INativeFinalizationTarg
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void ValidateThread(string operation)
     {
-        if (NativeThreadIdentity.Current != _ownerThreadId)
+        if (!_owner.IsCurrent())
         {
             ThrowWrongThread(operation);
         }

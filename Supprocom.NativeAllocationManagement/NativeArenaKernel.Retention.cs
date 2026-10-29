@@ -24,9 +24,10 @@ internal sealed unsafe partial class NativeArenaKernel
         ArgumentOutOfRangeException.ThrowIfLessThan(retentionPolicy.OrdinarySegmentCeilingBytes, SegmentAlignment, nameof(retentionPolicy));
         _returnMemoryOnDispose = returnMemoryOnDispose;
         _budget = budget;
-        _ownerThreadId = NativeThreadIdentity.Current;
+        NativeThreadState thread = NativeThreadState.Current;
+        _owner = new NativeOwnerThread(thread);
         _lifecycle = NativeOwnerLifecycle.Active;
-        _guard = NativeFinalizationGuard.Rent(NativeThreadState.Current, this);
+        _guard = NativeFinalizationGuard.Rent(thread, this);
         _retentionEnabled = true;
         _retentionPolicy = retentionPolicy;
         if (preAllocateBytes != 0)

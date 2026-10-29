@@ -23,6 +23,15 @@ internal sealed class NativeThreadState
     // Managed thread ids start at one and never change for a thread.
     internal readonly int ManagedThreadId = Environment.CurrentManagedThreadId;
 
+    private static long s_serials;
+
+    // Unlike a managed thread id, never given to another thread, so an
+    // owner's thread check (NativeOwnerThread) compares it.
+    internal readonly long Serial = Interlocked.Increment(ref s_serials);
+
+    // NativeOwnerThread: checks that missed the stack block, counted for tests.
+    internal int OwnerThreadSlowChecks;
+
     // Once it ends, NativeEndedThreads returns what this state keeps.
     internal readonly Thread Thread = Thread.CurrentThread;
 
