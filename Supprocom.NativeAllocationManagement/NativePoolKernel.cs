@@ -20,7 +20,10 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
     // lookup on its rents.
     private bool _isShared;
     private int[] _freeHeads = [];
-    private Slab[] _slabs = [];
+    // Every constructor path assigns the slab table, the adopting ones
+    // included: an empty-array initializer would only add a write barrier
+    // to each pool made per scope.
+    private Slab[] _slabs = null!;
     private uint _nonEmptyFreeClasses;
     private NativeOwnerLifecycle _lifecycle;
     private int _slabCount;
@@ -140,7 +143,13 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
         Id = NativeOwnerIdentity.Next(thread);
         ArgumentOutOfRangeException.ThrowIfNegative(preLease);
         _returnMemoryOnDispose = returnMemoryOnDispose;
-        _budget = budget;
+        // A null budget is the field's default; storing it would still cost
+        // a write barrier.
+        if (budget is not null)
+        {
+            _budget = budget;
+        }
+
         _ownerThreadId = thread.ManagedThreadId;
         _lifecycle = NativeOwnerLifecycle.Active;
         if (returnMemoryOnDispose == NativeMemoryReturn.Reuse
@@ -153,9 +162,10 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
             return;
         }
 
+        // The guard's finalizer sees a slab table, as an adopting pool's does.
+        _slabs = new Slab[4];
         // Before any native storage: the guard is this pool's finalizer.
         _guard = NativeFinalizationGuard.Rent(thread, this);
-        _slabs = new Slab[4];
 
         try
         {
