@@ -518,6 +518,96 @@ public sealed class NativeBuilderTests
         builder.Dispose();
     }
 
+    // A borrow or a callback entered on the same thread holds the writer gate,
+    // so Complete and Dispose refuse there.
+    [Fact]
+    public void CompleteAndDisposeDuringABorrowFailClosed()
+    {
+        using NativeMetricsScope metrics = new();
+        NativeBuilder<int> completed =
+            new NativeBuilder<int>(preLease: 2);
+        NativeBuilder<int> disposed =
+            new NativeBuilder<int>(preLease: 2);
+
+        void CompleteInside(
+            scoped ref NativeBuilderBorrow<int> borrow)
+        {
+            borrow.Append(1);
+            completed.Complete().Dispose();
+        }
+
+        void DisposeInside(
+            scoped ref NativeBuilderBorrow<int> borrow)
+        {
+            borrow.Append(1);
+            disposed.Dispose();
+        }
+
+        Assert.Contains(
+            "cannot run during another builder operation",
+            Assert.Throws<InvalidOperationException>(
+                () => completed.Borrow(CompleteInside)).Message,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "cannot run during another builder operation",
+            Assert.Throws<InvalidOperationException>(
+                () => disposed.Borrow(DisposeInside)).Message,
+            StringComparison.Ordinal);
+        completed.Dispose();
+        disposed.Dispose();
+        metrics.AssertBalanced();
+    }
+
+    [Fact]
+    public void CompleteAndDisposeDuringAWriteCallbackFailClosed()
+    {
+        using NativeMetricsScope metrics = new();
+        NativeBuilder<int> completed =
+            new NativeBuilder<int>(preLease: 2);
+        NativeBuilder<int> disposed =
+            new NativeBuilder<int>(preLease: 2);
+
+        Assert.Contains(
+            "cannot run during another builder operation",
+            Assert.Throws<InvalidOperationException>(
+                () => completed.Write(1, _ => completed.Complete().Dispose())).Message,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "cannot run during another builder operation",
+            Assert.Throws<InvalidOperationException>(
+                () => disposed.Write(1, _ => disposed.Dispose())).Message,
+            StringComparison.Ordinal);
+        completed.Dispose();
+        disposed.Dispose();
+        metrics.AssertBalanced();
+    }
+
+    [Fact]
+    public void RepeatedDisposeReturnsTheBlockOnce()
+    {
+        using NativeMetricsScope metrics = new();
+        NativeBuilder<int> builder =
+            new NativeBuilder<int>(preLease: 4);
+        builder.Append(1);
+        builder.Dispose();
+        builder.Dispose();
+        metrics.AssertBalanced();
+    }
+
+    [Fact]
+    public void DisposeAfterCompleteLeavesTheBlockToTheTransfer()
+    {
+        using NativeMetricsScope metrics = new();
+        NativeBuilder<int> builder =
+            new NativeBuilder<int>(preLease: 4);
+        builder.Append(7);
+        NativeTransfer<int> transfer = builder.Complete();
+        builder.Dispose();
+        Assert.Equal(7, transfer.Read(static view => view[0]));
+        transfer.Dispose();
+        metrics.AssertBalanced();
+    }
+
     [Fact]
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1861", Justification = "This one-shot assertion keeps its expected array local to the test case.")]
     public async Task ConcurrentBorrowIsRejected()
