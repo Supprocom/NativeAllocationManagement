@@ -70,7 +70,8 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
 
     internal static bool HasReusableKernelForTest =>
         NativeThreadState.Current is { } thread
-        && (thread.ReusableRegion is not null || thread.MoreReusableRegions is { IsEmpty: false });
+        && (thread.ReusableRegion is { _lifecycle: NativeOwnerLifecycle.Disposed }
+            || thread.MoreReusableRegions is { IsEmpty: false });
 
     internal static NativeRegionKernel Acquire(
         nuint preAllocateBytes,
@@ -84,20 +85,36 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
 
         if (returnMemoryOnDispose == NativeMemoryReturn.Reuse)
         {
+            // The slot's kernel stays in the slot while a region uses it, so
+            // disposal stores no reference to put it back.
             NativeThreadState thread = NativeThreadState.Current;
             NativeRegionKernel? reusable = thread.ReusableRegion;
-            if (reusable is not null)
+            bool inSlot = reusable is { _lifecycle: NativeOwnerLifecycle.Disposed };
+            if (!inSlot)
             {
-                thread.ReusableRegion = null;
-            }
-            else if (thread.MoreReusableRegions is not null)
-            {
-                reusable = TakeMoreReusable(thread);
+                // One in use there belongs to an enclosing region, which puts it
+                // back on disposal, or to a region never disposed: leaving it to
+                // its region lets the guard return an abandoned region's storage.
+                if (reusable is not null)
+                {
+                    thread.ReusableRegion = null;
+                }
+
+                reusable = thread.MoreReusableRegions is null ? null : TakeMoreReusable(thread);
             }
 
-            if (reusable is not null && reusable.TryReactivate(thread, preAllocateBytes))
+            if (reusable is not null)
             {
-                return reusable;
+                if (reusable.TryReactivate(thread, preAllocateBytes))
+                {
+                    return reusable;
+                }
+
+                // Its storage is freed; the slot must not offer it again.
+                if (inSlot)
+                {
+                    thread.ReusableRegion = null;
+                }
             }
         }
 
@@ -191,7 +208,10 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
         }
 
         long keptBytes = keep == null ? 0 : (long)keep->Capacity;
-        if (thread.ReusableRegion is not null
+        // A kernel this thread took from the slot is still in it.
+        bool inSlot = ReferenceEquals(thread.ReusableRegion, this);
+        if (!inSlot
+            && thread.ReusableRegion is not null
             && !(thread.MoreReusableRegions ??= new()).HasRoom(keptBytes))
         {
             return false;
@@ -203,6 +223,11 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
         }
 
         _retainEpoch = thread.ReuseEpoch;
+        if (inSlot)
+        {
+            return true;
+        }
+
         if (thread.ReusableRegion is null)
         {
             thread.ReusableRegion = this;
@@ -262,6 +287,13 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
     {
         NativeRegionKernel? kernel = thread.ReusableRegion;
         thread.ReusableRegion = null;
+        // A kernel still in use belongs to a region its thread never disposed;
+        // its guard returns that storage once the region is unreachable.
+        if (kernel is { _lifecycle: NativeOwnerLifecycle.Active })
+        {
+            kernel = thread.MoreReusableRegions?.Pop();
+        }
+
         while (kernel is not null)
         {
             kernel.ReleaseSegments();
