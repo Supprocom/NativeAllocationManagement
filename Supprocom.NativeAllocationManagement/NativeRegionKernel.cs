@@ -3,7 +3,7 @@ using System.Runtime.InteropServices;
 
 namespace Supprocom.NativeAllocationManagement;
 
-internal sealed unsafe class NativeRegionKernel
+internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget
 {
     private const nuint DefaultSegmentBytes = 4_096;
     private const string OwnerKind = "NativeRegion";
@@ -55,6 +55,8 @@ internal sealed unsafe class NativeRegionKernel
         _ownerThreadId = _ownerThread.ManagedThreadId;
         _lifecycle = NativeOwnerLifecycle.Active;
 
+        // Before any native storage: the guard is this kernel's finalizer.
+        _guard = NativeFinalizationGuard.Rent(_ownerThread, this);
         if (preAllocateBytes != 0)
         {
             AppendSegment(
@@ -104,7 +106,6 @@ internal sealed unsafe class NativeRegionKernel
     private static NativeRegionKernel? TakeMoreReusable(NativeThreadState thread) =>
         thread.MoreReusableRegions!.Pop();
 
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA1816", Justification = "A discarded reuse candidate frees its storage and disarms its emergency finalizer.")]
     private bool TryReactivate(NativeThreadState thread, nuint preAllocateBytes)
     {
         RegionSegmentHeader* segment = _firstSegment;
@@ -118,7 +119,7 @@ internal sealed unsafe class NativeRegionKernel
             || _generation == int.MaxValue)
         {
             FreeSegments();
-            GC.SuppressFinalize(this);
+            ReleaseGuard();
             return false;
         }
 
@@ -197,12 +198,12 @@ internal sealed unsafe class NativeRegionKernel
         }
     }
 
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA1816", Justification = "A released reuse candidate frees its storage and disarms its emergency finalizer.")]
     private void ReleaseSegments()
     {
         KeepLargeSegments();
         FreeSegments();
-        GC.SuppressFinalize(this);
+        _guard?.Disarm();
+        _guard = null;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -437,7 +438,6 @@ internal sealed unsafe class NativeRegionKernel
     private int GetAvailableSegmentCount() =>
         _currentSegment != null && _currentCursor == (byte*)_currentSegment + HeaderBytes ? 1 : 0;
 
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA1816", Justification = "Internal region-kernel disposal disarms its emergency finalizer; the outer owner exposes disposal.")]
     // Only NativeRegion.Dispose calls this, and the ref struct cannot leave its
     // construction thread, so disposal needs no thread check.
     // Out of line, so the finally of a using statement over a NativeRegion
@@ -459,7 +459,7 @@ internal sealed unsafe class NativeRegionKernel
         if (_returnMemoryOnDispose == NativeMemoryReturn.ToNativeMemory)
         {
             FreeSegments();
-            GC.SuppressFinalize(this);
+            ReleaseGuard();
             return;
         }
 
@@ -470,7 +470,7 @@ internal sealed unsafe class NativeRegionKernel
 
         if (_budget is null && KeepLargeSegments())
         {
-            GC.SuppressFinalize(this);
+            ReleaseGuard();
             return;
         }
 
@@ -903,16 +903,24 @@ internal sealed unsafe class NativeRegionKernel
         return checked(value + mask) & ~mask;
     }
 
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "MA0055", Justification = "Emergency native-memory cleanup supplements mandatory deterministic disposal.")]
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "An emergency finalizer must never let cleanup exceptions terminate the process.")]
-    ~NativeRegionKernel()
+    // This kernel's emergency finalizer, shared through its thread; see
+    // NativeFinalizationGuard. A finalizable kernel cost about 85 ns to
+    // allocate, paid by every region that did not reuse a kernel (one that
+    // frees its storage on disposal, or has a budget). Null once the kernel
+    // returned its storage; a kept kernel keeps its guard across lifetimes.
+    private NativeFinalizationGuard? _guard;
+
+    void INativeFinalizationTarget.FinalizeNativeStorage() => FreeSegments();
+
+    // After the storage is actually returned, on the owner thread; detached
+    // segments keep the guard.
+    private void ReleaseGuard()
     {
-        try
+        NativeFinalizationGuard? guard = _guard;
+        if (guard is not null)
         {
-            FreeSegments();
-        }
-        catch
-        {
+            _guard = null;
+            guard.Release(_ownerThread);
         }
     }
 

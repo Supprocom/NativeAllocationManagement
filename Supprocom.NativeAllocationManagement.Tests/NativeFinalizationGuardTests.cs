@@ -3,9 +3,10 @@ using System.Runtime.CompilerServices;
 
 namespace Supprocom.NativeAllocationManagement.Tests;
 
-// Arenas and pools are not finalizable themselves: each takes a finalization
-// guard from its thread, and a disposed owner hands it back for the next one.
-// An arena's guard belongs to its kernel, which a default arena's thread reuses.
+// Arenas, pools and region kernels are not finalizable themselves: each takes
+// a finalization guard from its thread, and a disposed owner hands it back for
+// the next one. An arena's or region's guard belongs to its kernel, which a
+// default owner's thread reuses.
 public sealed class NativeFinalizationGuardTests
 {
     [Fact]
@@ -51,10 +52,58 @@ public sealed class NativeFinalizationGuardTests
     }
 
     [Fact]
+    public void ARegionKernelTakesItsThreadsGuardAndHandsItBack()
+    {
+        Assert.Equal(typeof(object), typeof(NativeRegionKernel).GetMethod("Finalize", BindingFlags.Instance | BindingFlags.NonPublic)!.DeclaringType);
+        RunOnFreshThread(static () =>
+        {
+            NativeArena arena = new(64, NativeMemoryReturn.ToNativeMemory);
+            NativeFinalizationGuard guard = GuardOf(arena);
+            arena.Dispose();
+
+            NativeRegionKernel region = new(64, NativeMemoryReturn.ToNativeMemory);
+            Assert.Same(guard, GuardOf(region));
+            Assert.Same(region, guard.Target);
+            region.Dispose();
+            Assert.Null(GuardOf(region, allowNull: true));
+            Assert.Null(guard.Target);
+
+            using NativePool<int> pool = new(16, NativeMemoryReturn.ToNativeMemory);
+            Assert.Same(guard, GuardOf(pool));
+        });
+    }
+
+    // A budgeted region disposed with the garbage-collector policy detaches
+    // its storage, which stays charged until its guard's finalizer frees it.
+    [Fact]
+    public void ADetachedRegionIsFreedByItsGuardsFinalizer()
+    {
+        NativeMemoryBudget budget = new(1 << 20);
+        DisposeDetachedRegion(budget);
+        for (int attempt = 0; attempt < 20 && budget.CaptureStatistics().CommittedBytes != 0; attempt++)
+        {
+            GC.Collect(2, GCCollectionMode.Forced, blocking: true);
+            GC.WaitForPendingFinalizers();
+        }
+
+        Assert.Equal(0, budget.CaptureStatistics().CommittedBytes);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void DisposeDetachedRegion(NativeMemoryBudget budget)
+    {
+        NativeRegionKernel region = new(256, NativeMemoryReturn.ToGarbageCollector, budget);
+        NativeFinalizationGuard guard = GuardOf(region);
+        region.Dispose();
+        Assert.Same(region, guard.Target);
+        Assert.NotEqual(0, budget.CaptureStatistics().CommittedBytes);
+    }
+
+    [Fact]
     public void LeakedOwnersStillReturnTheirStorageThroughTheirGuards()
     {
         NativeMemoryBudget budget = new(1 << 20);
-        LeakArenaAndPool(budget);
+        LeakArenaPoolAndRegion(budget);
         for (int attempt = 0; attempt < 20 && budget.CaptureStatistics().CommittedBytes != 0; attempt++)
         {
             GC.Collect(2, GCCollectionMode.Forced, blocking: true);
@@ -66,7 +115,7 @@ public sealed class NativeFinalizationGuardTests
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000", Justification = "The owners are leaked on purpose: their guards must return the storage.")]
-    private static void LeakArenaAndPool(NativeMemoryBudget budget)
+    private static void LeakArenaPoolAndRegion(NativeMemoryBudget budget)
     {
         NativeArena arena = new(budget, 256, NativeMemoryReturn.ToNativeMemory);
         _ = arena.ScratchUninitialized<int>(16);
@@ -74,6 +123,8 @@ public sealed class NativeFinalizationGuardTests
         using (pool.RentUninitialized(16))
         {
         }
+
+        _ = new NativeRegionKernel(256, NativeMemoryReturn.ToNativeMemory, budget);
 
         Assert.NotEqual(0, budget.CaptureStatistics().CommittedBytes);
     }
