@@ -320,6 +320,7 @@ internal static class NativeBuilderBenchmark
         int gen2 = GC.CollectionCount(2);
         long heap = GC.GetGCMemoryInfo().HeapSizeBytes;
         NativeMemoryStatistics native = NativeMemoryDiagnostics.Snapshot();
+        (int keptCount, long keptBytes) = NativeKeptEvidence.InCurrentEpoch<uint>();
         NativeBuilderBudgetObservation? budgetObservation = CaptureBudgetObservation(budget);
         long cpuTicks = process.TotalProcessorTime.Ticks;
         if (!afterWork)
@@ -336,7 +337,8 @@ internal static class NativeBuilderBenchmark
             new NativeBuilderNativeObservation(
                 native.MetricsEpoch, native.AllocationCount, native.ReallocationCount,
                 native.FreeCount, native.OutstandingNativeBytes, native.DetachedNativeBytes,
-                native.RetiredNativeBytes, native.CopiedBytes, native.HistoryOverflowed))
+                native.RetiredNativeBytes, native.CopiedBytes, native.HistoryOverflowed,
+                keptCount, keptBytes))
         {
             Budget = budgetObservation
         };

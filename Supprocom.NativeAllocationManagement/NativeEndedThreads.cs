@@ -26,6 +26,24 @@ internal static class NativeEndedThreads
     private static int s_count;
     private static int s_next;
 
+    // Every registered thread's state, live or ended, not yet collected.
+    internal static List<NativeThreadState> StatesForTest()
+    {
+        List<NativeThreadState> states = [];
+        lock (s_gate)
+        {
+            foreach (ref readonly WeakReference<NativeThreadState> reference in s_states.AsSpan(0, s_count))
+            {
+                if (reference.TryGetTarget(out NativeThreadState? state))
+                {
+                    states.Add(state);
+                }
+            }
+        }
+
+        return states;
+    }
+
     // Checks every registered thread. The release records frees on the calling
     // thread's state, which must exist first: creating it inside the lock
     // would release from within this release.

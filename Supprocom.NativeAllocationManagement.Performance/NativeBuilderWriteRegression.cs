@@ -40,11 +40,7 @@ internal static class NativeBuilderWriteRegression
             return evidence.ExactParity
                 && evidence.CancellationCleanupPassed
                 && evidence.ExactlyOnceCleanupPassed
-                && evidence.NativeAllocationCountDelta
-                    == evidence.WorkerCount
-                && evidence.NativeFreeCountDelta
-                    == evidence.WorkerCount
-                && evidence.NativeRetainedBytesAfter == 0
+                && HasExpectedNativeOperations(evidence)
                 && evidence.TieredCompilationDisabled
                 && evidence.TieredPgoDisabled
                     ? 0
@@ -237,6 +233,8 @@ internal static class NativeBuilderWriteRegression
         long allocationsBefore = execution.NativeAllocationCount;
         long freesBefore = execution.NativeFreeCount;
         long retainedBefore = execution.RetainedBytes;
+        (int keptCountBefore, long keptBytesBefore) =
+            NativeKeptEvidence.InCurrentEpoch<uint>();
         long allocatedBefore = GC.GetTotalAllocatedBytes(
             precise: true);
         int gen0Before = GC.CollectionCount(0);
@@ -256,6 +254,8 @@ internal static class NativeBuilderWriteRegression
         long allocationsAfter = execution.NativeAllocationCount;
         long freesAfter = execution.NativeFreeCount;
         long retainedAfter = execution.RetainedBytes;
+        (int keptCountAfter, long keptBytesAfter) =
+            NativeKeptEvidence.InCurrentEpoch<uint>();
         exactParity &= measuredChecksum == expectedChecksum;
         long records = checked(
             (long)options.WorkerCount
@@ -290,6 +290,10 @@ internal static class NativeBuilderWriteRegression
             freesAfter - freesBefore,
             retainedBefore,
             retainedAfter,
+            keptCountBefore,
+            keptCountAfter,
+            keptBytesBefore,
+            keptBytesAfter,
             outputHash,
             measuredChecksum,
             exactParity,
@@ -335,12 +339,17 @@ internal static class NativeBuilderWriteRegression
         && aggregateSpeedup >= RequiredSpeedup
         && confidenceLower95 > 1d;
 
-    private static bool HasExpectedNativeOperations(
+    // A builder takes a block NAM kept for reuse when one fits, which records
+    // no allocation, and its disposed transfer keeps the block again. So each
+    // builder allocates at most one block, every block allocated is freed or
+    // kept, and kept storage is all that stays retained.
+    internal static bool HasExpectedNativeOperations(
         NativeBuilderWriteWorkerEvidence evidence) =>
-        evidence.NativeAllocationCountDelta == evidence.WorkerCount
-        && evidence.NativeFreeCountDelta == evidence.WorkerCount
-        && evidence.NativeRetainedBytesBefore == 0
-        && evidence.NativeRetainedBytesAfter == 0;
+        evidence.NativeAllocationCountDelta <= evidence.WorkerCount
+        && evidence.NativeAllocationCountDelta - evidence.NativeFreeCountDelta
+            == evidence.NativeKeptCountAfter - evidence.NativeKeptCountBefore
+        && evidence.NativeRetainedBytesBefore == evidence.NativeKeptBytesBefore
+        && evidence.NativeRetainedBytesAfter == evidence.NativeKeptBytesAfter;
 
     private static async Task<NativeBuilderWriteWorkerEvidence>
         RunIsolatedWorkerAsync(
@@ -810,8 +819,8 @@ internal static class NativeBuilderWriteRegression
             }
 
             return canceled
-                && NativeMemoryTestHooks.Snapshot()
-                    .OutstandingNativeBytes == 0;
+                && NativeKeptEvidence.IsBalanced<uint>(
+                    NativeMemoryTestHooks.Snapshot());
         }
 
         internal static bool ProbeExactlyOnceCleanup()
@@ -842,8 +851,8 @@ internal static class NativeBuilderWriteRegression
             }
 
             return secondDisposeFailed
-                && NativeMemoryTestHooks.Snapshot()
-                    .OutstandingNativeBytes == 0;
+                && NativeKeptEvidence.IsBalanced<uint>(
+                    NativeMemoryTestHooks.Snapshot());
         }
 
         private NativeTransfer<uint> Build(
@@ -940,6 +949,10 @@ internal sealed record NativeBuilderWriteWorkerEvidence(
     long NativeFreeCountDelta,
     long NativeRetainedBytesBefore,
     long NativeRetainedBytesAfter,
+    int NativeKeptCountBefore,
+    int NativeKeptCountAfter,
+    long NativeKeptBytesBefore,
+    long NativeKeptBytesAfter,
     string OutputSha256,
     long Checksum,
     bool ExactParity,

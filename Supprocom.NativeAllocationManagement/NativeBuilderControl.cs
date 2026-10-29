@@ -57,7 +57,7 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
                 ? stack.TakeCurrent(thread, byteLength)
                 : TakeFromOtherThreads(thread, byteLength)) is NativeBuilderControl<T> parked)
         {
-            parked.BeginLifetime(parked.TakeSpare(thread, byteLength, ownerId), ownerId);
+            parked.BeginLifetime(parked.TakeSpare(byteLength, ownerId), ownerId);
             return parked;
         }
 
@@ -269,7 +269,7 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
         if (stack.HasRoom(thread, block.ByteLength)
             || (!DepotDisabledForTest && Depot.TrySpill(stack) && stack.HasRoom(thread, block.ByteLength)))
         {
-            BecomeParked(thread, block);
+            BecomeParked(block);
             stack.Push(this, block.ByteLength);
             return true;
         }
@@ -300,13 +300,13 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
         return stack;
     }
 
-    private void BecomeParked(NativeBlock block) => BecomeParked(NativeThreadState.Current, block);
-
     // Everything the returning thread writes happens here, before the control
     // becomes visible in a reuse slot; it keeps its finalizer registration.
-    private void BecomeParked(NativeThreadState thread, NativeBlock block)
+    // The parked block stays counted as outstanding, as all storage NAM keeps
+    // for reuse does: parking and reusing it record nothing, and a free is
+    // recorded when it is freed.
+    private void BecomeParked(NativeBlock block)
     {
-        NativeMemoryAccounting.RecordFree(thread, block.ByteLength, detached: false, block.MetricsEpoch);
         _spare.Set(block);
         CompleteStorageReturn();
         _parked = true;
@@ -315,25 +315,70 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
 
     // A stack from an older reuse epoch frees its blocks; the controls are
     // dropped and their finalizers then find nothing left to free.
-    private unsafe void DiscardSpare()
+    private void DiscardSpare()
     {
-        if (_spare.Pointer != IntPtr.Zero)
-        {
-            NativeMemory.AlignedFree((void*)_spare.Pointer);
-        }
-
+        NativeBlockAllocator.Free(_spare.Value);
         _spare.Clear();
     }
 
     internal bool HasSpareForTest => _spare.Pointer != IntPtr.Zero;
 
-    // A parked spare already counts as freed.
-    private unsafe void ReleaseSpareOfEndedThread()
+    // A thread's parked blocks of the current measurement epoch: still
+    // counted as outstanding in it. Read without synchronization, for a
+    // quiescent test.
+    internal static (int Count, long Bytes) ParkedInCurrentEpochForTest(NativeThreadState thread) =>
+        thread.GetTyped<ParkedControls>(s_parkedSlot)?.CurrentEpochForTest() ?? (0, 0);
+
+    // Every block of T kept for reuse in the current measurement epoch:
+    // parked on any registered thread, live or ended, in the depot or in a
+    // shared partition, and every block in the large-block cache. It stays
+    // counted as outstanding, and no free is recorded for it until NAM frees
+    // it. The threads' stacks are read without synchronization: call this
+    // once the threads that park are quiescent.
+    internal static (int Count, long Bytes) KeptInCurrentEpochForTest()
     {
-        if (_spare.Pointer != IntPtr.Zero
-            && !NativeLargeBlocks.TryKeep((void*)_spare.Pointer, _spare.ByteLength))
+        (int count, long bytes) = Depot.CurrentEpochForTest();
+        foreach (SharedPartition partition in s_shared)
         {
-            NativeMemory.AlignedFree((void*)_spare.Pointer);
+            (int partitionCount, long partitionBytes) = partition.CurrentEpochForTest();
+            count += partitionCount;
+            bytes += partitionBytes;
+        }
+
+        foreach (ref NativeThreadState state in CollectionsMarshal.AsSpan(NativeEndedThreads.StatesForTest()))
+        {
+            (int parked, long parkedBytes) = ParkedInCurrentEpochForTest(state);
+            count += parked;
+            bytes += parkedBytes;
+        }
+
+        (int cached, long cachedBytes) = NativeLargeBlocks.KeptInCurrentEpochForTest;
+        return (count + cached, bytes + cachedBytes);
+    }
+
+    private static (int Count, long Bytes) CountCurrentEpoch(ReadOnlySpan<NativeBuilderControl<T>?> controls)
+    {
+        long epoch = NativeMemoryAccounting.CurrentMetricsEpoch;
+        int count = 0;
+        long bytes = 0;
+        foreach (ref readonly NativeBuilderControl<T>? control in controls)
+        {
+            if (control!._spare.Pointer != IntPtr.Zero && control._spare.MetricsEpoch == epoch)
+            {
+                count++;
+                bytes += (long)control._spare.ByteLength;
+            }
+        }
+
+        return (count, bytes);
+    }
+
+    // Kept in NativeLargeBlocks if large, still counted, or freed.
+    private void ReleaseSpareOfEndedThread()
+    {
+        if (_spare.Pointer != IntPtr.Zero)
+        {
+            NativeBlockAllocator.FreeOrKeep(_spare.Value);
         }
 
         _spare.Clear();
@@ -344,21 +389,22 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
         spareBytes >= byteLength
         && spareBytes <= Math.Max(byteLength * 4, SmallReuseBytes);
 
-    private unsafe NativeBlock TakeSpare(NativeThreadState thread, nuint byteLength, long ownerId)
+    // A parked spare is still counted, so reusing it records nothing. One from
+    // an earlier measurement epoch would hide its next owner from the current
+    // epoch, so it goes like one that does not fit: kept if large, or freed.
+    private NativeBlock TakeSpare(nuint byteLength, long ownerId)
     {
         NativeBlock spare = _spare.Value;
         _spare.Clear();
-        if (spare.Pointer != IntPtr.Zero && Fits(spare.ByteLength, byteLength))
+        if (spare.Pointer != IntPtr.Zero)
         {
-            long metricsEpoch = NativeMemoryAccounting.RecordAllocation(thread, spare.ByteLength, zeroed: false);
-            return new NativeBlock(spare.Pointer, spare.ByteLength, metricsEpoch, Budget: null, ownerId);
-        }
+            if (Fits(spare.ByteLength, byteLength)
+                && spare.MetricsEpoch == NativeMemoryAccounting.CurrentMetricsEpoch)
+            {
+                return new NativeBlock(spare.Pointer, spare.ByteLength, spare.MetricsEpoch, Budget: null, ownerId);
+            }
 
-        // A parked spare already counts as freed.
-        if (spare.Pointer != IntPtr.Zero
-            && !NativeLargeBlocks.TryKeep((void*)spare.Pointer, spare.ByteLength))
-        {
-            NativeMemory.AlignedFree((void*)spare.Pointer);
+            NativeBlockAllocator.FreeOrKeep(spare);
         }
 
         return NativeBlockAllocator.AllocateReusable(
@@ -400,6 +446,23 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
         private static int s_epoch = NativeStorageReuse.SharedEpoch;
 
         internal static bool HasFull => Volatile.Read(ref s_fullCount) != 0;
+
+        internal static (int Count, long Bytes) CurrentEpochForTest()
+        {
+            lock (s_gate)
+            {
+                int count = 0;
+                long bytes = 0;
+                foreach (ref Magazine? magazine in s_full.AsSpan(0, s_fullCount))
+                {
+                    (int magazineCount, long magazineBytes) = CountCurrentEpoch(magazine!.Items.AsSpan(0, magazine.Count));
+                    count += magazineCount;
+                    bytes += magazineBytes;
+                }
+
+                return (count, bytes);
+            }
+        }
 
         internal static bool TrySpill(ParkedControls stack)
         {
@@ -606,6 +669,8 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
             return control;
         }
 
+        internal (int Count, long Bytes) CurrentEpochForTest() => CountCurrentEpoch(_items.AsSpan(0, Count));
+
         // Large spares go to NativeLargeBlocks, the rest to native memory; the
         // controls are dropped.
         public void ReleaseStorageOfEndedThread()
@@ -721,6 +786,14 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
             }
         }
 
+        internal (int Count, long Bytes) CurrentEpochForTest()
+        {
+            lock (_gate)
+            {
+                return CountCurrentEpoch(_items.AsSpan(0, _count));
+            }
+        }
+
         private bool TryPark(NativeBuilderControl<T> control, NativeBlock block)
         {
             lock (_gate)
@@ -767,15 +840,8 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
     {
         if (_parked)
         {
-            // Diagnostics already counted the parked block as returned.
-            unsafe
-            {
-                if (_spare.Pointer != IntPtr.Zero)
-                {
-                    NativeMemory.AlignedFree((void*)_spare.Pointer);
-                }
-            }
-
+            // The parked block is still counted until this free.
+            NativeBlockAllocator.Free(_spare.Value);
             _spare.Clear();
             return;
         }

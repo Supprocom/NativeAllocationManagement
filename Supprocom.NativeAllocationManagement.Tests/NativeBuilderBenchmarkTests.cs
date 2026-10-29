@@ -48,10 +48,30 @@ public sealed class NativeBuilderBenchmarkTests
         long nativeOwnersPerPacket = implementation is NativeBuilderBenchmarkImplementation.NativeBuilder
             or NativeBuilderBenchmarkImplementation.NativeBuilderBudgeted
             or NativeBuilderBenchmarkImplementation.NativeBuilderBudgetedDirect ? 2 : 0;
-        Assert.Equal(nativeOwnersPerPacket, NativeAcquisitions(lifecycle.PreparationAndValidation));
-        Assert.Equal(nativeOwnersPerPacket * options.WarmupIterations, NativeAcquisitions(lifecycle.Warmup));
-        Assert.Equal(nativeOwnersPerPacket * options.Iterations, NativeAcquisitions(lifecycle.MeasuredBatch));
-        Assert.Equal(nativeOwnersPerPacket, NativeAcquisitions(lifecycle.SeparatePhaseProbe));
+        (NativeBuilderLifecyclePhaseEvidence Phase, long Packets)[] phases =
+        [
+            (lifecycle.PreparationAndValidation, 1),
+            (lifecycle.Warmup, options.WarmupIterations),
+            (lifecycle.MeasuredBatch, options.Iterations),
+            (lifecycle.SeparatePhaseProbe, 1),
+        ];
+        foreach ((NativeBuilderLifecyclePhaseEvidence phase, long packets) in phases)
+        {
+            if (implementation == NativeBuilderBenchmarkImplementation.NativeBuilder)
+            {
+                // An unbudgeted builder takes a block NAM kept for reuse when
+                // one fits, which records no allocation, so its invocations
+                // show in its copies: each packet appends every element once.
+                Assert.InRange(NativeAcquisitions(phase), 0, nativeOwnersPerPacket * packets);
+                Assert.Equal(
+                    packets * options.ElementCount * sizeof(uint),
+                    phase.After.Native.CopiedBytes - phase.Before.Native.CopiedBytes);
+            }
+            else
+            {
+                Assert.Equal(nativeOwnersPerPacket * packets, NativeAcquisitions(phase));
+            }
+        }
         NativeBuilderWorkerEvidence restored = JsonSerializer.Deserialize<NativeBuilderWorkerEvidence>(JsonSerializer.Serialize(evidence))!;
         Assert.Equal(lifecycle, restored.LifecycleEvidence);
     }
@@ -76,7 +96,9 @@ public sealed class NativeBuilderBenchmarkTests
         List<string> paths = [];
         CollectMeasurementPaths(document[nameof(NativeBuilderWorkerEvidence.LifecycleEvidence)]!.AsObject(),
             nameof(NativeBuilderWorkerEvidence.LifecycleEvidence), paths);
-        Assert.Equal(293, paths.Count);
+        // 293 before each native observation also reported its kept storage:
+        // KeptCount and KeptBytes in two observations of four phases.
+        Assert.Equal(309, paths.Count);
         foreach (ref readonly string path in CollectionsMarshal.AsSpan(paths))
         {
             JsonObject missing = document.DeepClone().AsObject();
@@ -124,11 +146,18 @@ public sealed class NativeBuilderBenchmarkTests
         Assert.Equal(phase.Before.Native.MetricsEpoch, phase.After.Native.MetricsEpoch);
         Assert.False(phase.Before.Native.HistoryOverflowed);
         Assert.False(phase.After.Native.HistoryOverflowed);
-        Assert.Equal(phase.Before.Native.OutstandingBytes, phase.After.Native.OutstandingBytes);
+        // Storage NAM keeps for reuse stays outstanding: across a phase,
+        // outstanding bytes change only by the kept storage, and every block
+        // the phase allocated was freed or is kept.
+        Assert.Equal(
+            phase.After.Native.KeptBytes - phase.Before.Native.KeptBytes,
+            phase.After.Native.OutstandingBytes - phase.Before.Native.OutstandingBytes);
         Assert.Equal(phase.Before.Native.DetachedBytes, phase.After.Native.DetachedBytes);
         Assert.Equal(phase.Before.Native.RetiredBytes, phase.After.Native.RetiredBytes);
         Assert.Equal(phase.Before.Native.ReallocationCount, phase.After.Native.ReallocationCount);
-        Assert.Equal(NativeAcquisitions(phase), phase.After.Native.FreeCount - phase.Before.Native.FreeCount);
+        Assert.Equal(
+            phase.After.Native.KeptCount - phase.Before.Native.KeptCount,
+            NativeAcquisitions(phase) - (phase.After.Native.FreeCount - phase.Before.Native.FreeCount));
     }
 
     [Theory]
@@ -194,7 +223,8 @@ public sealed class NativeBuilderBenchmarkTests
         Assert.Equal(managed.LogicalBytes, native.LogicalBytes);
         Assert.Equal(0, managed.NativeFreshSegmentAllocationDelta);
         Assert.Equal(0, managed.NativeRetainedBytes);
-        Assert.Equal(0, native.NativeRetainedBytes);
+        // The builders' blocks stay kept for reuse, and nothing else.
+        Assert.Equal(native.LifecycleEvidence.MeasuredBatch.After.Native.KeptBytes, native.NativeRetainedBytes);
     }
 
     [Fact]
@@ -643,7 +673,8 @@ public sealed class NativeBuilderBenchmarkTests
             native.ManagedAllocatedBytes
                 < managed.ManagedAllocatedBytes);
         Assert.True(native.NativeFreshSegmentAllocationDelta > 0);
-        Assert.Equal(0, native.NativeRetainedBytes);
+        // The builders' blocks stay kept for reuse, and nothing else.
+        Assert.Equal(native.LifecycleEvidence.MeasuredBatch.After.Native.KeptBytes, native.NativeRetainedBytes);
         Assert.Equal(
             options.ElementCount,
             native.OpaqueElementCount

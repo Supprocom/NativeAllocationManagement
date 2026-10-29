@@ -658,10 +658,8 @@ internal sealed unsafe partial class NativeArenaKernel : INativeFinalizationTarg
         {
             next = segment->Next;
             nuint allocationBytes = segment->AllocationBytes;
-            long metricsEpoch = segment->MetricsEpoch;
-            if (segment->External == 0 && NativeLargeBlocks.TryKeep(segment, allocationBytes))
+            if (segment->External == 0 && NativeLargeBlocks.TryKeep(segment, allocationBytes, segment->MetricsEpoch))
             {
-                NativeMemoryAccounting.RecordFree(allocationBytes, detached: false, metricsEpoch);
                 _retainedBytes -= checked((long)allocationBytes);
                 _segmentCount--;
                 kept = true;
@@ -827,12 +825,12 @@ internal sealed unsafe partial class NativeArenaKernel : INativeFinalizationTarg
 
         nuint allocationBytes = segment->AllocationBytes;
         long metricsEpoch = segment->MetricsEpoch;
-        if (!NativeLargeBlocks.TryKeep(segment, allocationBytes))
+        if (!NativeLargeBlocks.TryKeep(segment, allocationBytes, metricsEpoch))
         {
             NativeMemory.AlignedFree(segment);
+            NativeMemoryAccounting.RecordFree(allocationBytes, detached: false, metricsEpoch);
         }
 
-        NativeMemoryAccounting.RecordFree(allocationBytes, detached: false, metricsEpoch);
         _retainedBytes -= checked((long)allocationBytes);
         _segmentCount--;
     }
@@ -1069,13 +1067,15 @@ internal sealed unsafe partial class NativeArenaKernel : INativeFinalizationTarg
             }
             nuint keptBytes = 0;
             memory = _budget is null
-                ? NativeLargeBlocks.TryTake(allocationBytes, out keptBytes)
+                ? NativeLargeBlocks.TryTake(allocationBytes, out keptBytes, out metricsEpoch)
                 : null;
             if (memory != null)
             {
+                // Still counted from when it was kept.
                 allocationBytes = keptBytes;
                 capacity = keptBytes - HeaderBytes;
                 prospectiveBytes = checked(_retainedBytes + checked((long)allocationBytes));
+                recorded = true;
             }
             else
             {
@@ -1099,8 +1099,12 @@ internal sealed unsafe partial class NativeArenaKernel : INativeFinalizationTarg
             segment->DataStart = (byte*)segment + HeaderBytes;
             segment->Capacity = capacity;
             segment->AllocationBytes = allocationBytes;
-            metricsEpoch = NativeMemoryAccounting.RecordAllocation(allocationBytes, zeroed: false);
-            recorded = true;
+            if (!recorded)
+            {
+                metricsEpoch = NativeMemoryAccounting.RecordAllocation(allocationBytes, zeroed: false);
+                recorded = true;
+            }
+
             segment->MetricsEpoch = metricsEpoch;
             segment->AllocationOrdinal = allocationOrdinal;
             _budget?.Commit(allocationBytes, Id, allocationOrdinal: allocationOrdinal);

@@ -16,7 +16,9 @@ public sealed class NativeDetailedCountersTests
         Assert.Contains("enabled=False", report, StringComparison.Ordinal);
         Assert.Contains("allocations=0 frees=0 clears=0 copied=0", report, StringComparison.Ordinal);
         Assert.Contains("live=256 ", report, StringComparison.Ordinal);
-        Assert.EndsWith("outstanding=0", report.TrimEnd(), StringComparison.Ordinal);
+        // The disposed builder's block stays parked for the process's next
+        // builder, so it stays outstanding; the pool's slab was freed.
+        Assert.EndsWith("kept=256 outstanding=256", report.TrimEnd(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -27,7 +29,7 @@ public sealed class NativeDetailedCountersTests
         Assert.DoesNotContain("allocations=0 ", report, StringComparison.Ordinal);
         Assert.DoesNotContain("clears=0 ", report, StringComparison.Ordinal);
         Assert.Contains("copied=32 ", report, StringComparison.Ordinal);
-        Assert.EndsWith("outstanding=0", report.TrimEnd(), StringComparison.Ordinal);
+        Assert.EndsWith("kept=256 outstanding=256", report.TrimEnd(), StringComparison.Ordinal);
     }
 
     private static async Task<string> RunProbeAsync(string detailedCounters)

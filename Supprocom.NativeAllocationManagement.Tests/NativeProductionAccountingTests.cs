@@ -30,8 +30,11 @@ public sealed class NativeProductionAccountingTests
             bank.ReleaseToNative();
             Assert.Equal(8, NativeMemoryDiagnostics.Snapshot().RetainedNativeBytes);
             direct.Dispose();
-            Assert.Equal(0, NativeMemoryDiagnostics.Snapshot().RetainedNativeBytes);
-            Assert.Equal(0, NativeMemoryTestHooks.Snapshot().RetainedNativeBytes);
+            // The builder's block is parked for the next builder or freed;
+            // parked storage stays retained.
+            long kept = KeptStorage.InCurrentEpoch<int>().Bytes;
+            Assert.Equal(kept, NativeMemoryDiagnostics.Snapshot().RetainedNativeBytes);
+            Assert.Equal(kept, NativeMemoryTestHooks.Snapshot().RetainedNativeBytes);
         }
         finally
         {
@@ -124,6 +127,7 @@ public sealed class NativeProductionAccountingTests
     public void PublicDiagnosticsAccountWithoutFaultHookActivation()
     {
         NativeMemoryStatistics before = NativeMemoryDiagnostics.Snapshot();
+        (int keptBefore, long keptBytesBefore) = KeptStorage.InCurrentEpoch<int>();
         using (NativeBuilder<int> builder = new(preLease: 2))
         {
             builder.Append([17, 19, 23]);
@@ -135,8 +139,11 @@ public sealed class NativeProductionAccountingTests
             Assert.True(live.PeakOutstandingNativeBytes >= live.OutstandingNativeBytes);
         }
         NativeMemoryStatistics released = NativeMemoryDiagnostics.Snapshot();
-        Assert.Equal(before.OutstandingNativeBytes, released.OutstandingNativeBytes);
-        Assert.Equal(before.FreeCount + 1, released.FreeCount);
+        // Disposal parks the block for the next builder or frees it; a parked
+        // block stays outstanding and records no free.
+        (int keptAfter, long keptBytesAfter) = KeptStorage.InCurrentEpoch<int>();
+        Assert.Equal(before.OutstandingNativeBytes + keptBytesAfter - keptBytesBefore, released.OutstandingNativeBytes);
+        Assert.Equal(before.FreeCount + 1 - (keptAfter - keptBefore), released.FreeCount);
     }
 
     [Fact]
@@ -154,8 +161,9 @@ public sealed class NativeProductionAccountingTests
                 Assert.Equal(8, NativeMemoryDiagnostics.Snapshot().OutstandingNativeBytes);
             }
             Assert.Equal(1, NativeMemoryDiagnostics.Snapshot().AllocationCount);
-            Assert.Equal(1, NativeMemoryDiagnostics.Snapshot().FreeCount);
-            Assert.Equal(0, NativeMemoryDiagnostics.Snapshot().OutstandingNativeBytes);
+            // Disposal parks the block for the next builder or frees it; a
+            // parked block stays outstanding and records no free.
+            KeptStorage.AssertBalanced<int>(NativeMemoryDiagnostics.Snapshot());
         }
         finally
         {
@@ -182,9 +190,10 @@ public sealed class NativeProductionAccountingTests
             Assert.Equal(1, live.ReallocationCount);
             Assert.Equal(16, live.OutstandingNativeBytes);
             resizedIntoMeasurement.Dispose();
-            Assert.Equal(0, NativeMemoryDiagnostics.Snapshot().OutstandingNativeBytes);
+            // Disposal parks the block, now of this epoch, for the next builder
+            // or frees it; a parked block stays outstanding and records no free.
+            KeptStorage.AssertBalanced<int>(NativeMemoryDiagnostics.Snapshot());
             Assert.Equal(16, NativeMemoryDiagnostics.Snapshot().PeakOutstandingNativeBytes);
-            Assert.Equal(1, NativeMemoryDiagnostics.Snapshot().FreeCount);
         }
         finally
         {

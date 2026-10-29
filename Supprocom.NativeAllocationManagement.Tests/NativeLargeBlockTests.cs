@@ -74,36 +74,70 @@ public sealed unsafe class NativeLargeBlockTests
     [Fact]
     public void ATakenBlockIsAtLeastTheLengthAndAtMostTwice()
     {
-        void* block = NativeMemory.AlignedAlloc(Huge, NativeSegment.Alignment);
-        Assert.True(NativeLargeBlocks.TryKeep(block, Huge));
-        void* small = NativeLargeBlocks.TryTake((Huge / 2) - 64, out nuint smallBytes);
+        void* block = Allocate(Huge, out long metricsEpoch);
+        Assert.True(NativeLargeBlocks.TryKeep(block, Huge, metricsEpoch));
+        void* small = NativeLargeBlocks.TryTake((Huge / 2) - 64, out nuint smallBytes, out long smallEpoch);
         Assert.True(small != block);
-        FreeIfTaken(small);
-        void* fitting = NativeLargeBlocks.TryTake(Huge - 64, out nuint fittingBytes);
+        FreeIfTaken(small, smallBytes, smallEpoch);
+        void* fitting = NativeLargeBlocks.TryTake(Huge - 64, out nuint fittingBytes, out long fittingEpoch);
         Assert.True(fitting == block);
         Assert.Equal(Huge, fittingBytes);
-        NativeMemory.AlignedFree(fitting);
-        _ = smallBytes;
+        Assert.Equal(metricsEpoch, fittingEpoch);
+        Free(fitting, fittingBytes, fittingEpoch);
+    }
+
+    // A kept block stays outstanding: keeping and taking it record nothing,
+    // and the cache records the free when it frees it.
+    [Fact]
+    public void AKeptBlockStaysOutstandingUntilTheCacheFreesIt()
+    {
+        void* block = Allocate(Huge, out long metricsEpoch);
+        NativeMemoryStatistics allocated = NativeMemoryDiagnostics.Snapshot();
+        Assert.True(NativeLargeBlocks.TryKeep(block, Huge, metricsEpoch));
+        NativeMemoryStatistics kept = NativeMemoryDiagnostics.Snapshot();
+        Assert.Equal(allocated.OutstandingNativeBytes, kept.OutstandingNativeBytes);
+        Assert.Equal(allocated.FreeCount, kept.FreeCount);
+        NativeLargeBlocks.Trim(highLoad: true);
+        NativeMemoryStatistics freed = NativeMemoryDiagnostics.Snapshot();
+        Assert.False(NativeLargeBlocks.HoldsForTest(block));
+        Assert.True(freed.FreeCount > kept.FreeCount);
+        Assert.True(freed.OutstandingNativeBytes <= kept.OutstandingNativeBytes - (long)Huge);
+    }
+
+    // A block from an earlier measurement epoch would hide its next owner
+    // from the current one: it waits to be freed instead.
+    [Fact]
+    public void ABlockFromAnEarlierMeasurementEpochIsNotTaken()
+    {
+        // Never counted in the current epoch, so freeing it records nothing.
+        void* stale = NativeMemory.AlignedAlloc(Huge, NativeSegment.Alignment);
+        Assert.True(NativeLargeBlocks.TryKeep(stale, Huge, NativeMemoryAccounting.CurrentMetricsEpoch - 1));
+        void* taken = NativeLargeBlocks.TryTake(Huge, out nuint takenBytes, out long takenEpoch);
+        Assert.True(taken != stale);
+        FreeIfTaken(taken, takenBytes, takenEpoch);
+        Assert.True(NativeLargeBlocks.HoldsForTest(stale));
+        NativeLargeBlocks.Trim(highLoad: true);
+        Assert.False(NativeLargeBlocks.HoldsForTest(stale));
     }
 
     [Fact]
     public void AFullCacheFreesItsOldestBlock()
     {
-        void* first = NativeMemory.AlignedAlloc(Huge, NativeSegment.Alignment);
-        void* second = NativeMemory.AlignedAlloc(Huge, NativeSegment.Alignment);
-        Assert.True(NativeLargeBlocks.TryKeep(first, Huge));
-        Assert.True(NativeLargeBlocks.TryKeep(second, Huge));
+        void* first = Allocate(Huge, out long firstEpoch);
+        void* second = Allocate(Huge, out long secondEpoch);
+        Assert.True(NativeLargeBlocks.TryKeep(first, Huge, firstEpoch));
+        Assert.True(NativeLargeBlocks.TryKeep(second, Huge, secondEpoch));
         Assert.False(NativeLargeBlocks.HoldsForTest(first));
         Assert.True(NativeLargeBlocks.HoldsForTest(second));
-        FreeIfTaken(NativeLargeBlocks.TryTake(Huge, out _));
+        FreeIfTaken(NativeLargeBlocks.TryTake(Huge, out nuint takenBytes, out long takenEpoch), takenBytes, takenEpoch);
     }
 
     [Fact]
     public void ABlockNotTakenBetweenTwoTrimsIsFreed()
     {
-        void* block = NativeMemory.AlignedAlloc(Huge, NativeSegment.Alignment);
+        void* block = Allocate(Huge, out long metricsEpoch);
         int collections = GC.CollectionCount(2);
-        Assert.True(NativeLargeBlocks.TryKeep(block, Huge));
+        Assert.True(NativeLargeBlocks.TryKeep(block, Huge, metricsEpoch));
         NativeLargeBlocks.Trim(highLoad: false);
         if (GC.CollectionCount(2) == collections)
         {
@@ -118,8 +152,8 @@ public sealed unsafe class NativeLargeBlockTests
     [Fact]
     public void HighMemoryLoadFreesEveryKeptBlock()
     {
-        void* block = NativeMemory.AlignedAlloc(Huge, NativeSegment.Alignment);
-        Assert.True(NativeLargeBlocks.TryKeep(block, Huge));
+        void* block = Allocate(Huge, out long metricsEpoch);
+        Assert.True(NativeLargeBlocks.TryKeep(block, Huge, metricsEpoch));
         NativeLargeBlocks.Trim(highLoad: true);
         Assert.False(NativeLargeBlocks.HoldsForTest(block));
     }
@@ -128,7 +162,7 @@ public sealed unsafe class NativeLargeBlockTests
     public void SmallBlocksAreNotKept()
     {
         void* block = NativeMemory.AlignedAlloc(NativeLargeBlocks.MinimumBytes - 64, NativeSegment.Alignment);
-        Assert.False(NativeLargeBlocks.TryKeep(block, NativeLargeBlocks.MinimumBytes - 64));
+        Assert.False(NativeLargeBlocks.TryKeep(block, NativeLargeBlocks.MinimumBytes - 64, NativeMemoryAccounting.CurrentMetricsEpoch));
         NativeMemory.AlignedFree(block);
     }
 
@@ -149,11 +183,25 @@ public sealed unsafe class NativeLargeBlockTests
 
     private static nint Address(Span<byte> span) => (nint)Unsafe.AsPointer(ref span[0]);
 
-    private static void FreeIfTaken(void* block)
+    // A block as an owner hands it over: allocated and counted.
+    private static void* Allocate(nuint bytes, out long metricsEpoch)
+    {
+        void* block = NativeMemory.AlignedAlloc(bytes, NativeSegment.Alignment);
+        metricsEpoch = NativeMemoryAccounting.RecordAllocation(bytes, zeroed: false);
+        return block;
+    }
+
+    private static void Free(void* block, nuint bytes, long metricsEpoch)
+    {
+        NativeMemory.AlignedFree(block);
+        NativeMemoryAccounting.RecordFree(bytes, detached: false, metricsEpoch);
+    }
+
+    private static void FreeIfTaken(void* block, nuint bytes, long metricsEpoch)
     {
         if (block != null)
         {
-            NativeMemory.AlignedFree(block);
+            Free(block, bytes, metricsEpoch);
         }
     }
 

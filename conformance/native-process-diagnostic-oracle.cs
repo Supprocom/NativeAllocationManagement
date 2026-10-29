@@ -81,8 +81,9 @@ internal static class NativeProcessDiagnosticOracle
             expected = expected with { CopiedBytes = expected.CopiedBytes + 8 };
             Verify(expected, "transfer:exported-eight-bytes-without-new-backing");
         }
-        expected = expected.WithRelease(16);
-        Verify(expected, "transfer:physically-released");
+        // The disposed transfer's block is parked for the thread's next
+        // transfer: still held, so still outstanding, and no free recorded.
+        Verify(expected, "transfer:parked-block-still-outstanding");
         return expected;
     }
 

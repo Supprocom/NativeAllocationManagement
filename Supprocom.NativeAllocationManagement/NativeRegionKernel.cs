@@ -571,10 +571,8 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
         {
             next = segment->Next;
             nuint allocationBytes = segment->AllocationBytes;
-            long metricsEpoch = segment->MetricsEpoch;
-            if (NativeLargeBlocks.TryKeep(segment, allocationBytes))
+            if (NativeLargeBlocks.TryKeep(segment, allocationBytes, segment->MetricsEpoch))
             {
-                NativeMemoryAccounting.RecordFree(allocationBytes, detached: false, metricsEpoch);
                 _retainedBytes -= checked((long)allocationBytes);
                 kept = true;
             }
@@ -722,13 +720,15 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
             }
             nuint keptBytes = 0;
             memory = _budget is null
-                ? NativeLargeBlocks.TryTake(allocationBytes, out keptBytes)
+                ? NativeLargeBlocks.TryTake(allocationBytes, out keptBytes, out metricsEpoch)
                 : null;
             if (memory != null)
             {
+                // Still counted from when it was kept.
                 allocationBytes = keptBytes;
                 capacity = keptBytes - HeaderBytes;
                 prospectiveBytes = checked(_retainedBytes + checked((long)allocationBytes));
+                recorded = true;
             }
             else
             {
@@ -753,8 +753,12 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
             segment->Capacity = capacity;
             segment->AllocationBytes = allocationBytes;
             segment->AllocationOrdinal = allocationOrdinal;
-            metricsEpoch = NativeMemoryAccounting.RecordAllocation(allocationBytes, zeroed: false);
-            recorded = true;
+            if (!recorded)
+            {
+                metricsEpoch = NativeMemoryAccounting.RecordAllocation(allocationBytes, zeroed: false);
+                recorded = true;
+            }
+
             segment->MetricsEpoch = metricsEpoch;
             _budget?.Commit(allocationBytes, Id, allocationOrdinal: allocationOrdinal);
             acquired = true;
@@ -827,13 +831,13 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
                     int allocationOrdinal = segment->AllocationOrdinal;
                     NativeMemory.AlignedFree(segment);
                     _budget.Release(allocationBytes, Id, allocationOrdinal: allocationOrdinal);
+                    NativeMemoryAccounting.RecordFree(allocationBytes, detached: false, metricsEpoch);
                 }
-                else if (!NativeLargeBlocks.TryKeep(segment, allocationBytes))
+                else if (!NativeLargeBlocks.TryKeep(segment, allocationBytes, metricsEpoch))
                 {
                     NativeMemory.AlignedFree(segment);
+                    NativeMemoryAccounting.RecordFree(allocationBytes, detached: false, metricsEpoch);
                 }
-
-                NativeMemoryAccounting.RecordFree(allocationBytes, detached: false, metricsEpoch);
             }
 
             segment = next;

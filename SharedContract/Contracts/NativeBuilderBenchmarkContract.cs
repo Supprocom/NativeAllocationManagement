@@ -50,7 +50,9 @@ public readonly record struct NativeBuilderNativeObservation(
     [property: JsonRequired] long DetachedBytes,
     [property: JsonRequired] long RetiredBytes,
     [property: JsonRequired] long CopiedBytes,
-    [property: JsonRequired] bool HistoryOverflowed);
+    [property: JsonRequired] bool HistoryOverflowed,
+    [property: JsonRequired] int KeptCount,
+    [property: JsonRequired] long KeptBytes);
 
 /// <summary>All implemented budget fields at one quiescent worker boundary; requested histories are not opaque physical allocation volume.</summary>
 public readonly record struct NativeBuilderBudgetObservation(

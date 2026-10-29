@@ -33,7 +33,8 @@ internal static class NativeBuilderStateRegression
             Console.WriteLine(JsonSerializer.Serialize(evidence));
             return evidence.ExactParity
                 && evidence.ExactlyOnceCleanupPassed
-                && evidence.NativeRetainedBytesAfter == 0
+                && evidence.NativeRetainedBytesAfter
+                    == evidence.NativeKeptBytesAfter
                 && evidence.TieredCompilationDisabled
                 && evidence.TieredPgoDisabled
                     ? 0
@@ -241,9 +242,7 @@ internal static class NativeBuilderStateRegression
         process.Refresh();
         NativeMemoryTestMetrics metrics =
             NativeMemoryTestHooks.Snapshot();
-        bool exactlyOnce = metrics.AllocationCount
-                == metrics.FreeCount
-            && metrics.OutstandingNativeBytes == 0;
+        bool exactlyOnce = NativeKeptEvidence.IsBalanced<uint>(metrics);
         return new StateBuilderWorkerEvidence(
             implementation,
             ReadSourceCommit(),
@@ -280,6 +279,7 @@ internal static class NativeBuilderStateRegression
                     - ((long)ChunkCount * MeasurementIterations)),
             execution.CopiedBytes,
             metrics.OutstandingNativeBytes,
+            NativeKeptEvidence.InCurrentEpoch<uint>().Bytes,
             execution.OutputSha256,
             execution.ExactParity,
             exactlyOnce,
@@ -875,6 +875,7 @@ internal sealed record StateBuilderWorkerEvidence(
     long NativeGrowthCount,
     long CopiedBytes,
     long NativeRetainedBytesAfter,
+    long NativeKeptBytesAfter,
     string OutputSha256,
     bool ExactParity,
     bool ExactlyOnceCleanupPassed,

@@ -35,7 +35,8 @@ internal static class NativeBuilderPairRegression
                 && evidence.FailureCleanupPassed
                 && evidence.CancellationCleanupPassed
                 && evidence.ExactlyOnceCleanupPassed
-                && evidence.NativeRetainedBytesAfter == 0
+                && evidence.NativeRetainedBytesAfter
+                    == evidence.NativeKeptBytesAfter
                 && evidence.TieredCompilationDisabled
                 && evidence.TieredPgoDisabled
                     ? 0
@@ -222,9 +223,7 @@ internal static class NativeBuilderPairRegression
         process.Refresh();
         NativeMemoryTestMetrics metrics =
             NativeMemoryTestHooks.Snapshot();
-        bool exactlyOnce = metrics.AllocationCount
-                == metrics.FreeCount
-            && metrics.OutstandingNativeBytes == 0;
+        bool exactlyOnce = NativeKeptEvidence.IsBalanced<uint>(metrics);
         return new CompositeBuilderWorkerEvidence(
             implementation,
             ReadSourceCommit(),
@@ -251,6 +250,7 @@ internal static class NativeBuilderPairRegression
             Math.Max(0, metrics.AllocationCount - 2),
             execution.CopiedBytes,
             metrics.OutstandingNativeBytes,
+            NativeKeptEvidence.InCurrentEpoch<uint>().Bytes,
             execution.OutputSha256,
             execution.ExactParity,
             failureCleanup,
@@ -573,8 +573,7 @@ internal static class NativeBuilderPairRegression
             second.Dispose();
             NativeMemoryTestMetrics metrics =
                 NativeMemoryTestHooks.Snapshot();
-            return metrics.AllocationCount == metrics.FreeCount
-                && metrics.OutstandingNativeBytes == 0;
+            return NativeKeptEvidence.IsBalanced<int>(metrics);
         }
     }
 
@@ -605,8 +604,7 @@ internal static class NativeBuilderPairRegression
             second.Dispose();
             NativeMemoryTestMetrics metrics =
                 NativeMemoryTestHooks.Snapshot();
-            return metrics.AllocationCount == metrics.FreeCount
-                && metrics.OutstandingNativeBytes == 0;
+            return NativeKeptEvidence.IsBalanced<int>(metrics);
         }
     }
 
@@ -771,6 +769,7 @@ internal sealed record CompositeBuilderWorkerEvidence(
     long NativeGrowthCount,
     long CopiedBytes,
     long NativeRetainedBytesAfter,
+    long NativeKeptBytesAfter,
     string OutputSha256,
     bool ExactParity,
     bool FailureCleanupPassed,

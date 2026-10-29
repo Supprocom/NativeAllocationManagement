@@ -31,15 +31,25 @@ public sealed class NativeProcessDiagnosticContractTests
         try
         {
             NativeProcessDiagnosticOracle.Expected expected = NativeProcessDiagnosticOracle.Expected.FromBaseline(NativeMemoryDiagnostics.Snapshot());
-            using (NativeBuilder<int> builder = new(preLease: 2))
+            expected = expected.WithAcquisition(8);
+            // On a thread that ends, so the parked block is freed below as
+            // NAM frees an ended thread's kept storage.
+            TestThread.Run(() =>
             {
-                expected = expected.WithAcquisition(8);
-                NativeMemoryTestHooks.FailNextAllocation();
-                Assert.Throws<NativeAllocationFailedException>(() => builder.TryEnsureCapacity(3));
-                expected = expected.WithRelease(8);
-                NativeProcessDiagnosticOracle.Verify(expected, "failed-replacement:old-storage-actually-released");
-            }
-            NativeProcessDiagnosticOracle.Verify(expected, "failed-replacement:terminal-dispose-not-another-free");
+                using (NativeBuilder<int> builder = new(preLease: 2))
+                {
+                    NativeMemoryTestHooks.FailNextAllocation();
+                    Assert.Throws<NativeAllocationFailedException>(() => builder.TryEnsureCapacity(3));
+                    // The failed builder parks its old block for the next
+                    // builder: it stays outstanding, and its release is
+                    // credited only when NAM frees it.
+                    NativeProcessDiagnosticOracle.Verify(expected, "failed-replacement:old-storage-parked");
+                }
+                NativeProcessDiagnosticOracle.Verify(expected, "failed-replacement:terminal-dispose-not-another-free");
+            });
+            NativeEndedThreads.ReleaseEndedForTest();
+            expected = expected.WithRelease(8);
+            NativeProcessDiagnosticOracle.Verify(expected, "failed-replacement:old-storage-actually-released");
         }
         finally { NativeMemoryTestHooks.Reset(); }
     }

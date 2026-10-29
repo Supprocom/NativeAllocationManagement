@@ -25,7 +25,9 @@ public sealed class NativeCopyAccountingTests
                 throw new InvalidOperationException("Borrow failed after completed copy.");
             }));
             Assert.Equal(32, NativeMemoryDiagnostics.Snapshot().CopiedBytes);
-            Assert.Equal(1, NativeMemoryDiagnostics.Snapshot().FreeCount);
+            // The failed builder returned its block once: parked for the next
+            // builder, which records no free, or freed.
+            Assert.Equal(1, NativeMemoryDiagnostics.Snapshot().FreeCount + KeptStorage.InCurrentEpoch<int>().Count);
         }
         finally { NativeMemoryTestHooks.Reset(); }
     }

@@ -22,9 +22,10 @@ internal static class DetailedCountersProbe
         }
 
         NativeMemoryStatistics snapshot = NativeMemoryDiagnostics.Snapshot();
+        long kept = NativeKeptEvidence.InCurrentEpoch<int>().Bytes;
         Console.WriteLine(string.Create(
             CultureInfo.InvariantCulture,
-            $"enabled={NativeMemoryDiagnostics.DetailedCountersEnabled} allocations={snapshot.AllocationCount} frees={snapshot.FreeCount} clears={snapshot.StorageClearCount} copied={snapshot.CopiedBytes} live={liveOutstanding} outstanding={snapshot.OutstandingNativeBytes}"));
+            $"enabled={NativeMemoryDiagnostics.DetailedCountersEnabled} allocations={snapshot.AllocationCount} frees={snapshot.FreeCount} clears={snapshot.StorageClearCount} copied={snapshot.CopiedBytes} live={liveOutstanding} kept={kept} outstanding={snapshot.OutstandingNativeBytes}"));
         return 0;
     }
 }

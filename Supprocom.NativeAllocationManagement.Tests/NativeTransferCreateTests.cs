@@ -20,7 +20,9 @@ public sealed class NativeTransferCreateTests
         filled.Dispose();
         Assert.ThrowsAny<InvalidOperationException>(copied.Dispose);
         Assert.ThrowsAny<InvalidOperationException>(() => filled.Read(static view => view[0]));
-        Assert.Equal(0, NativeMemoryTestHooks.Snapshot().OutstandingNativeBytes);
+        // Disposal parks both blocks for the next transfers or frees them; a
+        // parked block stays outstanding and records no free.
+        KeptStorage.AssertBalanced<int>(NativeMemoryTestHooks.Snapshot());
     }
 
     [Fact]

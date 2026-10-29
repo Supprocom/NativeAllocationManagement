@@ -29,14 +29,26 @@ public sealed class NativeBuilderWriteRegressionTests
         Assert.True(direct.CancellationCleanupPassed);
         Assert.True(append.ExactlyOnceCleanupPassed);
         Assert.True(direct.ExactlyOnceCleanupPassed);
-        Assert.Equal(2, append.NativeAllocationCountDelta);
-        Assert.Equal(2, append.NativeFreeCountDelta);
-        Assert.Equal(2, direct.NativeAllocationCountDelta);
-        Assert.Equal(2, direct.NativeFreeCountDelta);
-        Assert.Equal(0, append.NativeRetainedBytesAfter);
-        Assert.Equal(0, direct.NativeRetainedBytesAfter);
+        AssertKeptOrFreed(append, options.WorkerCount);
+        AssertKeptOrFreed(direct, options.WorkerCount);
         Assert.Equal(256, append.BuilderOperationCallCount);
         Assert.Equal(2, direct.BuilderOperationCallCount);
+    }
+
+    // A builder takes a block NAM kept for reuse when one fits, which records
+    // no allocation, and its disposed transfer keeps the block again. So the
+    // measured batch allocates at most one block per builder, every block it
+    // allocated was freed or is kept, and kept storage is all that stays
+    // retained.
+    private static void AssertKeptOrFreed(NativeBuilderWriteWorkerEvidence evidence, int workerCount)
+    {
+        Assert.InRange(evidence.NativeAllocationCountDelta, 0, workerCount);
+        Assert.Equal(
+            evidence.NativeKeptCountAfter - evidence.NativeKeptCountBefore,
+            evidence.NativeAllocationCountDelta - evidence.NativeFreeCountDelta);
+        Assert.Equal(evidence.NativeKeptBytesBefore, evidence.NativeRetainedBytesBefore);
+        Assert.Equal(evidence.NativeKeptBytesAfter, evidence.NativeRetainedBytesAfter);
+        Assert.True(NativeBuilderWriteRegression.HasExpectedNativeOperations(evidence));
     }
 
     [Fact]

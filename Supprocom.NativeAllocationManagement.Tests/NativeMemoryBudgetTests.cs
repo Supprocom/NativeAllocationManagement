@@ -51,11 +51,12 @@ public sealed class NativeMemoryBudgetTests
             Assert.Equal(8, resized.PeakOutstandingNativeBytes);
             NativeTransfer<int> transfer = builder.Complete();
             transfer.Dispose();
-            NativeMemoryStatistics freed = NativeMemoryDiagnostics.Snapshot();
-            Assert.Equal(1, freed.AllocationCount);
-            Assert.Equal(1, freed.ReallocationCount);
-            Assert.Equal(1, freed.FreeCount);
-            Assert.Equal(0, freed.OutstandingNativeBytes);
+            NativeMemoryStatistics returned = NativeMemoryDiagnostics.Snapshot();
+            Assert.Equal(1, returned.AllocationCount);
+            Assert.Equal(1, returned.ReallocationCount);
+            // Disposal parks the block for the next builder or frees it; a
+            // parked block stays outstanding and records no free.
+            KeptStorage.AssertBalanced<int>(returned);
         }
         finally
         {

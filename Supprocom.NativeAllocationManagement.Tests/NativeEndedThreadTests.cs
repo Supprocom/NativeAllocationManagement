@@ -10,7 +10,7 @@ public sealed class NativeEndedThreadTests
     public void APoolAnEndedThreadKeptForReuseIsFreed()
     {
         NativePool<int>? pool = null;
-        NativeThreadState state = RunOnThread(() =>
+        NativeThreadState state = TestThread.Run(() =>
         {
             pool = new NativePool<int>();
             using (pool.Rent(1000, 1))
@@ -32,7 +32,7 @@ public sealed class NativeEndedThreadTests
     public void ThreadsStartingLaterReleaseWhatAnEndedThreadKept()
     {
         NativePool<int>? pool = null;
-        NativeThreadState state = RunOnThread(() =>
+        NativeThreadState state = TestThread.Run(() =>
         {
             pool = new NativePool<int>();
             using (pool.Rent(1000, 1))
@@ -45,7 +45,7 @@ public sealed class NativeEndedThreadTests
         NativePool<int>.Slab slab = pool!.SlabForTest(0);
         for (int started = 0; started < 1000 && slab.Pointer != IntPtr.Zero; started++)
         {
-            RunOnThread(static () => { });
+            TestThread.Run(static () => { });
         }
 
         Assert.Equal(IntPtr.Zero, slab.Pointer);
@@ -85,7 +85,7 @@ public sealed class NativeEndedThreadTests
     public void AnEndedThreadsSharedPoolIsDisposedAndFreedWithAnUndisposedLease()
     {
         NativePool<long>? shared = null;
-        NativeThreadState state = RunOnThread(() =>
+        NativeThreadState state = TestThread.Run(() =>
         {
             shared = NativePool<long>.Shared;
             _ = shared.Rent(64, 1);
@@ -104,7 +104,7 @@ public sealed class NativeEndedThreadTests
     public void ARetiredSharedPoolIsLeftToItsCoordinator()
     {
         NativePool<short>? shared = null;
-        NativeThreadState state = RunOnThread(() =>
+        NativeThreadState state = TestThread.Run(() =>
         {
             shared = NativePool<short>.Shared;
             using (shared.Rent(64, 1))
@@ -127,7 +127,7 @@ public sealed class NativeEndedThreadTests
     public void RegionAndArenaKernelsAnEndedThreadKeptAreReleased()
     {
         NativeArena? arena = null;
-        NativeThreadState state = RunOnThread(() =>
+        NativeThreadState state = TestThread.Run(() =>
         {
             using (NativeRegion region = new())
             {
@@ -162,7 +162,7 @@ public sealed class NativeEndedThreadTests
     public void ATransferBlockAnEndedThreadParkedIsReleased()
     {
         NativeTransfer<int> transfer = default;
-        NativeThreadState state = RunOnThread(() =>
+        NativeThreadState state = TestThread.Run(() =>
         {
             transfer = NativeTransfer<int>.Create(1000, 1);
             transfer.Dispose();
@@ -180,7 +180,7 @@ public sealed class NativeEndedThreadTests
     public void BudgetedOwnersAnEndedThreadKeptReturnTheirCharges()
     {
         NativeMemoryBudget budget = new(1 << 20);
-        NativeThreadState state = RunOnThread(() =>
+        NativeThreadState state = TestThread.Run(() =>
         {
             using (NativeRegion region = new(budget, 0, NativeMemoryReturn.ToGarbageCollector))
             {
@@ -203,35 +203,5 @@ public sealed class NativeEndedThreadTests
         Assert.Equal(0, budget.CaptureStatistics().ActiveAllocationCount);
         Assert.Null(state.KeptBudgetedRegion);
         Assert.Null(state.KeptBudgetedArena);
-    }
-
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The worker failure is rethrown on the test thread.")]
-    private static NativeThreadState RunOnThread(Action action)
-    {
-        NativeThreadState? state = null;
-        Exception? failure = null;
-        Thread thread = new(() =>
-        {
-            state = NativeThreadState.Current;
-            try
-            {
-                action();
-            }
-            catch (Exception exception)
-            {
-                failure = exception;
-            }
-        })
-        {
-            IsBackground = true
-        };
-        thread.Start();
-        Assert.True(thread.Join(TimeSpan.FromSeconds(30)));
-        if (failure is not null)
-        {
-            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
-        }
-
-        return state!;
     }
 }

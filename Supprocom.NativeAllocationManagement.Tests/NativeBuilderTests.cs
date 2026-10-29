@@ -301,10 +301,7 @@ public sealed class NativeBuilderTests
             builder.Dispose();
             NativeMemoryTestMetrics metrics =
                 NativeMemoryTestHooks.Snapshot();
-            Assert.Equal(
-                metrics.AllocationCount,
-                metrics.FreeCount);
-            Assert.Equal(0, metrics.OutstandingNativeBytes);
+            KeptStorage.AssertBalanced<int>(metrics);
         }
         finally
         {
@@ -438,10 +435,7 @@ public sealed class NativeBuilderTests
             builder.Dispose();
             NativeMemoryTestMetrics metrics =
                 NativeMemoryTestHooks.Snapshot();
-            Assert.Equal(
-                metrics.AllocationCount,
-                metrics.FreeCount);
-            Assert.Equal(0, metrics.OutstandingNativeBytes);
+            KeptStorage.AssertBalanced<int>(metrics);
         }
         finally
         {
@@ -724,10 +718,7 @@ public sealed class NativeBuilderTests
             second.Dispose();
             NativeMemoryTestMetrics metrics =
                 NativeMemoryTestHooks.Snapshot();
-            Assert.Equal(
-                metrics.AllocationCount,
-                metrics.FreeCount);
-            Assert.Equal(0, metrics.OutstandingNativeBytes);
+            KeptStorage.AssertBalanced<int>(metrics);
         }
         finally
         {
@@ -847,10 +838,7 @@ public sealed class NativeBuilderTests
 
             NativeMemoryTestMetrics metrics =
                 NativeMemoryTestHooks.Snapshot();
-            Assert.Equal(
-                metrics.AllocationCount,
-                metrics.FreeCount);
-            Assert.Equal(0, metrics.OutstandingNativeBytes);
+            KeptStorage.AssertBalanced<int>(metrics);
             Assert.Throws<ObjectDisposedException>(
                 () => builder.Append(3));
             builder.Dispose();
@@ -924,9 +912,11 @@ public sealed class NativeBuilderTests
             transfer.Dispose();
             NativeMemoryTestMetrics metrics =
                 NativeMemoryTestHooks.Snapshot();
+            // The transfer's block is parked for the thread's next one, still
+            // counted.
             Assert.Equal(1, metrics.AllocationCount);
-            Assert.Equal(1, metrics.FreeCount);
-            Assert.Equal(0, metrics.OutstandingNativeBytes);
+            Assert.Equal(1, NativeBuilderControl<long>.ParkedInCurrentEpochForTest(NativeThreadState.Current).Count);
+            KeptStorage.AssertBalanced<long>(metrics);
         }
         finally
         {
@@ -1176,10 +1166,7 @@ public sealed class NativeBuilderTests
                 NativeMemoryTestHooks.Snapshot();
             Assert.Equal(1, metrics.AllocationCount);
             Assert.Equal(7, metrics.ReallocationCount);
-            Assert.Equal(
-                metrics.AllocationCount,
-                metrics.FreeCount);
-            Assert.Equal(0, metrics.OutstandingNativeBytes);
+            KeptStorage.AssertBalanced<int>(metrics);
         }
         finally
         {
@@ -1352,14 +1339,13 @@ public sealed class NativeBuilderTests
         }
 
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822", Justification = "A metrics scope exposes an instance assertion while reading global test hooks.")]
+        // A block a builder or transfer returned may be parked for the thread's
+        // next one: it stays outstanding then, and no free is recorded for it.
         internal void AssertBalanced()
         {
             NativeMemoryTestMetrics metrics =
                 NativeMemoryTestHooks.Snapshot();
-            Assert.Equal(
-                metrics.AllocationCount,
-                metrics.FreeCount);
-            Assert.Equal(0, metrics.OutstandingNativeBytes);
+            KeptStorage.AssertBalanced<int>(metrics);
         }
 
         public void Dispose() => NativeMemoryTestHooks.Reset();

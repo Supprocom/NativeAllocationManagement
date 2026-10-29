@@ -707,12 +707,11 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
             Slab slab = _slabs[index];
             nuint bytes = slab.AllocationBytes;
             if (slab.State != SlabState.Free
-                || !NativeLargeBlocks.TryKeep((void*)slab.Pointer, bytes))
+                || !NativeLargeBlocks.TryKeep((void*)slab.Pointer, bytes, slab.MetricsEpoch))
             {
                 continue;
             }
 
-            NativeMemoryAccounting.RecordFree(bytes, detached: false, slab.MetricsEpoch);
             _retainedBytes -= checked((long)bytes);
             slab.Reset();
             slab.Next = _unusedHead;
@@ -1087,6 +1086,7 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
         int index = -1;
         void* memory = null;
         long metricsEpoch = 0;
+        bool recorded = false;
         bool acquired = false;
         try
         {
@@ -1104,12 +1104,14 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
 
                 nuint keptBytes = 0;
                 memory = _budget is null
-                    ? NativeLargeBlocks.TryTake(backingBytes, out keptBytes)
+                    ? NativeLargeBlocks.TryTake(backingBytes, out keptBytes, out metricsEpoch)
                     : null;
                 if (memory != null)
                 {
+                    // Still counted from when it was kept.
                     backingBytes = keptBytes;
                     prospectiveBytes = checked(_retainedBytes + checked((long)backingBytes));
+                    recorded = true;
                 }
                 else
                 {
@@ -1126,9 +1128,13 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
                 }
 
                 _peakRetainedBytes = Math.Max(_peakRetainedBytes, prospectiveBytes);
-                metricsEpoch = NativeMemoryAccounting.RecordAllocation(
-                    backingBytes,
-                    zeroed: false);
+                if (!recorded)
+                {
+                    metricsEpoch = NativeMemoryAccounting.RecordAllocation(
+                        backingBytes,
+                        zeroed: false);
+                    recorded = true;
+                }
             }
 
             int floor = capacity <= 1 ? 0 : (int)(BitOperations.RoundUpToPowerOf2((uint)capacity) >> 1);
@@ -1173,7 +1179,9 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
                 if (memory != null)
                 {
                     NativeMemory.AlignedFree(memory);
-                    if (metricsEpoch != 0)
+                    // Epochs start at zero, so only the flag tells whether the
+                    // allocation was recorded.
+                    if (recorded)
                     {
                         NativeMemoryAccounting.RecordFree(backingBytes, detached: false, metricsEpoch);
                     }

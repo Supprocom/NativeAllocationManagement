@@ -14,10 +14,13 @@ namespace Supprocom.NativeAllocationManagement;
 // Bounded in count and bytes; when full, the oldest block is freed. A block
 // not taken again before the next full collection after it was kept is freed
 // then, and all of them under high memory load, as ArrayPool trims its arrays.
-// Like a parked transfer block, a kept block counts as freed in the
-// diagnostics and a taken one as a new allocation. Nothing else about a kept
-// block is observable, so tests share the cache; it stands down while a test
-// injects a fault.
+// A kept block stays outstanding in the diagnostics, as all storage NAM keeps
+// for reuse does: keeping and taking it record nothing, and the free is
+// recorded when the cache frees it. Only a block of the current measurement
+// epoch is taken, so every owner's storage is counted in the epoch it is used
+// in; an older one waits to be freed. Nothing else about a kept block is
+// observable, so tests share the cache; it stands down while a test injects a
+// fault.
 internal static unsafe class NativeLargeBlocks
 {
     internal const nuint MinimumBytes = 256 * 1024;
@@ -51,10 +54,38 @@ internal static unsafe class NativeLargeBlocks
         }
     }
 
-    // A kept block of at least byteLength bytes and at most twice that, or null.
-    internal static void* TryTake(nuint byteLength, out nuint blockBytes)
+    // The kept blocks of the current measurement epoch: still counted as
+    // outstanding in it.
+    internal static (int Count, long Bytes) KeptInCurrentEpochForTest
+    {
+        get
+        {
+            long epoch = NativeMemoryAccounting.CurrentMetricsEpoch;
+            int count = 0;
+            long bytes = 0;
+            lock (s_gate)
+            {
+                foreach (ref Entry entry in s_entries.AsSpan(0, s_count))
+                {
+                    if (entry.MetricsEpoch == epoch)
+                    {
+                        count++;
+                        bytes += (long)entry.Bytes;
+                    }
+                }
+            }
+
+            return (count, bytes);
+        }
+    }
+
+    // A kept block of at least byteLength bytes and at most twice that, from
+    // the current measurement epoch, or null. It is still counted as
+    // outstanding in its epoch: the taker records no allocation.
+    internal static void* TryTake(nuint byteLength, out nuint blockBytes, out long metricsEpoch)
     {
         blockBytes = 0;
+        metricsEpoch = 0;
         if (Volatile.Read(ref s_count) == 0
             || byteLength < MinimumBytes
             || NativeMemoryTestHooks.FaultInjectionPending)
@@ -62,15 +93,17 @@ internal static unsafe class NativeLargeBlocks
             return null;
         }
 
+        long currentEpoch = NativeMemoryAccounting.CurrentMetricsEpoch;
         lock (s_gate)
         {
             int best = -1;
             for (int index = 0; index < s_count; index++)
             {
-                nuint bytes = s_entries[index].Bytes;
-                if (bytes >= byteLength
-                    && bytes - byteLength <= byteLength
-                    && (best < 0 || bytes < s_entries[best].Bytes))
+                ref Entry entry = ref s_entries[index];
+                if (entry.Bytes >= byteLength
+                    && entry.Bytes - byteLength <= byteLength
+                    && entry.MetricsEpoch == currentEpoch
+                    && (best < 0 || entry.Bytes < s_entries[best].Bytes))
                 {
                     best = index;
                 }
@@ -84,13 +117,15 @@ internal static unsafe class NativeLargeBlocks
             Entry taken = s_entries[best];
             RemoveAt(best);
             blockBytes = taken.Bytes;
+            metricsEpoch = taken.MetricsEpoch;
             return taken.Pointer;
         }
     }
 
-    // Keeps a returned block allocated with NativeSegment.Alignment; false
-    // when the caller must free it.
-    internal static bool TryKeep(void* block, nuint blockBytes)
+    // Keeps a returned block allocated with NativeSegment.Alignment, still
+    // counted as outstanding in its measurement epoch; false when the caller
+    // must free it.
+    internal static bool TryKeep(void* block, nuint blockBytes, long metricsEpoch)
     {
         if (blockBytes < MinimumBytes
             || blockBytes > LimitBytes
@@ -104,27 +139,35 @@ internal static unsafe class NativeLargeBlocks
             StartTrimmer();
         }
 
-        Span<nint> evicted = stackalloc nint[Capacity];
+        Span<Entry> evicted = stackalloc Entry[Capacity];
         int evictedCount = 0;
         lock (s_gate)
         {
             while (s_count == Capacity || s_bytes + blockBytes > LimitBytes)
             {
-                evicted[evictedCount++] = (nint)s_entries[0].Pointer;
+                evicted[evictedCount++] = s_entries[0];
                 RemoveAt(0);
             }
 
-            s_entries[s_count] = new Entry(block, blockBytes, s_collections);
+            s_entries[s_count] = new Entry(block, blockBytes, metricsEpoch, s_collections);
             s_bytes += blockBytes;
             Volatile.Write(ref s_count, s_count + 1);
         }
 
-        foreach (ref nint pointer in evicted[..evictedCount])
-        {
-            NativeMemory.AlignedFree((void*)pointer);
-        }
-
+        Free(evicted[..evictedCount]);
         return true;
+    }
+
+    // Outside the lock: recording a free can create the calling thread's
+    // state, which registers it under NativeEndedThreads' lock, and that lock
+    // is held around keeps.
+    private static void Free(ReadOnlySpan<Entry> entries)
+    {
+        foreach (ref readonly Entry entry in entries)
+        {
+            NativeMemory.AlignedFree(entry.Pointer);
+            NativeMemoryAccounting.RecordFree(entry.Bytes, detached: false, entry.MetricsEpoch);
+        }
     }
 
     private static void RemoveAt(int index)
@@ -136,14 +179,17 @@ internal static unsafe class NativeLargeBlocks
         Volatile.Write(ref s_count, last);
     }
 
-    private static void FreeWhere(Func<Entry, bool> free)
+    // Moves the entries to free into the span and returns how many; the
+    // caller frees them outside the lock.
+    private static int RemoveWhere(Func<Entry, bool> free, Span<Entry> removed)
     {
         int kept = 0;
+        int count = 0;
         foreach (ref Entry entry in s_entries.AsSpan(0, s_count))
         {
             if (free(entry))
             {
-                NativeMemory.AlignedFree(entry.Pointer);
+                removed[count++] = entry;
                 s_bytes -= entry.Bytes;
             }
             else
@@ -154,6 +200,7 @@ internal static unsafe class NativeLargeBlocks
 
         Array.Clear(s_entries, kept, s_count - kept);
         Volatile.Write(ref s_count, kept);
+        return count;
     }
 
     private static void StartTrimmer()
@@ -172,18 +219,23 @@ internal static unsafe class NativeLargeBlocks
 
     internal static void Trim(bool highLoad)
     {
+        Span<Entry> removed = stackalloc Entry[Capacity];
+        int count;
         lock (s_gate)
         {
             int previous = s_collections++;
-            FreeWhere(entry => highLoad || entry.Stamp < previous);
+            count = RemoveWhere(entry => highLoad || entry.Stamp < previous, removed);
         }
+
+        Free(removed[..count]);
     }
 
     [StructLayout(LayoutKind.Auto)]
-    private readonly struct Entry(void* pointer, nuint bytes, int stamp)
+    private readonly struct Entry(void* pointer, nuint bytes, long metricsEpoch, int stamp)
     {
         internal readonly void* Pointer = pointer;
         internal readonly nuint Bytes = bytes;
+        internal readonly long MetricsEpoch = metricsEpoch;
         internal readonly int Stamp = stamp;
     }
 

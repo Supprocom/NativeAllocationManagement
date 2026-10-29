@@ -191,11 +191,12 @@ internal static unsafe class NativeBlockAllocator
     // A growing builder takes a kept block and keeps the one it leaves,
     // instead of reallocating: the aligned realloc allocates, copies and
     // frees anyway, and a builder grown per use would map every doubling
-    // afresh. False when neither block goes through NativeLargeBlocks.
+    // afresh. False when neither block goes through NativeLargeBlocks. A kept
+    // block is already counted, so only a new one records an allocation.
     private static bool TryMoveThroughLargeBlocks(NativeBlock block, nuint byteLength, long ownerId, out NativeBlock moved)
     {
         nuint blockBytes = byteLength;
-        void* memory = NativeLargeBlocks.TryTake(byteLength, out nuint keptBytes);
+        void* memory = NativeLargeBlocks.TryTake(byteLength, out nuint keptBytes, out long metricsEpoch);
         if (memory != null)
         {
             blockBytes = keptBytes;
@@ -209,6 +210,8 @@ internal static unsafe class NativeBlockAllocator
                 throw new OutOfMemoryException();
 #pragma warning restore CA2201
             }
+
+            metricsEpoch = NativeMemoryAccounting.RecordAllocation(blockBytes, zeroed: false);
         }
         else
         {
@@ -217,27 +220,25 @@ internal static unsafe class NativeBlockAllocator
         }
 
         Buffer.MemoryCopy((void*)block.Pointer, memory, blockBytes, Math.Min(block.ByteLength, byteLength));
-        long metricsEpoch = NativeMemoryAccounting.RecordAllocation(blockBytes, zeroed: false);
         FreeOrKeep(block);
         moved = new NativeBlock((IntPtr)memory, blockBytes, metricsEpoch, Budget: null, ownerId);
         return true;
     }
 
     // An unbudgeted block kept by NativeLargeBlocks, at most twice the
-    // length, or else a new one.
+    // length, or else a new one. A kept block is already counted.
     internal static NativeBlock AllocateReusable(
         nuint byteLength,
         string ownerKind,
         string operation,
         long ownerId)
     {
-        void* kept = NativeLargeBlocks.TryTake(byteLength, out nuint keptBytes);
+        void* kept = NativeLargeBlocks.TryTake(byteLength, out nuint keptBytes, out long metricsEpoch);
         if (kept == null)
         {
             return Allocate(byteLength, ownerKind, operation, budget: null, ownerId);
         }
 
-        long metricsEpoch = NativeMemoryAccounting.RecordAllocation(keptBytes, zeroed: false);
         return new NativeBlock(
             (IntPtr)kept,
             keptBytes,
@@ -246,13 +247,13 @@ internal static unsafe class NativeBlockAllocator
             ownerId == 0 ? NativeOwnerIdentity.Next() : ownerId);
     }
 
-    // Frees the block, or hands an unbudgeted large one to NativeLargeBlocks.
+    // Frees the block, or hands an unbudgeted large one to NativeLargeBlocks,
+    // where it stays counted.
     internal static void FreeOrKeep(NativeBlock block)
     {
         if (block.Budget is null
-            && NativeLargeBlocks.TryKeep((void*)block.Pointer, block.ByteLength))
+            && NativeLargeBlocks.TryKeep((void*)block.Pointer, block.ByteLength, block.MetricsEpoch))
         {
-            NativeMemoryAccounting.RecordFree(block.ByteLength, detached: false, block.MetricsEpoch);
             return;
         }
 

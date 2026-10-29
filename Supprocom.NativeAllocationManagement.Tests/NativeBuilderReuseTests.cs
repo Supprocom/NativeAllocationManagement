@@ -11,9 +11,10 @@ public sealed class NativeBuilderReuseTests
         object control = first.ControlForTest!;
         long firstId = first.Id;
         first.Dispose();
+        // The block is parked with its control, still counted.
         NativeMemoryTestMetrics afterFirst = NativeMemoryTestHooks.Snapshot();
-        Assert.Equal(afterFirst.AllocationCount, afterFirst.FreeCount);
-        Assert.Equal(0, afterFirst.OutstandingNativeBytes);
+        Assert.Equal(1, afterFirst.AllocationCount);
+        KeptStorage.AssertBalanced<int>(afterFirst);
 
         NativeTransfer<int> second = Build([4, 5], preLease: 8);
         Assert.Same(control, second.ControlForTest);
@@ -30,9 +31,10 @@ public sealed class NativeBuilderReuseTests
         Assert.Equal(new[] { 4, 5 }, second.Read(static view => view.AsSpan().ToArray()));
 
         second.Dispose();
+        // Reusing the parked block recorded no allocation.
         NativeMemoryTestMetrics end = NativeMemoryTestHooks.Snapshot();
-        Assert.Equal(end.AllocationCount, end.FreeCount);
-        Assert.Equal(0, end.OutstandingNativeBytes);
+        Assert.Equal(1, end.AllocationCount);
+        KeptStorage.AssertBalanced<int>(end);
     }
 
     [Fact]
@@ -106,7 +108,7 @@ public sealed class NativeBuilderReuseTests
             NativeTransfer<byte> next = NativeTransfer<byte>.Create(64 * 1024, 3);
             Assert.NotSame(smallControl, next.ControlForTest);
             next.Dispose();
-            Assert.Equal(0, NativeMemoryTestHooks.Snapshot().OutstandingNativeBytes);
+            KeptStorage.AssertBalanced<byte>(NativeMemoryTestHooks.Snapshot());
         }
         finally
         {
@@ -149,7 +151,10 @@ public sealed class NativeBuilderReuseTests
             second[index].Dispose();
         }
 
-        Assert.Equal(0, NativeMemoryTestHooks.Snapshot().OutstandingNativeBytes);
+        // Every block is freed or kept: the ninth waits on the ended thread
+        // until its release.
+        NativeEndedThreads.ReleaseEndedForTest();
+        KeptStorage.AssertBalanced<MagazineProbe>(NativeMemoryTestHooks.Snapshot());
     }
 
     private readonly record struct MagazineProbe(int Value);
@@ -177,7 +182,8 @@ public sealed class NativeBuilderReuseTests
             smallAgain.Dispose();
             largeAgain.Dispose();
         });
-        Assert.Equal(0, NativeMemoryTestHooks.Snapshot().OutstandingNativeBytes);
+        NativeEndedThreads.ReleaseEndedForTest();
+        KeptStorage.AssertBalanced<CycleProbe>(NativeMemoryTestHooks.Snapshot());
     }
 
     private readonly record struct CycleProbe(int Value);
@@ -216,7 +222,8 @@ public sealed class NativeBuilderReuseTests
             transfer.Dispose();
         }
 
-        Assert.Equal(0, NativeMemoryTestHooks.Snapshot().OutstandingNativeBytes);
+        NativeEndedThreads.ReleaseEndedForTest();
+        KeptStorage.AssertBalanced<int>(NativeMemoryTestHooks.Snapshot());
     }
 
     [Fact]
