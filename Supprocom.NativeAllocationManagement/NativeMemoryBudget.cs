@@ -13,8 +13,7 @@ namespace Supprocom.NativeAllocationManagement;
 /// owner with this budget on its thread; kept storage stays charged to the budget. When an admission
 /// would exceed the capacity, the budget first frees what every thread kept for it, so it refuses only
 /// when storage in use fills the capacity. Owners of a budget created with a trace capacity keep no
-/// storage: a region, arena or pool that would otherwise keep it frees it on disposal instead, so
-/// tracing does not change when the budget refuses an admission.
+/// storage: they free it on disposal, so tracing does not change when the budget refuses an admission.
 /// </para>
 /// </remarks>
 public sealed partial class NativeMemoryBudget

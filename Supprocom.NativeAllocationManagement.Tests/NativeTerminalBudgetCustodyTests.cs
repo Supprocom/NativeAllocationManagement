@@ -114,12 +114,16 @@ public sealed class NativeTerminalBudgetCustodyTests
         Assert.False(owner.TryGetTarget(out _));
     }
 
-    // An arena with a retention policy is never kept for reuse, so with the
-    // garbage-collector policy it still detaches its storage for finalization.
-    [Fact]
-    public void DetachedFastStorageKeepsTheDomainUntilActualFinalizerReturn()
+    // Disposal no longer detaches storage for finalization: a disposed owner
+    // keeps it for reuse or frees it. Only an owner that is never disposed
+    // leaves its storage, still charged, to its guard's finalizer, which
+    // keeps the domain until it returns the storage.
+    [Theory]
+    [InlineData(1)]
+    [InlineData(3)]
+    public void AbandonedFastStorageKeepsTheDomainUntilActualFinalizerReturn(int model)
     {
-        AbandonHeldDetachedOwner(12, out WeakReference<NativeMemoryBudget> budget, out WeakReference<IDisposable> owner);
+        AbandonHeldOwner(model, out WeakReference<NativeMemoryBudget> budget, out WeakReference<IDisposable> owner);
         Collect();
         Assert.False(IsAlive(budget));
         Assert.False(owner.TryGetTarget(out _));
@@ -223,7 +227,6 @@ public sealed class NativeTerminalBudgetCustodyTests
         9 => new NativeArena(new NativeArenaPreparation(64, 64), budget),
         10 => new NativeConcurrentPool<int>(budget, 0, 0, policy, true),
         11 => new NativeConcurrentArena(budget, 0, policy, true),
-        12 => new NativeArena(budget, new NativeArenaRetentionPolicy(64, 0), 64U, policy),
         _ => throw new ArgumentOutOfRangeException(nameof(model))
     };
 
@@ -301,17 +304,17 @@ public sealed class NativeTerminalBudgetCustodyTests
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static void AbandonHeldDetachedOwner(int model, out WeakReference<NativeMemoryBudget> budget,
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000", Justification = "The owner is abandoned on purpose: its guard must return the storage and the domain.")]
+    private static void AbandonHeldOwner(int model, out WeakReference<NativeMemoryBudget> budget,
         out WeakReference<IDisposable> observedOwner)
     {
-        using IDisposable owner = CreateClassWithOnlyWeakDomain(model, NativeMemoryReturn.Reuse, out budget);
-        owner.Dispose();
+        IDisposable owner = CreateClassWithOnlyWeakDomain(model, NativeMemoryReturn.Reuse, out budget);
         observedOwner = new(owner);
         Collect();
         Assert.True(IsAlive(budget));
         Assert.True(Observe(budget).CommittedBytes > 0);
         Assert.Equal(0, Observe(budget).FreeCount);
-        Assert.Equal(NativeOwnerLifecycle.Disposed, Snapshot(owner).Lifecycle);
+        Assert.Equal(NativeOwnerLifecycle.Active, Snapshot(owner).Lifecycle);
         GC.KeepAlive(owner);
     }
 

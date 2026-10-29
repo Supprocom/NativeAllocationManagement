@@ -191,17 +191,21 @@ public sealed class VoxelAllocatorDiagnosticContractTests
         Assert.Equal(0, budget.CaptureStatistics().CommittedBytes);
     }
 
-    // A disposed owner detaches only storage it cannot keep for reuse: this
-    // pool has no budget and holds more than the 1 MiB a thread keeps, in
-    // slabs too small for the large-block cache, so its storage stays
-    // outstanding until finalization.
+    // Disposal no longer detaches storage: a disposed owner keeps it for reuse
+    // or frees it. A concurrent pool still detaches its current generation
+    // when asked to, through ReturnMemoryToGarbageCollector; once the pool is
+    // disposed, that storage stays measured, detached and charged until
+    // finalization.
     [VoxelDemonstrationFact]
     public void DetachedBackingRemainsMeasuredAndChargedUntilActualFinalization()
     {
-        using NativePool<byte> pool = new(preLease: 1, NativeMemoryReturn.Reuse);
-        HoldSlabs(pool, 9);
-        long retained = pool.GetStatistics().RetainedBytes;
-        Assert.True(retained > 1024 * 1024);
+        NativeMemoryBudget budget = new(1 << 20);
+        NativeConcurrentPool<byte> pool = new(budget, 4, 0, NativeMemoryReturn.Reuse, false);
+        ConcurrentPooled<byte> lease = pool.Rent(4, static writer => writer.Fill(7));
+        long retained = pool.GetStatistics().OutstandingNativeBytes;
+        Assert.True(retained > 0);
+        pool.ReturnMemoryToGarbageCollector();
+        lease.Dispose();
         pool.Dispose();
         PressureAllocatorDiagnosticSnapshot detached = VerifyCompleteMapping(pool.CaptureDiagnosticSnapshot());
         Assert.Equal(retained, detached.OutstandingNativeBytes);
@@ -209,20 +213,9 @@ public sealed class VoxelAllocatorDiagnosticContractTests
         Assert.Equal(retained, detached.PeakOutstandingNativeBytes);
         Assert.Equal(NativeOwnerLifecycle.Disposed.ToString(), detached.Lifecycle);
         Assert.Equal(0, detached.AvailableSegmentCount);
+        Assert.Equal(retained, budget.CaptureStatistics().CommittedBytes);
         Assert.Throws<NativeAllocationDisposedException>(() => pool.Rent(1, static writer => writer.Write(31)));
         GC.KeepAlive(pool);
-    }
-
-    // Slabs of 131,072 bytes, each held while the next is rented.
-    private static void HoldSlabs(NativePool<byte> pool, int count)
-    {
-        if (count == 0)
-        {
-            return;
-        }
-
-        using Pooled<byte> lease = pool.RentUninitialized(100_000);
-        HoldSlabs(pool, count - 1);
     }
 
     [VoxelDemonstrationFact]

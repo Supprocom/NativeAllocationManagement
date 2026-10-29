@@ -58,8 +58,10 @@ public sealed class NativeEndedThreadTests
         using ManualResetEventSlim disposed = new();
         using ManualResetEventSlim end = new();
         NativePool<int>? pool = null;
+        NativeThreadState? state = null;
         Thread thread = new(() =>
         {
+            state = NativeThreadState.Current;
             pool = new NativePool<int>();
             using (pool.Rent(1000, 1))
             {
@@ -79,6 +81,9 @@ public sealed class NativeEndedThreadTests
         thread.Join();
         NativeEndedThreads.ReleaseEndedForTest();
         Assert.Equal(IntPtr.Zero, pool.SlabForTest(0).Pointer);
+        // Reachable until here: a collected state would leave its pool to
+        // finalization instead of this release.
+        GC.KeepAlive(state);
     }
 
     [Fact]

@@ -12,9 +12,8 @@ public enum NativeMemoryReturn
     /// storage, up to 1 MiB per owner. Without a budget, blocks of 256 KiB or more may instead wait for
     /// any thread's next owner, until a full garbage collection finds them unused. What a thread kept
     /// returns to native memory after the thread ends, and a budget takes back the storage kept for it
-    /// before it refuses an admission. Owners of a budget created with a trace capacity keep nothing: a
-    /// region, arena or pool that would otherwise keep its storage frees it on disposal instead. Other
-    /// storage that is not kept is detached and freed by finalization.
+    /// before it refuses an admission. Storage that is not kept is freed on disposal; owners of a budget
+    /// created with a trace capacity keep nothing.
     /// </remarks>
     Reuse = 0,
 

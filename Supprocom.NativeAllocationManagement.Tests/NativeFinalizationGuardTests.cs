@@ -74,22 +74,16 @@ public sealed class NativeFinalizationGuardTests
     }
 
     // A region its thread cannot keep for reuse, because the thread's reuse
-    // stack is full, detaches its storage on disposal with the
-    // garbage-collector policy; its guard's finalizer frees it.
+    // stack is full, frees its storage on disposal instead of detaching it for
+    // finalization, and gives its guard back; only a region that is never
+    // disposed leaves its storage to the guard's finalizer.
     [Fact]
-    public void ADetachedRegionIsFreedByItsGuardsFinalizer()
+    public void ARegionItsThreadCannotKeepFreesItsStorageOnDisposal()
     {
         NativeMemoryTestHooks.Reset();
         try
         {
-            TestThread.Run(DisposeDetachedRegion);
-            for (int attempt = 0; attempt < 20 && NativeMemoryTestHooks.Snapshot().DetachedNativeBytes != 0; attempt++)
-            {
-                GC.Collect(2, GCCollectionMode.Forced, blocking: true);
-                GC.WaitForPendingFinalizers();
-            }
-
-            Assert.Equal(0, NativeMemoryTestHooks.Snapshot().DetachedNativeBytes);
+            TestThread.Run(DisposeUnkeptRegion);
         }
         finally
         {
@@ -102,7 +96,7 @@ public sealed class NativeFinalizationGuardTests
     // reuse stack, which then holds 400,000 of its 512 KiB; the fourth does
     // not fit, and its segment is too small for the large-block cache.
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static void DisposeDetachedRegion()
+    private static void DisposeUnkeptRegion()
     {
         NativeRegionKernel[] regions = new NativeRegionKernel[4];
         foreach (ref NativeRegionKernel region in regions.AsSpan())
@@ -116,8 +110,11 @@ public sealed class NativeFinalizationGuardTests
             region.Dispose();
         }
 
-        Assert.Same(regions[3], guard.Target);
-        Assert.NotEqual(0, NativeMemoryTestHooks.Snapshot().DetachedNativeBytes);
+        Assert.Null(guard.Target);
+        NativeMemoryTestMetrics metrics = NativeMemoryTestHooks.Snapshot();
+        Assert.Equal(1, metrics.FreeCount);
+        Assert.Equal(0, metrics.DetachedNativeBytes);
+        Assert.Equal(0, metrics.DetachedGenerationCount);
     }
 
     [Fact]

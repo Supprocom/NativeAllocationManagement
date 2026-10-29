@@ -3406,7 +3406,6 @@ internal sealed partial class NativeOwnerKernel
     private readonly Lock _gate = new();
     private readonly NativeOwnerKind _kind;
     private readonly string _ownerKind;
-    private readonly NativeMemoryReturn _returnMemoryOnDispose;
     private NativeMemoryBudget? _budget;
     private readonly int _storageElementSize;
     private readonly NativeOwnerBackingHistory _backingHistory;
@@ -4035,7 +4034,6 @@ internal sealed partial class NativeOwnerKernel
     private NativeOwnerKernel(
         NativeOwnerKind kind,
         string ownerKind,
-        NativeMemoryReturn returnMemoryOnDispose,
         int storageElementSize,
         nuint preLease,
         nuint preAllocateBytes,
@@ -4046,7 +4044,6 @@ internal sealed partial class NativeOwnerKernel
         _kind = kind;
         _backingHistory = new(Id);
         _ownerKind = ownerKind;
-        _returnMemoryOnDispose = returnMemoryOnDispose;
         _budget = budget;
         _storageElementSize = storageElementSize;
         _preLease = preLease;
@@ -4093,7 +4090,6 @@ internal sealed partial class NativeOwnerKernel
         return new NativeOwnerKernel(
             NativeOwnerKind.Pool,
             ownerKind,
-            returnMemoryOnDispose,
             storageElementSize,
             (nuint)preLease,
             preAllocateBytes,
@@ -4114,7 +4110,6 @@ internal sealed partial class NativeOwnerKernel
         return new NativeOwnerKernel(
             NativeOwnerKind.Region,
             ownerKind,
-            returnMemoryOnDispose,
             storageElementSize: 0,
             preLease: 0,
             preAllocateBytes: preAllocateBytes,
@@ -4134,7 +4129,6 @@ internal sealed partial class NativeOwnerKernel
         return new NativeOwnerKernel(
             NativeOwnerKind.Arena,
             ownerKind,
-            returnMemoryOnDispose,
             storageElementSize: 0,
             preLease: 0,
             preAllocateBytes: preAllocateBytes,
@@ -9262,14 +9256,11 @@ internal sealed partial class NativeOwnerKernel
 
                 if (_lifecycle == NativeOwnerLifecycle.Unleased)
                 {
-                    if (_returnMemoryOnDispose == NativeMemoryReturn.Free)
-                    {
-                        ReleaseOwnerWideStorageLocked();
-                    }
-                    else
-                    {
-                        DetachOwnerWideStorageLocked();
-                    }
+                    // Disposal frees what the owner holds under either policy:
+                    // it proved the owner idle and invalidated its generations,
+                    // so nothing waits for finalization. A concurrent owner keeps
+                    // nothing for reuse.
+                    ReleaseOwnerWideStorageLocked();
 
                     _current = null;
                     _retiredGenerations.Clear();
@@ -9293,14 +9284,7 @@ internal sealed partial class NativeOwnerKernel
                     ClearOwnerWideAllocationsLocked(skipActiveOperations: false);
                     _lifecycle = NativeOwnerLifecycle.Returning;
                     InvalidateOwnerWideGenerationsLocked();
-                    if (_returnMemoryOnDispose == NativeMemoryReturn.Free)
-                    {
-                        ReleaseOwnerWideStorageLocked();
-                    }
-                    else
-                    {
-                        DetachOwnerWideStorageLocked();
-                    }
+                    ReleaseOwnerWideStorageLocked();
 
                     _current = null;
                     _retiredGenerations.Clear();
@@ -9323,14 +9307,7 @@ internal sealed partial class NativeOwnerKernel
                 ClearOwnerWideAllocationsLocked(skipActiveOperations: false);
                 _lifecycle = NativeOwnerLifecycle.Returning;
                 InvalidateOwnerWideGenerationsLocked();
-                if (_returnMemoryOnDispose == NativeMemoryReturn.Free)
-                {
-                    ReleaseOwnerWideStorageLocked();
-                }
-                else
-                {
-                    DetachOwnerWideStorageLocked();
-                }
+                ReleaseOwnerWideStorageLocked();
 
                 _current = null;
                 _generation = nextGenerationNumber;
