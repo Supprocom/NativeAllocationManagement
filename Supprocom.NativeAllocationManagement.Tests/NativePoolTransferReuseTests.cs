@@ -9,6 +9,26 @@ public sealed class NativePoolTransferReuseTests
 {
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(30);
 
+    // Length and Capacity read a transferable lease's shape in its thread's
+    // cache without entering the pool; once the pool is disposed, the
+    // invalidated transfer is refused as before.
+    [Fact]
+    public void ATransfersShapeIsReadUntilItsPoolInvalidatesIt()
+    {
+        NativeTransfer<int> transfer;
+        using (NativeConcurrentPool<int> pool = new(preLease: 16))
+        {
+            transfer = pool.RentTransferable(4, 7);
+            Assert.Equal(4, transfer.Length);
+            Assert.True(transfer.Capacity >= 4);
+        }
+
+        Assert.Equal(NativeTransferLifecycle.Invalidated, transfer.CaptureSnapshot().Lifecycle);
+        Assert.ThrowsAny<InvalidOperationException>(() => transfer.Length);
+        Assert.ThrowsAny<InvalidOperationException>(() => transfer.Capacity);
+        transfer.Dispose();
+    }
+
     [Fact]
     public void ADisposedTransferControlServesTheNextRentAndKeepsStaleValuesReturned()
     {
