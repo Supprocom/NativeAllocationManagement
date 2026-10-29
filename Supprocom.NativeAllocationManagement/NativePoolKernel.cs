@@ -5,7 +5,7 @@ using System.Runtime.InteropServices;
 
 namespace Supprocom.NativeAllocationManagement;
 
-public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget
+public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, INativeKeptKernel
     where T : unmanaged
 {
     private const int SizeClassCount = 32;
@@ -57,7 +57,7 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget
     // generic thread-static field was one more thread-local lookup each.
     private static readonly int s_reuseSlot = NativeThreadState.AllocateTypedSlot();
 
-    private sealed class ReusablePools : INativeThreadStorage
+    private sealed class ReusablePools : INativeThreadStorage, INativeKeptBudgetStorage
     {
         internal NativePool<T>? Slot;
 
@@ -67,15 +67,24 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget
         // The thread's shared pool, kept here too for the release below.
         internal NativePool<T>? Shared;
 
+        // One disposed budgeted pool, kept for the thread's next pool with the
+        // same budget. Other threads take it too, with an atomic exchange,
+        // when that budget refuses an admission.
+        internal NativePool<T>? Budgeted;
+
+        public void ReleaseKeptFor(NativeMemoryBudget budget) => NativeKeptStorage.Release(ref Budgeted, budget);
+
         public void ReleaseStorageOfEndedThread()
         {
             NativePool<T>? pool = Slot;
             Slot = null;
             while (pool is not null)
             {
-                pool.ReleaseSlabsOfEndedThread();
+                pool.ReleaseKeptSlabs();
                 pool = More?.Pop();
             }
+
+            NativeKeptStorage.Release(ref Budgeted, budget: null);
 
             // A retired shared pool is its coordinator's to release.
             NativePool<T>? shared = Shared;
@@ -85,20 +94,29 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget
                 && Interlocked.CompareExchange(ref shared._retirementState, 2, 0) == 0)
             {
                 shared._lifecycle = NativeOwnerLifecycle.Disposed;
-                shared.ReleaseSlabsOfEndedThread();
+                shared.ReleaseKeptSlabs();
             }
         }
     }
 
-    // The thread that could use these slabs ended, and with it every lease of
-    // them: large slabs go to NativeLargeBlocks, the rest to native memory.
-    private void ReleaseSlabsOfEndedThread()
+    // Slabs no lease can reach any more (their thread ended, or the pool was
+    // kept for reuse): large unbudgeted slabs go to NativeLargeBlocks, the
+    // rest to native memory, releasing their budget charges.
+    private void ReleaseKeptSlabs()
     {
-        KeepLargeSlabs();
+        if (_budget is null)
+        {
+            KeepLargeSlabs();
+        }
+
         FreeAll();
         _guard?.Disarm();
         _guard = null;
     }
+
+    bool INativeKeptKernel.IsKeptFor(NativeMemoryBudget? budget) => budget is null || _budget == budget;
+
+    void INativeKeptKernel.ReleaseKept() => ReleaseKeptSlabs();
 
     // Registers a new shared pool for its thread's release.
     internal static void RegisterShared(NativePool<T> pool)
@@ -126,10 +144,11 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget
         _ownerThreadId = thread.ManagedThreadId;
         _lifecycle = NativeOwnerLifecycle.Active;
         if (returnMemoryOnDispose == NativeMemoryReturn.ToGarbageCollector
-            && budget is null
             && preLease == 0
             && preAllocateBytes == 0
-            && TryAdoptRetainedSlabs(thread))
+            && (budget is null
+                ? TryAdoptRetainedSlabs(thread)
+                : TryAdoptKeptBudgetedSlabs(thread, budget)))
         {
             return;
         }
@@ -705,10 +724,14 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget
     // Every slab is free: disposal refused live leases.
     private bool TryRetainForReuse(NativeThreadState thread)
     {
+        if (_budget is not null)
+        {
+            return TryKeepBudgeted(thread);
+        }
+
         // A pool that never rented is kept too: the next pool takes its slab
         // table and guard instead of allocating them.
-        if (_budget is not null
-            || _retainedBytes > ReuseLimitBytes)
+        if (_retainedBytes > ReuseLimitBytes)
         {
             return false;
         }
@@ -731,6 +754,61 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget
         _retainEpoch = thread.ReuseEpoch;
         more.Push(this, _retainedBytes);
         return true;
+    }
+
+    // A budgeted pool keeps its slabs, within the reuse limit, in its
+    // thread's budgeted slot for the next pool with the same budget, as a
+    // budgeted region does (see NativeRegionKernel); they stay charged to the
+    // budget until reused or taken back for it. Its own handles stay disposed:
+    // the next pool is a new object that adopts the slabs.
+    private bool TryKeepBudgeted(NativeThreadState thread)
+    {
+        if (_budget!.TraceEnabled)
+        {
+            return false;
+        }
+
+        if (_retainedBytes > ReuseLimitBytes)
+        {
+            FreeSlabsOverReuseLimit();
+        }
+
+        ReusablePools reuse = thread.GetTyped<ReusablePools>(s_reuseSlot) ?? CreateReusablePools(thread);
+        _retainEpoch = thread.ReuseEpoch;
+        NativeKeptStorage.Keep(ref reuse.Budgeted, this);
+        return true;
+    }
+
+    // Frees idle slabs, largest first, until the rest fits the reuse limit;
+    // their charges return to the budget.
+    private void FreeSlabsOverReuseLimit()
+    {
+        while (_retainedBytes > ReuseLimitBytes)
+        {
+            int largest = -1;
+            for (int index = 0; index < _slabCount; index++)
+            {
+                Slab slab = _slabs[index];
+                if (slab.State == SlabState.Free
+                    && slab.AllocationBytes != 0
+                    && (largest < 0 || slab.AllocationBytes > _slabs[largest].AllocationBytes))
+                {
+                    largest = index;
+                }
+            }
+
+            if (largest < 0)
+            {
+                break;
+            }
+
+            Slab chosen = _slabs[largest];
+            FreeSlab(chosen);
+            chosen.Next = _unusedHead;
+            _unusedHead = largest;
+        }
+
+        RebuildFreeListsWithoutFreedSlabs();
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
@@ -772,6 +850,33 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget
             return false;
         }
 
+        AdoptSlabs(donor);
+        return true;
+    }
+
+    // The slabs a budgeted pool of this thread kept for the next pool with
+    // the same budget, unless another thread's refused admission took them.
+    private bool TryAdoptKeptBudgetedSlabs(NativeThreadState thread, NativeMemoryBudget budget)
+    {
+        ReusablePools? reuse = thread.GetTyped<ReusablePools>(s_reuseSlot);
+        NativePool<T>? donor = reuse is null ? null : NativeKeptStorage.Take(ref reuse.Budgeted, budget);
+        if (donor is null)
+        {
+            return false;
+        }
+
+        if (donor._retainEpoch != thread.ReuseEpoch || !donor.SlabsInCurrentMetricsEpoch())
+        {
+            donor.ReleaseKeptSlabs();
+            return false;
+        }
+
+        AdoptSlabs(donor);
+        return true;
+    }
+
+    private void AdoptSlabs(NativePool<T> donor)
+    {
         _slabs = donor._slabs;
         _slabCount = donor._slabCount;
         _freeHeads = donor._freeHeads;
@@ -796,7 +901,6 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget
         _guard = donor._guard;
         donor._guard = null;
         _guard!.Target = this;
-        return true;
     }
 
     private bool SlabsInCurrentMetricsEpoch()

@@ -3,7 +3,7 @@ using System.Runtime.InteropServices;
 
 namespace Supprocom.NativeAllocationManagement;
 
-internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget
+internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INativeKeptKernel
 {
     private const nuint DefaultSegmentBytes = 4_096;
     private const string OwnerKind = "NativeRegion";
@@ -75,8 +75,14 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget
 
     internal static NativeRegionKernel Acquire(
         nuint preAllocateBytes,
-        NativeMemoryReturn returnMemoryOnDispose)
+        NativeMemoryReturn returnMemoryOnDispose,
+        NativeMemoryBudget? budget = null)
     {
+        if (budget is not null)
+        {
+            return AcquireBudgeted(preAllocateBytes, returnMemoryOnDispose, budget);
+        }
+
         if (returnMemoryOnDispose == NativeMemoryReturn.ToGarbageCollector)
         {
             NativeThreadState thread = NativeThreadState.Current;
@@ -100,6 +106,33 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget
             preAllocateBytes,
             returnMemoryOnDispose);
     }
+
+    // The kernel a budgeted region of this thread kept for the next one with
+    // the same budget, unless another thread's refused admission took it.
+    private static NativeRegionKernel AcquireBudgeted(
+        nuint preAllocateBytes,
+        NativeMemoryReturn returnMemoryOnDispose,
+        NativeMemoryBudget budget)
+    {
+        if (returnMemoryOnDispose == NativeMemoryReturn.ToGarbageCollector)
+        {
+            NativeThreadState thread = NativeThreadState.Current;
+            NativeRegionKernel? kept = NativeKeptStorage.Take(ref thread.KeptBudgetedRegion, budget);
+            if (kept is not null && kept.TryReactivate(thread, preAllocateBytes))
+            {
+                return kept;
+            }
+        }
+
+        return new NativeRegionKernel(
+            preAllocateBytes,
+            returnMemoryOnDispose,
+            budget);
+    }
+
+    bool INativeKeptKernel.IsKeptFor(NativeMemoryBudget? budget) => budget is null || _budget == budget;
+
+    void INativeKeptKernel.ReleaseKept() => ReleaseSegments();
 
     // A nested scope: the slot is in use, so a region behind it serves.
     [MethodImpl(MethodImplOptions.NoInlining)]
@@ -144,7 +177,7 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget
         NativeThreadState thread = _ownerThread;
         if (_budget is not null)
         {
-            return false;
+            return TryKeepBudgeted(thread);
         }
 
         // A region that never leased, or grew only past the limit, is kept
@@ -185,6 +218,48 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget
         return true;
     }
 
+    // A budgeted region keeps its kernel, with its largest segment within the
+    // limit, in its thread's budgeted slot for the next region with the same
+    // budget; the storage stays charged to the budget. A developer expects
+    // disposal to make room in the budget: a disposed budgeted region used to
+    // detach its storage until finalization, so regions made per scope ran
+    // the budget out (a 1 GiB budget after 16,368 regions of 64 KiB) before
+    // any collection, and each one allocated and freed its storage (280 ns
+    // per region against 21 without a budget). Now the next region takes the
+    // kept storage, and a budget that refuses an admission first takes back
+    // what every thread kept for it (NativeEndedThreads.ReleaseKeptFor), so
+    // it never refuses while kept storage holds its bytes. The slot is shared
+    // with those threads (NativeKeptStorage), so the disposed lifetime's
+    // handles end here: none can reach storage another thread may free.
+    private bool TryKeepBudgeted(NativeThreadState thread)
+    {
+        if (_budget!.TraceEnabled || _generation >= int.MaxValue - 1)
+        {
+            return false;
+        }
+
+        RegionSegmentHeader* keep = null;
+        for (RegionSegmentHeader* segment = _firstSegment; segment != null; segment = segment->Next)
+        {
+            if ((long)segment->Capacity <= ReuseLimitBytes
+                && (keep == null || segment->Capacity > keep->Capacity))
+            {
+                keep = segment;
+            }
+        }
+
+        if (_firstSegment != null && (keep == null || _firstSegment->Next != null))
+        {
+            FreeSegmentsExcept(keep);
+        }
+
+        _retainedForReuse = true;
+        _retainEpoch = thread.ReuseEpoch;
+        _generation++;
+        NativeKeptStorage.Keep(ref thread.KeptBudgetedRegion, this);
+        return true;
+    }
+
     // The kernels an ended thread kept for its next regions: large segments
     // go to NativeLargeBlocks, the rest to native memory.
     internal static void ReleaseRetained(NativeThreadState thread)
@@ -196,11 +271,17 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget
             kernel.ReleaseSegments();
             kernel = thread.MoreReusableRegions?.Pop();
         }
+
+        NativeKeptStorage.Release(ref thread.KeptBudgetedRegion, budget: null);
     }
 
     private void ReleaseSegments()
     {
-        KeepLargeSegments();
+        if (_budget is null)
+        {
+            KeepLargeSegments();
+        }
+
         FreeSegments();
         _guard?.Disarm();
         _guard = null;
@@ -741,7 +822,13 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget
             {
                 nuint allocationBytes = segment->AllocationBytes;
                 long metricsEpoch = segment->MetricsEpoch;
-                if (!NativeLargeBlocks.TryKeep(segment, allocationBytes))
+                if (_budget is not null)
+                {
+                    int allocationOrdinal = segment->AllocationOrdinal;
+                    NativeMemory.AlignedFree(segment);
+                    _budget.Release(allocationBytes, Id, allocationOrdinal: allocationOrdinal);
+                }
+                else if (!NativeLargeBlocks.TryKeep(segment, allocationBytes))
                 {
                     NativeMemory.AlignedFree(segment);
                 }
@@ -764,7 +851,8 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget
         }
 
         // The next lifetime starts with this one segment, as a region that
-        // never grew does; unbudgeted ordinals only number the chain.
+        // never grew does; ordinals only number the chain (a budget that
+        // traces them never keeps a kernel).
         keep->Next = null;
         keep->AllocationOrdinal = 1;
         _firstSegment = keep;

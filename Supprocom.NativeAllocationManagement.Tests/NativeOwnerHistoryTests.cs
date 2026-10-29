@@ -206,12 +206,25 @@ public sealed class NativeOwnerHistoryTests
             Assert.Equal(0, terminal.AvailableSegmentCount);
             Assert.False(terminal.HistoryOverflowed);
             Assert.Equal(statistics.PeakOutstandingNativeBytes, terminal.PeakOutstandingNativeBytes);
-            bool detached = policy == NativeMemoryReturn.ToGarbageCollector;
-            Assert.Equal(detached ? 2 : 0, terminal.RetainedSegmentCount);
-            Assert.Equal(detached ? statistics.RetainedBytes : 0, terminal.OutstandingNativeBytes);
-            Assert.Equal(detached ? statistics.RetainedBytes : 0, terminal.DetachedNativeBytes);
-            Assert.Equal(2, typeof(NativeRegionKernel).GetField("_segmentCount", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(kernel));
-            Assert.Equal(detached ? 0 : 2, budget.CaptureStatistics().FreeCount);
+            Assert.Equal(0, terminal.DetachedNativeBytes);
+            object? segmentCount = typeof(NativeRegionKernel).GetField("_segmentCount", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(kernel);
+            if (policy == NativeMemoryReturn.ToNativeMemory)
+            {
+                Assert.Equal(0, terminal.RetainedSegmentCount);
+                Assert.Equal(0, terminal.OutstandingNativeBytes);
+                Assert.Equal(2, segmentCount);
+                Assert.Equal(2, budget.CaptureStatistics().FreeCount);
+            }
+            else
+            {
+                // Kept for the thread's next region with this budget: the larger
+                // segment stays, still charged, and the other is freed.
+                Assert.Equal(1, terminal.RetainedSegmentCount);
+                Assert.Equal(budget.CaptureStatistics().CommittedBytes, terminal.OutstandingNativeBytes);
+                Assert.InRange(terminal.OutstandingNativeBytes, 8_192, statistics.RetainedBytes - 1);
+                Assert.Equal(1, segmentCount);
+                Assert.Equal(1, budget.CaptureStatistics().FreeCount);
+            }
             bool refused = false;
             try { _ = first.Read(static view => view[0]); }
             catch (NativeAllocationDisposedException) { refused = true; }

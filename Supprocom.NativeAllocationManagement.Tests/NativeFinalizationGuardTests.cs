@@ -73,12 +73,14 @@ public sealed class NativeFinalizationGuardTests
         });
     }
 
-    // A budgeted region disposed with the garbage-collector policy detaches
-    // its storage, which stays charged until its guard's finalizer frees it.
+    // A budgeted region that is not kept for reuse (a budget that traces keeps
+    // nothing) detaches its storage on disposal with the garbage-collector
+    // policy; it stays charged to its budget until its guard's finalizer
+    // frees it.
     [Fact]
     public void ADetachedRegionIsFreedByItsGuardsFinalizer()
     {
-        NativeMemoryBudget budget = new(1 << 20);
+        NativeMemoryBudget budget = new(1 << 20, traceCapacity: 16);
         DisposeDetachedRegion(budget);
         for (int attempt = 0; attempt < 20 && budget.CaptureStatistics().CommittedBytes != 0; attempt++)
         {

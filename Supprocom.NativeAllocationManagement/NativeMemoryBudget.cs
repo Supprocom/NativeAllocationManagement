@@ -127,27 +127,40 @@ public sealed partial class NativeMemoryBudget
 
         long preferredBytes = checked((long)preferredByteLength);
         long minimumBytes = checked((long)minimumByteLength);
-        lock (_gate)
+        // Before refusing, take back once what disposed owners kept for reuse
+        // charged to this budget, on every thread: a developer expects room
+        // made by disposal to be there for the next allocation.
+        bool reclaimed = !NativeKeptStorage.MayHoldAny;
+        while (true)
         {
-            availableBytes = CapacityBytes - _committedBytes - _reservedBytes;
-            long bytes = preferredBytes <= availableBytes ? preferredBytes : minimumBytes;
-            if (bytes > availableBytes)
+            lock (_gate)
             {
-                IncrementHistory(ref _rejectedAllocationCount);
-                RecordTrace(NativeMemoryTraceKind.Rejected, ownerId, minimumByteLength);
-                admittedByteLength = 0;
-                return false;
+                availableBytes = CapacityBytes - _committedBytes - _reservedBytes;
+                long bytes = preferredBytes <= availableBytes ? preferredBytes : minimumBytes;
+                if (bytes <= availableBytes)
+                {
+                    _reservedBytes += bytes;
+                    _peakAdmittedBytes = Math.Max(
+                        _peakAdmittedBytes, _committedBytes + _reservedBytes);
+                    admittedByteLength = checked((nuint)bytes);
+                    if (bytes != 0)
+                    {
+                        RecordTrace(NativeMemoryTraceKind.Admitted, ownerId, admittedByteLength);
+                    }
+                    return true;
+                }
+
+                if (reclaimed)
+                {
+                    IncrementHistory(ref _rejectedAllocationCount);
+                    RecordTrace(NativeMemoryTraceKind.Rejected, ownerId, minimumByteLength);
+                    admittedByteLength = 0;
+                    return false;
+                }
             }
 
-            _reservedBytes += bytes;
-            _peakAdmittedBytes = Math.Max(
-                _peakAdmittedBytes, _committedBytes + _reservedBytes);
-            admittedByteLength = checked((nuint)bytes);
-            if (bytes != 0)
-            {
-                RecordTrace(NativeMemoryTraceKind.Admitted, ownerId, admittedByteLength);
-            }
-            return true;
+            NativeEndedThreads.ReleaseKeptFor(this);
+            reclaimed = true;
         }
     }
 

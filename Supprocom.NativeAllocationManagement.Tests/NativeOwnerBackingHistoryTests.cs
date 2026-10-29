@@ -8,7 +8,7 @@ public sealed class NativeOwnerBackingHistoryTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void FastTerminalGcOwnersKeepActualDetachedExtentUntilFinalization(bool arenaKind)
+    public void FastTerminalGcOwnersKeepTheirActualExtentCharged(bool arenaKind)
     {
         NativeMemoryBudget budget = new(512);
         if (arenaKind)
@@ -17,10 +17,12 @@ public sealed class NativeOwnerBackingHistoryTests
             long extent = budget.CaptureStatistics().CommittedBytes;
             Assert.True(extent >= 64);
             AssertBacking(arena.CaptureDiagnosticSnapshot(), extent, 0, extent);
+            // The kernel is kept for the thread's next arena with this budget,
+            // still charged; the disposed arena reports an ended lifetime.
             arena.Dispose();
-            AssertBacking(arena.CaptureDiagnosticSnapshot(), extent, extent, extent);
+            AssertBacking(arena.CaptureDiagnosticSnapshot(), 0, 0, 0);
             arena.Dispose();
-            AssertBacking(arena.CaptureDiagnosticSnapshot(), extent, extent, extent);
+            AssertBacking(arena.CaptureDiagnosticSnapshot(), 0, 0, 0);
             Assert.Equal(extent, budget.CaptureStatistics().CommittedBytes);
             GC.KeepAlive(arena);
         }
@@ -196,8 +198,10 @@ public sealed class NativeOwnerBackingHistoryTests
             AssertBacking(kernel.GetDiagnosticSnapshot(), extent, 0, extent);
             AssertMatches(kernel.GetStatistics(), kernel.GetDiagnosticSnapshot());
             kernel.Dispose();
-            bool detached = policy == NativeMemoryReturn.ToGarbageCollector;
-            AssertBacking(kernel.GetDiagnosticSnapshot(), detached ? extent : 0, detached ? extent : 0, extent);
+            // Kept for the thread's next region with this budget, still charged.
+            bool kept = policy == NativeMemoryReturn.ToGarbageCollector;
+            AssertBacking(kernel.GetDiagnosticSnapshot(), kept ? extent : 0, 0, extent);
+            Assert.Equal(kept ? extent : 0, budget.CaptureStatistics().CommittedBytes);
         }
         finally { kernel.Dispose(); }
         GC.KeepAlive(kernel);

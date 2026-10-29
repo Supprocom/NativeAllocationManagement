@@ -38,6 +38,27 @@ internal static class NativeEndedThreads
         }
     }
 
+    // A budget refused an admission: every registered thread, live or ended,
+    // gives back the kernels it kept charged to that budget. Each is taken
+    // from its slot with an atomic exchange, so its own thread either took it
+    // first or finds the slot empty.
+    internal static void ReleaseKeptFor(NativeMemoryBudget budget)
+    {
+        // The release records frees on the calling thread's state, which must
+        // exist before the lock: creating it registers it under the same lock.
+        _ = NativeThreadState.Current;
+        lock (s_gate)
+        {
+            foreach (ref readonly WeakReference<NativeThreadState> reference in s_states.AsSpan(0, s_count))
+            {
+                if (reference.TryGetTarget(out NativeThreadState? state))
+                {
+                    state.ReleaseKeptFor(budget);
+                }
+            }
+        }
+    }
+
     internal static void Register(NativeThreadState state)
     {
         lock (s_gate)

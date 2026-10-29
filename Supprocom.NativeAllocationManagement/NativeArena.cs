@@ -31,7 +31,7 @@ public sealed class NativeArena : IDisposable
     /// <param name="preAllocateBytes">The initial usable byte reservation; native headers are charged too.</param>
     /// <param name="returnMemoryOnDispose">The final storage cleanup policy.</param>
     public NativeArena(NativeMemoryBudget budget, nuint preAllocateBytes, NativeMemoryReturn returnMemoryOnDispose)
-        : this(new NativeArenaKernel(preAllocateBytes, returnMemoryOnDispose, budget, requireBudget: true))
+        : this(NativeArenaKernel.AcquireBudgeted(budget, preAllocateBytes, returnMemoryOnDispose))
     {
     }
 

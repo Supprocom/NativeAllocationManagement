@@ -4,7 +4,7 @@ using System.Runtime.InteropServices;
 
 namespace Supprocom.NativeAllocationManagement;
 
-internal sealed unsafe partial class NativeArenaKernel : INativeFinalizationTarget
+internal sealed unsafe partial class NativeArenaKernel : INativeFinalizationTarget, INativeKeptKernel
 {
     private const nuint DefaultSegmentBytes = 4_096;
     private const nuint SegmentAlignment = 64;
@@ -109,6 +109,35 @@ internal sealed unsafe partial class NativeArenaKernel : INativeFinalizationTarg
         return new NativeArenaKernel(preAllocateBytes, returnMemoryOnDispose, budget: null, requireBudget: false);
     }
 
+    // The kernel a budgeted arena of this thread kept for the next one with
+    // the same budget, unless another thread's refused admission took it.
+    internal static NativeArenaKernel AcquireBudgeted(NativeMemoryBudget budget, nuint preAllocateBytes, NativeMemoryReturn returnMemoryOnDispose)
+    {
+        ArgumentNullException.ThrowIfNull(budget);
+        if (returnMemoryOnDispose == NativeMemoryReturn.ToGarbageCollector)
+        {
+            NativeThreadState thread = NativeThreadState.Current;
+            NativeArenaKernel? kept = NativeKeptStorage.Take(ref thread.KeptBudgetedArena, budget);
+            if (kept is not null && kept.TryReactivate(thread, preAllocateBytes))
+            {
+                return kept;
+            }
+        }
+
+        return new NativeArenaKernel(preAllocateBytes, returnMemoryOnDispose, budget, requireBudget: true);
+    }
+
+    bool INativeKeptKernel.IsKeptFor(NativeMemoryBudget? budget) => budget is null || _budget == budget;
+
+    void INativeKeptKernel.ReleaseKept() => ReleaseKeptSegments();
+
+    private void ReleaseKeptSegments()
+    {
+        ReleaseSegmentsExcept(null);
+        _guard?.Disarm();
+        _guard = null;
+    }
+
     // A nested scope: the slot is in use, so a kernel behind it serves.
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static NativeArenaKernel? TakeMoreReusable(NativeThreadState thread) =>
@@ -129,7 +158,18 @@ internal sealed unsafe partial class NativeArenaKernel : INativeFinalizationTarg
             || _scopeEpoch >= ulong.MaxValue - 1
             || Lifetime == int.MaxValue)
         {
-            DetachForFinalizer();
+            // A budgeted kernel frees its storage instead: the budget counts it
+            // until it is freed.
+            if (_budget is not null)
+            {
+                ReleaseSegmentsExcept(null);
+                ReleaseGuard(thread);
+            }
+            else
+            {
+                DetachForFinalizer();
+            }
+
             return false;
         }
 
@@ -652,12 +692,16 @@ internal sealed unsafe partial class NativeArenaKernel : INativeFinalizationTarg
     // released now: freed, or kept in NativeLargeBlocks if large.
     private bool TryRetainForReuse(NativeThreadState thread)
     {
-        if (_budget is not null
-            || _prepared
+        if (_prepared
             || _retentionEnabled
             || _externalBuffer is not null)
         {
             return false;
+        }
+
+        if (_budget is not null)
+        {
+            return TryKeepBudgeted(thread);
         }
 
         ArenaSegmentHeader* keep = null;
@@ -691,6 +735,36 @@ internal sealed unsafe partial class NativeArenaKernel : INativeFinalizationTarg
         return true;
     }
 
+    // A budgeted arena keeps its kernel, with its largest segment within the
+    // limit, in its thread's budgeted slot for the next arena with the same
+    // budget, as a budgeted region does (see NativeRegionKernel); the storage
+    // stays charged to the budget until reused or taken back for it. The
+    // slot is shared with other threads, so the disposed lifetime ends here
+    // for its arena and leases.
+    private bool TryKeepBudgeted(NativeThreadState thread)
+    {
+        if (_budget!.TraceEnabled || Lifetime >= int.MaxValue - 1)
+        {
+            return false;
+        }
+
+        ArenaSegmentHeader* keep = null;
+        for (ArenaSegmentHeader* segment = _ordinary.First; segment != null; segment = segment->Next)
+        {
+            if ((long)segment->Capacity <= ReuseLimitBytes
+                && (keep == null || segment->Capacity > keep->Capacity))
+            {
+                keep = segment;
+            }
+        }
+
+        ReleaseSegmentsExcept(keep);
+        _retainEpoch = thread.ReuseEpoch;
+        Lifetime++;
+        NativeKeptStorage.Keep(ref thread.KeptBudgetedArena, this);
+        return true;
+    }
+
     // The kernels an ended thread kept for its next arenas: large segments go
     // to NativeLargeBlocks, the rest to native memory.
     internal static void ReleaseRetained(NativeThreadState thread)
@@ -704,6 +778,8 @@ internal sealed unsafe partial class NativeArenaKernel : INativeFinalizationTarg
             kernel._guard = null;
             kernel = thread.MoreReusableArenas?.Pop();
         }
+
+        NativeKeptStorage.Release(ref thread.KeptBudgetedArena, budget: null);
     }
 
     private void ReleaseSegmentsExcept(ArenaSegmentHeader* keep)
@@ -736,6 +812,13 @@ internal sealed unsafe partial class NativeArenaKernel : INativeFinalizationTarg
     // A plain arena's segment: freed, or kept for later owners if large.
     private void ReleaseSegment(ArenaSegmentHeader* segment)
     {
+        // A budgeted segment is freed and its charge released.
+        if (_budget is not null)
+        {
+            FreeSegment(segment);
+            return;
+        }
+
         nuint allocationBytes = segment->AllocationBytes;
         long metricsEpoch = segment->MetricsEpoch;
         if (!NativeLargeBlocks.TryKeep(segment, allocationBytes))

@@ -176,16 +176,62 @@ public sealed class NativeEndedThreadTests
         GC.KeepAlive(state);
     }
 
+    [Fact]
+    public void BudgetedOwnersAnEndedThreadKeptReturnTheirCharges()
+    {
+        NativeMemoryBudget budget = new(1 << 20);
+        NativeThreadState state = RunOnThread(() =>
+        {
+            using (NativeRegion region = new(budget, 0, NativeMemoryReturn.ToGarbageCollector))
+            {
+                _ = region.LeaseUninitialized<byte>(10_000);
+            }
+
+            using (NativeArena arena = new(budget, 0, NativeMemoryReturn.ToGarbageCollector))
+            {
+                _ = arena.ScratchUninitialized<byte>(10_000);
+            }
+
+            using NativePool<byte> pool = new(budget, 0, 0, NativeMemoryReturn.ToGarbageCollector);
+            using Pooled<byte> lease = pool.RentUninitialized(10_000);
+        });
+
+        Assert.NotEqual(0, budget.CaptureStatistics().CommittedBytes);
+        NativeEndedThreads.ReleaseEndedForTest();
+
+        Assert.Equal(0, budget.CaptureStatistics().CommittedBytes);
+        Assert.Equal(0, budget.CaptureStatistics().ActiveAllocationCount);
+        Assert.Null(state.KeptBudgetedRegion);
+        Assert.Null(state.KeptBudgetedArena);
+    }
+
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "The worker failure is rethrown on the test thread.")]
     private static NativeThreadState RunOnThread(Action action)
     {
         NativeThreadState? state = null;
+        Exception? failure = null;
         Thread thread = new(() =>
         {
             state = NativeThreadState.Current;
-            action();
-        });
+            try
+            {
+                action();
+            }
+            catch (Exception exception)
+            {
+                failure = exception;
+            }
+        })
+        {
+            IsBackground = true
+        };
         thread.Start();
-        thread.Join();
+        Assert.True(thread.Join(TimeSpan.FromSeconds(30)));
+        if (failure is not null)
+        {
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
+        }
+
         return state!;
     }
 }

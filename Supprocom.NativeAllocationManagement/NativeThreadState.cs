@@ -39,6 +39,13 @@ internal sealed class NativeThreadState
     internal NativeArenaKernel? ReusableArena;
     internal NativeReuseStack<NativeArenaKernel>? MoreReusableArenas;
 
+    // One disposed budgeted region and arena kernel, kept for this thread's
+    // next owner with the same budget. Unlike the slots above, other threads
+    // take them too, with an atomic exchange, when their budget refuses an
+    // admission; see NativeEndedThreads.ReleaseKeptFor.
+    internal NativeRegionKernel? KeptBudgetedRegion;
+    internal NativeArenaKernel? KeptBudgetedArena;
+
     // NativeFinalizationGuard: one guard, still registered for finalization,
     // waiting for the next arena or pool created on this thread.
     internal NativeFinalizationGuard? SpareFinalizationGuard;
@@ -95,6 +102,19 @@ internal sealed class NativeThreadState
         }
     }
 
+    // Frees what this thread kept for owners with this budget; called from
+    // any thread. A slot created while this runs may be missed: its storage
+    // was kept after the refusal began.
+    internal void ReleaseKeptFor(NativeMemoryBudget budget)
+    {
+        NativeKeptStorage.Release(ref KeptBudgetedRegion, budget);
+        NativeKeptStorage.Release(ref KeptBudgetedArena, budget);
+        foreach (object? typed in Volatile.Read(ref _typed))
+        {
+            (typed as INativeKeptBudgetStorage)?.ReleaseKeptFor(budget);
+        }
+    }
+
     [MethodImpl(MethodImplOptions.NoInlining)]
     internal void SetTyped(int slot, object? value)
     {
@@ -111,4 +131,11 @@ internal sealed class NativeThreadState
 internal interface INativeThreadStorage
 {
     void ReleaseStorageOfEndedThread();
+}
+
+// Per element type state that keeps budgeted storage, which other threads
+// may take back for the budget.
+internal interface INativeKeptBudgetStorage
+{
+    void ReleaseKeptFor(NativeMemoryBudget budget);
 }

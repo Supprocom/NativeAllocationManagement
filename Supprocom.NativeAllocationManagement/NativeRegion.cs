@@ -47,7 +47,7 @@ public readonly ref struct NativeRegion
     {
         ArgumentNullException.ThrowIfNull(budget);
         NativeMemoryReturnValidation.Validate(returnMemoryOnDispose, nameof(returnMemoryOnDispose));
-        _kernel = new NativeRegionKernel(preAllocateBytes, returnMemoryOnDispose, budget);
+        _kernel = NativeRegionKernel.Acquire(preAllocateBytes, returnMemoryOnDispose, budget);
         _generation = _kernel.Generation;
     }
 
