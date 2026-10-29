@@ -6,6 +6,8 @@ using Supprocom.NativeAllocationManagement.Performance;
 
 namespace Supprocom.NativeAllocationManagement.Tests;
 
+// Several tests compare process-wide counters around their work.
+[Collection(ProcessCounterGroup.Name)]
 public sealed class NativeBuilderBenchmarkTests
 {
     [Theory]
