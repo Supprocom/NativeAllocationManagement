@@ -83,12 +83,19 @@ public sealed unsafe partial class NativeArena : INativeFinalizationTarget
     private bool TryAdoptRetainedSegment(NativeThreadState thread, nuint preAllocateBytes)
     {
         NativeArena? donor = thread.ReusableArena;
-        if (donor is null)
+        if (donor is not null)
         {
-            return false;
+            thread.ReusableArena = null;
+        }
+        else
+        {
+            donor = thread.MoreReusableArenas?.Pop();
+            if (donor is null)
+            {
+                return false;
+            }
         }
 
-        thread.ReusableArena = null;
         ArenaSegmentHeader* segment = donor._ordinary.First;
         if (donor._retainEpoch != thread.ReuseEpoch
             || segment->MetricsEpoch != NativeMemoryAccounting.CurrentMetricsEpoch
@@ -543,13 +550,22 @@ public sealed unsafe partial class NativeArena : INativeFinalizationTarget
         }
 
         NativeThreadState thread = NativeThreadState.Current;
-        if (thread.ReusableArena is not null)
+        if (thread.ReusableArena is null)
+        {
+            _retainEpoch = thread.ReuseEpoch;
+            thread.ReusableArena = this;
+            return true;
+        }
+
+        // A nested scope's arena waits behind the slot.
+        NativeReuseStack<NativeArena> more = thread.MoreReusableArenas ??= new();
+        if (!more.HasRoom((long)segment->Capacity))
         {
             return false;
         }
 
         _retainEpoch = thread.ReuseEpoch;
-        thread.ReusableArena = this;
+        more.Push(this, (long)segment->Capacity);
         return true;
     }
 

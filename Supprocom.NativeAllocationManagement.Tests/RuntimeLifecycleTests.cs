@@ -696,14 +696,28 @@ public sealed class RuntimeLifecycleTests
     {
         NativeMemoryTestHooks.Reset();
         NativeRegion region = new(preAllocateBytes: 1, returnMemoryOnDispose: NativeMemoryReturn.ToGarbageCollector);
-        // Occupy this thread's region reuse slot, so the grown region is
-        // detached for finalization rather than kept for the next region.
-        new NativeRegion(preAllocateBytes: 64).Dispose();
+        // Occupy this thread's region reuse slot and the regions kept behind
+        // it, so the grown region is detached for finalization rather than
+        // kept for the next region.
+        OccupyRegionReuse(5);
         Local<long> first = region.Lease<long>(32, static writer => writer.Fill(default!));
         first.Access(static span => span[0] = 8);
         region.Dispose();
         Assert.IsType<NativeAllocationDisposedException>(CaptureDisposed(first));
         Assert.Equal(1, NativeMemoryTestHooks.Snapshot().DetachedGenerationCount);
+    }
+
+    // Nested regions disposed innermost first fill the slot, then the regions
+    // kept behind it.
+    private static void OccupyRegionReuse(int depth)
+    {
+        NativeRegion region = new(preAllocateBytes: 64);
+        if (depth > 1)
+        {
+            OccupyRegionReuse(depth - 1);
+        }
+
+        region.Dispose();
     }
 
     [Fact]

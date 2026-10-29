@@ -67,7 +67,9 @@ internal sealed unsafe class NativeRegionKernel
 
     internal int Generation => _generation;
 
-    internal static bool HasReusableKernelForTest => NativeThreadState.Current.ReusableRegion is not null;
+    internal static bool HasReusableKernelForTest =>
+        NativeThreadState.Current is { } thread
+        && (thread.ReusableRegion is not null || thread.MoreReusableRegions is { IsEmpty: false });
 
     internal static NativeRegionKernel Acquire(
         nuint preAllocateBytes,
@@ -80,10 +82,15 @@ internal sealed unsafe class NativeRegionKernel
             if (reusable is not null)
             {
                 thread.ReusableRegion = null;
-                if (reusable.TryReactivate(thread, preAllocateBytes))
-                {
-                    return reusable;
-                }
+            }
+            else if (thread.MoreReusableRegions is not null)
+            {
+                reusable = TakeMoreReusable(thread);
+            }
+
+            if (reusable is not null && reusable.TryReactivate(thread, preAllocateBytes))
+            {
+                return reusable;
             }
         }
 
@@ -91,6 +98,11 @@ internal sealed unsafe class NativeRegionKernel
             preAllocateBytes,
             returnMemoryOnDispose);
     }
+
+    // A nested scope: the slot is in use, so a region behind it serves.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static NativeRegionKernel? TakeMoreReusable(NativeThreadState thread) =>
+        thread.MoreReusableRegions!.Pop();
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA1816", Justification = "A discarded reuse candidate frees its storage and disarms its emergency finalizer.")]
     private bool TryReactivate(NativeThreadState thread, nuint preAllocateBytes)
@@ -129,7 +141,6 @@ internal sealed unsafe class NativeRegionKernel
         // other thread can reach this storage, so detaching it buys no safety.
         NativeThreadState thread = _ownerThread;
         if (_budget is not null
-            || thread.ReusableRegion is not null
             || _firstSegment == null)
         {
             return false;
@@ -145,7 +156,9 @@ internal sealed unsafe class NativeRegionKernel
             }
         }
 
-        if (keep == null)
+        if (keep == null
+            || thread.ReusableRegion is not null
+                && !(thread.MoreReusableRegions ??= new()).HasRoom((long)keep->Capacity))
         {
             return false;
         }
@@ -157,7 +170,15 @@ internal sealed unsafe class NativeRegionKernel
 
         _retainedForReuse = true;
         _retainEpoch = thread.ReuseEpoch;
-        thread.ReusableRegion = this;
+        if (thread.ReusableRegion is null)
+        {
+            thread.ReusableRegion = this;
+        }
+        else
+        {
+            thread.MoreReusableRegions!.Push(this, (long)keep->Capacity);
+        }
+
         return true;
     }
 

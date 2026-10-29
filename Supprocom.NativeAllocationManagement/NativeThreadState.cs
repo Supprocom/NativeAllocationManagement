@@ -26,12 +26,15 @@ internal sealed class NativeThreadState
     // NativeMemoryAccounting: this thread's outstanding-bytes stripe.
     internal NativeMemoryAccounting.GaugeStripe? Gauge;
 
-    // NativeRegionKernel: one disposed default-policy region kept for reuse.
+    // NativeRegionKernel: one disposed default-policy region kept for reuse,
+    // and more behind it for nested scopes.
     internal NativeRegionKernel? ReusableRegion;
+    internal NativeReuseStack<NativeRegionKernel>? MoreReusableRegions;
 
     // NativeArena: one disposed default-policy arena whose segment the next
-    // arena on this thread takes.
+    // arena on this thread takes, and more behind it for nested scopes.
     internal NativeArena? ReusableArena;
+    internal NativeReuseStack<NativeArena>? MoreReusableArenas;
 
     // NativeFinalizationGuard: one guard, still registered for finalization,
     // waiting for the next arena or pool created on this thread.

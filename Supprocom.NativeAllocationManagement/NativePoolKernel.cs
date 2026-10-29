@@ -55,6 +55,10 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget
     [ThreadStatic]
     private static NativePool<T>? t_reusable;
 
+    // More disposed pools behind the slot, for nested scopes.
+    [ThreadStatic]
+    private static NativeReuseStack<NativePool<T>>? t_moreReusable;
+
     private NativePool(
         int preLease,
         nuint preAllocateBytes,
@@ -612,14 +616,27 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget
     {
         if (_budget is not null
             || _slabCount == 0
-            || _retainedBytes > ReuseLimitBytes
-            || t_reusable is not null)
+            || _retainedBytes > ReuseLimitBytes)
+        {
+            return false;
+        }
+
+        if (t_reusable is null)
+        {
+            _retainEpoch = NativeThreadState.Current.ReuseEpoch;
+            t_reusable = this;
+            return true;
+        }
+
+        // A nested scope's pool waits behind the slot.
+        NativeReuseStack<NativePool<T>> more = t_moreReusable ??= new();
+        if (!more.HasRoom(_retainedBytes))
         {
             return false;
         }
 
         _retainEpoch = NativeThreadState.Current.ReuseEpoch;
-        t_reusable = this;
+        more.Push(this, _retainedBytes);
         return true;
     }
 
@@ -629,12 +646,19 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget
     private bool TryAdoptRetainedSlabs(NativeThreadState thread)
     {
         NativePool<T>? donor = t_reusable;
-        if (donor is null)
+        if (donor is not null)
         {
-            return false;
+            t_reusable = null;
+        }
+        else
+        {
+            donor = t_moreReusable?.Pop();
+            if (donor is null)
+            {
+                return false;
+            }
         }
 
-        t_reusable = null;
         if (donor._retainEpoch != thread.ReuseEpoch || !donor.SlabsInCurrentMetricsEpoch())
         {
             donor.MarkDetached();
