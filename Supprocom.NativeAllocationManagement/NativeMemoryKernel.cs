@@ -3439,7 +3439,11 @@ internal sealed partial class NativeOwnerKernel
     private int _arenaFastInitializerActive;
     private int _arenaFastBoundaryClosing;
     private int _arenaFastOperationDepth;
-    private NativeGeneration? _arenaFastHazardGeneration;
+    // The number of the generation the creating thread's local operation is
+    // in, or NoArenaFastHazard: a number, so entering stores no reference and
+    // runs no write barrier.
+    private long _arenaFastHazardNumber = NoArenaFastHazard;
+    private const long NoArenaFastHazard = -1;
     private NativeBumpSegment? _arenaTransferCentralSegment;
     private long _arenaTransferSlowPathCount;
     private long _arenaTransferSlotCreationCount;
@@ -3837,7 +3841,7 @@ internal sealed partial class NativeOwnerKernel
             if (_kind == NativeOwnerKind.Arena)
             {
                 count = checked(count + CountArenaTransferOperations(generation));
-                if (ReferenceEquals(Volatile.Read(ref _arenaFastHazardGeneration), generation))
+                if (Volatile.Read(ref _arenaFastHazardNumber) == generation.Number)
                 {
                     count = checked(count + Volatile.Read(ref _arenaFastOperationDepth));
                 }
@@ -4232,10 +4236,7 @@ internal sealed partial class NativeOwnerKernel
     private bool HasArenaFastHazard(
         NativeGeneration generation) =>
         _kind == NativeOwnerKind.Arena
-        && (ReferenceEquals(
-                Volatile.Read(
-                    ref _arenaFastHazardGeneration),
-                generation)
+        && (Volatile.Read(ref _arenaFastHazardNumber) == generation.Number
             || HasArenaTransferOperation(generation));
 
     private static bool HasArenaTransferOperation(
@@ -7746,9 +7747,7 @@ internal sealed partial class NativeOwnerKernel
         int depth = _arenaFastOperationDepth;
         if (depth != 0)
         {
-            if (!ReferenceEquals(
-                    _arenaFastHazardGeneration,
-                    generation)
+            if (_arenaFastHazardNumber != generation.Number
                 || !IsArenaFastHandleActive(allocation))
             {
                 return false;
@@ -7759,16 +7758,16 @@ internal sealed partial class NativeOwnerKernel
         }
 
         Volatile.Write(
-            ref _arenaFastHazardGeneration,
-            generation);
+            ref _arenaFastHazardNumber,
+            generation.Number);
         if (Volatile.Read(
                 ref _arenaFastBoundaryClosing)
                 != 0
             || !IsArenaFastHandleActive(allocation))
         {
             Volatile.Write(
-                ref _arenaFastHazardGeneration,
-                null);
+                ref _arenaFastHazardNumber,
+                NoArenaFastHazard);
             return false;
         }
 
@@ -8044,8 +8043,8 @@ internal sealed partial class NativeOwnerKernel
         }
 
         Volatile.Write(
-            ref _arenaFastHazardGeneration,
-            null);
+            ref _arenaFastHazardNumber,
+            NoArenaFastHazard);
         if (!generation.MemoryDetached
             && ReferenceEquals(
                 Volatile.Read(ref _current),
@@ -11126,6 +11125,40 @@ internal sealed partial class NativeOwnerKernel
 
     private int ActiveOperationCountLocked() => GetOwnerWideActivityLocked().ActiveOperations;
 
+    // The current, retired or quarantined generation with this number.
+    private NativeGeneration? FindGenerationLocked(long number)
+    {
+        if (number == NoArenaFastHazard)
+        {
+            return null;
+        }
+
+        if (_current is { } current && current.Number == number)
+        {
+            return current;
+        }
+
+#pragma warning disable HLQ012 // Retain the enumerator's mutation checks during ownership cleanup; a span removes them.
+        foreach (NativeGeneration generation in _retiredGenerations)
+        {
+            if (generation.Number == number)
+            {
+                return generation;
+            }
+        }
+
+        foreach (NativeGeneration generation in _quarantinedGenerations)
+        {
+            if (generation.Number == number)
+            {
+                return generation;
+            }
+        }
+#pragma warning restore HLQ012
+
+        return null;
+    }
+
     private OwnerWideActivity GetOwnerWideActivityLocked()
     {
         int activeOperations = 0;
@@ -11173,8 +11206,8 @@ internal sealed partial class NativeOwnerKernel
         }
 #pragma warning restore HLQ012
 
-        NativeGeneration? arenaHazard = Volatile.Read(
-            ref _arenaFastHazardGeneration);
+        NativeGeneration? arenaHazard = FindGenerationLocked(
+            Volatile.Read(ref _arenaFastHazardNumber));
         bool activeArenaHazard = arenaHazard is
         { MemoryDetached: false };
         NativeGeneration? arenaInitializer =
