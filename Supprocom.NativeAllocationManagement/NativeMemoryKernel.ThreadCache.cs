@@ -189,18 +189,8 @@ internal sealed partial class NativeOwnerKernel
         return fits;
     }
 
-    private static bool HasAvailableSlabLocked(NativeGeneration generation, int length)
-    {
-        foreach (ref readonly NativeSlab slab in System.Runtime.InteropServices.CollectionsMarshal.AsSpan(generation.AvailableSlabs))
-        {
-            if (slab.Capacity >= length)
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
+    private static bool HasAvailableSlabLocked(NativeGeneration generation, int length) =>
+        generation.AvailableSlabs.HasCapacity(length);
 
     private bool OtherThreadCachesHoldFreeLocked(NativePoolThreadCache cache)
     {

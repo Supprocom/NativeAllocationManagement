@@ -2708,7 +2708,7 @@ internal sealed class NativeGeneration
 
     internal List<NativeSlab> Slabs { get; } = [];
 
-    internal List<NativeSlab> AvailableSlabs { get; } = [];
+    internal NativeAvailableSlabs AvailableSlabs { get; } = new();
 
     internal NativeAllocation? HotPoolAllocation { get; set; }
 
@@ -2839,24 +2839,7 @@ internal sealed class NativeGeneration
         Slabs.Insert(index, slab);
     }
 
-    internal void AddAvailableSlabOrdered(NativeSlab slab)
-    {
-        if (AvailableSlabs.Count == 0
-            || AvailableSlabs[^1].AllocationOrdinal
-                < slab.AllocationOrdinal)
-        {
-            AvailableSlabs.Add(slab);
-            return;
-        }
-
-        int index = 0;
-        while (index < AvailableSlabs.Count && AvailableSlabs[index].AllocationOrdinal < slab.AllocationOrdinal)
-        {
-            index++;
-        }
-
-        AvailableSlabs.Insert(index, slab);
-    }
+    internal void AddAvailableSlabOrdered(NativeSlab slab) => AvailableSlabs.Add(slab);
 
     internal int AddBumpOrdered(NativeBumpSegment segment)
     {
@@ -9524,29 +9507,9 @@ internal sealed partial class NativeOwnerKernel
         }
     }
 
-    private static NativeSlab? TakeSmallestAvailableSlabLocked(NativeGeneration generation, int length)
-    {
-        NativeSlab? best = null;
-        int bestIndex = -1;
-        for (int index = 0; index < generation.AvailableSlabs.Count; index++)
-        {
-            NativeSlab candidate = generation.AvailableSlabs[index];
-            if (candidate.Capacity < length || (best is not null && candidate.Capacity >= best.Capacity))
-            {
-                continue;
-            }
-
-            best = candidate;
-            bestIndex = index;
-        }
-
-        if (bestIndex >= 0)
-        {
-            generation.AvailableSlabs.RemoveAt(bestIndex);
-        }
-
-        return best;
-    }
+    // The smallest available slab that holds the length, the oldest of those.
+    private static NativeSlab? TakeSmallestAvailableSlabLocked(NativeGeneration generation, int length) =>
+        generation.AvailableSlabs.TakeSmallest(length);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static NativeAllocation?
