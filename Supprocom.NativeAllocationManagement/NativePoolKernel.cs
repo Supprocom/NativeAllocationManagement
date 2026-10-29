@@ -235,8 +235,8 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
         long token = TakeLeaseToken();
 
         int slabIndex = TakeOrAddSlab(length);
-
-        return InitializeSlab(slabIndex, token, length, initializer);
+        Slab slab = InitializeSlab(slabIndex, token, length, initializer);
+        return new Pooled<T>(this, slab, token, length, slab.Capacity);
     }
 
     /// <summary>Fills and publishes one pooled slab without an initializer callback.</summary>
@@ -370,8 +370,9 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
         }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private Pooled<T> InitializeSlab(int slabIndex, long token, int length,
+    // Returns the slab, not the lease: the try/catch keeps this method out of
+    // line, and a lease would come back through memory.
+    private Slab InitializeSlab(int slabIndex, long token, int length,
         NativeLeaseInitializer<T> initializer)
     {
 
@@ -399,12 +400,7 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
             _peakInitializedPayloadBytes = Math.Max(_peakInitializedPayloadBytes, _requestedBytes);
             // Nested rentals can grow the slot table, but this slab object stays put.
             slab.State = SlabState.Leased;
-            return new Pooled<T>(
-                this,
-                slab,
-                token,
-                length,
-                slab.Capacity);
+            return slab;
         }
         catch
         {
