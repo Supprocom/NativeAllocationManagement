@@ -51,12 +51,14 @@ public sealed unsafe partial class NativeArena : INativeFinalizationTarget
     {
         if (requireBudget) ArgumentNullException.ThrowIfNull(budget);
         NativeMemoryReturnValidation.Validate(returnMemoryOnDispose, nameof(returnMemoryOnDispose));
-        Id = NativeOwnerIdentity.Next();
+        // One thread-static read for the identity, the owner thread and the reuse slot.
+        NativeMemoryAccounting.PrepareThread();
+        NativeThreadState thread = NativeThreadState.Current;
+        Id = NativeOwnerIdentity.Next(thread);
         _returnMemoryOnDispose = returnMemoryOnDispose;
         _budget = budget;
-        _ownerThreadId = NativeThreadIdentity.Current;
+        _ownerThreadId = thread.ManagedThreadId;
         _lifecycle = NativeOwnerLifecycle.Active;
-        NativeThreadState thread = NativeThreadState.Current;
         if (returnMemoryOnDispose == NativeMemoryReturn.ToGarbageCollector
             && budget is null
             && TryAdoptRetainedSegment(thread, preAllocateBytes))
@@ -491,7 +493,13 @@ public sealed unsafe partial class NativeArena : INativeFinalizationTarget
     [SuppressMessage("Usage", "CA1816", Justification = "Close disarms finalization only after actual native return; ToGarbageCollector must retain its emergency finalizer while detached backing remains.")]
     public void Dispose()
     {
-        ValidateThread(nameof(Dispose));
+        // The thread check also yields the thread's reuse slot and spare guard.
+        NativeThreadState thread = NativeThreadState.Current;
+        if (thread.ManagedThreadId != _ownerThreadId)
+        {
+            ThrowWrongThread(nameof(Dispose));
+        }
+
         if (_lifecycle == NativeOwnerLifecycle.Disposed)
         {
             return;
@@ -502,21 +510,23 @@ public sealed unsafe partial class NativeArena : INativeFinalizationTarget
             ThrowBoundaryInUse(nameof(Dispose));
         }
 
-        Close();
+        Close(thread);
     }
 
-    private void Close()
+    private void Close() => Close(NativeThreadState.Current);
+
+    private void Close(NativeThreadState thread)
     {
         _lifecycle = NativeOwnerLifecycle.Disposed;
         if (_returnMemoryOnDispose
             == NativeMemoryReturn.ToNativeMemory)
         {
             FreeAllSegments();
-            ReleaseGuard();
+            ReleaseGuard(thread);
             return;
         }
 
-        if (TryRetainForReuse())
+        if (TryRetainForReuse(thread))
         {
             return;
         }
@@ -534,7 +544,7 @@ public sealed unsafe partial class NativeArena : INativeFinalizationTarget
 
     // A plain arena with one segment within the limit, on the thread that
     // owns it, waits in that thread's slot for the next arena.
-    private bool TryRetainForReuse()
+    private bool TryRetainForReuse(NativeThreadState thread)
     {
         ArenaSegmentHeader* segment = _ordinary.First;
         if (_budget is not null
@@ -549,7 +559,6 @@ public sealed unsafe partial class NativeArena : INativeFinalizationTarget
             return false;
         }
 
-        NativeThreadState thread = NativeThreadState.Current;
         if (thread.ReusableArena is null)
         {
             _retainEpoch = thread.ReuseEpoch;
@@ -1188,13 +1197,13 @@ public sealed unsafe partial class NativeArena : INativeFinalizationTarget
     void INativeFinalizationTarget.FinalizeNativeStorage() => FreeAllSegments();
 
     // After the storage is actually returned; detached backing keeps its guard.
-    private void ReleaseGuard()
+    private void ReleaseGuard(NativeThreadState thread)
     {
         NativeFinalizationGuard? guard = _guard;
         if (guard is not null)
         {
             _guard = null;
-            guard.Release(NativeThreadState.Current);
+            guard.Release(thread);
         }
     }
 

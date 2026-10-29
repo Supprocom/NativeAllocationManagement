@@ -52,12 +52,18 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget
     // still name it and fail its validation.
     private const long ReuseLimitBytes = 1024 * 1024;
 
-    [ThreadStatic]
-    private static NativePool<T>? t_reusable;
+    // The thread's reuse slot for this element type lives in its
+    // NativeThreadState, which construction and disposal read anyway: a
+    // generic thread-static field was one more thread-local lookup each.
+    private static readonly int s_reuseSlot = NativeThreadState.AllocateTypedSlot();
 
-    // More disposed pools behind the slot, for nested scopes.
-    [ThreadStatic]
-    private static NativeReuseStack<NativePool<T>>? t_moreReusable;
+    private sealed class ReusablePools
+    {
+        internal NativePool<T>? Slot;
+
+        // More disposed pools behind the slot, for nested scopes.
+        internal NativeReuseStack<NativePool<T>>? More;
+    }
 
     private NativePool(
         int preLease,
@@ -70,13 +76,13 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget
         NativeMemoryReturnValidation.Validate(returnMemoryOnDispose, nameof(returnMemoryOnDispose));
         // Growable pools need hot-history records only for actual clear/copy work.
         // Fixed-shape prepared pools still acquire them during preparation.
-        Id = NativeOwnerIdentity.NextWithoutPreparation();
+        NativeThreadState thread = NativeThreadState.Current;
+        Id = NativeOwnerIdentity.Next(thread);
         ArgumentOutOfRangeException.ThrowIfNegative(preLease);
         _returnMemoryOnDispose = returnMemoryOnDispose;
         _budget = budget;
-        _ownerThreadId = NativeThreadIdentity.Current;
+        _ownerThreadId = thread.ManagedThreadId;
         _lifecycle = NativeOwnerLifecycle.Active;
-        NativeThreadState thread = NativeThreadState.Current;
         if (returnMemoryOnDispose == NativeMemoryReturn.ToGarbageCollector
             && budget is null
             && preLease == 0
@@ -579,7 +585,13 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget
     /// <summary>Closes the pool after all leases return.</summary>
     public void Dispose()
     {
-        ValidateThread(nameof(Dispose));
+        // The thread check also yields the thread's reuse slot and spare guard.
+        NativeThreadState thread = NativeThreadState.Current;
+        if (_isShared ? !ReferenceEquals(t_shared, this) : thread.ManagedThreadId != _ownerThreadId)
+        {
+            ThrowWrongThread(nameof(Dispose));
+        }
+
         if (Volatile.Read(ref _retirementState) != 0)
         {
             ThrowRetiredDispose();
@@ -599,11 +611,11 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget
         if (_returnMemoryOnDispose == NativeMemoryReturn.ToNativeMemory)
         {
             FreeAll();
-            ReleaseGuard();
+            ReleaseGuard(thread);
             return;
         }
 
-        if (TryRetainForReuse())
+        if (TryRetainForReuse(thread))
         {
             return;
         }
@@ -612,7 +624,7 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget
     }
 
     // Every slab is free: disposal refused live leases.
-    private bool TryRetainForReuse()
+    private bool TryRetainForReuse(NativeThreadState thread)
     {
         if (_budget is not null
             || _slabCount == 0
@@ -621,23 +633,32 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget
             return false;
         }
 
-        if (t_reusable is null)
+        ReusablePools reuse = thread.GetTyped<ReusablePools>(s_reuseSlot) ?? CreateReusablePools(thread);
+        if (reuse.Slot is null)
         {
-            _retainEpoch = NativeThreadState.Current.ReuseEpoch;
-            t_reusable = this;
+            _retainEpoch = thread.ReuseEpoch;
+            reuse.Slot = this;
             return true;
         }
 
         // A nested scope's pool waits behind the slot.
-        NativeReuseStack<NativePool<T>> more = t_moreReusable ??= new();
+        NativeReuseStack<NativePool<T>> more = reuse.More ??= new();
         if (!more.HasRoom(_retainedBytes))
         {
             return false;
         }
 
-        _retainEpoch = NativeThreadState.Current.ReuseEpoch;
+        _retainEpoch = thread.ReuseEpoch;
         more.Push(this, _retainedBytes);
         return true;
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static ReusablePools CreateReusablePools(NativeThreadState thread)
+    {
+        ReusablePools reuse = new();
+        thread.SetTyped(s_reuseSlot, reuse);
+        return reuse;
     }
 
     // Takes the slab table of this thread's retained pool, unless it is from
@@ -645,14 +666,20 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget
     // finalizer as its disposal would have.
     private bool TryAdoptRetainedSlabs(NativeThreadState thread)
     {
-        NativePool<T>? donor = t_reusable;
+        ReusablePools? reuse = thread.GetTyped<ReusablePools>(s_reuseSlot);
+        if (reuse is null)
+        {
+            return false;
+        }
+
+        NativePool<T>? donor = reuse.Slot;
         if (donor is not null)
         {
-            t_reusable = null;
+            reuse.Slot = null;
         }
         else
         {
-            donor = t_moreReusable?.Pop();
+            donor = reuse.More?.Pop();
             if (donor is null)
             {
                 return false;
@@ -1291,13 +1318,15 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget
     void INativeFinalizationTarget.FinalizeNativeStorage() => FreeAll();
 
     // After the storage is actually returned; detached backing keeps its guard.
-    private void ReleaseGuard()
+    private void ReleaseGuard() => ReleaseGuard(NativeThreadState.Current);
+
+    private void ReleaseGuard(NativeThreadState thread)
     {
         NativeFinalizationGuard? guard = _guard;
         if (guard is not null)
         {
             _guard = null;
-            guard.Release(NativeThreadState.Current);
+            guard.Release(thread);
         }
     }
 
