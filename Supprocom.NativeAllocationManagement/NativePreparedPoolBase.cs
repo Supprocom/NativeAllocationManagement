@@ -16,7 +16,7 @@ public abstract unsafe class NativePreparedPoolBase
 {
     private const string OwnerKind = "NativePreparedPool";
     private protected NativeMemoryBudget? _budget;
-    private protected readonly int _ownerThreadId;
+    private protected NativeOwnerThread _owner;
     private protected readonly Slot[] _slabs = [];
     private protected readonly Page[] _pages = [];
     private protected readonly NativePoolPreparation _preparation;
@@ -47,7 +47,7 @@ public abstract unsafe class NativePreparedPoolBase
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(preparation.SlotCapacity, nameof(preparation));
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(preparation.SlotsPerPage, nameof(preparation));
         _budget = budget;
-        _ownerThreadId = NativeThreadIdentity.Current;
+        _owner = new NativeOwnerThread(NativeThreadState.Current);
         _preparation = preparation;
         nuint slotBytes = CalculateByteLength(preparation.SlotCapacity, elementSize);
         // Consecutive slots use the CLR element stride without padding; pages
@@ -246,7 +246,7 @@ public abstract unsafe class NativePreparedPoolBase
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void ValidateColdThread(string operation)
     {
-        if (NativeThreadIdentity.Current == _ownerThreadId)
+        if (_owner.IsCurrent())
         {
             return;
         }

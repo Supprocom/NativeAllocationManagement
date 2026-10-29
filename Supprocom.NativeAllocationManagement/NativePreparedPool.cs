@@ -456,7 +456,7 @@ public sealed unsafe class NativePreparedPool<T> : NativePreparedPoolBase, IDisp
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void ValidateThread(string operation)
     {
-        if (NativeThreadIdentity.Current == _ownerThreadId)
+        if (_owner.IsCurrent())
         {
             return;
         }

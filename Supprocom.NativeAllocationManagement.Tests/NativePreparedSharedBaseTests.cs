@@ -38,8 +38,11 @@ public sealed class NativePreparedSharedBaseTests
     public void BanksBoundsThreadAndIdentityRemainReadonlyOnTheSameOwner()
     {
         FieldInfo[] fields = typeof(NativePreparedPoolBase).GetFields(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
-        Assert.Equal("_id|_ownerThreadId|_pages|_preparation|_slabs",
+        Assert.Equal("_id|_pages|_preparation|_slabs",
             string.Join("|", fields.Where(static field => field.IsInitOnly).Select(static field => field.Name).Order(StringComparer.Ordinal)));
+        // The thread check moves its stack block; the owner thread, its serial, stays.
+        Assert.Equal(typeof(NativeOwnerThread), fields.First(static field => string.Equals(field.Name, "_owner", StringComparison.Ordinal)).FieldType);
+        Assert.True(typeof(NativeOwnerThread).GetField(nameof(NativeOwnerThread.Serial), BindingFlags.Instance | BindingFlags.NonPublic)!.IsInitOnly);
         Assert.DoesNotContain(fields, static field => field.Name is "_state" or "_kernel" or "_freshSegmentAllocationCount" or "_nextAllocationOrdinal");
     }
 
