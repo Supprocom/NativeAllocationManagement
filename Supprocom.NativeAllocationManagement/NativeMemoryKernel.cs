@@ -1549,8 +1549,11 @@ internal sealed class NativeAllocation
 
     internal void ExitOwnerOperation() => _operationAdmission--;
 
-    // A thread-cached lease's storage address, set when its cache rents it.
-    // The lease's admitted operations keep the slab alive while they use it.
+    // The storage address of a slab record, set when the record gets its slab
+    // (Reset): a cached rent reaches its storage in one load. A slab's segment
+    // keeps its pointer until it is freed or detached, and both first revoke
+    // every thread cache, so no cached record uses an address after that. The
+    // lease's admitted operations keep the slab alive while they use it.
     internal nint CachedAddress;
 
     internal bool HasNoOwnerOperations => _operationAdmission == 0;
@@ -1558,12 +1561,11 @@ internal sealed class NativeAllocation
     // Re-rents a record its thread cache already holds: the slab, offset,
     // capacity, reference roots and scope flag are those of its last cached rent.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal void ResetCached(long id, int length, nuint storageBytes, long scopeEpoch, nint address)
+    internal void ResetCached(long id, int length, nuint storageBytes, long scopeEpoch)
     {
         Volatile.Write(ref _id, 0);
         Length = length;
         StorageBytes = storageBytes;
-        CachedAddress = address;
         Volatile.Write(ref _scopeEpoch, scopeEpoch);
         Lifecycle = NativeAllocationLifecycle.Initializing;
         NativeOperationAdmission.Reset(ref _operationAdmission);
@@ -1585,6 +1587,7 @@ internal sealed class NativeAllocation
     {
         Volatile.Write(ref _id, 0);
         Slab = slab;
+        CachedAddress = slab is null ? 0 : slab.Segment.Pointer + (nint)offsetBytes;
         BumpSegment = bumpSegment;
         OffsetBytes = offsetBytes;
         Length = length;
