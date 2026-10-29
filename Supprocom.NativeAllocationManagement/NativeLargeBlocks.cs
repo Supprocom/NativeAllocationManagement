@@ -22,7 +22,9 @@ internal static unsafe class NativeLargeBlocks
 {
     internal const nuint MinimumBytes = 256 * 1024;
     internal const nuint LimitBytes = 64 * 1024 * 1024;
-    private const int Capacity = 8;
+    // Room for a block between one owner's return and its next use on many
+    // threads at once; the bytes bound is what limits what is kept.
+    private const int Capacity = 32;
 
     private static readonly Lock s_gate = new();
     // Oldest first.
