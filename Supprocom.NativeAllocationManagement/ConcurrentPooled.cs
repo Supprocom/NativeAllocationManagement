@@ -309,7 +309,7 @@ public readonly ref struct ConcurrentPooled<T>
         long allocationId)
     {
         if (allocation?.CacheOwner is NativePoolThreadCache cache
-            && NativeOwnerKernel.TryReturnCachedLease(cache, generation!, allocation, generationNumber, allocationId))
+            && NativeOwnerKernel.TryReturnCachedLease(cache, allocation, allocationId))
         {
             return;
         }
@@ -337,7 +337,7 @@ public readonly ref struct ConcurrentPooled<T>
     {
         NativeAllocation? allocation = _allocationState;
         if (allocation?.CacheOwner is NativePoolThreadCache owner
-            && NativeOwnerKernel.TryEnterCachedLeaseOperation(owner, _generationState!, allocation, _generation, _allocationId, out epoch))
+            && NativeOwnerKernel.TryEnterCachedLeaseOperation(owner, allocation, _allocationId, out epoch))
         {
             return owner;
         }

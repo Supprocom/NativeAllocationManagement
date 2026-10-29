@@ -144,6 +144,14 @@ internal sealed class NativePoolThreadCache
     internal NativeAllocation? TakeFree(int length)
     {
         int count = FreeCount;
+        // A thread renting one size finds it in the newest free record.
+        int newest = count - 1;
+        if (newest >= 0 && FreeCapacities[newest] == length)
+        {
+            FreeCount = newest;
+            return Records[FreeSlots[newest]];
+        }
+
         int best = -1;
         int bestCapacity = int.MaxValue;
         for (int index = count - 1; index >= 0; index--)

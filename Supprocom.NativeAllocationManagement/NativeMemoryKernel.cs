@@ -3412,6 +3412,8 @@ internal sealed partial class NativeOwnerKernel
     private readonly nuint _preLease;
     private readonly nuint _preAllocateBytes;
     private readonly bool _containsReferences;
+    // A pool of values without references: its leases may use thread caches.
+    private readonly bool _threadCacheEligible;
     private long _generation;
     private long _nextAllocationId;
     private long _nextSegmentOrdinal;
@@ -4053,6 +4055,7 @@ internal sealed partial class NativeOwnerKernel
         _preLease = preLease;
         _preAllocateBytes = preAllocateBytes;
         _containsReferences = containsReferences;
+        _threadCacheEligible = kind == NativeOwnerKind.Pool && !containsReferences;
         _arenaFastThreadId =
             kind == NativeOwnerKind.Arena
                 ? Environment.CurrentManagedThreadId

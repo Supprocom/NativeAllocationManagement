@@ -15,8 +15,7 @@ internal sealed partial class NativeOwnerKernel
     private int _threadCacheCount;
     private int _threadCachePruneCountdown;
 
-    private bool ThreadCacheEligible =>
-        _kind == NativeOwnerKind.Pool && !_containsReferences;
+    private bool ThreadCacheEligible => _threadCacheEligible;
 
     // Returns the cache too: once the busy window closes, a revocation on
     // another thread may clear the record's CacheOwner.
@@ -280,8 +279,10 @@ internal sealed partial class NativeOwnerKernel
         {
             NativeMemoryAccounting.RecordReusedNativeSegment();
         }
-
-        slab.HasBeenUsed = true;
+        else
+        {
+            slab.HasBeenUsed = true;
+        }
     }
 
     private NativePoolLease InitializeCached<T>(
@@ -572,8 +573,11 @@ internal sealed partial class NativeOwnerKernel
         {
             NativeMemoryAccounting.RecordReusedNativeSegment();
         }
+        else
+        {
+            slab.HasBeenUsed = true;
+        }
 
-        slab.HasBeenUsed = true;
         if (fill)
         {
             CachedSpan<T>(allocation, length).Fill(value);
@@ -768,22 +772,23 @@ internal sealed partial class NativeOwnerKernel
         AbortPoolInitialization(allocation.GenerationState, allocation);
     }
 
-    // Puts this thread's valid, idle cached lease back into its cache.
+    // Puts this thread's valid, idle cached lease back into its cache. The
+    // caller read the cache from the record's CacheOwner, which only a fold
+    // changes; a fold revokes the cache first, or runs on this thread outside
+    // any window, so a successful Enter means the record is still this cache's.
+    // Allocation ids are never reused within a pool, so the id and the active
+    // lifecycle identify this rental: its generation, fixed for a record and
+    // the cache's own while the record is cached, needs no check of its own.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static bool TryReturnCachedLease(
         NativePoolThreadCache cache,
-        NativeGeneration generation,
         NativeAllocation allocation,
-        long generationNumber,
         long allocationId)
     {
         if (cache.FreeCount < NativePoolThreadCache.FreeCapacity && cache.Enter())
         {
-            if (ReferenceEquals(allocation.CacheOwner, cache)
-                && allocation.Id == allocationId
+            if (allocation.Id == allocationId
                 && allocation.Lifecycle == NativeAllocationLifecycle.Active
-                && ReferenceEquals(cache.Generation, generation)
-                && generation.Number == generationNumber
                 && allocation.HasNoOwnerOperations)
             {
                 cache.PayloadDelta -= (long)allocation.StorageBytes;
@@ -903,7 +908,7 @@ internal sealed partial class NativeOwnerKernel
                 SpillThreadCacheFree(cache);
             }
 
-            if (TryReturnCachedLease(cache, generationState, allocation, generationNumber, allocationId))
+            if (TryReturnCachedLease(cache, allocation, allocationId))
             {
                 return;
             }
@@ -943,22 +948,19 @@ internal sealed partial class NativeOwnerKernel
 
     // An operation on this thread's cached lease: the busy window replaces the
     // generation and record admission atomics. Operation hooks need the locked
-    // path, which reports entries to them.
+    // path, which reports entries to them. The caller read the cache from the
+    // record's CacheOwner; as for a return (TryReturnCachedLease), a successful
+    // Enter keeps it this cache's, and the id identifies the rental.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static bool TryEnterCachedLeaseOperation(
         NativePoolThreadCache cache,
-        NativeGeneration generation,
         NativeAllocation allocation,
-        long generationNumber,
         long allocationId,
         out int epoch)
     {
         if (!NativeMemoryTestHooks.OperationHooksEnabled && cache.Enter())
         {
-            if (ReferenceEquals(allocation.CacheOwner, cache)
-                && ReferenceEquals(cache.Generation, generation)
-                && generation.Number == generationNumber
-                && allocation.Id == allocationId
+            if (allocation.Id == allocationId
                 && allocation.Lifecycle == NativeAllocationLifecycle.Active)
             {
                 allocation.EnterOwnerOperation();
@@ -1022,7 +1024,7 @@ internal sealed partial class NativeOwnerKernel
     {
         if (allocation.CacheOwner is NativePoolThreadCache cache)
         {
-            if (TryEnterCachedLeaseOperation(cache, generation, allocation, generationNumber, allocationId, out int epoch))
+            if (TryEnterCachedLeaseOperation(cache, allocation, allocationId, out int epoch))
             {
                 token = new NativeOperationToken(this, generation, allocation, cache, epoch, recordEntered: true, operation);
                 return true;
