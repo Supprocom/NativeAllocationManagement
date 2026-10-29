@@ -1006,6 +1006,35 @@ internal sealed partial class NativeOwnerKernel
         return false;
     }
 
+    // A transfer's shape, if its lease is current in this thread's cache: the
+    // checks TryEnterCachedTransferOperation grants an operation on, in one busy
+    // window, without entering an operation, since the shape is no storage.
+    // False leaves the decision to ValidateHandle.
+    internal bool TryReadCachedTransferShape(
+        NativeAllocation allocation,
+        long generationNumber,
+        long allocationId,
+        out NativeHandleMetadata shape)
+    {
+        if (allocation.TransferOwner is not null
+            && !NativeMemoryTestHooks.OperationHooksEnabled
+            && NativePoolThreadCaches.Find(Id, _cacheSlot) is NativePoolThreadCache found
+            && found.Enter())
+        {
+            NativeGeneration generation = allocation.GenerationState;
+            bool current = ReferenceEquals(found.Generation, generation)
+                && generation.Number == generationNumber
+                && allocation.Id == allocationId
+                && allocation.Lifecycle == NativeAllocationLifecycle.Active;
+            shape = current ? new NativeHandleMetadata(allocation.Length, allocation.Capacity) : default;
+            found.Exit();
+            return current;
+        }
+
+        shape = default;
+        return false;
+    }
+
     // This thread's cache in its busy window, armed for operations if need be.
     private NativePoolThreadCache? EnterOperationCache()
     {

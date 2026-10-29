@@ -163,6 +163,110 @@ public sealed class NativeBuilderReuseTests
 
     private readonly record struct MagazineProbe(int Value);
 
+    // The depot frees at a full collection the blocks no thread reused since
+    // the previous one: one trim leaves a spilled magazine, unless a
+    // collection's own trim ran in between, and a second frees it.
+    [Fact]
+    public void FullCollectionsFreeDepotBlocksNoThreadReused()
+    {
+        NativeMemoryTestHooks.Reset();
+        NativeThreadState worker = SpillOneMagazine<TrimProbe>();
+        Assert.Equal(8, KeptStorage.InCurrentEpoch<TrimProbe>().Count);
+        int collections = GC.CollectionCount(2);
+        NativeBuilderControl<TrimProbe>.TrimShared(highLoad: false);
+        if (GC.CollectionCount(2) == collections)
+        {
+            Assert.Equal(8, KeptStorage.InCurrentEpoch<TrimProbe>().Count);
+        }
+
+        NativeBuilderControl<TrimProbe>.TrimShared(highLoad: false);
+        Assert.Equal(0, KeptStorage.InCurrentEpoch<TrimProbe>().Count);
+        KeptStorage.AssertBalanced<TrimProbe>(NativeMemoryTestHooks.Snapshot());
+        GC.KeepAlive(worker);
+    }
+
+    // A magazine taken back and spilled again after a trim is stamped anew, so
+    // the next trim leaves it.
+    [Fact]
+    public void ADepotBlockReusedSinceTheLastCollectionStays()
+    {
+        NativeMemoryTestHooks.Reset();
+        NativeThreadState first = SpillOneMagazine<ReuseProbe>();
+        NativeBuilderControl<ReuseProbe>.TrimShared(highLoad: false);
+        NativeThreadState second = SpillOneMagazine<ReuseProbe>();
+        int collections = GC.CollectionCount(2);
+        NativeBuilderControl<ReuseProbe>.TrimShared(highLoad: false);
+        if (GC.CollectionCount(2) == collections)
+        {
+            Assert.Equal(8, KeptStorage.InCurrentEpoch<ReuseProbe>().Count);
+        }
+
+        NativeBuilderControl<ReuseProbe>.TrimShared(highLoad: false);
+        Assert.Equal(0, KeptStorage.InCurrentEpoch<ReuseProbe>().Count);
+        KeptStorage.AssertBalanced<ReuseProbe>(NativeMemoryTestHooks.Snapshot());
+        GC.KeepAlive(first);
+        GC.KeepAlive(second);
+    }
+
+    // High memory load frees every block the shared partitions hold.
+    [Fact]
+    public void HighMemoryLoadFreesEverySharedBlock()
+    {
+        NativeMemoryTestHooks.Reset();
+        NativeTransfer<LoadProbe>[] transfers = new NativeTransfer<LoadProbe>[16];
+        for (int index = 0; index < transfers.Length; index++)
+        {
+            transfers[index] = NativeTransfer<LoadProbe>.Create(4, new LoadProbe(index));
+        }
+
+        NativeThreadState worker = TestThread.Run(() =>
+        {
+            // Without the depot, what the stack cannot hold goes to the shared
+            // partitions.
+            NativeBuilderControl<LoadProbe>.DepotDisabledForTest = true;
+            foreach (NativeTransfer<LoadProbe> transfer in transfers)
+            {
+                transfer.Dispose();
+            }
+        });
+        NativeEndedThreads.ReleaseEndedForTest();
+        Assert.Equal(8, KeptStorage.InCurrentEpoch<LoadProbe>().Count);
+        NativeBuilderControl<LoadProbe>.TrimShared(highLoad: true);
+        Assert.Equal(0, KeptStorage.InCurrentEpoch<LoadProbe>().Count);
+        KeptStorage.AssertBalanced<LoadProbe>(NativeMemoryTestHooks.Snapshot());
+        GC.KeepAlive(worker);
+    }
+
+    // Nine transfers of the probe type are disposed on a thread that ends:
+    // eight fill its stack and the ninth sends them to the depot as one
+    // magazine; the ninth itself is freed with the ended thread's storage. The
+    // returned state stays reachable until the caller is done.
+    private static NativeThreadState SpillOneMagazine<TProbe>()
+        where TProbe : unmanaged
+    {
+        NativeTransfer<TProbe>[] transfers = new NativeTransfer<TProbe>[9];
+        foreach (ref NativeTransfer<TProbe> transfer in transfers.AsSpan())
+        {
+            transfer = NativeTransfer<TProbe>.Create(2, default(TProbe));
+        }
+
+        NativeThreadState worker = TestThread.Run(() =>
+        {
+            foreach (NativeTransfer<TProbe> transfer in transfers)
+            {
+                transfer.Dispose();
+            }
+        });
+        NativeEndedThreads.ReleaseEndedForTest();
+        return worker;
+    }
+
+    private readonly record struct TrimProbe(int Value);
+
+    private readonly record struct ReuseProbe(int Value);
+
+    private readonly record struct LoadProbe(int Value);
+
     [Fact]
     public void AThreadCyclingThroughSizesKeepsAParkedBlockForEach()
     {

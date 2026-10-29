@@ -28,6 +28,14 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
 
     private static readonly SharedPartition[] s_shared = SharedPartition.CreateAll();
 
+    // The depot and the shared partitions keep returned blocks for any thread,
+    // bounded per element type. Each full collection frees those no thread
+    // reused since the previous one, as NativeLargeBlocks does, and all of them
+    // under high memory load: kept storage is released in the end. A block is
+    // stamped with the count of full collections when it parks there.
+    private static int s_collections;
+    private static int s_trimmerStarted;
+
     private NativeBlockSlot _spare;
     private long _lifetimeFirstVersion = 1;
     private bool _parked;
@@ -287,6 +295,46 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
     // returning call completes, so a test can reuse it inside that window.
     internal static Action? AfterSharedHandOffForTest { get; set; }
 
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void StartTrimmer()
+    {
+        if (Interlocked.Exchange(ref s_trimmerStarted, 1) == 0)
+        {
+            _ = new Trimmer();
+        }
+    }
+
+    // Removes under each lock and frees outside it, as NativeLargeBlocks does:
+    // recording a free can register the calling thread.
+    internal static void TrimShared(bool highLoad)
+    {
+        int previous = Interlocked.Increment(ref s_collections) - 1;
+        Depot.Trim(previous, highLoad);
+        foreach (SharedPartition partition in s_shared)
+        {
+            partition.Trim(previous, highLoad);
+        }
+    }
+
+    private sealed class Trimmer
+    {
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "A trim failure must not terminate the process; the next collection retries.")]
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "MA0055", Justification = "The finalizer is the full-collection callback that trims the shared depots.")]
+        ~Trimmer()
+        {
+            try
+            {
+                GCMemoryInfo memory = GC.GetGCMemoryInfo();
+                TrimShared(highLoad: memory.MemoryLoadBytes >= memory.HighMemoryLoadThresholdBytes * 9 / 10);
+            }
+            catch
+            {
+            }
+
+            GC.ReRegisterForFinalize(this);
+        }
+    }
+
     // Lets a test thread exercise the single-control overflow and per-thread
     // ceiling without the magazine depot.
     [ThreadStatic]
@@ -482,9 +530,52 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
                 Magazine magazine = s_emptyCount != 0 ? s_empty[--s_emptyCount]! : new Magazine();
                 s_empty[s_emptyCount] = null;
                 s_bytes += stack.MoveTo(magazine);
+                magazine.Stamp = Volatile.Read(ref s_collections);
                 s_full[s_fullCount] = magazine;
                 Volatile.Write(ref s_fullCount, s_fullCount + 1);
-                return true;
+            }
+
+            if (Volatile.Read(ref s_trimmerStarted) == 0)
+            {
+                StartTrimmer();
+            }
+
+            return true;
+        }
+
+        // Magazines are taken from the top and spilled onto it, so their
+        // stamps never decrease upwards: the trimmed ones are a bottom run.
+        internal static void Trim(int previous, bool highLoad)
+        {
+            Magazine?[] removed;
+            int count = 0;
+            lock (s_gate)
+            {
+                DiscardIfStale();
+                while (count < s_fullCount && (highLoad || s_full[count]!.Stamp < previous))
+                {
+                    count++;
+                }
+
+                if (count == 0)
+                {
+                    return;
+                }
+
+                removed = s_full[..count];
+                Array.Copy(s_full, count, s_full, 0, s_fullCount - count);
+                Array.Clear(s_full, s_fullCount - count, count);
+                foreach (Magazine? magazine in removed)
+                {
+                    s_bytes -= magazine!.Bytes;
+                }
+
+                Volatile.Write(ref s_fullCount, s_fullCount - count);
+            }
+
+            foreach (Magazine? magazine in removed)
+            {
+                magazine!.Discard();
             }
         }
 
@@ -538,6 +629,8 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
         internal readonly NativeBuilderControl<T>?[] Items = new NativeBuilderControl<T>?[ParkedControls.Capacity];
         internal int Count;
         internal nuint Bytes;
+        // The count of full collections when it was spilled into the depot.
+        internal int Stamp;
 
         internal void Discard()
         {
@@ -709,6 +802,8 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
         private const nuint LimitBytes = 128 * 1024;
         private readonly Lock _gate = new();
         private readonly NativeBuilderControl<T>?[] _items = new NativeBuilderControl<T>?[Capacity];
+        // The count of full collections when each item parked here.
+        private readonly int[] _stamps = new int[Capacity];
         private nuint _bytes;
         private int _epoch = NativeStorageReuse.SharedEpoch;
         private int _count;
@@ -779,6 +874,7 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
                 NativeBuilderControl<T> control = _items[index]!;
                 int last = _count - 1;
                 _items[index] = _items[last];
+                _stamps[index] = _stamps[last];
                 _items[last] = null;
                 _bytes -= control._spare.ByteLength;
                 Volatile.Write(ref _count, last);
@@ -806,9 +902,50 @@ internal sealed class NativeBuilderControl<T> : NativeTransferControl<T>
 
                 control.BecomeParked(block);
                 _items[_count] = control;
+                _stamps[_count] = Volatile.Read(ref s_collections);
                 _bytes += block.ByteLength;
                 Volatile.Write(ref _count, _count + 1);
-                return true;
+            }
+
+            if (Volatile.Read(ref s_trimmerStarted) == 0)
+            {
+                StartTrimmer();
+            }
+
+            return true;
+        }
+
+        internal void Trim(int previous, bool highLoad)
+        {
+            Span<NativeBuilderControl<T>?> removed = new NativeBuilderControl<T>?[Capacity];
+            int count = 0;
+            lock (_gate)
+            {
+                DiscardIfStale();
+                int kept = 0;
+                for (int index = 0; index < _count; index++)
+                {
+                    NativeBuilderControl<T> control = _items[index]!;
+                    if (highLoad || _stamps[index] < previous)
+                    {
+                        removed[count++] = control;
+                        _bytes -= control._spare.ByteLength;
+                    }
+                    else
+                    {
+                        _items[kept] = control;
+                        _stamps[kept] = _stamps[index];
+                        kept++;
+                    }
+                }
+
+                Array.Clear(_items, kept, _count - kept);
+                Volatile.Write(ref _count, kept);
+            }
+
+            foreach (ref NativeBuilderControl<T>? control in removed[..count])
+            {
+                control!.DiscardSpare();
             }
         }
 
