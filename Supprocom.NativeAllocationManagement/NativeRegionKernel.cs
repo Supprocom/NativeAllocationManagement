@@ -24,7 +24,9 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
     private NativeOwnerThread _owner;
     // The construction thread's state: disposal reaches its reuse slot without a TLS read.
     private readonly NativeThreadState _ownerThread;
-    private NativeOwnerLifecycle _lifecycle;
+    // The lifecycle and the entered-operation count side by side, so that
+    // "active with nothing entered" reads as one 64-bit zero (see Dispose).
+    private RegionState _state;
     private RegionSegmentHeader* _firstSegment;
     private RegionSegmentHeader* _currentSegment;
     private byte* _currentCursor;
@@ -37,7 +39,6 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
     private int _segmentCount;
     // Backing count when the current lifetime began; nonzero only after reuse.
     private int _activationSegmentCount;
-    private int _activeBorrowCount;
     // Region and Local handles carry the lifetime they were issued for; a reused
     // kernel starts the next lifetime, so earlier handles stay disposed.
     private int _generation;
@@ -52,7 +53,7 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
         _budget = budget;
         _ownerThread = NativeThreadState.Current;
         _owner = new NativeOwnerThread(_ownerThread);
-        _lifecycle = NativeOwnerLifecycle.Active;
+        _state.Lifecycle = NativeOwnerLifecycle.Active;
 
         // Before any native storage: the guard is this kernel's finalizer.
         _guard = NativeFinalizationGuard.Rent(_ownerThread, this);
@@ -64,13 +65,13 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
         }
     }
 
-    internal NativeOwnerLifecycle Lifecycle => _lifecycle;
+    internal NativeOwnerLifecycle Lifecycle => _state.Lifecycle;
 
     internal int Generation => _generation;
 
     internal static bool HasReusableKernelForTest =>
         NativeThreadState.Current is { } thread
-        && (thread.ReusableRegion is { _lifecycle: NativeOwnerLifecycle.Disposed }
+        && (thread.ReusableRegion is { _state.Lifecycle: NativeOwnerLifecycle.Disposed }
             || thread.MoreReusableRegions is { IsEmpty: false });
 
     internal static NativeRegionKernel Acquire(
@@ -89,7 +90,7 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
             // disposal stores no reference to put it back.
             NativeThreadState thread = NativeThreadState.Current;
             NativeRegionKernel? reusable = thread.ReusableRegion;
-            bool inSlot = reusable is { _lifecycle: NativeOwnerLifecycle.Disposed };
+            bool inSlot = reusable is { _state.Lifecycle: NativeOwnerLifecycle.Disposed };
             if (!inSlot)
             {
                 // One in use there belongs to an enclosing region, which puts it
@@ -175,7 +176,7 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
         NativeMemoryAccounting.PrepareThread();
         Id = NativeOwnerIdentity.Next(thread);
         _generation++;
-        _lifecycle = NativeOwnerLifecycle.Active;
+        _state.Lifecycle = NativeOwnerLifecycle.Active;
         _currentSegment = segment;
         _currentCursor = segment == null ? null : (byte*)segment + HeaderBytes;
         _currentEnd = segment == null ? null : _currentCursor + segment->Capacity;
@@ -289,7 +290,7 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
         thread.ReusableRegion = null;
         // A kernel still in use belongs to a region its thread never disposed;
         // its guard returns that storage once the region is unreachable.
-        if (kernel is { _lifecycle: NativeOwnerLifecycle.Active })
+        if (kernel is { _state.Lifecycle: NativeOwnerLifecycle.Active })
         {
             kernel = thread.MoreReusableRegions?.Pop();
         }
@@ -324,7 +325,7 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
         ArgumentNullException.ThrowIfNull(initializer);
         ArgumentOutOfRangeException.ThrowIfNegative(length);
         ValidateLeaseActive(nameof(NativeRegion.Lease));
-        if (_activeBorrowCount < 0)
+        if (_state.Borrows < 0)
         {
             ThrowActiveOperation(nameof(NativeRegion.Lease));
         }
@@ -335,7 +336,7 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
             _requestedBytes + checked((long)byteLength));
         // The high bit is initializer admission; lower bits remain the local
         // bounded-borrow count. No per-range control or owner field is needed.
-        _activeBorrowCount |= int.MinValue;
+        _state.Borrows |= int.MinValue;
         try
         {
             RegionReservation reservation = Reserve(byteLength, alignment);
@@ -345,7 +346,7 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
         }
         finally
         {
-            _activeBorrowCount &= int.MaxValue;
+            _state.Borrows &= int.MaxValue;
         }
     }
 
@@ -356,7 +357,7 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
     {
         ArgumentOutOfRangeException.ThrowIfNegative(length);
         ValidateLeaseActive(nameof(NativeRegion.Lease));
-        if (_activeBorrowCount < 0)
+        if (_state.Borrows < 0)
         {
             ThrowActiveOperation(nameof(NativeRegion.Lease));
         }
@@ -376,7 +377,7 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
     {
         ArgumentOutOfRangeException.ThrowIfNegative(length);
         ValidateLeaseActive(nameof(NativeRegion.LeaseUninitialized));
-        if (_activeBorrowCount < 0)
+        if (_state.Borrows < 0)
         {
             ThrowActiveOperation(nameof(NativeRegion.LeaseUninitialized));
         }
@@ -421,7 +422,7 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void ValidateActive(string operation)
     {
-        if (_lifecycle != NativeOwnerLifecycle.Active)
+        if (_state.Lifecycle != NativeOwnerLifecycle.Active)
         {
             throw CreateDisposed(operation);
         }
@@ -439,7 +440,7 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void ValidateLeaseActive(string operation)
     {
-        if (_lifecycle != NativeOwnerLifecycle.Active)
+        if (_state.Lifecycle != NativeOwnerLifecycle.Active)
         {
             throw CreateDisposed(operation);
         }
@@ -465,11 +466,11 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
         }
 
         ValidateLeaseActive(operation);
-        _activeBorrowCount++;
+        _state.Borrows++;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal void ExitBorrow() => _activeBorrowCount--;
+    internal void ExitBorrow() => _state.Borrows--;
 
     internal NativeOwnerStatistics GetStatistics()
     {
@@ -480,7 +481,7 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
             usableCapacityBytes = checked(usableCapacityBytes + (long)segment->Capacity);
         }
         return new NativeOwnerStatistics(
-            _lifecycle,
+            _state.Lifecycle,
             Generation: 0,
             _requestedBytes,
             _retainedBytes,
@@ -499,7 +500,7 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
             OutstandingNativeBytes = _retainedBytes,
             DetachedNativeBytes = 0,
             PeakOutstandingNativeBytes = _peakRetainedBytes,
-            InitializedPayloadBytes = _lifecycle == NativeOwnerLifecycle.Active ? _requestedBytes : 0,
+            InitializedPayloadBytes = _state.Lifecycle == NativeOwnerLifecycle.Active ? _requestedBytes : 0,
             PeakInitializedPayloadBytes = _requestedBytes,
             UsableCapacityBytes = usableCapacityBytes
         };
@@ -524,9 +525,9 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
             index = checked(index + 1);
         }
         NativeOwnerDiagnosticSnapshot snapshot = new(
-            _lifecycle, 0, 0, NativeMemoryAccounting.CurrentMetricsEpoch,
+            _state.Lifecycle, 0, 0, NativeMemoryAccounting.CurrentMetricsEpoch,
             0, 0, 0, currentIndex, -1, _firstSegment == null ? 0 : _segmentCount,
-            _lifecycle == NativeOwnerLifecycle.Active ? GetAvailableSegmentCount() : 0,
+            _state.Lifecycle == NativeOwnerLifecycle.Active ? GetAvailableSegmentCount() : 0,
             0, 0, 0, 0, 0, false)
         {
             OwnerId = Id,
@@ -536,7 +537,7 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
             // A disposed region kept its storage for reuse or freed it.
             DetachedNativeBytes = 0,
             PeakOutstandingNativeBytes = _peakRetainedBytes,
-            InitializedPayloadBytes = _lifecycle == NativeOwnerLifecycle.Active ? _requestedBytes : 0,
+            InitializedPayloadBytes = _state.Lifecycle == NativeOwnerLifecycle.Active ? _requestedBytes : 0,
             PeakInitializedPayloadBytes = _requestedBytes
         };
         GC.KeepAlive(this);
@@ -548,25 +549,23 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
 
     // Only NativeRegion.Dispose calls this, and the ref struct cannot leave its
     // construction thread, so disposal needs no thread check.
-    // The common case inlines into the region's own Dispose: a default-policy
-    // region with no budget whose one segment is small enough to keep, its
-    // kernel still in the thread's slot, only marks the kernel free there.
-    // This is what TryRetainForReuse does for it, without the calls.
+    // The common case inlines into the region's own Dispose: an active kernel
+    // with nothing entered, still in its thread's slot, only marks itself free
+    // there. This is what TryRetainForReuse does for it, without the calls. Its
+    // place in the slot proves the rest: only a default-policy region with no
+    // budget takes or returns the slot's kernel, and one that grows past one
+    // segment within the reuse limit leaves the slot (AppendSegment). Two
+    // checks, so that a using statement's finally stays small enough for the
+    // JIT to copy inline rather than call as a funclet: with the eight checks
+    // this replaced, it did not (a region with one lease 15.6 -> 13.2 ns).
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void Dispose()
     {
-        RegionSegmentHeader* first = _firstSegment;
         NativeThreadState thread = _ownerThread;
-        if (_lifecycle == NativeOwnerLifecycle.Active
-            && _activeBorrowCount == 0
-            && _budget is null
-            && _returnMemoryOnDispose == NativeMemoryReturn.Reuse
-            && first != null
-            && first->Next == null
-            && (long)first->Capacity <= ReuseLimitBytes
+        if (Unsafe.As<RegionState, long>(ref _state) == 0
             && ReferenceEquals(thread.ReusableRegion, this))
         {
-            _lifecycle = NativeOwnerLifecycle.Disposed;
+            _state.Lifecycle = NativeOwnerLifecycle.Disposed;
             _retainEpoch = thread.ReuseEpoch;
             return;
         }
@@ -578,17 +577,17 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
     [MethodImpl(MethodImplOptions.NoInlining)]
     private void DisposeSlow()
     {
-        if (_lifecycle == NativeOwnerLifecycle.Disposed)
+        if (_state.Lifecycle == NativeOwnerLifecycle.Disposed)
         {
             return;
         }
 
-        if (_activeBorrowCount != 0)
+        if (_state.Borrows != 0)
         {
             ThrowActiveOperation(nameof(Dispose));
         }
 
-        _lifecycle = NativeOwnerLifecycle.Disposed;
+        _state.Lifecycle = NativeOwnerLifecycle.Disposed;
         if (_returnMemoryOnDispose == NativeMemoryReturn.Free)
         {
             FreeSegments();
@@ -736,6 +735,16 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
         _retainedBytes = checked(
             _retainedBytes + checked((long)segment->AllocationBytes));
         _segmentCount = segmentCount;
+
+        // A kernel in its thread's slot holds at most one segment within the
+        // reuse limit, which its inlined disposal relies on: past that it leaves
+        // the slot, and its disposal trims it and puts it back.
+        if ((segment != _firstSegment || (long)capacity > ReuseLimitBytes)
+            && ReferenceEquals(_ownerThread.ReusableRegion, this))
+        {
+            _ownerThread.ReusableRegion = null;
+        }
+
         return segment;
     }
 
@@ -770,7 +779,7 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
             long prospectiveBytes = checked(_retainedBytes + checked((long)allocationBytes));
             if (NativeMemoryTestHooks.ConsumeForcedFailure())
             {
-                throw new NativeAllocationFailedException(allocationBytes, OwnerKind, generation: 0, operation, _lifecycle);
+                throw new NativeAllocationFailedException(allocationBytes, OwnerKind, generation: 0, operation, _state.Lifecycle);
             }
             nuint keptBytes = 0;
             memory = _budget is null
@@ -797,7 +806,7 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
                     OwnerKind,
                     generation: 0,
                     operation,
-                    _lifecycle);
+                    _state.Lifecycle);
             }
 
             _peakRetainedBytes = Math.Max(_peakRetainedBytes, prospectiveBytes);
@@ -825,7 +834,7 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
                 OwnerKind,
                 generation: 0,
                 operation,
-                _lifecycle,
+                _state.Lifecycle,
                 exception);
         }
         finally
@@ -939,7 +948,7 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
             operation,
             activeOperationCount: ActiveOperationCount,
             allocationId: 0,
-            _lifecycle);
+            _state.Lifecycle);
 
     internal static NativeAllocationDisposedException CreateEndedLifetime(
         string operation) =>
@@ -963,17 +972,17 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
             operation,
             activeOperationCount: ActiveOperationCount,
             allocationId: 0,
-            _lifecycle);
+            _state.Lifecycle);
 
     [System.Diagnostics.CodeAnalysis.DoesNotReturn]
     private void ThrowActiveOperation(string operation) =>
         throw new NativeAllocationInUseException(
             "NativeRegion cannot initialize recursively or dispose during an entered initializer or bounded callback.",
             OwnerKind, generation: 0, currentGeneration: 0, operation,
-            activeOperationCount: ActiveOperationCount, allocationId: 0, _lifecycle);
+            activeOperationCount: ActiveOperationCount, allocationId: 0, _state.Lifecycle);
 
     private int ActiveOperationCount =>
-        (_activeBorrowCount & int.MaxValue) + (_activeBorrowCount < 0 ? 1 : 0);
+        (_state.Borrows & int.MaxValue) + (_state.Borrows < 0 ? 1 : 0);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static nuint CalculateByteLength<T>(int length)
@@ -1077,4 +1086,16 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
 
         internal IntPtr Pointer { get; }
     }
+}
+
+// A region kernel's lifecycle and entered-operation count, laid out together.
+// Active is zero, so "active with nothing entered" is a zero 64-bit value on
+// either byte order.
+[StructLayout(LayoutKind.Sequential)]
+internal struct RegionState
+{
+    internal NativeOwnerLifecycle Lifecycle;
+
+    // The high bit is initializer admission; the lower bits count bounded borrows.
+    internal int Borrows;
 }
