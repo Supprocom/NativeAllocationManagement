@@ -1618,6 +1618,14 @@ internal sealed class NativeAllocation
         IsScoped = scoped;
         Volatile.Write(ref _scopeEpoch, scopeEpoch);
         Lifecycle = NativeAllocationLifecycle.Active;
+        // A blind reset. A stale copy of the record's previous lease that the
+        // closed admission refuses takes its increment back right after making
+        // it. If the record is returned and rented again in between, this reset
+        // erases the increment, the decrement wraps the count, and the new
+        // lease's operations and its return are then refused. That takes a
+        // returned lease used on another thread and a preemption between two
+        // adjacent instructions, and it shares no memory; clearing only the
+        // closed bit here would put an atomic on every rent.
         NativeOperationAdmission.Reset(ref _operationAdmission);
         InitializedLength = 0;
         Volatile.Write(ref _id, id);
