@@ -98,7 +98,7 @@ internal sealed class NativeThreadState
                 return t_current ?? Create();
             }
 
-            nuint block = NativeStackBlockForTest.Current();
+            nuint block = LookupBlock();
             NativeThreadState? state = Unsafe.Add(
                 ref MemoryMarshal.GetArrayDataReference(s_byBlock),
                 (nint)BlockSlot(block));
@@ -112,6 +112,35 @@ internal sealed class NativeThreadState
 
     // The calling thread's state from the thread-static, for tests.
     internal static NativeThreadState FromThreadStaticForTest => t_current ?? Create();
+
+    // The lookup's own test override, apart from NativeStackBlockForTest's. That
+    // one names an exited thread's real block for the pool caches, and a state
+    // recorded at a real block would be found there by a later thread whose
+    // stack reuses that memory: the recording thread's state, alive, for the
+    // wrong thread. So tests name only blocks at or above 2^52, whose addresses
+    // would lie past 2^64, where no stack can be. Only a test process reads it.
+    internal const ulong FirstBlockForTest = 1UL << 52;
+
+    [ThreadStatic]
+    private static nuint t_blockForTest;
+
+    internal static nuint BlockForTest
+    {
+        get => t_blockForTest;
+        set
+        {
+            if (value != 0 && (ulong)value < FirstBlockForTest)
+            {
+                throw new ArgumentOutOfRangeException(nameof(value), "A test names only blocks no stack can have.");
+            }
+
+            t_blockForTest = value;
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static nuint LookupBlock() =>
+        NativeStackBlockForTest.Enabled && t_blockForTest != 0 ? t_blockForTest : NativeOwnerThread.CurrentBlock();
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static NativeThreadState Create()

@@ -22,8 +22,9 @@ namespace Supprocom.NativeAllocationManagement;
 // runtime reads the thread-static, as before.
 internal static class NativeThreadEnded
 {
-    // Tests force the runtime major version the gate sees, to run the suite on
-    // the thread-static path.
+    // Tests name another runtime major version to run the suite on the
+    // thread-static path. A switch in any app's configuration can only turn the
+    // lookup off this way: the runtime itself must still be version 10.
     internal const string RuntimeMajorVersionSwitch = "Supprocom.NativeAllocationManagement.Testing.RuntimeMajorVersion";
 
     internal static readonly bool CanRead = Probe();
@@ -47,7 +48,7 @@ internal static class NativeThreadEnded
 
     private static bool Probe()
     {
-        if (RuntimeMajorVersion != 10)
+        if (Environment.Version.Major != 10 || RuntimeMajorVersion != 10)
         {
             return false;
         }

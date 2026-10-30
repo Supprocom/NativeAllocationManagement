@@ -1,11 +1,13 @@
 namespace Supprocom.NativeAllocationManagement.Tests;
 
 // NativeThreadState.Current finds the calling thread's state by stack block.
-// These tests name the blocks through the test-only override, which also lets
-// a thread take the block of one that ended, as a thread whose stack reuses
-// that memory would. The table is process-wide, so they run alone. With the
-// suite run as another runtime (-p:NamTestRuntimeMajor=11), Current reads the
-// thread-static only, and the table checks are skipped.
+// These tests name the blocks through the lookup's test-only override, which
+// also lets a thread take the block of one that ended, as a thread whose stack
+// reuses that memory would. They name only blocks no stack can have
+// (NativeThreadState.FirstBlockForTest and above), so no later thread finds a
+// test thread's state at its own block. The table is process-wide, so they run
+// alone. With the suite run as another runtime (-p:NamTestRuntimeMajor=11),
+// Current reads the thread-static only, and the table checks are skipped.
 [CollectionDefinition(Name, DisableParallelization = true)]
 #pragma warning disable CA1515 // xUnit requires collection-definition classes to be public.
 public sealed class ThreadStateByBlockGroup
@@ -56,7 +58,7 @@ public sealed class NativeThreadStateBlockTests
         RunOnNewThread(() =>
         {
             NativeThreadState own = NativeThreadState.FromThreadStaticForTest;
-            nuint first = (nuint)0x3456_7800;
+            nuint first = Block(0x3456_7800);
             int before = own.BlockMisses;
             for (int pass = 0; pass < 2; pass++)
             {
@@ -78,7 +80,7 @@ public sealed class NativeThreadStateBlockTests
     [Fact]
     public void ANewThreadAtAnEndedThreadsBlockGetsItsOwnState()
     {
-        nuint block = (nuint)0x4567_8900;
+        nuint block = Block(0x4567_8900);
         using ManualResetEventSlim nextReady = new(false);
         using ManualResetEventSlim firstEnded = new(false);
         NativeThreadState? ended = null;
@@ -138,7 +140,7 @@ public sealed class NativeThreadStateBlockTests
     [Fact]
     public void LiveThreadsWhoseBlocksShareASlotEachGetTheirOwnState()
     {
-        nuint one = (nuint)0x5678_9A00;
+        nuint one = Block(0x5678_9A00);
         nuint other = one + 1024;
         while (NativeThreadState.BlockSlotForTest(other) != NativeThreadState.BlockSlotForTest(one))
         {
@@ -169,7 +171,7 @@ public sealed class NativeThreadStateBlockTests
             return;
         }
 
-        nuint block = (nuint)0x6789_AB00;
+        nuint block = Block(0x6789_AB00);
         NativeThreadState ended = StateOfEndedThreadAt(block);
         Assert.Same(ended, NativeThreadState.AtBlockSlotForTest(block));
         NativeEndedThreads.ReleaseEndedForTest();
@@ -186,7 +188,7 @@ public sealed class NativeThreadStateBlockTests
             return;
         }
 
-        nuint block = (nuint)0x789A_BC00;
+        nuint block = Block(0x789A_BC00);
         NativeThreadState ended = StateOfEndedThreadAt(block);
         Assert.Same(ended, NativeThreadState.AtBlockSlotForTest(block));
         for (int collection = 0; collection < 2; collection++)
@@ -197,6 +199,60 @@ public sealed class NativeThreadStateBlockTests
 
         Assert.NotSame(ended, NativeThreadState.AtBlockSlotForTest(block));
     }
+
+    // NativeStackBlockReuseTests name an exited thread's real block for the pool
+    // caches. A thread whose stack then reuses that memory must still find its
+    // own state, never the naming thread's.
+    [Fact]
+    public void AThreadOnAnExitedThreadsStackNeverFindsTheStateOfAThreadThatNamedItsBlock()
+    {
+        Assert.True(NativeStackBlockForTest.Enabled);
+        int wrong = 0;
+        for (int round = 0; round < 20; round++)
+        {
+            nuint exitedBlock = 0;
+            Thread exited = new(() => exitedBlock = NativeOwnerThread.CurrentBlock());
+            exited.Start();
+            Assert.True(exited.Join(Timeout));
+            NativeThreadState naming;
+            nuint previous = NativeStackBlockForTest.Override;
+            NativeStackBlockForTest.Override = exitedBlock;
+            try
+            {
+                naming = NativeThreadState.Current;
+            }
+            finally
+            {
+                NativeStackBlockForTest.Override = previous;
+            }
+
+            NativeThreadState? found = null;
+            NativeThreadState? own = null;
+            Thread next = new(() =>
+            {
+                found = NativeThreadState.Current;
+                own = NativeThreadState.FromThreadStaticForTest;
+            });
+            next.Start();
+            Assert.True(next.Join(Timeout));
+            Assert.Same(own, found);
+            if (ReferenceEquals(found, naming))
+            {
+                wrong++;
+            }
+        }
+
+        Assert.Equal(0, wrong);
+    }
+
+    [Fact]
+    public void ABlockAStackCanHaveIsRefusedAsATestBlock()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => NativeThreadState.BlockForTest = (nuint)0x3456_7800);
+        Assert.Equal((nuint)0, NativeThreadState.BlockForTest);
+    }
+
+    private static nuint Block(ulong offset) => (nuint)(NativeThreadState.FirstBlockForTest + offset);
 
     private static void TakeTurns(nuint block, SemaphoreSlim mine, SemaphoreSlim theirs)
     {
@@ -258,10 +314,10 @@ public sealed class NativeThreadStateBlockTests
 
         internal OverrideBlock(nuint block)
         {
-            _previous = NativeStackBlockForTest.Override;
-            NativeStackBlockForTest.Override = block;
+            _previous = NativeThreadState.BlockForTest;
+            NativeThreadState.BlockForTest = block;
         }
 
-        public void Dispose() => NativeStackBlockForTest.Override = _previous;
+        public void Dispose() => NativeThreadState.BlockForTest = _previous;
     }
 }
