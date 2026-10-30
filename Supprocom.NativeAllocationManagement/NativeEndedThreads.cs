@@ -118,6 +118,7 @@ internal static class NativeEndedThreads
                 }
 
                 state.ReleaseStorageOfEndedThread();
+                NativeThreadState.ForgetEnded(state);
             }
 
             // The last entry, not yet checked, takes this one's place.

@@ -16,6 +16,8 @@
     <RuntimeHostConfigurationOption Include="Supprocom.NativeAllocationManagement.Testing.StackBlockOverride" Value="true" />
     <!-- NativeTransferRetirementRaceTests hold borrows at the points where they race a move. -->
     <RuntimeHostConfigurationOption Include="Supprocom.NativeAllocationManagement.Testing.TransferRaces" Value="true" />
+    <!-- dotnet test -p:NamTestRuntimeMajor=11 runs the suite as if under another runtime: NativeThreadState.Current then reads the thread-static only. -->
+    <RuntimeHostConfigurationOption Include="Supprocom.NativeAllocationManagement.Testing.RuntimeMajorVersion" Value="$(NamTestRuntimeMajor)" Condition="'$(NamTestRuntimeMajor)' != ''" />
   </ItemGroup>
 
   <ItemGroup>
