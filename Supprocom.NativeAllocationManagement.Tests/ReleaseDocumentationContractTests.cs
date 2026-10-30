@@ -9,10 +9,10 @@ public sealed class ReleaseDocumentationContractTests
         string guide = Read("docs", "getting-started.md");
         Assert.DoesNotContain("unreleased", readme, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("unreleased", guide, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("released `0.3.0` package", readme, StringComparison.Ordinal);
-        Assert.Contains("released `0.3.0` package", guide, StringComparison.Ordinal);
-        Assert.Contains("--version 0.3.0", guide, StringComparison.Ordinal);
-        Assert.Contains("Version=\"0.3.0\"", guide, StringComparison.Ordinal);
+        Assert.Contains("released `0.3.1` package", readme, StringComparison.Ordinal);
+        Assert.Contains("released `0.3.1` package", guide, StringComparison.Ordinal);
+        Assert.Contains("--version 0.3.1", guide, StringComparison.Ordinal);
+        Assert.Contains("Version=\"0.3.1\"", guide, StringComparison.Ordinal);
         Assert.DoesNotContain("version-status.md", readme, StringComparison.Ordinal);
         Assert.DoesNotContain("version-status.md", guide, StringComparison.Ordinal);
     }

@@ -1,6 +1,6 @@
 # Getting started
 
-This guide describes the released `0.3.0` package. Its budget, prepared, layout
+This guide describes the released `0.3.1` package. Its budget, prepared, layout
 and smart-pointer APIs do not exist in 0.2.x. Transfer representation and rebuild
 requirements for consumers built against 0.2.x are described in the ownership
 section below.
@@ -18,17 +18,17 @@ The package targets .NET 10. The fast `NativePool<T>`, `NativeRegion`, and
 generation model for concurrent ownership. Their ordinary leases can store managed
 references through a separate root-aware path. Transferable leases remain unmanaged.
 
-Install version `0.3.0` with the .NET CLI:
+Install version `0.3.1` with the .NET CLI:
 
 ```powershell
-dotnet add package Supprocom.NativeAllocationManagement --version 0.3.0
+dotnet add package Supprocom.NativeAllocationManagement --version 0.3.1
 ```
 
 The equivalent project file entry is:
 
 ```xml
 <ItemGroup>
-  <PackageReference Include="Supprocom.NativeAllocationManagement" Version="0.3.0" />
+  <PackageReference Include="Supprocom.NativeAllocationManagement" Version="0.3.1" />
 </ItemGroup>
 ```
 

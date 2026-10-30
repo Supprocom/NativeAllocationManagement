@@ -9,7 +9,7 @@
     <PackageId>Supprocom.NativeAllocationManagement</PackageId>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
-    <Version>0.3.0</Version>
+    <Version>0.3.1</Version>
     <Authors>Supprocom</Authors>
     <Company>Supprocom</Company>
     <Description>Explicit C# owners for growable native builders, reusable typed pools, cross-thread transferable leases, lexical regions, and heterogeneous native arenas.</Description>
@@ -17,7 +17,7 @@
     <PackageLicenseExpression>AGPL-3.0-only</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageTags>native-memory;native-builder;memory-pool;native-transfer;cross-thread;native-region;native-arena;roslyn-analyzer;scoped-recycling</PackageTags>
-    <PackageReleaseNotes>Add native memory budgets and admission, prepared pools and arenas, typed layouts, shared and weak ownership, owner diagnostics and ownership code fixes. Speed up hot paths with direct lease spans, static span processors, NativePool&lt;T&gt;.Shared, NativeTransfer&lt;T&gt;.Create and uninitialized acquisitions. NativeTransfer&lt;T&gt; is now a value type, so rebuild consumers. Per-event accounting counters are now opt-in.</PackageReleaseNotes>
+    <PackageReleaseNotes>Fix NativeConcurrentArena. When another thread called ScratchScoped or InitializeScoped while the arena's own thread was scratching, the new range could share memory with that thread's leases; other threads' scoped ranges now stay out of the memory that thread allocates from. Threads can also now run Scratch initializers on the same arena at the same time, where 0.3.0 threw NativeAllocationInUseException, and a failed initializer gives back only space that no other lease uses. Fix NativeTransfer. When Move found a callback running on another thread, the storage could stay held until finalization after that callback ended, and a callback refused during a Move or Dispose could leave the moved transfer, or a builder's next transfer, refusing every callback and disposal. Dispose, Move and NativeShared.Create also no longer fail while a stale copy's callback is leaving.</PackageReleaseNotes>
     <PackageOutputPath>$(MSBuildThisFileDirectory)..\artifacts\packages\</PackageOutputPath>
   </PropertyGroup>
 
