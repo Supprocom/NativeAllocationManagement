@@ -16,7 +16,8 @@ internal partial class NativeTransferControl<T> where T : unmanaged
             Volatile.Write(ref _state, Active);
             ThrowInactive("NativeShared.Pin", Moved);
         }
-        if (NativeOperationAdmission.Close(ref _operationAdmission) != 0)
+        if (NativeOperationAdmission.Close(ref _operationAdmission) != 0
+            && BorrowsRemainActive())
         {
             NativeOperationAdmission.Open(ref _operationAdmission);
             Volatile.Write(ref _state, Active);

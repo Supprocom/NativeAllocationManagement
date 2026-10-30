@@ -12,6 +12,8 @@
   <ItemGroup>
     <!-- Diagnostic contracts and measurement workers read per-event counters. -->
     <RuntimeHostConfigurationOption Include="Supprocom.NativeAllocationManagement.DetailedCounters" Value="true" />
+    <!-- NativeTransferRetirementRaceTests hold borrows and moves at the points where they race. -->
+    <RuntimeHostConfigurationOption Include="Supprocom.NativeAllocationManagement.Testing.TransferRaces" Value="true" />
   </ItemGroup>
 
   <ItemGroup>

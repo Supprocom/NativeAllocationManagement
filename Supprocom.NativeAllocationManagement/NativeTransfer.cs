@@ -419,9 +419,8 @@ internal partial class NativeTransferControl<T>
             ThrowInactive(nameof(Dispose), Moved);
         }
 
-        int activeOperations =
-            NativeOperationAdmission.Close(ref _operationAdmission);
-        if (activeOperations != 0)
+        if (NativeOperationAdmission.Close(ref _operationAdmission) != 0
+            && BorrowsRemainActive())
         {
             NativeOperationAdmission.Open(ref _operationAdmission);
             Volatile.Write(ref _state, Active);
@@ -545,12 +544,20 @@ internal partial class NativeTransferControl<T>
     private protected void EnterTransferOperation(long authorityVersion, string operation)
     {
         EnsureActive(authorityVersion, operation);
-        if (!NativeOperationAdmission.TryEnter(
-            ref _operationAdmission, out int enteredCount))
+        if (NativeTransferRacesForTest.Enabled)
         {
-            ThrowInactive(
-                operation,
-                Volatile.Read(ref _state));
+            NativeTransferRacesForTest.Run(NativeTransferRacesForTest.AfterActiveCheck);
+        }
+
+        int enteredCount = Interlocked.Increment(ref _operationAdmission);
+        if (enteredCount <= 0)
+        {
+            RefuseEntry(enteredCount, operation);
+        }
+
+        if (NativeTransferRacesForTest.Enabled)
+        {
+            NativeTransferRacesForTest.Run(NativeTransferRacesForTest.AfterAdmission);
         }
 
         int state = Volatile.Read(ref _state);
@@ -566,8 +573,72 @@ internal partial class NativeTransferControl<T>
             return;
         }
 
-        NativeOperationAdmission.Exit(ref _operationAdmission);
+        // A move may have retired this transfer since the check above, and
+        // the last borrow to leave completes a retirement.
+        ExitTransferOperation();
         ThrowInactive(operation, state == Active ? Moved : state);
+    }
+
+    // A closed admission refused this borrow. Its increment is taken back at
+    // once, but the last borrow of a retiring transfer may have counted it and
+    // left the retirement to this decrement.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private void RefuseEntry(int entered, string operation)
+    {
+        if (NativeTransferRacesForTest.Enabled)
+        {
+            NativeTransferRacesForTest.Run(NativeTransferRacesForTest.BeforeRefusedExit);
+        }
+
+        Interlocked.Decrement(ref _operationAdmission);
+        if (entered == int.MinValue)
+        {
+            throw new InvalidOperationException(
+                "The native operation count reached its limit.");
+        }
+
+        int state = Volatile.Read(ref _state);
+        if (state == Retiring)
+        {
+            CompleteRetirement();
+        }
+
+        ThrowInactive(operation, state);
+    }
+
+    // Called after the state left Active, so no borrow can newly be admitted.
+    // A borrow still counted may be an alias of an earlier version that passed
+    // its first check before that change and is about to leave: wait a few
+    // microseconds for it before treating it as an active callback.
+    private protected bool BorrowsRemainActive()
+    {
+        if (NativeOperationAdmission.Count(ref _operationAdmission) == 0)
+        {
+            return false;
+        }
+
+        return WaitForLeavingBorrows();
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private bool WaitForLeavingBorrows()
+    {
+        if (NativeTransferRacesForTest.Enabled)
+        {
+            NativeTransferRacesForTest.Run(NativeTransferRacesForTest.BeforeBorrowWait);
+        }
+
+        for (int attempt = 0; attempt < 64; attempt++)
+        {
+            if (NativeOperationAdmission.Count(ref _operationAdmission) == 0)
+            {
+                return false;
+            }
+
+            Thread.SpinWait(8);
+        }
+
+        return NativeOperationAdmission.Count(ref _operationAdmission) != 0;
     }
 
     private protected void ExitTransferOperation()
@@ -612,9 +683,8 @@ internal partial class NativeTransferControl<T>
             ThrowInactive(nameof(Move), Moved);
         }
 
-        int activeOperations =
-            NativeOperationAdmission.Close(ref _operationAdmission);
-        if (activeOperations != 0)
+        if (NativeOperationAdmission.Close(ref _operationAdmission) != 0
+            && BorrowsRemainActive())
         {
             try
             {
@@ -622,7 +692,10 @@ internal partial class NativeTransferControl<T>
             }
             finally
             {
-                Volatile.Write(ref _state, Retiring);
+                // A full fence: the recheck below reads the borrow count only
+                // after every exit can see Retiring, so either it sees the last
+                // exit or that exit sees Retiring and completes the retirement.
+                Interlocked.Exchange(ref _state, Retiring);
                 TraceOwnership(budget, NativeMemoryTraceKind.Retired);
                 // The last callback may have exited while the state was Moving.
                 // Recheck after publication; the terminal CAS arbitrates with its exit.
@@ -630,6 +703,11 @@ internal partial class NativeTransferControl<T>
             }
             throw new InvalidOperationException(
                 "NativeTransfer.Move found an active callback. The source will return after that callback ends.");
+        }
+
+        if (NativeTransferRacesForTest.Enabled)
+        {
+            NativeTransferRacesForTest.Run(NativeTransferRacesForTest.BeforeMovePublication);
         }
 
         try
@@ -669,7 +747,10 @@ internal partial class NativeTransferControl<T>
     private void PublishMove(long authorityVersion)
     {
         Volatile.Write(ref _authorityVersion, authorityVersion);
-        NativeOperationAdmission.Reset(ref _operationAdmission);
+        // Clear only the closed bit: a refused alias of the old version may
+        // still hold its increment, and a blind reset would let its decrement
+        // wrap the count.
+        NativeOperationAdmission.Open(ref _operationAdmission);
         NativeMemoryBudget? budget = _kernel?.BudgetForSharing ?? _block.Budget;
         TraceOwnership(budget, NativeMemoryTraceKind.Moved);
         Volatile.Write(ref _state, Active);
@@ -812,7 +893,9 @@ internal partial class NativeTransferControl<T>
         _ownerId = ownerId;
         _length = 0;
         _capacity = 0;
-        NativeOperationAdmission.Reset(ref _operationAdmission);
+        // As for a move: a refused alias of the earlier lifetime may still
+        // hold its increment, so clear only the closed bit.
+        NativeOperationAdmission.Open(ref _operationAdmission);
         _peakBorrows = 0;
         _returnFailures = 0;
         _historyOverflowed = false;
@@ -870,5 +953,41 @@ internal partial class NativeTransferControl<T>
         long AuthorityVersion)
     {
         internal void Publish() => Source.PublishMove(AuthorityVersion);
+    }
+}
+
+// Tests hold a borrow, a move or a disposal at the points where these races
+// happen. Only a test process sets the switch; elsewhere Enabled is false and
+// optimized code drops every call.
+internal static class NativeTransferRacesForTest
+{
+    internal const string Switch = "Supprocom.NativeAllocationManagement.Testing.TransferRaces";
+
+    internal static readonly bool Enabled = AppContext.TryGetSwitch(Switch, out bool enabled) && enabled;
+
+    // After a borrow's active check, before its admission increment.
+    internal static Action? AfterActiveCheck;
+
+    // After a borrow's admission increment, before it rechecks the state.
+    internal static Action? AfterAdmission;
+
+    // After a refused borrow's increment, before it takes the increment back.
+    internal static Action? BeforeRefusedExit;
+
+    // When a disposal, move or pin starts waiting for borrows that may be leaving.
+    internal static Action? BeforeBorrowWait;
+
+    // After a move closed admission with no borrow, before it publishes the new version.
+    internal static Action? BeforeMovePublication;
+
+    internal static void Run(Action? hook) => hook?.Invoke();
+
+    internal static void Reset()
+    {
+        AfterActiveCheck = null;
+        AfterAdmission = null;
+        BeforeRefusedExit = null;
+        BeforeBorrowWait = null;
+        BeforeMovePublication = null;
     }
 }
