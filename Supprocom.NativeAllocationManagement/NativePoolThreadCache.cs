@@ -109,6 +109,10 @@ internal sealed class NativePoolThreadCache
     internal NativeBumpSegment? LaneSegment;
     internal nuint LaneCursor;
     internal nuint LaneLimit;
+    // The lane segment's storage address, set with LaneSegment: a lane rent
+    // reaches its storage in one load. A segment keeps its address until it is
+    // freed, which revokes every cache first.
+    internal IntPtr LaneBase;
     internal nuint LaneChunkBytes = 4096;
 
     internal NativePoolThreadCache(NativeOwnerKernel kernel, Thread owner)

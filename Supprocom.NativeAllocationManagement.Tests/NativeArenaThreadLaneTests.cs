@@ -2,7 +2,9 @@ namespace Supprocom.NativeAllocationManagement.Tests;
 
 // Threads other than a synchronized arena's own fast thread scratch from
 // private chunks of its shared segments. These tests race them against each
-// other and against the operations that revoke their chunks.
+// other and against the operations that revoke their chunks. A fault injected
+// anywhere in the process turns lanes off, so they run alone.
+[Collection(ProcessCounterGroup.Name)]
 public sealed class NativeArenaThreadLaneTests
 {
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(30);
@@ -157,10 +159,12 @@ public sealed class NativeArenaThreadLaneTests
         using ManualResetEventSlim scratched = new(false);
         using ManualResetEventSlim released = new(false);
         NativeAllocationException? staleRead = null;
+        bool onLane = false;
         int renewed = 0;
         Thread owner = new(() =>
         {
             ConcurrentArenaLease<int> lease = arena.Scratch<int>(2, static writer => writer.Fill(4));
+            onLane = lease.HasLaneCacheForTest;
             scratched.Set();
             Assert.True(released.Wait(Timeout));
             try
@@ -181,6 +185,7 @@ public sealed class NativeArenaThreadLaneTests
         released.Set();
         Assert.True(owner.Join(Timeout));
 
+        Assert.True(onLane);
         Assert.NotNull(staleRead);
         Assert.Equal(9, renewed);
     }
@@ -208,9 +213,11 @@ public sealed class NativeArenaThreadLaneTests
         using ManualResetEventSlim entered = new(false);
         using ManualResetEventSlim release = new(false);
         int result = 0;
+        bool onLane = false;
         Thread owner = new(() =>
         {
             ConcurrentArenaLease<int> lease = arena.Scratch<int>(3, static writer => writer.Fill(4));
+            onLane = lease.HasLaneCacheForTest;
             result = lease.Read(view =>
             {
                 entered.Set();
@@ -232,6 +239,7 @@ public sealed class NativeArenaThreadLaneTests
         release.Set();
         Assert.True(owner.Join(Timeout));
 
+        Assert.True(onLane);
         Assert.Equal(11, result);
         Assert.Equal(0, arena.CurrentGenerationActiveOperationsForTest);
         arena.ReleaseLeasesToNativeMemory();
@@ -244,9 +252,11 @@ public sealed class NativeArenaThreadLaneTests
         using ManualResetEventSlim scratched = new(false);
         using ManualResetEventSlim released = new(false);
         int rejected = 0;
+        bool onLane = false;
         Thread owner = new(() =>
         {
             ConcurrentArenaLease<int> lease = arena.Scratch<int>(2, static writer => writer.Fill(1));
+            onLane = lease.HasLaneCacheForTest;
             scratched.Set();
             Assert.True(released.Wait(Timeout));
             try
@@ -272,8 +282,112 @@ public sealed class NativeArenaThreadLaneTests
         arena.ReleaseLeasesToNativeMemory();
         released.Set();
         Assert.True(owner.Join(Timeout));
+        Assert.True(onLane);
         Assert.Equal(2, rejected);
         Assert.Equal(0, arena.CurrentGenerationActiveOperationsForTest);
+    }
+
+    // A lane operation trusts its armed cache: disposal and a return of the
+    // arena's memory revoke the caches first, so operations after either are
+    // refused, and either is refused while a lane operation is entered.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ALaneOperationAfterDisposalOrReturnIsRejected(bool dispose)
+    {
+        NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
+        using ManualResetEventSlim scratched = new(false);
+        using ManualResetEventSlim ended = new(false);
+        bool onLane = false;
+        NativeAllocationException? read = null;
+        NativeAllocationException? clear = null;
+        Thread owner = new(() =>
+        {
+            ConcurrentArenaLease<int> lease = arena.Scratch<int>(2, static writer => writer.Fill(1));
+            onLane = lease.HasLaneCacheForTest;
+            scratched.Set();
+            if (ended.Wait(Timeout))
+            {
+                try
+                {
+                    _ = lease.Read(static view => view[0]);
+                }
+                catch (NativeAllocationException exception)
+                {
+                    read = exception;
+                }
+
+                try
+                {
+                    lease.Clear();
+                }
+                catch (NativeAllocationException exception)
+                {
+                    clear = exception;
+                }
+            }
+        });
+        owner.Start();
+        Assert.True(scratched.Wait(Timeout));
+        if (dispose)
+        {
+            arena.Dispose();
+        }
+        else
+        {
+            arena.ReturnMemoryToNativeMemory();
+        }
+
+        ended.Set();
+        Assert.True(owner.Join(Timeout));
+        Assert.True(onLane);
+        Type expected = dispose ? typeof(NativeAllocationDisposedException) : typeof(NativeAllocationReturnedException);
+        Assert.IsType(expected, read);
+        Assert.IsType(expected, clear);
+        arena.Dispose();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void DisposalOrReturnDuringALaneOperationIsRefusedAndTheOperationCompletes(bool dispose)
+    {
+        NativeConcurrentArena arena = new(returnMemoryOnDispose: NativeMemoryReturn.Free);
+        using ManualResetEventSlim entered = new(false);
+        using ManualResetEventSlim release = new(false);
+        bool onLane = false;
+        int result = 0;
+        Thread owner = new(() =>
+        {
+            ConcurrentArenaLease<int> lease = arena.Scratch<int>(3, static writer => writer.Fill(4));
+            onLane = lease.HasLaneCacheForTest;
+            result = lease.Read(view =>
+            {
+                entered.Set();
+                _ = release.Wait(Timeout);
+                return view[2];
+            });
+            result += lease.Read(static view => view[0]);
+        });
+        owner.Start();
+        Assert.True(entered.Wait(Timeout));
+        if (dispose)
+        {
+            Assert.Throws<NativeAllocationInUseException>(arena.Dispose);
+        }
+        else
+        {
+            Assert.Throws<NativeAllocationInUseException>(arena.ReturnMemoryToNativeMemory);
+        }
+
+        Assert.Equal(NativeOwnerLifecycle.Active, arena.CurrentLifecycle);
+        release.Set();
+        Assert.True(owner.Join(Timeout));
+        Assert.True(onLane);
+        Assert.Equal(8, result);
+        Assert.Equal(0, arena.CurrentGenerationActiveOperationsForTest);
+        arena.Dispose();
+        Assert.Equal(NativeOwnerLifecycle.Disposed, arena.CurrentLifecycle);
     }
 
     private static int Count(Span<int> span, int marker)

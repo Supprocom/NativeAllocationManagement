@@ -1292,8 +1292,11 @@ internal sealed partial class NativeOwnerKernel
             && (known ?? FindOwnCache()) is NativePoolThreadCache found
             && found.Enter())
         {
+            // Every change of the current generation or the lifecycle revokes
+            // the caches first, so a cache armed for the lease's generation
+            // proves that generation current and the arena active.
             if (ReferenceEquals(found.Generation, allocation.GenerationState)
-                && IsArenaFastHandleActive(allocation))
+                && (!allocation.Scoped || allocation.ScopeEpoch == allocation.GenerationState.ScopeEpoch))
             {
                 found.ActiveOperations++;
                 epoch = found.FoldEpoch;
@@ -1775,7 +1778,7 @@ internal sealed partial class NativeOwnerKernel
             return false;
         }
 
-        IntPtr pointer = AddPointer(reservation.Segment.Segment.Pointer, reservation.Offset);
+        IntPtr pointer = AddPointer(reservation.Base, reservation.Offset);
         int initializedLength = 0;
         try
         {
@@ -1837,7 +1840,7 @@ internal sealed partial class NativeOwnerKernel
                 if (aligned <= cache.LaneLimit && byteLength <= cache.LaneLimit - aligned)
                 {
                     cache.LaneCursor = aligned + byteLength;
-                    IntPtr direct = AddPointer(segment.Segment.Pointer, aligned);
+                    IntPtr direct = AddPointer(cache.LaneBase, aligned);
                     if (fill)
                     {
                         new Span<T>((void*)direct, length).Fill(value);
@@ -1867,7 +1870,7 @@ internal sealed partial class NativeOwnerKernel
             return false;
         }
 
-        IntPtr pointer = AddPointer(reservation.Segment.Segment.Pointer, reservation.Offset);
+        IntPtr pointer = AddPointer(reservation.Base, reservation.Offset);
         if (fill)
         {
             new Span<T>((void*)pointer, length).Fill(value);
@@ -1882,6 +1885,7 @@ internal sealed partial class NativeOwnerKernel
     private readonly record struct ArenaLaneReservation(
         NativeGeneration Generation,
         NativeBumpSegment Segment,
+        IntPtr Base,
         nuint Offset,
         nuint OriginalCursor,
         int Epoch);
@@ -1908,7 +1912,7 @@ internal sealed partial class NativeOwnerKernel
             {
                 cache.LaneCursor = aligned + byteLength;
                 cache.Initializing++;
-                reservation = new ArenaLaneReservation(cache.Generation!, lane, aligned, cursor, cache.FoldEpoch);
+                reservation = new ArenaLaneReservation(cache.Generation!, lane, cache.LaneBase, aligned, cursor, cache.FoldEpoch);
                 cache.Exit();
                 return true;
             }
@@ -1918,14 +1922,14 @@ internal sealed partial class NativeOwnerKernel
         return false;
     }
 
-    // Under the owner lock: arms the thread's cache, gives it a lane with room
-    // for the request and reserves the range, so no revocation can come
-    // between. A full lane goes back to the generation as an ordinary segment.
-    // False means the arena is not active or has no room for another cache;
-    // the locked path then reports or serves the request.
-    // Arms this thread's own cache, found through the thread-local tables: a
-    // cache the stack-block table gave the caller may be an exited thread's,
-    // which a revocation may have dropped since.
+    // Under the owner lock: arms this thread's own cache, found through the
+    // thread-local tables, gives it a lane with room for the request and
+    // reserves the range, so no revocation can come between. The cache the
+    // stack-block table gave the caller is not used: it may be an exited
+    // thread's, which a revocation may have dropped since. A full lane goes
+    // back to the generation as an ordinary segment. False means the arena is
+    // not active or has no room for another cache; the locked path then
+    // reports or serves the request.
     private bool ClaimArenaLane(
         [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out NativePoolThreadCache? cache,
         nuint byteLength,
@@ -2004,6 +2008,7 @@ internal sealed partial class NativeOwnerKernel
             nuint chunkStart = AlignUp(segment.LowCursor, alignment);
             segment.LowCursor = checked(chunkStart + chunkBytes);
             cache.LaneSegment = segment;
+            cache.LaneBase = segment.Segment.Pointer;
             cache.LaneCursor = chunkStart;
             cache.LaneLimit = segment.LowCursor;
             cache.Generation = generation;
@@ -2032,6 +2037,7 @@ internal sealed partial class NativeOwnerKernel
         }
 
         cache.LaneSegment = null;
+        cache.LaneBase = IntPtr.Zero;
         cache.LaneCursor = 0;
         cache.LaneLimit = 0;
     }
