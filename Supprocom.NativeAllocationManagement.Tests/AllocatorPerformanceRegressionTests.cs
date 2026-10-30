@@ -6,6 +6,7 @@ using Xunit.Abstractions;
 
 namespace Supprocom.NativeAllocationManagement.Tests;
 
+[Collection(PerformanceRegressionGroup.Name)]
 public sealed class AllocatorPerformanceRegressionTests
 {
     private const int ProcessTimeoutMilliseconds = 10_000;
