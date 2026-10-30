@@ -37,10 +37,10 @@ says when NAM is worth it.
 
 ## Quick example
 
-Install the released `0.3.0` package (it targets .NET 10):
+Install the released `0.3.1` package (it targets .NET 10):
 
 ```powershell
-dotnet add package Supprocom.NativeAllocationManagement --version 0.3.0
+dotnet add package Supprocom.NativeAllocationManagement --version 0.3.1
 ```
 
 Borrow a temporary buffer for one call. It returns to the pool when the `using` scope
