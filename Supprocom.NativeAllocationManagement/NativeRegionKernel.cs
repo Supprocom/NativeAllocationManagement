@@ -16,7 +16,7 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
     // segment within the limit, so a region that grew starts the next one at
     // that size. A larger segment would be mapped fresh, page by page, for
     // every region that needs it.
-    private const long ReuseLimitBytes = 1024 * 1024;
+    internal const long ReuseLimitBytes = 1024 * 1024;
 
     private readonly NativeMemoryReturn _returnMemoryOnDispose;
     private NativeMemoryBudget? _budget;
@@ -90,38 +90,59 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
             // disposal stores no reference to put it back.
             NativeThreadState thread = NativeThreadState.Current;
             NativeRegionKernel? reusable = thread.ReusableRegion;
-            bool inSlot = reusable is { _state.Lifecycle: NativeOwnerLifecycle.Disposed };
-            if (!inSlot)
+            if (reusable is { _state.Lifecycle: NativeOwnerLifecycle.Disposed }
+                && reusable.TryReactivateKept(thread, preAllocateBytes))
             {
-                // One in use there belongs to an enclosing region, which puts it
-                // back on disposal, or to a region never disposed: leaving it to
-                // its region lets the guard return an abandoned region's storage.
-                if (reusable is not null)
-                {
-                    thread.ReusableRegion = null;
-                }
-
-                reusable = thread.MoreReusableRegions is null ? null : TakeMoreReusable(thread);
+                return reusable;
             }
 
-            if (reusable is not null)
-            {
-                if (reusable.TryReactivate(thread, preAllocateBytes))
-                {
-                    return reusable;
-                }
-
-                // Its storage is freed; the slot must not offer it again.
-                if (inSlot)
-                {
-                    thread.ReusableRegion = null;
-                }
-            }
+            return AcquireReusable(thread, preAllocateBytes);
         }
 
         return new NativeRegionKernel(
             preAllocateBytes,
             returnMemoryOnDispose);
+    }
+
+    // Every other default-policy acquisition: a slot kernel without its
+    // segment or with stale storage, a nested scope, or no kernel to reuse.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static NativeRegionKernel AcquireReusable(
+        NativeThreadState thread,
+        nuint preAllocateBytes)
+    {
+        NativeRegionKernel? reusable = thread.ReusableRegion;
+        bool inSlot = reusable is { _state.Lifecycle: NativeOwnerLifecycle.Disposed };
+        if (!inSlot)
+        {
+            // One in use there belongs to an enclosing region, which puts it
+            // back on disposal, or to a region never disposed: leaving it to
+            // its region lets the guard return an abandoned region's storage.
+            if (reusable is not null)
+            {
+                thread.ReusableRegion = null;
+            }
+
+            reusable = thread.MoreReusableRegions is null ? null : TakeMoreReusable(thread);
+        }
+
+        if (reusable is not null)
+        {
+            if (reusable.TryReactivate(thread, preAllocateBytes))
+            {
+                return reusable;
+            }
+
+            // Its storage is freed; the slot must not offer it again.
+            if (inSlot)
+            {
+                thread.ReusableRegion = null;
+            }
+        }
+
+        return new NativeRegionKernel(
+            preAllocateBytes,
+            NativeMemoryReturn.Reuse);
     }
 
     // The kernel a budgeted region of this thread kept for the next one with
@@ -156,6 +177,29 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
     private static NativeRegionKernel? TakeMoreReusable(NativeThreadState thread) =>
         thread.MoreReusableRegions!.Pop();
 
+    // The slot kernel's common case: it kept its first segment, which still
+    // serves. False leaves everything to AcquireReusable.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private bool TryReactivateKept(NativeThreadState thread, nuint preAllocateBytes)
+    {
+        RegionSegmentHeader* segment = _firstSegment;
+        if (segment == null
+            || _retainEpoch != thread.ReuseEpoch
+            || segment->MetricsEpoch != NativeMemoryAccounting.CurrentMetricsEpoch
+            || segment->Capacity < preAllocateBytes
+            || _generation == int.MaxValue)
+        {
+            return false;
+        }
+
+        Reactivate(thread);
+        byte* cursor = (byte*)segment + HeaderBytes;
+        _currentSegment = segment;
+        _currentCursor = cursor;
+        _currentEnd = cursor + segment->Capacity;
+        return true;
+    }
+
     private bool TryReactivate(NativeThreadState thread, nuint preAllocateBytes)
     {
         RegionSegmentHeader* segment = _firstSegment;
@@ -173,17 +217,23 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
             return false;
         }
 
+        Reactivate(thread);
+        _currentSegment = segment;
+        _currentCursor = segment == null ? null : (byte*)segment + HeaderBytes;
+        _currentEnd = segment == null ? null : _currentCursor + segment->Capacity;
+        return true;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void Reactivate(NativeThreadState thread)
+    {
         NativeMemoryAccounting.PrepareThread();
         Id = NativeOwnerIdentity.Next(thread);
         _generation++;
         _state.Lifecycle = NativeOwnerLifecycle.Active;
-        _currentSegment = segment;
-        _currentCursor = segment == null ? null : (byte*)segment + HeaderBytes;
-        _currentEnd = segment == null ? null : _currentCursor + segment->Capacity;
         _requestedBytes = 0;
         _peakRetainedBytes = _retainedBytes;
         _activationSegmentCount = _segmentCount;
-        return true;
     }
 
     private bool TryRetainForReuse()
@@ -324,16 +374,10 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
     {
         ArgumentNullException.ThrowIfNull(initializer);
         ArgumentOutOfRangeException.ThrowIfNegative(length);
-        ValidateLeaseActive(nameof(NativeRegion.Lease));
-        if (_state.Borrows < 0)
-        {
-            ThrowActiveOperation(nameof(NativeRegion.Lease));
-        }
-
+        ValidateLeaseAdmission(nameof(NativeRegion.Lease));
         nuint byteLength = CalculateByteLength<T>(length);
         nuint alignment = CalculateAlignment<T>();
-        long requestedBytes = checked(
-            _requestedBytes + checked((long)byteLength));
+        long requestedBytes = RequestedAfter(byteLength);
         // The high bit is initializer admission; lower bits remain the local
         // bounded-borrow count. No per-range control or owner field is needed.
         _state.Borrows |= int.MinValue;
@@ -356,15 +400,9 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
         where T : unmanaged
     {
         ArgumentOutOfRangeException.ThrowIfNegative(length);
-        ValidateLeaseActive(nameof(NativeRegion.Lease));
-        if (_state.Borrows < 0)
-        {
-            ThrowActiveOperation(nameof(NativeRegion.Lease));
-        }
-
+        ValidateLeaseAdmission(nameof(NativeRegion.Lease));
         nuint byteLength = CalculateByteLength<T>(length);
-        long requestedBytes = checked(
-            _requestedBytes + checked((long)byteLength));
+        long requestedBytes = RequestedAfter(byteLength);
         RegionReservation reservation = Reserve(byteLength, CalculateAlignment<T>());
         // An unmanaged fill runs no user code: no initializer admission or rollback.
         new Span<T>((void*)reservation.Pointer, length).Fill(value);
@@ -376,15 +414,9 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
         where T : unmanaged
     {
         ArgumentOutOfRangeException.ThrowIfNegative(length);
-        ValidateLeaseActive(nameof(NativeRegion.LeaseUninitialized));
-        if (_state.Borrows < 0)
-        {
-            ThrowActiveOperation(nameof(NativeRegion.LeaseUninitialized));
-        }
-
+        ValidateLeaseAdmission(nameof(NativeRegion.LeaseUninitialized));
         nuint byteLength = CalculateByteLength<T>(length);
-        long requestedBytes = checked(
-            _requestedBytes + checked((long)byteLength));
+        long requestedBytes = RequestedAfter(byteLength);
         RegionReservation reservation = Reserve(byteLength, CalculateAlignment<T>());
         _requestedBytes = requestedBytes;
         return new Local<T>(this, reservation.Pointer, length, _generation);
@@ -444,6 +476,36 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
         {
             throw CreateDisposed(operation);
         }
+    }
+
+    // A new lease needs an active region and no entered initializer. Active is
+    // zero and an entered initializer sets the borrow count's high bit, so one
+    // test of the packed state checks both.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void ValidateLeaseAdmission(string operation)
+    {
+        if ((Unsafe.As<RegionState, ulong>(ref _state) & RegionState.LeaseRefusedMask) != 0)
+        {
+            ThrowLeaseRefused(operation);
+        }
+    }
+
+    // The requested bytes with one more lease, added unchecked. A lease's byte
+    // count is below 2^62: an int length times an unmanaged size, each below
+    // 2^31 (in a 32-bit process CalculateByteLength refuses more than 2^32 - 1).
+    // The current sum counts only published leases, which lie apart inside
+    // this region's segments, so it is below the bytes the process can map:
+    // under 2^57 on every 64-bit platform, under 2^32 in a 32-bit process. The
+    // sum therefore stays below 2^63.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private long RequestedAfter(nuint byteLength) => _requestedBytes + (long)byteLength;
+
+    [System.Diagnostics.CodeAnalysis.DoesNotReturn]
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private void ThrowLeaseRefused(string operation)
+    {
+        ValidateLeaseActive(operation);
+        ThrowActiveOperation(operation);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -662,22 +724,24 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
                 IntPtr.Zero);
         }
 
+        // A region without a segment has a null cursor and end, which align to
+        // zero and leave no room, so it grows here like a full one. The new
+        // cursor is added unchecked: past the room test, aligned <= end and
+        // byteLength <= end - aligned, so aligned + byteLength <= end; after
+        // GrowSegment the cursor starts a segment of at least byteLength bytes.
         byte* originalCursor = _currentCursor;
-        nuint aligned = originalCursor == null
-            ? 0
-            : byteLength >= NativeVectorAlignment.MinimumBytes
-                ? AlignLarge((nuint)originalCursor, (nuint)_currentEnd, byteLength, alignment)
-                : AlignUp((nuint)originalCursor, alignment);
-        if (originalCursor == null
-            || aligned > (nuint)_currentEnd
-            || byteLength > (nuint)_currentEnd - aligned)
+        nuint end = (nuint)_currentEnd;
+        nuint aligned = byteLength >= NativeVectorAlignment.MinimumBytes
+            ? AlignLarge((nuint)originalCursor, end, byteLength, alignment)
+            : AlignUp((nuint)originalCursor, alignment);
+        if (aligned > end || byteLength > end - aligned)
         {
             GrowSegment(byteLength, "allocation growth");
             originalCursor = _currentCursor;
             aligned = (nuint)originalCursor;
         }
 
-        _currentCursor = (byte*)checked(aligned + byteLength);
+        _currentCursor = (byte*)(aligned + byteLength);
         return new RegionReservation(
             originalCursor,
             (IntPtr)aligned);
@@ -1034,11 +1098,18 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
             : AlignUp(cursor, alignment);
     }
 
+    // Aligns a cursor within a segment, or the header size, unchecked. The
+    // largest alignment is 64 (NativeSegment.Alignment, for the header; a
+    // range takes at most 32), so the mask is at most 63, and a cursor lies at
+    // or below its segment's end. No platform .NET runs on maps the top 64 KiB
+    // of the address space into a process: 64-bit address spaces end below
+    // 2^57, win-x86 reserves its top 64 KiB and linux-arm's ends below 3 GiB.
+    // A cursor plus 63 therefore cannot wrap.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static nuint AlignUp(nuint value, nuint alignment)
     {
         nuint mask = alignment - 1;
-        return checked(value + mask) & ~mask;
+        return (value + mask) & ~mask;
     }
 
     // This kernel's emergency finalizer, shared through its thread; see
@@ -1094,6 +1165,10 @@ internal sealed unsafe class NativeRegionKernel : INativeFinalizationTarget, INa
 [StructLayout(LayoutKind.Sequential)]
 internal struct RegionState
 {
+    // The lifecycle's bits and the initializer bit, as one 64-bit value.
+    internal static readonly ulong LeaseRefusedMask =
+        BitConverter.IsLittleEndian ? 0x8000_0000_FFFF_FFFFUL : 0xFFFF_FFFF_8000_0000UL;
+
     internal NativeOwnerLifecycle Lifecycle;
 
     // The high bit is initializer admission; the lower bits count bounded borrows.
