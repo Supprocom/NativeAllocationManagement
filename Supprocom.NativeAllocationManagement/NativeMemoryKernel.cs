@@ -503,6 +503,18 @@ internal static class NativeMemoryTestHooks
     private static Action<string, NativeGenerationOwner>? _operationEnteredWithGenerationOwner;
     private static int _operationHooksEnabled;
 
+    // Runs on a thread placing a scoped range under the owner lock, after its
+    // segment is chosen and before the segment's top moves. Unlike the
+    // operation hooks it arms nothing, so lanes and the owner's lane keep their
+    // paths: a test lets another thread allocate inside that window.
+    private static Action? _beforeScopedCursorWrite;
+
+    internal static void SetBeforeScopedCursorWrite(Action? callback) =>
+        Volatile.Write(ref _beforeScopedCursorWrite, callback);
+
+    internal static void BeforeScopedCursorWrite() =>
+        Volatile.Read(ref _beforeScopedCursorWrite)?.Invoke();
+
     // Set when a test arms any fault or hook and cleared only by Reset, so the
     // reuse caches check one flag while no test injects anything.
     private static int _faultsArmed;
@@ -525,6 +537,7 @@ internal static class NativeMemoryTestHooks
         Volatile.Write(ref _beforeOperationEntryWithKernel, null);
         Volatile.Write(ref _operationEnteredWithAllocation, null);
         Volatile.Write(ref _operationEnteredWithGenerationOwner, null);
+        Volatile.Write(ref _beforeScopedCursorWrite, null);
         Volatile.Write(ref _operationHooksEnabled, 0);
         Volatile.Write(ref _faultsArmed, 0);
     }
@@ -4250,6 +4263,11 @@ internal sealed partial class NativeOwnerKernel
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    // A thread other than a synchronized arena's owner, which never places a
+    // scoped range in the owner's lane segments (see FindBumpSpaceLocked).
+    private bool IsOutsideArenaLane(int thread) =>
+        _kind == NativeOwnerKind.Arena && thread != _arenaFastThreadId;
+
     private bool HasArenaFastInitializer()
     {
         if (_kind != NativeOwnerKind.Arena)
@@ -6784,6 +6802,7 @@ internal sealed partial class NativeOwnerKernel
                 ref offsets,
                 ref originalCursors,
                 count,
+                IsOutsideArenaLane(NativeThreadIdentity.Current),
                 out nuint finalCursor);
         if (segment is null)
         {
@@ -6841,6 +6860,7 @@ internal sealed partial class NativeOwnerKernel
                 initializedCount++;
             }
 
+            NativeMemoryTestHooks.BeforeScopedCursorWrite();
             segment.HighCursor = finalCursor;
             generation.ScopedRecordCount =
                 checked(firstRecordIndex + count);
@@ -6878,6 +6898,8 @@ internal sealed partial class NativeOwnerKernel
         }
     }
 
+    // As FindBumpSpaceLocked: a thread other than the owner places no scoped
+    // group in a lane segment.
     private static NativeBumpSegment?
         FindScopedBumpBatchSpaceLocked(
             NativeGeneration generation,
@@ -6885,6 +6907,7 @@ internal sealed partial class NativeOwnerKernel
             ref NativeBumpCursorBuffer offsets,
             ref NativeBumpCursorBuffer originalCursors,
             int count,
+            bool skipLaneSegments,
             out nuint finalCursor)
     {
         finalCursor = 0;
@@ -6903,7 +6926,8 @@ internal sealed partial class NativeOwnerKernel
             NativeMemoryAccounting.RecordBumpTraversalVisit();
             NativeBumpSegment segment =
                 generation.BumpSegments[segmentIndex];
-            if (segment.IsArenaTransferSegment)
+            if (segment.IsArenaTransferSegment
+                || (skipLaneSegments && segment.IsArenaFastSegment))
             {
                 continue;
             }
@@ -7090,7 +7114,8 @@ internal sealed partial class NativeOwnerKernel
                     generation,
                     byteLength,
                     alignment,
-                    scoped);
+                    scoped,
+                    skipLaneSegments: scoped && IsOutsideArenaLane(thread));
                 if (bumpSegment is null)
                 {
                     nuint segmentBytes = ChooseBumpSegmentBytes(
@@ -7114,6 +7139,7 @@ internal sealed partial class NativeOwnerKernel
                             checked(generation.ScopedTouchedSegments.Count + 1));
                     }
 
+                    NativeMemoryTestHooks.BeforeScopedCursorWrite();
                     originalCursor = bumpSegment.HighCursor;
                     cursorCaptured = true;
                     nuint unaligned = checked(bumpSegment.HighCursor - byteLength);
@@ -9649,7 +9675,12 @@ internal sealed partial class NativeOwnerKernel
         return allocation;
     }
 
-    private static NativeBumpSegment? FindBumpSpaceLocked(NativeGeneration generation, nuint byteLength, nuint alignment, bool scoped)
+    // A scoped range takes a segment's top. The owner's lane allocates up to its
+    // segment's top without the owner lock, so a thread other than the owner
+    // places no scoped range in a lane segment (skipLaneSegments): the lane
+    // could cross the range before the segment's top moves. Unscoped ranges
+    // skip lane segments on every thread.
+    private static NativeBumpSegment? FindBumpSpaceLocked(NativeGeneration generation, nuint byteLength, nuint alignment, bool scoped, bool skipLaneSegments = false)
     {
         if (generation.BumpSegments.Count == 0)
         {
@@ -9666,6 +9697,7 @@ internal sealed partial class NativeOwnerKernel
                 NativeMemoryAccounting.RecordBumpTraversalVisit();
                 NativeBumpSegment segment = generation.BumpSegments[index];
                 if (segment.IsArenaTransferSegment
+                    || (skipLaneSegments && segment.IsArenaFastSegment)
                     || segment.HighCursor < segment.LowCursor
                     || byteLength > segment.HighCursor - segment.LowCursor)
                 {
