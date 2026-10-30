@@ -25,7 +25,7 @@ those passing tests, actual zero exits, ten-second deadlines and original floors
 Passing test counts alone do not stand in for retained performance measurements.
 
 A generated standalone worker outside the checkout also compares the exact signed
-public 0.3.0 runtime with the current runtime, using identical compiled Region
+public 0.3.1 runtime with the current runtime, using identical compiled Region
 workload/configuration bytes and the existing expert typed-pool reference. Eight
 balanced process pairs in each controlled/default mode retain every raw result,
 native worker identity, observed exit and whole-child wall time. Each live worker

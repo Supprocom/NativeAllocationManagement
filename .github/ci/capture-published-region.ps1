@@ -15,14 +15,14 @@ if ($namRoot -eq $namSource -or $namRoot.StartsWith($namSource + [IO.Path]::Dire
 [IO.Directory]::CreateDirectory($namRoot) | Out-Null
 $namInputs = Join-Path $namRoot 'worker-inputs'
 [IO.Directory]::CreateDirectory((Join-Path $namInputs 'runtime')) | Out-Null
-$namPackage = Join-Path $namRoot 'published-0.3.0.nupkg'
+$namPackage = Join-Path $namRoot 'published-0.3.1.nupkg'
 $namClient = [Net.Http.HttpClient]::new()
 try {
-    $namBytes = $namClient.GetByteArrayAsync('https://api.nuget.org/v3-flatcontainer/supprocom.nativeallocationmanagement/0.3.0/supprocom.nativeallocationmanagement.0.3.0.nupkg').GetAwaiter().GetResult()
+    $namBytes = $namClient.GetByteArrayAsync('https://api.nuget.org/v3-flatcontainer/supprocom.nativeallocationmanagement/0.3.1/supprocom.nativeallocationmanagement.0.3.1.nupkg').GetAwaiter().GetResult()
     [IO.File]::WriteAllBytes($namPackage, $namBytes)
 } finally { $namClient.Dispose() }
-if ((Get-Item -LiteralPath $namPackage).Length -ne 396641 -or
-    (Get-FileHash -LiteralPath $namPackage -Algorithm SHA256).Hash -cne '100C3A647B6504DD23C9C286FC182A35BCAB9734786D08B603C51FA639AFBC20') {
+if ((Get-Item -LiteralPath $namPackage).Length -ne 398299 -or
+    (Get-FileHash -LiteralPath $namPackage -Algorithm SHA256).Hash -cne '8B2F9C6D42A84F0CE365C8641724EBFF43D785249BDD51AB0B031296AE46519E') {
     throw 'Published signed package differs from the exact accepted publication.'
 }
 $namOld = Join-Path $namInputs 'runtime/Supprocom.NativeAllocationManagement.dll'
@@ -32,7 +32,7 @@ try {
     if ($null -eq $namEntry) { throw 'Actual published NET10 runtime is absent.' }
     [IO.Compression.ZipFileExtensions]::ExtractToFile($namEntry, $namOld, $false)
 } finally { $namZip.Dispose() }
-if ((Get-FileHash -LiteralPath $namOld -Algorithm SHA256).Hash -cne '30DB91F303655C7A25F82071777D1B866DC09144D3CB4BDBE1AF7D7DE29E9B48') {
+if ((Get-FileHash -LiteralPath $namOld -Algorithm SHA256).Hash -cne '158A0E6936B0BD78FF9C4AB59D3B47BF2F480FF94AB95AB914875040309C10E8') {
     throw 'Published runtime does not equal the accepted payload.'
 }
 foreach ($namFile in @('Directory.Build.props', 'BannedSymbols.txt', '.editorconfig')) {
@@ -145,7 +145,7 @@ try {
 } finally {
     $namCommands | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $namRoot 'commands.json') -Encoding utf8
     [pscustomobject]@{ CaptureComplete = $namCaptureComplete; PerformanceAccepted = $false; NativeRid = $ExpectedRid;
-        PublishedVersion = '0.3.0'; CandidateRuntime = $namCandidate; CandidateSHA256 = (Get-FileHash -LiteralPath $namCandidate -Algorithm SHA256).Hash;
+        PublishedVersion = '0.3.1'; CandidateRuntime = $namCandidate; CandidateSHA256 = (Get-FileHash -LiteralPath $namCandidate -Algorithm SHA256).Hash;
         Scope = 'Uninstrumented published/current/managed Region comparison; retained floor failures are not passes.' } |
         ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $namRoot 'capture.json') -Encoding utf8
 }
