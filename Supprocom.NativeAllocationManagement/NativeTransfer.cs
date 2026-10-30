@@ -696,6 +696,11 @@ internal partial class NativeTransferControl<T>
     private protected bool EnterTransferOperation(long authorityVersion, string operation)
     {
         EnsureActive(authorityVersion, operation);
+        if (NativeTransferRacesForTest.Enabled)
+        {
+            NativeTransferRacesForTest.Run(NativeTransferRacesForTest.AfterActiveCheck);
+        }
+
         if (Interlocked.CompareExchange(ref _loneBorrow, 1, 0) == 0)
         {
             if (Volatile.Read(ref _state) == Active && Volatile.Read(ref _authorityVersion) == authorityVersion)
@@ -728,12 +733,10 @@ internal partial class NativeTransferControl<T>
     [MethodImpl(MethodImplOptions.NoInlining)]
     private void EnterSharedTransferOperation(long authorityVersion, string operation)
     {
-        if (!NativeOperationAdmission.TryEnter(
-            ref _operationAdmission, out int enteredCount))
+        int enteredCount = Interlocked.Increment(ref _operationAdmission);
+        if (enteredCount <= 0)
         {
-            ThrowInactive(
-                operation,
-                Volatile.Read(ref _state));
+            RefuseSharedEntry(enteredCount, operation);
         }
 
         int state = Volatile.Read(ref _state);
@@ -745,6 +748,33 @@ internal partial class NativeTransferControl<T>
 
         ExitSharedTransferOperation();
         ThrowInactive(operation, state == Active ? Moved : state);
+    }
+
+    // A closed admission refused this borrow. Its increment is taken back at
+    // once, but the last borrow of a retiring transfer may have counted it and
+    // left the retirement to this decrement.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private void RefuseSharedEntry(int entered, string operation)
+    {
+        if (NativeTransferRacesForTest.Enabled)
+        {
+            NativeTransferRacesForTest.Run(NativeTransferRacesForTest.BeforeRefusedExit);
+        }
+
+        Interlocked.Decrement(ref _operationAdmission);
+        if (entered == int.MinValue)
+        {
+            throw new InvalidOperationException(
+                "The native operation count reached its limit.");
+        }
+
+        int state = Volatile.Read(ref _state);
+        if (state == Retiring)
+        {
+            CompleteRetirement();
+        }
+
+        ThrowInactive(operation, state);
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
@@ -1133,5 +1163,29 @@ internal partial class NativeTransferControl<T>
         long AuthorityVersion)
     {
         internal void Publish() => Source.PublishMove(AuthorityVersion);
+    }
+}
+
+// Tests hold a borrow at the points where it races a move. Only a test
+// process sets the switch; elsewhere Enabled is false and optimized code
+// drops every call.
+internal static class NativeTransferRacesForTest
+{
+    internal const string Switch = "Supprocom.NativeAllocationManagement.Testing.TransferRaces";
+
+    internal static readonly bool Enabled = AppContext.TryGetSwitch(Switch, out bool enabled) && enabled;
+
+    // After a borrow's active check, before it takes the lone slot or the count.
+    internal static Action? AfterActiveCheck;
+
+    // After a refused borrow's increment, before it takes the increment back.
+    internal static Action? BeforeRefusedExit;
+
+    internal static void Run(Action? hook) => hook?.Invoke();
+
+    internal static void Reset()
+    {
+        AfterActiveCheck = null;
+        BeforeRefusedExit = null;
     }
 }

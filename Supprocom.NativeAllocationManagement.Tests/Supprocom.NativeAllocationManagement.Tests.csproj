@@ -14,6 +14,8 @@
     <RuntimeHostConfigurationOption Include="Supprocom.NativeAllocationManagement.DetailedCounters" Value="true" />
     <!-- Tests name the stack block a pool's thread-cache lookup uses, to simulate stack reuse. -->
     <RuntimeHostConfigurationOption Include="Supprocom.NativeAllocationManagement.Testing.StackBlockOverride" Value="true" />
+    <!-- NativeTransferRetirementRaceTests hold borrows at the points where they race a move. -->
+    <RuntimeHostConfigurationOption Include="Supprocom.NativeAllocationManagement.Testing.TransferRaces" Value="true" />
   </ItemGroup>
 
   <ItemGroup>
