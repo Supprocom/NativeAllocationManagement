@@ -13,6 +13,10 @@ memory management without its usual cost: a bundled Roslyn analyzer turns owners
 mistakes, such as using a buffer after it was returned, into compile errors, and
 runtime checks reject stale handles instead of letting them read reused memory.
 
+For raw speed, unsafe C# is probably the better option until proven otherwise. NAM aims
+to let you stay comfortably trapped in safe C#'s pit of success while still enjoying
+potentially massive gains.
+
 ## What it is good for
 
 NAM helps when memory work is a real part of your run time:
