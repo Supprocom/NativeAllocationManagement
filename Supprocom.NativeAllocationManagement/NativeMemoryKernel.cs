@@ -160,7 +160,8 @@ internal readonly struct NativeBumpInitialization
         nuint originalCursor,
         bool cursorCaptured,
         bool scoped,
-        bool startedScope)
+        bool startedScope,
+        int initializingThread = 0)
     {
         Allocation = allocation;
         CreatedSegment = createdSegment;
@@ -168,6 +169,7 @@ internal readonly struct NativeBumpInitialization
         CursorCaptured = cursorCaptured;
         Scoped = scoped;
         StartedScope = startedScope;
+        InitializingThread = initializingThread;
     }
 
     internal NativeGeneration Generation =>
@@ -191,6 +193,9 @@ internal readonly struct NativeBumpInitialization
 
     internal bool StartedScope { get; }
 
+    // The thread whose single initializer this is (see
+    // NativeGeneration.LockedInitializers); zero for a group's reservations.
+    internal int InitializingThread { get; }
 }
 
 internal readonly record struct NativeBumpBatchRequest(
@@ -2607,6 +2612,10 @@ internal sealed class NativeGeneration
     private long _scopeEpoch;
     private int _memoryDetached;
     private int _initializationsInProgress;
+    // The threads with a single locked-path initializer in progress, and whether
+    // it is scoped: a nested initializer on such a thread is refused, other
+    // threads' are admitted. Changed under the owner lock.
+    private List<(int Thread, bool Scoped)>? _lockedInitializers;
     private NativeArenaTransferBatchState[]
         _arenaTransferBatchSnapshot = [];
 
@@ -2690,6 +2699,53 @@ internal sealed class NativeGeneration
     internal bool FastArenaScopedActive { get; set; }
 
     internal int ArenaInitializationsInProgress;
+
+    internal int LockedInitializers => _lockedInitializers?.Count ?? 0;
+
+    internal int UnscopedLockedInitializers { get; private set; }
+
+    internal bool HasLockedInitializer(int thread)
+    {
+        if (_lockedInitializers is { } initializers)
+        {
+            foreach (ref readonly (int Thread, bool Scoped) entry in CollectionsMarshal.AsSpan(initializers))
+            {
+                if (entry.Thread == thread)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    internal void AddLockedInitializer(int thread, bool scoped)
+    {
+        (_lockedInitializers ??= []).Add((thread, scoped));
+        if (!scoped)
+        {
+            UnscopedLockedInitializers++;
+        }
+    }
+
+    internal void RemoveLockedInitializer(int thread)
+    {
+        List<(int Thread, bool Scoped)> initializers = _lockedInitializers!;
+        for (int index = 0; index < initializers.Count; index++)
+        {
+            if (initializers[index].Thread == thread)
+            {
+                if (!initializers[index].Scoped)
+                {
+                    UnscopedLockedInitializers--;
+                }
+
+                initializers.RemoveAt(index);
+                return;
+            }
+        }
+    }
 
     internal List<NativeAllocation>? ArenaCompositeAllocations { get; set; }
 
@@ -4707,7 +4763,14 @@ internal sealed class NativeOwnerKernel
                 _arenaFastScopedSegment = null;
             }
 
-            if (generation.InitializationsInProgress != 0)
+            // Other threads' unscoped locked initializers do not stop the owner's
+            // lane: none of them gives back a range placed before the lane's
+            // (see AbortBumpInitialization). Any other one in progress does, as
+            // does one this thread is running.
+            int pending = generation.InitializationsInProgress;
+            if (pending != 0
+                && (pending != generation.UnscopedLockedInitializers
+                    || generation.HasLockedInitializer(NativeThreadIdentity.Current)))
             {
                 throw CreateInUseException(
                     operation,
@@ -6637,8 +6700,17 @@ internal sealed class NativeOwnerKernel
             throw CreateStateException("Lease", "This owner does not expose heterogeneous allocations.", 0);
         }
 
+        // An initializer is refused when it is nested in one the same thread is
+        // running. While only other threads' single initializers are in
+        // progress, an unscoped range is admitted: no range is given back while
+        // anything was placed after it (see AbortBumpInitialization). A scoped
+        // range keeps one initializer per generation, since scoped records are
+        // released last in, first out, and so does any initializer this
+        // generation does not track by thread (a group, or a lane's after a fold).
+        int thread = NativeThreadIdentity.Current;
         if (_kind == NativeOwnerKind.Arena
-            && HasArenaFastInitializer())
+            && HasArenaFastInitializer()
+            && (scoped || thread == _arenaFastThreadId))
         {
             throw CreateInUseException(
                 scoped ? "LeaseScoped" : "Lease",
@@ -6648,8 +6720,12 @@ internal sealed class NativeOwnerKernel
                 "An Arena scratch initializer is already active on the owner lane.");
         }
 
-        if (generation.InitializationsInProgress != 0
-            && !allowExistingInitialization)
+        int pending = generation.InitializationsInProgress;
+        if (pending != 0
+            && !allowExistingInitialization
+            && (scoped
+                || pending != generation.LockedInitializers
+                || generation.HasLockedInitializer(thread)))
         {
             throw CreateInUseException(
                 scoped ? "LeaseScoped" : "Lease",
@@ -6776,6 +6852,11 @@ internal sealed class NativeOwnerKernel
 
             int initializationCount = checked(
                 generation.InitializationsInProgress + 1);
+            if (!allowExistingInitialization)
+            {
+                generation.AddLockedInitializer(thread, scoped);
+            }
+
             generation.InitializationsInProgress = initializationCount;
             Volatile.Write(
                 ref generation.ArenaInitializationsInProgress,
@@ -6787,7 +6868,8 @@ internal sealed class NativeOwnerKernel
                 originalCursor,
                 cursorCaptured,
                 scoped,
-                startedScope);
+                startedScope,
+                allowExistingInitialization ? 0 : thread);
         }
         catch
         {
@@ -7105,6 +7187,12 @@ internal sealed class NativeOwnerKernel
         {
             RecordInitialization(generation, checked((long)allocation.StorageBytes), reservation.Scoped);
         }
+
+        if (reservation.InitializingThread != 0)
+        {
+            generation.RemoveLockedInitializer(reservation.InitializingThread);
+        }
+
         generation.InitializationsInProgress--;
         Volatile.Write(
             ref generation.ArenaInitializationsInProgress,
@@ -7212,6 +7300,16 @@ internal sealed class NativeOwnerKernel
                 return;
             }
 
+            // Lanes, the owner's fast lane and other threads' initializers may
+            // have placed ranges in this segment since the reservation, so it is
+            // given back only while still last: a rewound cursor or a freed
+            // segment would hand their live ranges out again. A range that is no
+            // longer last stays a hole. It was never counted as payload, and its
+            // bytes stay counted in the segment's retained bytes until the
+            // generation's release resets every cursor. Holes are bounded by the
+            // failed reservations.
+            nuint start = allocation.OffsetBytes;
+            nuint end = start + allocation.StorageBytes;
             allocation.ClearInitializedReferences();
             allocation.Lifecycle = NativeAllocationLifecycle.Returned;
             allocation.InitializedLength = 0;
@@ -7225,28 +7323,35 @@ internal sealed class NativeOwnerKernel
                 generation.ReusableAllocations.Add(allocation);
             }
 
-            if (reservation.CreatedSegment is not null)
+            NativeBumpSegment? segment = reservation.BumpSegment;
+            if (segment is not null
+                && reservation.CursorCaptured
+                && !segment.IsArenaFastSegment
+                && (reservation.Scoped ? segment.HighCursor == start : segment.LowCursor == end))
             {
-                generation.BumpSegments.Remove(
-                    reservation.CreatedSegment);
-                generation.Owner.RemoveSegment(
-                    reservation.CreatedSegment.Segment);
-                reservation.CreatedSegment.Segment.FreeNow();
-                ResetBumpTraversal(generation);
-            }
-            else if (reservation.BumpSegment is not null
-                && reservation.CursorCaptured)
-            {
-                if (reservation.Scoped)
+                if (reservation.CreatedSegment is not null
+                    && (reservation.Scoped
+                        ? segment.LowCursor == 0
+                        : segment.HighCursor == segment.Segment.ByteLength))
                 {
-                    reservation.BumpSegment.HighCursor =
-                        reservation.OriginalCursor;
+                    generation.BumpSegments.Remove(segment);
+                    generation.Owner.RemoveSegment(segment.Segment);
+                    segment.Segment.FreeNow();
+                    ResetBumpTraversal(generation);
+                }
+                else if (reservation.Scoped)
+                {
+                    segment.HighCursor = reservation.OriginalCursor;
                 }
                 else
                 {
-                    reservation.BumpSegment.LowCursor =
-                        reservation.OriginalCursor;
+                    segment.LowCursor = reservation.OriginalCursor;
                 }
+            }
+
+            if (reservation.InitializingThread != 0)
+            {
+                generation.RemoveLockedInitializer(reservation.InitializingThread);
             }
 
             generation.InitializationsInProgress--;
