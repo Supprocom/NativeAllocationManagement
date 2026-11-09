@@ -17,7 +17,11 @@
     <PackageLicenseExpression>AGPL-3.0-only</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageTags>native-memory;native-builder;memory-pool;native-transfer;cross-thread;native-region;native-arena;roslyn-analyzer;scoped-recycling</PackageTags>
-    <PackageReleaseNotes>Fix NativeConcurrentArena. When another thread called ScratchScoped or InitializeScoped while the arena's own thread was scratching, the new range could share memory with that thread's leases; other threads' scoped ranges now stay out of the memory that thread allocates from. Threads can also now run Scratch initializers on the same arena at the same time, where 0.3.0 threw NativeAllocationInUseException, and a failed initializer gives back only space that no other lease uses. Fix NativeTransfer. When Move found a callback running on another thread, the storage could stay held until finalization after that callback ended, and a callback refused during a Move or Dispose could leave the moved transfer, or a builder's next transfer, refusing every callback and disposal. Dispose, Move and NativeShared.Create also no longer fail while a stale copy's callback is leaving.</PackageReleaseNotes>
+    <PackageReleaseNotes>Spans from NAM leases are now bound to the lease. Pooled&lt;T&gt;.AsSpan, PreparedPooled&lt;T&gt;.AsSpan, Local&lt;T&gt;.AsSpan and ArenaLease&lt;T&gt;.AsSpan return a span the compiler ties to the variable that holds the lease, so returning it, storing it in a ref struct passed by ref, assigning it to an out parameter or keeping it past the lease's block is a compile error (CS8168, CS8156 or CS8352). These escapes used to compile and could read memory after it was returned. NativeRegion.Lease and LeaseUninitialized are bound the same way, so a Local&lt;T&gt; cannot leave the method that owns its region.
+
+To upgrade: declare a span local scoped when it starts as default and is assigned a lease span later (scoped Span&lt;int&gt; span = default;). A helper that needs a lease's elements should take the span, not the lease.
+
+Analyzer: NAM1001, NAM1012, NAM1013, NAM1040 and NAM1050 messages name the value and the destination instead of placeholders. NAM1012 no longer reports a discarded region lease. NAM1045 and NAM1046 no longer report a Write callback that reads a primitive or enum state. NAM1027, NAM1033 and NAM1040 now also check local functions and top-level helpers.</PackageReleaseNotes>
     <PackageOutputPath>$(MSBuildThisFileDirectory)..\artifacts\packages\</PackageOutputPath>
   </PropertyGroup>
 
