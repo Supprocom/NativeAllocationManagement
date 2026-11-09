@@ -186,7 +186,7 @@ internal static class NativeAllocationDiagnosticDescriptors
     internal static readonly DiagnosticDescriptor UnsupportedWorkspaceParameter = Create(
         "NAM1040",
         "Native workspace parameter must be a scoped read-only borrow",
-        "Native workspace parameter '{0}' uses '{1}'. Use scoped in for a bounded borrow, or keep ownership in the declaring method.");
+        "Native workspace parameter '{0}' is passed {1}. Use scoped in for a bounded borrow, or keep ownership in the declaring method.");
 
     internal static readonly DiagnosticDescriptor ManagedAllocationInRegion = Create(
         "NAM1035",

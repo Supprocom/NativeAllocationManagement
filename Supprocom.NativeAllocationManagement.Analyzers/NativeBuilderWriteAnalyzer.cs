@@ -1972,9 +1972,20 @@ public sealed class NativeBuilderWriteAnalyzer : DiagnosticAnalyzer
             Action<Diagnostic> report)
         {
             _symbols = symbols;
-            _states = states;
+            // Copying a primitive or enum state value carries no native
+            // authority, so reading it is not an alias or an escape.
+            _states = states
+                .Where(state => !IsPlainValueType(state.Type))
+                .ToArray();
             _report = report;
         }
+
+        private static bool IsPlainValueType(ITypeSymbol type) =>
+            type.TypeKind == TypeKind.Enum
+            || type.SpecialType is >= SpecialType.System_Boolean
+                and <= SpecialType.System_Double
+            || type.SpecialType is SpecialType.System_IntPtr
+                or SpecialType.System_UIntPtr;
 
         internal void ReportExpressionReturn(IOperation operation)
         {

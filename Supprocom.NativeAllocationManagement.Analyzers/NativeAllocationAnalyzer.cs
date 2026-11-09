@@ -79,6 +79,15 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 analyzer.AnalyzeOperationBlock(anonymous.Body);
                 analyzer.Complete();
             }, OperationKind.AnonymousFunction);
+            startContext.RegisterOperationAction(operationContext =>
+            {
+                if (operationContext.Operation is ILocalFunctionOperation localFunction
+                    && symbols.HasTrackedParameters(localFunction.Symbol))
+                {
+                    new MethodFlowAnalyzer(operationContext, symbols)
+                        .ReportLocalFunctionParameters(localFunction.Symbol);
+                }
+            }, OperationKind.LocalFunction);
         });
     }
 
@@ -513,7 +522,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                         NativeAllocationDiagnosticDescriptors.UnsupportedWorkspaceParameter,
                         syntax,
                         parameter.Name,
-                        ParameterModifier(parameter.RefKind));
+                        WorkspaceParameterMode(parameter.RefKind));
                 }
 
                 _transfers.Add(
@@ -4619,7 +4628,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         {
             if (transfer.ConditionalPending)
             {
-                Report(NativeAllocationDiagnosticDescriptors.PreparedAcquisitionGuard, syntax, transfer.DisplayName);
+                Report(NativeAllocationDiagnosticDescriptors.PreparedAcquisitionGuard, syntax,
+                    transfer.DisplayName, operation);
                 return false;
             }
             if (transfer.Status == TransferStatus.Active)
@@ -4793,6 +4803,23 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         private static bool IsNullValue(IOperation operation) =>
             operation.ConstantValue.HasValue
             && operation.ConstantValue.Value is null;
+
+        private static string WorkspaceParameterMode(RefKind refKind) =>
+            refKind switch
+            {
+                RefKind.None => "by value",
+                RefKind.In => "by 'in' without 'scoped'",
+                RefKind.Ref => "by 'ref'",
+                RefKind.Out => "by 'out'",
+                _ => "by '" + refKind + "'"
+            };
+
+        internal void ReportLocalFunctionParameters(IMethodSymbol method)
+        {
+            RegisterTransferParameters(method);
+            RegisterBuilderParameters(method);
+            RegisterWorkspaceParameters(method);
+        }
 
         private static string ParameterModifier(RefKind refKind) =>
             refKind switch
@@ -5474,12 +5501,22 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
 
             if (target.Symbol is null)
             {
-                Report(
-                    isRegion
-                        ? NativeAllocationDiagnosticDescriptors.RegionMustBeUsing
-                        : NativeAllocationDiagnosticDescriptors.OwnerAlias,
-                    operation.Syntax,
-                    "the temporary owner");
+                if (isRegion)
+                {
+                    Report(
+                        NativeAllocationDiagnosticDescriptors.RegionMustBeUsing,
+                        operation.Syntax,
+                        "the temporary owner");
+                }
+                else
+                {
+                    Report(
+                        NativeAllocationDiagnosticDescriptors.OwnerAlias,
+                        operation.Syntax,
+                        "a new " + operation.Type?.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat),
+                        DescribeDestination(operation));
+                }
+
                 return;
             }
 
@@ -5601,6 +5638,15 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 return;
             }
 
+            if (target.Symbol is null
+                && !scopedAcquisition
+                && owner.IsRegion
+                && IsDiscarded(operation))
+            {
+                // A discarded region lease is released with the region; nothing escapes.
+                return;
+            }
+
             if (target.Symbol is not ILocalSymbol)
             {
                 Report(
@@ -5610,8 +5656,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                             ? NativeAllocationDiagnosticDescriptors.LocalEscape
                             : NativeAllocationDiagnosticDescriptors.PooledEscape,
                     operation.Syntax,
-                    scopedAcquisition ? operation.TargetMethod.Name : "the new allocation",
-                    scopedAcquisition ? "" : target.Symbol?.Name ?? "an escaping destination");
+                    scopedAcquisition ? operation.TargetMethod.Name : DescribeValue(operation),
+                    scopedAcquisition ? "" : target.Symbol?.Name ?? DescribeDestination(operation));
                 return;
             }
 
@@ -5620,7 +5666,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 Report(
                     NativeAllocationDiagnosticDescriptors.LocalEscape,
                     target.Syntax,
-                    "the new allocation",
+                    DescribeValue(operation),
                     target.Symbol.Name);
                 return;
             }
@@ -7890,6 +7936,71 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         private bool IsScopedGroupInitialization(IInvocationOperation operation) =>
             string.Equals(operation.TargetMethod.Name, "InitializeScoped", StringComparison.Ordinal)
             && NativeSymbols.Is(operation.TargetMethod.ContainingType, _symbols.LeaseOperations);
+
+        private static bool IsDiscarded(IOperation operation)
+        {
+            IOperation current = operation;
+            while (current.Parent is IConversionOperation or IParenthesizedOperation)
+            {
+                current = current.Parent;
+            }
+
+            return current.Parent is IExpressionStatementOperation
+                || current.Parent is ISimpleAssignmentOperation { Target: IDiscardOperation } assignment
+                    && assignment.Value == current
+                    && assignment.Parent is IExpressionStatementOperation;
+        }
+
+        private static string DescribeValue(IOperation operation)
+        {
+            string text = operation.Syntax.ToString();
+            text = string.Join(" ", text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+            return text.Length > 60 ? text.Substring(0, 57) + "..." : text;
+        }
+
+        private static string DescribeDestination(IOperation operation)
+        {
+            IOperation current = operation;
+            while (current.Parent is IConversionOperation or IParenthesizedOperation)
+            {
+                current = current.Parent;
+            }
+
+            return current.Parent switch
+            {
+                IReturnOperation => "the return value",
+                IArgumentOperation { Parent: IInvocationOperation call } => "an argument of '" + call.TargetMethod.Name + "'",
+                ISimpleAssignmentOperation { Target: IDiscardOperation } => "a discarded result",
+                IExpressionStatementOperation => "a discarded result",
+                ISimpleAssignmentOperation assignment when assignment.Value == current
+                    => "'" + assignment.Target.Syntax.ToString() + "'",
+                _ => DescribeDestinationSyntax(operation.Syntax)
+            };
+        }
+
+        // Control-flow graphs detach the operation parent, so fall back to the syntax.
+        private static string DescribeDestinationSyntax(SyntaxNode syntax)
+        {
+            SyntaxNode? current = syntax;
+            while (current?.Parent is ParenthesizedExpressionSyntax or CastExpressionSyntax)
+            {
+                current = current.Parent;
+            }
+
+            return current?.Parent switch
+            {
+                ReturnStatementSyntax or ArrowExpressionClauseSyntax => "the return value",
+                ArgumentSyntax { Parent: BaseArgumentListSyntax { Parent: InvocationExpressionSyntax call } }
+                    => "an argument of '" + call.Expression.ToString() + "'",
+                ExpressionStatementSyntax => "a discarded result",
+                AssignmentExpressionSyntax assignment when assignment.Right == current
+                    => assignment.Left.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.IdentifierName)
+                        && string.Equals(assignment.Left.ToString(), "_", StringComparison.Ordinal)
+                        ? "a discarded result"
+                        : "'" + assignment.Left.ToString() + "'",
+                _ => "an escaping destination"
+            };
+        }
 
         private static Target FindTarget(IOperation operation)
         {
