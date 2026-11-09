@@ -1750,12 +1750,12 @@ public sealed class VoxelSharedContractTests
             guide,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Do not use application `in`, `ref`, or `out NativeTransfer<T>` parameters.",
+            "// WRONG, does not compile: NAM1027 (ref parameter)",
             guide,
             StringComparison.Ordinal);
         Assert.Contains(
             "--native-builder --samples 10",
-            guide,
+            File.ReadAllText(Path.Combine(root, "docs", "builder-benchmark.md")),
             StringComparison.Ordinal);
         Assert.Contains(
             "NativeBuilder<uint> builder = new(",
@@ -1766,11 +1766,11 @@ public sealed class VoxelSharedContractTests
             guide,
             StringComparison.Ordinal);
         Assert.Contains(
-            "`NAM1028` rejects ownership copies.",
+            "[NAM1028](diagnostics/NAM1028.md) | Builder copied, boxed or stored",
             guide,
             StringComparison.Ordinal);
         Assert.Contains(
-            "`NAM1034` requires `Complete`",
+            "// NAM1034: result discarded",
             guide,
             StringComparison.Ordinal);
     }
