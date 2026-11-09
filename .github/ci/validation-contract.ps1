@@ -4,7 +4,7 @@ function Assert-NamRuntimeInventory {
     if ($ExpectedRid.StartsWith('win-', [StringComparison]::Ordinal)) { $namFrameworks += 'Microsoft.WindowsDesktop.App' }
     if ($Runtimes.Count -ne $namFrameworks.Count) { throw 'Unexpected framework inventory in the isolated canonical SDK.' }
     foreach ($namFramework in $namFrameworks) {
-        $namPattern = '^' + [regex]::Escape($namFramework) + ' 10\.0\.10 \['
+        $namPattern = '^' + [regex]::Escape($namFramework) + ' 10\.0\.14 \['
         if (@($Runtimes | Where-Object { $_ -match $namPattern }).Count -ne 1) {
             throw "Missing or noncanonical isolated runtime: $namFramework"
         }
