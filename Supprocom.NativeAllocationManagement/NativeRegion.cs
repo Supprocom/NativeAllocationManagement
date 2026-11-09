@@ -68,6 +68,7 @@ public readonly ref struct NativeRegion
         GetKernel(nameof(GetStatistics)).GetStatistics();
 
     /// <summary>Initializes and publishes one unmanaged bump range.</summary>
+    [System.Diagnostics.CodeAnalysis.UnscopedRef]
     public Local<T> Lease<T>(
         int length,
         NativeLeaseInitializer<T> initializer)
@@ -80,6 +81,7 @@ public readonly ref struct NativeRegion
     /// <summary>Fills and publishes one unmanaged bump range without an initializer callback.</summary>
     /// <param name="length">The complete initialized element count.</param>
     /// <param name="value">The value written to every element before publication.</param>
+    [System.Diagnostics.CodeAnalysis.UnscopedRef]
     public Local<T> Lease<T>(
         int length,
         T value)
@@ -89,6 +91,7 @@ public readonly ref struct NativeRegion
     /// <summary>Publishes one unmanaged bump range without writing its elements.</summary>
     /// <param name="length">The element count.</param>
     /// <remarks>The contents are unspecified: they may hold values an earlier lease in this process wrote. Write every element before reading it, or use <see cref="Lease{T}(int, T)"/> for a filled range.</remarks>
+    [System.Diagnostics.CodeAnalysis.UnscopedRef]
     public Local<T> LeaseUninitialized<T>(int length)
         where T : unmanaged =>
         GetKernel(nameof(LeaseUninitialized)).LeaseUninitialized<T>(length);

@@ -252,10 +252,14 @@ public readonly ref struct ArenaLease<T>
 
     /// <summary>Returns the logical range for direct use after one owner and lease check.</summary>
     /// <remarks>
-    /// The span is confined to this lease's scope and carries no ownership. Use it only
-    /// while the lease is current: not after the arena resets its generation, recycles its scoped lane or is disposed. The bundled analyzer reports later use.
+    /// The compiler binds the span to the variable that holds this lease, so it cannot be
+    /// returned, stored in an outer ref struct or assigned to an out parameter. It carries
+    /// no ownership: use it only while the lease is current, not after the arena resets its
+    /// generation, recycles its scoped lane or is disposed. Declare a later-assigned span
+    /// local as <c>scoped Span&lt;T&gt; s = default;</c>. The bundled analyzer reports later use.
     /// </remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    [System.Diagnostics.CodeAnalysis.UnscopedRef]
     public unsafe Span<T> AsSpan()
     {
         GetKernel(nameof(AsSpan)).ValidateHandle(_generation, _scopeEpoch, _scoped, nameof(AsSpan));
