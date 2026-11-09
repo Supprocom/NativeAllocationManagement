@@ -20,10 +20,10 @@ if (Test-Path -LiteralPath $namTools) { throw 'SDK extraction requires a new exa
 $namEvidence = Join-Path ([IO.Path]::GetFullPath($EvidenceRoot)) 'tools'
 [IO.Directory]::CreateDirectory($namEvidence) | Out-Null
 $namHashes = @{
-    'linux-x64' = '10069bec8783596484a610332f090d562802a41b9b40e3327a5a5688b572e10c296ae300f940d40461f23c157ed1b0843c2f8e6b3f20d8d8d9d83432d8143bac'
-    'linux-arm64' = '9e409c14e00686d661c78fa4dd9ad0e4dcf695c328bd5ff777d05b4a9c34b42cf89b12573b92e9fb2f565dbe12016b4835f77c7d9a42b55a7494df21634cd5d6'
-    'win-x64' = '7d170ed75fa9af34c00646621d92011dbd71943952e2787cd15df9be78e6452b55dadef34d7eff77b802e6af4959e071a55855ac649afeac70901c3a2a258716'
-    'win-arm64' = '241abb2b345cff1b32d87a9e29da5e9d52f899f691e7b34661274477564c4717054c489814a9fd7a5526fc9e0d8174a0d951a4a845556eee53add526f71917e7'
+    'linux-x64' = 'b7b3d8461cf98b07d2552ce9199702fa3ad010ac2671a5f8cd5136f7534e50f6855ba7bbb02b11494563f1d04156276a31cda1103b900e5eecd0d9473dc7b9c5'
+    'linux-arm64' = '0966aa2b70f4677b8319be9df447a78a0dcd6164836425b55a68fd714f4023feb87b4cac21b9a996b79472ad54487cd0adcd2a9dfd570e2b2a1d26423a2baa9b'
+    'win-x64' = '7a114c318fa7f1d9822991b534b2814d0e78386ceda816b371f5141acefe741d87ccb606ede06cadac8f9ac5070e32b708a67bbd1619ff5e5a7858a27874ef48'
+    'win-arm64' = 'f78ecd8b48e24fd72ee604687b75f1bbb81505e8343f7d52e4baf9ea32372557eb30e88facaaad195bf2646fcce117fd941e49da0d5bdee1d60d63d836968429'
 }
 $namExtension = if ($namWindows) { 'zip' } else { 'tar.gz' }
 $namName = "dotnet-sdk-10.0.403-$ExpectedRid.$namExtension"
