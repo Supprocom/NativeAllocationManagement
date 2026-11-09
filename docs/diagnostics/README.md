@@ -1,10 +1,9 @@
-# Ownership diagnostics
+# Diagnostics
 
-Every enabled descriptor has a dedicated help page. IDs and severities are
-maintained independently of the optional IDE cleanup provider.
+Each NAM analyzer diagnostic has a page with a wrong and a right example.
 
-| Diagnostic | Default severity | Rule |
-| --- | --- | --- |
+| ID | Severity | What it catches |
+|---|---|---|
 | [NAM1001](NAM1001.md) | error | Native owner alias is not permitted |
 | [NAM1002](NAM1002.md) | error | Owner-derived handle cannot be copied |
 | [NAM1003](NAM1003.md) | error | Native ownership must end before lexical exit |
@@ -54,6 +53,3 @@ maintained independently of the optional IDE cleanup provider.
 | [NAM1050](NAM1050.md) | error | Prepared lease requires a successful acquisition guard |
 | [NAM1051](NAM1051.md) | error | Lease span is used after its storage ended |
 | [NAM9001](NAM9001.md) | error | Bundled analyzer is required |
-
-See [safe fixes](../analyzer-usability.md) and the
-[managed-first allocator guide](../allocator-selection.md).

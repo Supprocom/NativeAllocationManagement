@@ -1,19 +1,19 @@
 # Prepared fixed-shape pools
 
-Use `NativePreparedPool<T>` with `NativePoolPreparation` when a workload genuinely needs a known number of
-simultaneously live unmanaged buffers of one bounded shape. It groups those slots
-into pages and prepares both native backing and the complete slot/page metadata banks and one embedded-link free list. It is not a general heap or automatic sizing policy.
+Use `NativePreparedPool<T>` when you know how many buffers of one bounded size are live at the same time. The pool allocates all of them up front, so within retained capacity, renting and returning never allocates. It is not a general heap and does not size itself.
 
 ```csharp
+using Supprocom.NativeAllocationManagement;
+
 NativeMemoryBudget budget = new(64 * 4096);
 using NativePreparedPool<byte> pool = new(new NativePoolPreparation(64, 4096, 16), budget);
+
 if (pool.TryRent(4096, static writer => writer.Fill(42),
-    out PreparedPooled<byte> lease, out NativePoolExhaustionReason reason))
+        out PreparedPooled<byte> lease, out NativePoolExhaustionReason reason))
 {
     try
     {
-        // Bounded access validates the same owner/thread/token as ordinary pooling.
-        _ = lease.Read(static view => view[0]);
+        byte first = lease.Read(static view => view[0]);
     }
     finally
     {
@@ -22,113 +22,123 @@ if (pool.TryRent(4096, static writer => writer.Fill(42),
 }
 else
 {
-    // No producer ran and no lease was published. Handle reason at application level.
+    // No lease was published and the initializer did not run. Handle `reason` here.
 }
 ```
 
-This preparation makes four 64 KiB backing acquisitions, not 64 independent
-4 KiB acquisitions. All page extents are admitted before metadata or backing
-acquisition; a partial failure frees acquired pages and cancels the uncommitted
-remainder. Each slot has exactly the declared element capacity, packed at the CLR element
-stride without cache-line padding or an additional SIMD-address alignment guarantee. A shorter final page contains only the remaining declared slots.
-The admitted page extent is the exact sum of its slots.
+The steps are: prepare, rent, use, return, dispose the pool.
 
-Within retained capacity, NAM rent/complete initialization, destructive lexical
-movement, bounded access, return, snapshots and expected exhaustion allocate no managed storage or native
-backing and do not grow metadata. Consumer callbacks can still allocate. There
-is no implicit refill, OS residency guarantee, zero-page-fault guarantee, or
-guarantee about unrelated runtime work.
+Analyzer errors in this page:
 
-`PreparedPooled<T>.Move(ref source)` reuses the slot's existing identity metadata. It
-clears the source on success and invalidates its previous aliases without copying
-the payload. The destination retains the source's cleanup obligation and stays
-on the pool's construction thread. The capability remains a lexical ref structure,
-not a heap-storable or cross-thread pointer. Use `NativeTransfer<T>` for those
-different ownership requirements.
+| ID | What it catches | How to fix |
+|---|---|---|
+| [NAM1050](diagnostics/NAM1050.md) | Using a lease without checking that `TryRent` returned `true` | Use it only inside `if (TryRent(...))` or after an early-return guard |
+| [NAM1003](diagnostics/NAM1003.md) | A lease that is not disposed on every path | `Dispose()` in a `finally` or use `using` |
+| [NAM1004](diagnostics/NAM1004.md) | Using a lease after `Move` or after it was returned | Use the destination, not the source |
+
+
+## 1. Prepare
+
+`new NativePoolPreparation(slotCount, slotCapacity, slotsPerPage)` describes the pool:
+
+| Argument | Meaning |
+|---|---|
+| `slotCount` | How many leases can be live at once. |
+| `slotCapacity` | Elements per slot. |
+| `slotsPerPage` | Slots per native allocation. |
+
+The example above is 64 slots of 4096 bytes in 4 pages. Each page is one native allocation. A shorter last page holds the remaining slots. Slots are packed at the CLR element stride, with no cache-line padding and no SIMD-alignment guarantee. The pool asks the budget for all pages before it allocates any, and frees what it got if one allocation fails. Its charge is exactly the slot bytes. If the budget cannot hold them, the constructor throws `NativeMemoryBudgetExceededException` and the budget's committed and reserved bytes stay at 0. Pass `null` as the budget to run without a limit.
+
+The pool belongs to the thread that created it. Using it from another thread throws `NativeAllocationStateException`.
+
+## 2. Rent
+
+`TryRent(length, initializer, out lease, out reason)` returns `false` for exactly two reasons:
+
+| `NativePoolExhaustionReason` | Meaning |
+|---|---|
+| `ShapeExceeded` | `length` is larger than `slotCapacity`. |
+| `NoAvailableSlot` | Every slot is in use. |
+
+Nothing runs on `false`: your initializer is not called and no lease exists. Everything else is a bug and throws: a negative length, a `null` initializer, the wrong thread, a closed pool, an initializer that throws, or one that does not write the whole range. A slot is returned to the pool if the initializer fails.
+
+`Rent` does the same and throws `InvalidOperationException` when the pool is full. Use `TryRent` when full is normal. The initializer can be a value instead of a callback: `pool.Rent(4096, (byte)42)`.
+
+Only a `true` result gives you a lease. The analyzer enforces that:
 
 ```csharp
-PreparedPooled<byte> source = pool.Rent(4096, static writer => writer.Fill(42));
-using PreparedPooled<byte> destination = PreparedPooled<byte>.Move(ref source);
-_ = destination.Read(static view => view[0]);
-// source is now default; do not access or dispose it.
+// WRONG, does not compile: NAM1050 (lease used without checking the result), NAM1003 (never returned on the failed path)
+pool.TryRent(4, static writer => writer.Fill(42), out PreparedPooled<byte> lease, out _);
+lease.Dispose();
 ```
 
-Movement validates before consumption. A stale/default source, wrong thread,
-entered borrow or exhausted monotonic identity is an error; failure leaves the
-source unchanged so its actual owner can still return it. This differs from
-`NativeTransfer<T>.Move`, whose source is consumed on failure. Using bindings
-are read-only and cannot be passed by ref; keep a movable source in an ordinary
-local and put its final destination in a using or proven finally cleanup.
+A direct `if (!pool.TryRent(...)) return;` guard is also accepted. A boolean you store and test later is not.
 
-`TryRent` returns false only for `ShapeExceeded` or `NoAvailableSlot`. A negative
-length, null initializer, wrong thread, closed owner, exhausted
-token identity, throwing initializer or incomplete initialization is an error,
-not ordinary capacity exhaustion. Failure returns a slot without exposing the
-partial payload. The failure output capability is default and cannot be borrowed
-or disposed as an owner. The bundled analyzer recognizes direct positive and
-negated acquisition guards, including early-return guards; unguarded capability
-use remains unproven. Returning only a boolean and later testing an unrelated or
-reassigned value does not create ownership proof.
+## 3. Use and return
 
-`Rent` also works on prepared pages, but throws for expected exhaustion;
-use `TryRent` when fullness is normal. Ordinary variable-shape pool constructors
-retain their existing behavior. A prepared owner deterministically releases its
-backing on Dispose after all leases return; emergency finalization is fallback,
-not timely capacity relief. The existing retirement/coordinator cleanup contract
-also applies. Invalid or stale aliases cannot return or access a reused slot.
+`PreparedPooled<T>` is a `ref struct`: keep it in a local of the method that rented it. `Read`, `Access` and `AsSpan` work as for an ordinary pooled lease. `Dispose()` returns the slot.
 
-## Pages and retention
+```csharp
+// WRONG, does not compile: NAM1003 (slot never returned)
+PreparedPooled<byte> leaked = pool.Rent(4, (byte)42);
+```
 
-Slot return is reuse permission, not a native free. One live or initializing slot
-retains its whole page, and a borrow prevents premature return. Trim releases
-only wholly idle pages. It can release more than the requested byte amount to
-respect whole-page boundaries. Trim lowers current retained capacity without
-changing original preparation bounds or refilling backing. Construct a new
-explicitly prepared owner to increase capacity; never change a live slot shape.
+Dispose the pool only after every lease has been returned. Disposing it with a live lease throws `InvalidOperationException`. Disposing the pool frees its memory on the spot.
 
-Storage/structural segment counts describe physical pages for this mode. Active
-records describe occupied slot metadata; available segments are completely idle
-pages, not free slots on partially occupied pages. Use `CapturePreparedSnapshot`
-for actual slot availability. Small logical ranges still retain the full slot
-and, indirectly, its whole page; dense and sparse retention must be measured.
+## Move a lease
+
+`PreparedPooled<T>.Move(ref source)` gives the slot to a new variable without copying. `source` becomes unusable. The destination stays on the pool's thread. To send the data to another thread, use a [`NativeTransfer<T>`](getting-started.md#transfer-ownership-across-threads).
+
+```csharp
+PreparedPooled<byte> source = pool.Rent(4096, (byte)42);
+using PreparedPooled<byte> destination = PreparedPooled<byte>.Move(ref source);
+byte moved = destination.Read(static view => view[0]);
+```
+
+```csharp
+// WRONG, does not compile: NAM1004 (source was moved)
+_ = source.Read(static view => view[0]);
+```
+
+If `Move` fails (the source is stale or default, the thread is wrong, or a borrow is active), it throws and `source` is left unchanged, so you can still return it. A `using` variable is read-only and cannot be passed by `ref`; move from an ordinary local and put the destination in the `using`.
+
+## Pages and trimming
+
+Returning a slot makes it available again; it does not free memory. One live slot keeps its whole page allocated.
+
+`TrimRetainedMemory()` and `TrimRetainedMemoryByBytes(n)` free only pages that have no live slot. They can free more than you asked for, because a page goes whole. A trimmed page never comes back. To get capacity again, create a new pool.
+
+Small leases still use a whole slot, and a slot keeps its page. If most leases are small or short-lived, measure how many pages stay allocated.
 
 ## Prepared snapshot inventory
 
-All fields are derived or recorded by `NativePreparedPool.GetPreparedStatistics`
-on the construction thread. The value retains no authority, can observe closure,
-does not allocate or reset history, and remains owner-local for the full lifetime.
-Counts are integers; byte fields are bytes, not RSS. Tests in
-`NativePreparedPoolTests` cover alternate states, failure, sparse trim and cleanup.
+`pool.CapturePreparedSnapshot()` returns a value copy. Call it on the pool's thread. It allocates nothing and resets nothing.
 
-| Field | Definition and source |
-| --- | --- |
-| `OwnerId`, `Lifecycle` | Actual stable owner identity and lifecycle. |
-| `Preparation` | Original checked slot count, exact element capacity and page grouping. A caller-created default is not a valid preparation. |
-| `RetainedPageCount`, `RetainedSlotCount` | Physically present pages and their actual slot sum; reduced by trim or release. |
-| `OccupiedSlotCount` | Actual initializing/published live slot metadata, not entered-borrow count. |
-| `PeakOccupiedSlotCount` | Recorded maximum occupied slots, including failed initialization; retained after return/closure. |
-| `AvailableSlotCount` | Retained slots minus occupied slots; trimmed slots are not available. |
-| `RetainedBytes`, `PeakRetainedBytes` | Complete known owned page extents and recorded high-water extent; exclude CLR metadata and opaque allocator bookkeeping. |
-| `SuccessfulRentCount` | Actual complete initialization/publication events, not attempts. |
-| `RejectedShapeCount`, `RejectedFullCount` | Actual shape/full refusals before production; distinct from byte-ceiling refusal. |
-| `InitializerFailureCount` | Initializers that throw or do not write the required range; no publication or native free is invented. |
-| `ManagedBankBytes` | Allocated slot/page array element storage, including record padding; excludes CLR headers and outer owner size. Full managed allocation measurements must include those omitted costs. |
-| `UnusedSlotBytes` | Exposed element capacity of reusable retained slots; excludes stride padding and does not represent additional backing. |
-| `HistoryOverflowed` | An event count reached Int64 saturation; saturated values are lower bounds. Overflow cannot invalidate successful storage/slot transitions. |
+| Field | Meaning |
+|---|---|
+| `OwnerId`, `Lifecycle` | Identity and state of the pool. |
+| `Preparation` | The `NativePoolPreparation` you passed. |
+| `RetainedPageCount`, `RetainedSlotCount` | Pages and slots still allocated. Trim lowers them. |
+| `OccupiedSlotCount` | Slots in use, including one being initialized. |
+| `PeakOccupiedSlotCount` | Highest `OccupiedSlotCount`, including failed initializations. |
+| `AvailableSlotCount` | Retained slots minus occupied ones. |
+| `RetainedBytes`, `PeakRetainedBytes` | Native bytes held now, and the highest so far. Not RSS. |
+| `SuccessfulRentCount` | Rents that returned a lease. |
+| `RejectedShapeCount`, `RejectedFullCount` | `ShapeExceeded` and `NoAvailableSlot` refusals. |
+| `InitializerFailureCount` | Initializers that threw or did not write the range. |
+| `ManagedBankBytes` | Managed memory used by the pool's slot and page tables. |
+| `UnusedSlotBytes` | Payload capacity of free retained slots. |
+| `HistoryOverflowed` | A count reached `long.MaxValue`; counts are lower bounds. |
 
-Optional budget tracing emits full admission, actual `PageAcquired`, complete
-`Prepared`, physical `Trimmed` and `Released` events. Per-page transitions carry
-the real owner-local backing ordinal; aggregate preparation has no single backing
-ordinal. Disabled tracing constructs no payload, and warmed reuse emits no
-redundant budget event or budget-lock operation. Existing bounded/drop semantics
-apply. The internal ordinal probe now reports actual physical acquisition order,
-including ordinary independent slabs, rather than an always-empty array.
-Lexical movement emits `Moved` only after publishing its new slot token. Its
-correlation identity is that never-reused token, backing ordinal is the actual
-page, and extent is the exact slot stride. It does not claim a physical allocation, free or budget transfer.
-Disabled movement tracing performs no budget locking or event construction.
+With a budget that has [tracing](memory-budgets.md#owner-identities-and-optional-tracing) enabled, the pool emits `PageAcquired`, `Prepared`, `Trimmed` and `Released` events, and `Moved` for each `Move`.
 
-Fewer backend calls and zero warmed allocation are structural facts, not general
-performance superiority. Required release measurements include preparation,
-metadata, padding, dense/sparse occupancy, unequal lifetimes, diagnostics and
-cleanup against equivalent optimized managed storage and the preserved NAM pool.
+Renting, moving, reading, returning, snapshots and refusals allocate no managed or native memory while the pool keeps its pages. Your callbacks can still allocate. There is no refill, and no promise about page faults or other runtime work.
+
+## Terms
+
+| Term | Meaning |
+|---|---|
+| Slot | One fixed-size buffer in the pool. |
+| Page | A group of slots allocated together. |
+| Lease | The right to use one rented slot, until you dispose it. |
+| Trim | Freeing pages that have no live slot. |

@@ -1,104 +1,95 @@
-# Builder comparison domains
+# Builder benchmarks
 
-The builder worker generates two known-sized uint sequences, hands ownership
-through a bounded channel, and computes the same byte checksum without requiring
-an independently materialized byte array. Use the strongest applicable managed
-comparison; a growable native builder is not automatically the right owner for
-known-sized output.
+Two benchmarks live in `Supprocom.NativeAllocationManagement.Performance`. Run them in Release from the repository root.
 
-The paired command defaults to `ManagedExactArray`: directly initialize exact
-arrays and consume their bytes through spans. `--managed-baseline ManagedListPrefix`
-retains geometric List growth but hands its live prefix to the consumer without
-ToArray or upload copies. `--managed-baseline ManagedList` keeps the original
-List/ToArray/byte-array materialization comparison. All sides retain identical
-generated values, sequence
-ordering, checksum, batch sizes and the one-slot channel. Managed value packets
-hold storage references without an additional per-packet heap owner.
+## Builder against managed output
 
-The paired native default is `NativeBuilderBudgeted`; `--native-baseline
-NativeBuilder` retains the original unbudgeted path. The budgeted
-worker creates one shared domain inside its preparation clock and gives it to
-both builders for correctness validation, warm-up, the measured batch and the
-separate probe. `--native-budget-bytes` sets its immutable NAM-requested extent
-ceiling (default `Int64.MaxValue`), not a managed-allocation or process-RSS cap.
-No admission, allocation, growth, handoff or release cost is omitted from the
-applicable complete phase. Tracing is disabled for this comparison.
+It generates two `uint` sequences (an opaque and a transparent packed-word stream), hands both through a one-slot bounded channel and computes the same byte checksum on the receiving side. Each side is run in its own process, alternating which goes first.
 
-`--native-baseline NativeBuilderBudgetedDirect` is a separate known-size
-integration of the existing bounded writer API. Each output gets its exact
-capacity, then one static state writer initializes the destination directly,
-with identical batch seed resets and output. It removes geometric growth,
-stack-to-builder batch copies and per-batch builder entry checks. It does not
-remove ownership/control objects, budget admission, publication or cleanup.
-`PreLease` remains the reported input but is not used by this explicit exact-size
-path. Use the growing workers for unknown-size production. Compare
-its complete measured batch against `ManagedExactArray`, counting GC allocation
-plus successful requested backing bytes.
+```text
+dotnet run --project Supprocom.NativeAllocationManagement.Performance -c Release -- --native-builder --samples 10 --prelease 1024 --output native-builder.json
+```
 
-An explicitly supplied option requires a nonblank value and may occur only once.
-A trailing `--native-budget-bytes`, another option in place of its value or a
-duplicate fails before any payload allocation; it never selects an unlimited
-budget. Negative and nonnumeric budget values also fail.
+| Option | Default | Meaning |
+|---|---|---|
+| `--elements` | 262144 | total elements across both sequences (75% opaque, 25% transparent) |
+| `--prelease` | 1024 | `NativeBuilder<T>` `preLease`, and the initial capacity of the managed `List<uint>`; `NativeBuilderBudgetedDirect` ignores it |
+| `--batch-size` | 256 | elements per generation chunk, 1 to 1024 |
+| `--iterations` | 128 | measured iterations; one iteration builds both sequences, hands them over and consumes them |
+| `--warmup` | 16 | warm-up batches |
+| `--samples` | 10 | paired runs; must be even |
+| `--seed` | 29123 | seed of the generated values |
+| `--managed-baseline` | `ManagedExactArray` | the managed side (below) |
+| `--native-baseline` | `NativeBuilderBudgeted` | the native side (below) |
+| `--native-budget-bytes` | `Int64.MaxValue` | byte ceiling of the budget used by budgeted native sides |
+| `--output` | none | also write the report to this file |
 
-Every worker boundary requires a `Budget` property. It contains all 19 real
-budget fields after budgeted preparation; it is `null` (unavailable), not
-invented zero, before preparation and on managed/unbudgeted paths. The worker
-reader rejects missing fields, false availability, changing domains or
-capacity, overflow, unresolved charge and failed/refused successful-work claims.
-Successful `AcquiredBackingBytes` and `ReplacementBackingBytes` are disjoint
-requested-extent histories. Their phase deltas plus process-wide GC allocation
-provide a defined allocation domain; allocation-event counts and live endpoint
-gauges cannot reconstruct it. Replacement history counts the full successful
-target, not net growth. It does not reveal opaque realloc's newly allocated
-physical bytes, private allocator metadata or transient resident-memory peak.
+An option needs a value and may appear once; a missing or repeated value is an error.
 
-Example: run the performance executable with `--native-builder
---managed-baseline ManagedExactArray --elements 262144 --prelease 1024
---batch-size 256 --iterations 128 --warmup 16 --samples 12`. Each persisted worker
-identity names the implementation actually used. The isolated paired helper
-currently forces controlled tiering/PGO; normal-compilation runs require direct
-worker invocation with those environment settings unset.
+| Managed baseline | What it does |
+|---|---|
+| `ManagedExactArray` | writes each output into an exact-size array and reads its bytes through spans (the strongest managed comparison for known sizes) |
+| `ManagedListPrefix` | grows a `List<uint>` and hands its live prefix on, with no `ToArray` or copy |
+| `ManagedList` | `List<uint>`, `ToArray`, then a byte-array copy |
 
-The existing steady-state time/GC-allocation number excludes setup and warm-up;
-phase observations are separate measurements, not components to add to that
-time. Its `PerformanceAdvantage` field is a time-only observation, not the full
-total-allocation measurement. A smaller GC number does not include
-native growth requests. Use actual budget histories on budgeted workers for
-that defined domain; the unbudgeted path's request volume is unavailable. This does
-not measure opaque backend overhead. Managed pooling, shared-cap comparisons
-and application-specific reuse need corresponding workloads.
+| Native baseline | What it does |
+|---|---|
+| `NativeBuilderBudgeted` | `NativeBuilder<uint>` growing inside a `NativeMemoryBudget` |
+| `NativeBuilder` | the same builder without a budget |
+| `NativeBuilderBudgetedDirect` | known size: each output is created with its exact capacity and written once through `Write` |
 
-`LifecycleEvidence` and every nested measurement are required in newly serialized
-worker evidence: absent observations cannot deserialize into invented zero
-measurements; explicit null is rejected by the worker reader. It separates
-preparation plus correctness validation, warm-up, the complete measured batch
-(including channel/task setup), and the later one-packet phase probe. Each has
-wall time and absolute before/after process CPU, process-wide GC allocation,
-collection counts, last-observed GC heap size, and implemented native accounting
-counters. CPU sampling overhead is excluded from the GC allocation boundaries;
-accounting/CPU observers are initialized before preparation on both sides.
-Process startup is outside these phase observations.
+Use the growing baselines for output of unknown size. A growable builder is not automatically the right owner for known-size output, so compare `NativeBuilderBudgetedDirect` with `ManagedExactArray` for that case.
 
-The older GC allocation/collection/heap fields now correspond only to the
-complete measured batch, ending before RSS queries and the separate probe.
-Its older elapsed-time field still covers the inner producer/consumer loop, so use
-`LifecycleEvidence.MeasuredBatch.ElapsedMilliseconds` for complete invocation
-time. Process CPU is shared by all process threads and has OS timer granularity;
-GC heap size is the last collection's value, not instantaneous live storage.
-Native observations preserve the epoch and saturation indicator: only compare
-event deltas within the same nonsaturated epoch. Outstanding, detached and
-retired byte fields are current gauges, not cumulative allocated byte volume.
-The probe's managed `GC.KeepAlive` boundary is not physical GC reclamation. Do not
-sum these four phases into an application-lifetime or terminal-reclamation
-measurement.
+### Read the report
 
-`WorkingSetBeforeBytes` and `WorkingSetAfterBytes` are endpoint resident-memory
-observations. `PeakWorkingSetBytes` is the OS-reported process-lifetime working-set
-high-water mark through the post-measurement refresh, before the separate phase
-probe and report serialization. It includes startup, setup and warm-up; it is not
-a resettable steady-state peak, native-only extent or complete process budget.
-The pooled worker's `PeakObservedWorkingSetBytes` has the same lifetime definition,
-ending before its separately measured disposal. Endpoints cannot reconstruct
-these peaks. Isolated builder runs preserve the worker's own observation without
-parent RSS polling. A missing/nonpositive OS peak fails evidence collection,
-instead of reporting zero.
+The process exits 0 when every pair produced identical output and the order was balanced; 3 otherwise.
+
+| Field | Meaning |
+|---|---|
+| `ExactParity`, `BalancedOrder` | both must be `true` for the numbers to mean anything |
+| `ManagedMeanMilliseconds`, `NativeMeanMilliseconds` | mean time of the inner producer/consumer loop (setup and warm-up excluded). For the complete measured phase use `LifecycleEvidence.MeasuredBatch.ElapsedMilliseconds` |
+| `MeanPairedSpeedup` | managed time divided by native time; above 1 means native was faster |
+| `PairedSpeedupConfidenceLower95` | lower end of the 95% confidence interval of that ratio |
+| `PerformanceAdvantage` | `true` only if the mean is above 1 and the interval's lower end is above 1; it is a time-only result |
+| `ManagedMeanAllocatedBytes`, `NativeMeanAllocatedBytes` | GC allocation only; native bytes are not in it |
+| `ManagedMeanPeakWorkingSetBytes`, `NativeMeanPeakWorkingSetBytes` | the OS's peak working set of the worker process since it started, including startup and warm-up |
+| `Pairs[]` | per-run evidence for both sides |
+
+To compare total allocation, add the native side's GC allocation
+plus successful requested backing bytes, and compare that with the managed side's GC allocation. The backing bytes are `AcquiredBackingBytes` plus `ReplacementBackingBytes` in the budgeted native worker's `LifecycleEvidence.MeasuredBatch.After.Budget`, minus the same fields in `Before.Budget` (a replacement counts its whole new size, not the growth). `Budget` is `null` for managed and unbudgeted workers.
+
+Things the numbers do not include: allocator bookkeeping and the real physical size of a reallocation. Pooled managed buffers and application-specific reuse need their own workload.
+
+Each worker's `LifecycleEvidence` has four phases (`PreparationAndValidation`, `Warmup`, `MeasuredBatch`, `SeparatePhaseProbe`), each with `Before`, `After` and `ElapsedMilliseconds`. Do not add the phases together. Process CPU is shared by all threads of the process, and `ManagedHeapBytes` is the heap size after the last GC, not live data.
+
+Both sides run with `DOTNET_TieredCompilation=0` and `DOTNET_TieredPGO=0`.
+
+## Write in place against repeated Append
+
+It compares millions of two-word `Append` calls with one `Write` call per builder, on 24 independent builders, and checks that the output is identical.
+
+```text
+dotnet run --project Supprocom.NativeAllocationManagement.Performance -c Release -- --native-builder-write --samples 6 --records-per-builder 100000 --enforce --output native-builder-write.json
+```
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--samples` | 6 | paired runs; must be even |
+| `--records-per-builder` | 100000 | two-word records per builder |
+| `--workers` | 24 | builders |
+| `--enforce` | off | exit 4 if the result does not meet the gate below |
+| `--output` | none | also write the report to this file |
+
+The program starts the workers itself with tiered compilation and PGO off.
+
+### Read the report
+
+| Field | Meaning |
+|---|---|
+| `meanSpeedup`, `aggregateSpeedup` | `Append` time divided by `Write` time (mean of runs, and total over total); above 1 means `Write` was faster |
+| `confidenceLower95` | lower end of the 95% confidence interval of the per-run ratio |
+| `repeatedAppendMeanRecordsPerSecond`, `boundedWriteMeanRecordsPerSecond` | throughput of each side |
+| `exactParity`, `balancedOrder`, `cleanupPassed`, `boundedNativeAllocationsPassed`, `runtimeConfigurationPassed`, `productionShapePassed`, `binaryIdentityPassed` | checks; all must be `true`. `productionShapePassed` needs `--workers 24` and at least 2,000,000 records in total |
+| `gatePassed` | all seven checks passed, both speedups are at least 1.20 and `confidenceLower95` is above 1 |
+
+Exit code: 0 on success, 3 if parity or order failed, 4 if `--enforce` is set and `gatePassed` is `false` (this includes a parity failure). Lowering `--workers` or `--records-per-builder` so the total is under 2,000,000 records makes `--enforce` fail.

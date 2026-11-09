@@ -1,88 +1,69 @@
-# Production accounting contract
+# Production accounting
 
-Accounting is active in ordinary runtime operation, without enabling tests or
-tracing. The outstanding, peak, detached and retired byte gauges are always
-recorded. Event histories (the allocation, reallocation, free, zeroed-allocation,
-detached-generation, clear, copy, reuse and traversal counts and bytes) are recorded
-only when the process starts with the
-`Supprocom.NativeAllocationManagement.DetailedCounters` AppContext switch enabled or
-the `NAM_DETAILED_COUNTERS` environment variable set to `1` or `true`; otherwise
-they stay zero. `NativeMemoryDiagnostics.DetailedCountersEnabled` reports which mode
-is active. Fault injection can reject a backend operation but cannot disable its
-accounting. Measurement reset is internal, quiescent, and advances a checked
-non-reusing epoch; pre-epoch release is excluded, while successful resizing brings
-that complete block into the current measurement epoch.
+`NativeMemoryDiagnostics.Snapshot()` reports the native memory NAM holds in the whole process. It needs no setup and no tracing.
 
-AllocationCount counts successful backing acquisitions, including realloc from
-null and a successful resize of pre-epoch backing. ReallocationCount counts actual
-successful realloc calls, not a fabricated allocate/free pair. FreeCount counts
-measured physical releases. ZeroedAllocationCount is the zeroed subset of backing
-acquisitions. DetachedGenerationCount counts actual measured generation detach
-events, independently of payload size. Failed backend operations add no successful
-event or outstanding extent.
+```csharp
+using Supprocom.NativeAllocationManagement;
 
-OutstandingNativeBytes covers known NAM-owned native extents, including tracked
-headers/alignment. It excludes provider-owned mapping capacity and opaque native
-allocator overhead. PeakOutstandingNativeBytes records high-water usage,
-including intermediate growth. DetachedNativeBytes and RetiredNativeBytes are
-overlapping subsets, not additional allocations to add to outstanding bytes.
-RetainedNativeBytes is outstanding minus detached. Each thread keeps its own running
-change to outstanding bytes, so threads that allocate at once do not contend for one
-counter. A capture adds every thread's change, so it is exact whenever no other
-thread is allocating or freeing at that moment. The peak is exact while one thread
-allocates; when several threads allocate at once, it can miss up to 256 KiB per
-other thread. Completed event and byte histories saturate with HistoryOverflowed
-rather than wrapping or throwing after work has completed.
+using NativeBuilder<int> builder = new(preLease: 1_024);
+builder.Append(1);
 
-BumpTraversalVisitCount is actual segment search work. ReusedNativeSegmentCount
-counts backing reuse, not physical acquisition. ReclaimedRangeReuseCount/Bytes are
-actual reclaimed ranges consumed. No element access increments these counters.
+NativeMemoryStatistics stats = NativeMemoryDiagnostics.Snapshot();
+Console.WriteLine($"outstanding {stats.OutstandingNativeBytes}, peak {stats.PeakOutstandingNativeBytes}");
+```
 
-StorageClearCount counts NAM-controlled nonempty clear ranges. StorageClearBytes
-counts bytes visited by those operations; WrittenClearBytes counts bytes actually
-zero-written. Direct native range clears write their full range. Reference-root
-cleanup visits its declared slot range but skips already-empty slots, so visited
-and written bytes can differ. Partial initialization cleanup counts only its
-initialized prefix. Direct bounded-view Clear and workspace initial backing clears are included;
-backend allocation zeroing is reported separately by ZeroedAllocationCount.
-Arbitrary consumer AsSpan().Clear() or callback writes are not introspectable and
-are excluded. Reference cleanup records a range once using root counts under its
-existing gate, without adding a per-element counter.
+The snapshot allocates nothing. For a per-budget view see [memory budgets](memory-budgets.md).
 
-Hot histories use an array with fixed capacity 64 plus one shared fallback object
-and one value accumulator for completed history. Local metric objects are created
-on cold slot claim, then reused; the array never expands. Slot claim folds an
-exited thread's history before reuse. A local strong Thread wrapper reference
-protects its weak liveness observation while the actual thread is alive. The bank
-retains no owner and no strong historical Thread reference. Excess simultaneously
-live threads share atomic histories instead of exhausting application capacity.
-Owner construction prepares accounting for its thread before prepared execution.
-Cold metric-object or weak-reference allocation failure uses the preexisting
-atomic fallback instead of allowing diagnostics to fail a completed operation.
-Partial cold registration keeps completed history folded exactly once. Narrow
-internal probes inject OOM before selection, before folding and after folding;
-fault state remains in the separate test-hook class, not in production counters.
+## Gauges and event counters
 
-Warm updates add a local/shared branch and saturation arithmetic; global physical
-events and excess-thread fallback use saturating compare/exchange. Cold startup
-adds the fixed reference array, lock, fallback object and claimed local objects;
-each claim adds one weak reference. This removes an unbounded historical-thread
-bag and allocating snapshot enumeration. Snapshot visits only the claimed prefix
-and aggregates into a stack value
-under the cold claim gate and allocates nothing after initialization. Counters can
-advance concurrently, so reconciliation requires a quiescent measurement boundary.
+| Group | Fields | Available |
+|---|---|---|
+| Byte gauges | `OutstandingNativeBytes`, `PeakOutstandingNativeBytes`, `DetachedNativeBytes`, `RetiredNativeBytes`, `RetainedNativeBytes` | Always |
+| Event counters | `AllocationCount`, `ReallocationCount`, `FreeCount`, `ZeroedAllocationCount`, `DetachedGenerationCount`, `ReusedNativeSegmentCount`, `ReclaimedRangeReuseCount`, `ReclaimedRangeReuseBytes`, `BumpTraversalVisitCount`, `StorageClearCount`, `StorageClearBytes`, `WrittenClearBytes`, `CopiedBytes` | Only in detailed mode, otherwise `0` |
 
-The maintained [20-field process contract](../conformance/native-process-diagnostic-contracts.json)
-records each field's units, scope, update/derivation source, consistency, reset,
-overflow and linked positive/fault/cleanup proofs. Reflection checks require exact
-agreement with the published schema and independently declared expected fields;
-new fields cannot silently remain unmapped. The exact public-only oracle source
-also compiles and runs in an isolated analyzer-enabled package consumer.
+Detailed mode costs cycles on hot paths, so it is off by default. Turn it on before the process starts. `NativeMemoryDiagnostics.DetailedCountersEnabled` tells you which mode is active.
 
-The oracle takes one quiescent initial baseline in an unsaturated measurement
-epoch, then independently calculates complete workspace/builder/transfer extents,
-actual copies and clears, successful realloc and final releases. It never builds
-a production snapshot as its expected result or reads later observations into
-its expectation. Generation/reclaim fields stay at their true direct-owner
-invariants; separate positive retirement, detach, reuse, epoch and overflow tests
-cover the mechanisms that can advance them.
+```xml
+<!-- in your .csproj -->
+<ItemGroup>
+  <RuntimeHostConfigurationOption Include="Supprocom.NativeAllocationManagement.DetailedCounters" Value="true" />
+</ItemGroup>
+```
+
+```bash
+# or, without rebuilding
+NAM_DETAILED_COUNTERS=1 dotnet run
+```
+
+`NAM_DETAILED_COUNTERS` is `1` or `true` to enable; when it is set it wins over the switch.
+
+## What the fields mean
+
+| Field | Meaning |
+|---|---|
+| `OutstandingNativeBytes` | Extents NAM owns now, header and alignment included. This includes storage that disposed owners kept for reuse. Provider-owned ranges and allocator overhead are not counted. |
+| `PeakOutstandingNativeBytes` | Highest outstanding value, including growth in between. |
+| `DetachedNativeBytes`, `RetiredNativeBytes` | Subsets of outstanding bytes. Do not add them to it. |
+| `RetainedNativeBytes` | Outstanding minus detached. |
+| `AllocationCount` | Successful acquisitions, including the first `realloc` from null. |
+| `ReallocationCount` | Successful `realloc` calls. |
+| `FreeCount` | Physical releases. |
+| `ZeroedAllocationCount` | Acquisitions that were zeroed. |
+| `DetachedGenerationCount` | Generation detach events, whatever their size. |
+| `ReusedNativeSegmentCount` | Times existing backing was reused instead of acquired. |
+| `ReclaimedRangeReuseCount`, `ReclaimedRangeReuseBytes` | Reclaimed ranges handed out again, and their bytes. |
+| `BumpTraversalVisitCount` | Segments visited while searching for space. Element access does not count. |
+| `StorageClearCount`, `StorageClearBytes` | Clears NAM performed on non-empty ranges, and the bytes they visited. |
+| `WrittenClearBytes` | Bytes actually zeroed. Can be lower than `StorageClearBytes` because empty reference slots are skipped. |
+| `CopiedBytes` | Bytes copied by NAM bulk operations. |
+| `MetricsEpoch` | Measurement epoch. Only internal test resets advance it. |
+| `HistoryOverflowed` | An event or byte total reached `long.MaxValue`. Gauges stay exact. |
+
+Clears and copies that you do through `AsSpan()` are not counted.
+
+## Reading the numbers
+
+- Read at a point where no other thread allocates or frees. Each thread keeps its own running change, and a snapshot adds them, so the result is exact only then.
+- The peak is exact while one thread allocates. When several allocate at once it can miss up to 256 KiB per other thread.
+- Counters saturate at `long.MaxValue` and set `HistoryOverflowed`; they never wrap or throw.
+- The snapshot does not include allocator-internal copying or RSS.

@@ -1,38 +1,42 @@
-# Safe ownership correction
+# Automatic fixes
 
-Every shipped diagnostic has a [dedicated help page](diagnostics/README.md).
-The compiler analyzer remains independent of IDE workspace dependencies. The
-package includes a separate exported code-fix companion for Roslyn hosts with
-matching workspace support; compiler-only consumers still run the ownership gate.
+Every diagnostic has a [help page](diagnostics/README.md). The package also ships a code-fix provider for editors that support Roslyn code fixes. The analyzer itself runs in every build, with or without the provider.
 
-The provider supports NAM1006, NAM1025, NAM1031 and NAM1038 only where one directly
-constructed local owner can safely become a using declaration. It authenticates
-the runtime type, rejects already-using/multiple/field declarations, reassignment,
-ref/out/in consumption, captured locals, explicit lifecycle cleanup, await/yield and ambiguous
-control transfer. It recompiles and re-runs NAM before offering the correction:
-the requested defect must disappear without a compiler error or any new NAM
-diagnostic. Budget values, payload, sharing and copying are unchanged.
+The provider offers "Use verified lexical cleanup" for four diagnostics:
+
+| ID | Owner it fixes |
+|---|---|
+| [NAM1006](diagnostics/NAM1006.md) | `NativeRegion` |
+| [NAM1025](diagnostics/NAM1025.md) | `NativeTransfer<T>` |
+| [NAM1031](diagnostics/NAM1031.md) | `NativeBuilder<T>` |
+| [NAM1038](diagnostics/NAM1038.md) | `NativeWorkspace<T>` |
 
 ```csharp
-// Before: NAM1006, no proven lexical region.
-NativeRegion region = new();
+static int Count()
+{
+    NativeRegion region = new();                     // error NAM1006
+    Span<int> values = region.Lease<int>(16, 0).AsSpan();
+    values[0] = 1;
+    return values.Length;
+}
+```
 
-// After: only when the remaining body passes the semantic checks.
+The fix turns the declaration into a using declaration:
+
+```csharp
 using NativeRegion region = new();
 ```
 
-The cleanup scope retains the original declaration's enclosing block. Exceptions
-and early returns receive normal C# using cleanup. The fix never adds sharing,
-copies native payload, moves authority into storage, enlarges a cap or suppresses
-analysis. If automatic cleanup conflicts with a later ownership operation, no
-fix is offered. A source lookalike does not receive a runtime-type exemption.
+The fix is offered only when the owner is a local declared with an initializer and the rest of the body keeps compiling without any new NAM diagnostic. It is not offered if the local:
 
-Batch Fix All is intentionally unsupported: transformations need independent
-semantic verification and a combined edit could alter another owner's lifetime.
-Other diagnostics require explicit application decisions. In particular, NAM1050
-cannot select the application's refusal path or safely guess that a result is
-successful. Fix missing guards/ownership paths directly and rerun compilation.
+- is already a `using`, is declared with others, or is a field;
+- is reassigned, passed as `ref`, `out` or `in`, or captured;
+- is already disposed or completed by hand;
+- lives in a block that contains `goto`, `await` or `yield`, or is changed with `++` or `--`;
+- is consumed by `Move`, `ReturnTo...` or `LeaseFromMemory`.
 
-See the [allocator-selection guide](allocator-selection.md) before adding NAM
-risk to a workload. Passing ownership analysis is necessary, not performance
-evidence, process-memory admission or proof of an unsafe external provider.
+The fix never adds sharing, copies data, stores an owner, raises a cap or suppresses a diagnostic. "Fix all" is not offered, because each owner needs its own check.
+
+Every other diagnostic needs a decision from you. For example [NAM1050](diagnostics/NAM1050.md) cannot know what your code does when an acquisition is refused. Fix those by hand and rebuild.
+
+Before adding NAM to a workload, read the [allocator-selection guide](allocator-selection.md). A clean analyzer run is necessary, not sufficient: it does not show NAM is faster for your workload.

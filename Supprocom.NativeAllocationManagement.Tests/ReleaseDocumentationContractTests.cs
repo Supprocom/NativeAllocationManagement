@@ -11,6 +11,7 @@ public sealed class ReleaseDocumentationContractTests
         Assert.DoesNotContain("unreleased", guide, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("released `0.3.2` package", readme, StringComparison.Ordinal);
         Assert.Contains("released `0.3.2` package", guide, StringComparison.Ordinal);
+        Assert.Contains("--version 0.3.2", readme, StringComparison.Ordinal);
         Assert.Contains("--version 0.3.2", guide, StringComparison.Ordinal);
         Assert.Contains("Version=\"0.3.2\"", guide, StringComparison.Ordinal);
         Assert.DoesNotContain("version-status.md", readme, StringComparison.Ordinal);
@@ -18,25 +19,22 @@ public sealed class ReleaseDocumentationContractTests
     }
 
     [Fact]
-    public void MigrationMatchesTheCurrentReadonlyValueRepresentation()
+    public void GuideMovesTheCurrentReadonlyValueRepresentation()
     {
         string transfer = Read("Supprocom.NativeAllocationManagement", "NativeTransfer.cs");
         string guide = Read("docs", "getting-started.md");
         Assert.Contains("public readonly struct NativeTransfer<T>", transfer, StringComparison.Ordinal);
-        Assert.Contains("not binary compatibility", guide, StringComparison.Ordinal);
-        Assert.Contains("Rebuild consumers", guide, StringComparison.Ordinal);
-        Assert.Contains("A nullable binding uses `binding.Value` after checking", guide, StringComparison.Ordinal);
-        Assert.Contains("Copies of the previous value cannot access or", guide, StringComparison.Ordinal);
+        Assert.Contains("`Move(ref source)` returns the next owner and sets `source` to `null`", guide, StringComparison.Ordinal);
+        Assert.Contains("A copy of the old value then throws `InvalidOperationException` when used", guide, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void MigrationDoesNotTurnCopiesDefaultsOrFinalizersIntoOwnership()
+    public void GuideDoesNotTurnCopiesDefaultsOrFinalizersIntoOwnership()
     {
         string guide = Read("docs", "getting-started.md");
-        Assert.Contains("A failed move consumes its source binding", guide, StringComparison.Ordinal);
-        Assert.Contains("they do not create another owner", guide, StringComparison.Ordinal);
-        Assert.Contains("uninitialized and reject use, including disposal", guide, StringComparison.Ordinal);
-        Assert.Contains("Never use finalization as timely budget", guide, StringComparison.Ordinal);
+        Assert.Contains("NAM1021 (a copy is not a second owner)", guide, StringComparison.Ordinal);
+        Assert.Contains("`default(NativeTransfer<T>)` rejects every use, including `Dispose`", guide, StringComparison.Ordinal);
+        Assert.Contains("is freed by a finalizer, but only when the GC gets to it", guide, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -44,7 +42,7 @@ public sealed class ReleaseDocumentationContractTests
     {
         string readme = Read("README.md");
         string benchmark = Read("docs", "builder-benchmark.md");
-        Assert.Contains("Earlier runs of the voxel demo", readme, StringComparison.Ordinal);
+        Assert.Contains("InProcessBenchmark", readme, StringComparison.Ordinal);
         Assert.Contains("Results depend on workload", readme, StringComparison.Ordinal);
         Assert.Contains("total managed/native allocation", readme, StringComparison.Ordinal);
         Assert.Contains("docs/builder-benchmark.md", readme, StringComparison.Ordinal);
@@ -60,14 +58,13 @@ public sealed class ReleaseDocumentationContractTests
         Assert.Contains("does not claim to bound process RSS", budget, StringComparison.Ordinal);
         Assert.Contains("external storage owned by another provider", budget, StringComparison.Ordinal);
         Assert.Contains("Borrowed storage and managed metadata require separate accounting", budget, StringComparison.Ordinal);
-        Assert.Contains("Accounting is active in ordinary runtime operation, without enabling tests or\ntracing", accounting, StringComparison.Ordinal);
+        Assert.Contains("It needs no setup and no tracing.", accounting, StringComparison.Ordinal);
     }
 
     [Fact]
     public void BudgetIntroductionLinksImplementedPreparationInsteadOfStaleMissingWork()
     {
         string budget = Read("docs", "memory-budgets.md");
-        Assert.Contains("available from version 0.3.0", budget, StringComparison.Ordinal);
         Assert.Contains("(prepared-pools.md)", budget, StringComparison.Ordinal);
         Assert.Contains("(prepared-arenas.md)", budget, StringComparison.Ordinal);
         Assert.Contains("(immutable-sharing.md)", budget, StringComparison.Ordinal);

@@ -1,168 +1,76 @@
 # Voxel chunk pipeline
 
-This demo compares expert safe C# with the same application design using
-Native Allocation Management.
+Two implementations of one voxel chunk pipeline: expert safe C# (`Span<T>`, stack storage, worker-local `ArrayPool<T>`, no `unsafe`) and the same design with Native Allocation Management (NAM). Both build, render, prerender and upload the same 32 by 32 by 32 chunks, and produce equal typed outputs and equal upload bytes.
 
-Both implementations build, render, prerender, and upload the same voxel
-chunks. They produce equal typed outputs and equal upload bytes.
+| Project | Contains |
+|---|---|
+| `SharedContract` | Input, output, workload and result types |
+| `SafeCSharp` | The safe C# memory strategy |
+| `NAM` | The NAM memory strategy |
+| `Harness` | The container matrix driver |
+| `InProcessBenchmark` | The one-command comparison below |
 
-The comparison asks one question. Does safe explicit native ownership improve
-performance after the managed implementation applies its available memory
-optimizations?
+## Compare on one machine
 
-## Estimates
+Needs the .NET 10 SDK, no container. Run from the repository root:
 
-The control profiles estimate that NAM is 50 to 85 percent faster in a
-non-memory-constrained environment.
+```bash
+dotnet run --project .Demos/01-VoxelChunkPipeline/InProcessBenchmark/Supprocom.NativeAllocationManagement.Demos.VoxelChunkPipeline.InProcessBenchmark.csproj -c Release -- compare
+```
 
-The constrained profiles estimate that NAM is 90 to 130 percent faster in a
-very memory-constrained environment.
+Output (`--rounds 1` shown; numbers depend on your machine):
 
-| Environment | Estimated improvement |
-|---|---:|
-| Non-memory-constrained controls | Approximately 50–85% |
-| Very memory-constrained profiles | Approximately 90–130% |
+```text
+1 rounds, 9 timed requests, 256 MiB demand, 4 warmups; one process per mode per round, order alternates
+Median per-request process CPU time in ms.
+round  order      NAM     Safe   Safe/NAM
+    1  NAM,Safe     51.5    111.5     2.165
+median of NAM medians:  51.5 ms
+median of Safe medians: 111.5 ms
+Safe/NAM (medians):     2.165
+Safe/NAM per-round range: 2.165 - 2.165
+```
 
-These values are workload and system estimates. Use the included command to
-measure the result on the applicable target system.
+How to read it:
 
-The matrix records constrained-memory qualification as an informational result.
-The result confirms the equal binary cap, no swap, and cumulative demand.
-It does not require a garbage collection or a resident-memory threshold.
+- Each mode runs in its own process, so neither inherits the other's heap. Per round, NAM and Safe each run once; the order alternates (NAM first, then Safe first).
+- Each process runs 4 warmup requests, then times 9 requests of 256 MiB demand.
+- The values are the median per-request process CPU time in milliseconds.
+- `Safe/NAM` is Safe time divided by NAM time. Above 1, NAM used less CPU.
+- The per-round range shows the spread between rounds.
 
-## Equal work
+Options (defaults shown):
 
-`SharedContract` defines the input, output, workload, protocol, and result
-types. The Safe and NAM projects contain only their memory strategies.
+```bash
+dotnet run --project .Demos/01-VoxelChunkPipeline/InProcessBenchmark/Supprocom.NativeAllocationManagement.Demos.VoxelChunkPipeline.InProcessBenchmark.csproj -c Release -- compare --rounds 5 --requests 9 --demand-mib 256
+```
 
-All four projects (`SharedContract`, `SafeCSharp`, `NAM`, and `Harness`) are
-direct children of the repository root and are included in the root solution.
-The demo guide and pressure scripts remain in this directory.
+## Check that both produce the same output
 
-Both implementations process the same ordered 32 by 32 by 32 chunks. They
-produce the same sections, faces, masks, vertices, indices, descriptors, and
-upload bytes.
+```bash
+dotnet run --project .Demos/01-VoxelChunkPipeline/InProcessBenchmark/Supprocom.NativeAllocationManagement.Demos.VoxelChunkPipeline.InProcessBenchmark.csproj -c Release -- verify nam 128 4E414D
+dotnet run --project .Demos/01-VoxelChunkPipeline/InProcessBenchmark/Supprocom.NativeAllocationManagement.Demos.VoxelChunkPipeline.InProcessBenchmark.csproj -c Release -- verify safe 128 4E414D
+```
 
-The workload contains eight chunk archetypes and all section representation
-types. One fixed 16-chunk cycle keeps the type mix and work per byte equal.
+`verify <nam|safe> <demandMiB> <hexSeed>...` reads every output value and byte of 32 chunks for each seed. Both lines must be identical except for the leading mode:
 
-The exact verifier reads every material output value and byte. Safe and NAM
-must produce equal per-chunk evidence and the same SHA-256 evidence stream.
+```text
+nam seed 4E414D correct True chunks 32 canonical 44A23E69DCDDC91471F1D5EF62FDACD34DA2094D543C08AAB7F1EA13D78F1C3D chunk-evidence 886614B8918E017F14F54443DF542B2485DB439CCE1313FF6277F60DF60F8B51
+safe seed 4E414D correct True chunks 32 canonical 44A23E69DCDDC91471F1D5EF62FDACD34DA2094D543C08AAB7F1EA13D78F1C3D chunk-evidence 886614B8918E017F14F54443DF542B2485DB439CCE1313FF6277F60DF60F8B51
+```
 
-## Safe C# strategy
+`canonical` and `chunk-evidence` are SHA-256 hashes of the output; equal hashes mean equal output.
 
-The Safe project disables unsafe code. It uses `Span<T>`, `ReadOnlySpan<T>`,
-bounded stack storage, and worker-local `ArrayPool<T>` size classes.
+## Memory-constrained matrix
 
-It uses exact logical slices and prompt pool returns. Proactive memory
-admission limits each live batch before the mapped GPU transfer.
+Measures both implementations in Docker containers with the same 256 MiB memory cap, no swap, and the same CPU, PID and GC settings. Each profile sets the total memory demand as a percentage of the cap: 50, 100, 200, 500, 1000 and 10000. Needs Windows, Docker and PowerShell (`pwsh`).
 
-The final transfer copies the five typed GPU stage ranges into persistent
-mapped storage. Safe managed spans cannot directly own that external storage.
-
-## NAM strategy
-
-The NAM project uses persistent worker-local owners and one heterogeneous
-arena. The arena uses a mapped GPU buffer as external backing.
-
-Cells, faces, section ranges, masks, and final outputs use bounded native
-ranges. Scoped recycling releases each phase with one generation operation.
-
-Final GPU stages reference their native payload, vertex, index, and padding
-ranges. The mapped handoff does not copy these ranges into duplicate stage
-records.
-
-Four 1000-percent warmup passes establish allocation shapes and stable
-capacities. Each later canonical cycle uses the same worker assignment.
-
-Thus, the 10000-percent profile adds storage turnover without adding a new
-resident allocation shape.
-
-## Measurement controls
-
-The compiler gate runs before the runtime matrix. The NAM compiler time and
-complete build time must each remain within 1.10 times the Safe result.
-
-The gate uses one warmup pair and six measured pairs. Each implementation has
-three first positions and three second positions.
-
-Both warmup builds must complete with compiler timing and exit code zero. A
-warmup failure writes the artifact and stops before measured builds.
-
-Each child build disables tiered compilation and dynamic tiered PGO. The
-artifact records these settings for every warmup and measured build.
-
-The artifact records compiler standard deviation. It also records the compiler
-mean for each implementation in each command position.
-
-Runtime containers receive equal 256 MiB memory limits, swap policy, CPU
-access, PID limits, GC mode, and GC heap limits.
-
-Both containers disable tiered compilation and dynamic tiered PGO. Each worker
-records these settings in its startup runtime data.
-
-The default profiles are 50, 100, 200, 500, 1000, and 10000 percent of the
-binary cgroup cap.
-
-Requested subsets must keep this canonical order. The harness rejects
-reversed, rotated, duplicate, or unknown profile lists.
-
-Each profile uses six paired samples by default. The harness rejects odd
-sample counts because each implementation must run first equally often.
-
-Each paired sample uses new Safe and NAM containers. Startup and four fixed
-1000-percent warmup passes occur outside measured processing.
-
-Each worker then runs six selected-profile preparation requests. The timed
-request always has request ordinal 11.
-
-Safe and NAM use equal preparation counts. Elapsed-time noise does not change
-the count or accept a different runtime state.
-
-The output path contains an atomic progress checkpoint until the run
-completes. The harness writes a checkpoint after each preparation series.
-
-The harness writes another checkpoint after each isolated pair. This
-checkpoint includes completed profiles, current pairs, initialization data,
-commands, binary identities, and completed worker lifecycles.
-
-Each preparation checkpoint includes all attempts and the current worker
-state. The final report atomically replaces the latest checkpoint.
-
-In enforce mode, the harness evaluates each completed profile immediately. A
-failed gate writes a terminal artifact before another profile can start.
-
-The terminal artifact records exact gates, identities, commands, lifecycles,
-cleanup state, and the preserved profile state.
-
-The worker resets all logical state after each request. The harness removes
-both sample containers before it starts the next pair.
-
-The child waits at `ProcessingReady`. The host starts its timer before it sends
-`BeginProcessing`.
-
-The host stops its timer at `ProcessingCompleted`. The child does not run a
-benchmark timer or scan allocator statistics during processing.
-
-Untimed warmup and exact verification use a separate 60-second host timeout.
-Each completed warmup and preparation request updates a host activity file.
-
-Each result records completion, deadline, correctness, process, GC, cgroup,
-CPU, and native-memory data. A failed result remains in the artifact.
-
-## Run the matrix
-
-Restore and build the solution first.
+Build, then prepare the worker image. Setup runs outside the measured matrix and writes the compiler-time artifact:
 
 ```powershell
 dotnet restore Supprocom.NativeAllocationManagement.slnx
 dotnet build Supprocom.NativeAllocationManagement.slnx -c Release --no-restore
-```
 
-Prepare the worker image first. This setup command runs outside the measured
-matrix and writes the compiler artifact.
-
-```powershell
 $commit = (git rev-parse HEAD).Trim()
 $image = "nam-voxel-pressure:$($commit.Substring(0, 12))"
 
@@ -173,7 +81,7 @@ $image = "nam-voxel-pressure:$($commit.Substring(0, 12))"
   -SetupOnly
 ```
 
-Run the fixed matrix from the repository root after setup.
+Run the matrix from the repository root:
 
 ```powershell
 $commit = (git rev-parse HEAD).Trim()
@@ -190,16 +98,11 @@ $image = "nam-voxel-pressure:$($commit.Substring(0, 12))"
   -Enforce
 ```
 
-The wrapper stops a harness that has no activity for 120 seconds. This limit
-exceeds the longest internal operation limit.
+How to read it:
 
-The wrapper derives a separate absolute fail-safe from the selected profiles,
-sample count, fixed warmups, fixed preparations, and operation limits.
-
-A smaller supplied fail-safe is invalid. A timeout keeps the latest checkpoint
-and writes its path, SHA-256, standard output, and standard error.
-
-The matrix command returns a nonzero exit code when any gate fails.
-
-The command creates local evidence only. It does not change or publish the
-package.
+- Each profile runs `-SamplesPerProfile` paired samples (default 6, must be even). Each pair uses fresh Safe and NAM containers, and each implementation runs first equally often.
+- `-OutputPath` receives a JSON report: per-sample correctness, timing, GC, cgroup, CPU and native-memory data. A failed sample stays in the report.
+- Before the runtime matrix, a compiler gate requires NAM's compile time and complete build time to each stay within 1.10 times Safe's.
+- With `-Enforce`, the command exits nonzero when any gate fails and writes a terminal report for the failed profile.
+- The wrapper stops a run with no activity for 120 seconds and keeps the latest checkpoint.
+- The command writes local files only.

@@ -1,90 +1,133 @@
-# Unique native ownership
+# Unique ownership with NativeTransfer
 
-`NativeTransfer<T>` is NAM's unique smart-pointer family for an initialized
-unmanaged range. It is not a wrapper around another published smart-pointer
-family. Acquire one acquisition-time control, then use the two-field value
-capability for destructive movement without another allocation. Assignment does
-not acquire ownership. Old value aliases retain their version and cannot borrow,
-move or dispose a newer destination.
+`NativeTransfer<T>` (`T` must be unmanaged) is the single owner of one block of initialized native elements. Unlike a `Span<T>`, you can keep it in a field, send it through a channel or hand it to another thread.
 
-Prefer ordinary managed ownership unless the complete workload demonstrates a
-material memory or performance advantage under the same cap and output contract.
-Zero allocations and the presence of a native pointer are insufficient. NAM
-requires deterministic cleanup, runtime guards and explicit lifetime reasoning.
+```csharp
+using Supprocom.NativeAllocationManagement;
 
-## Movement, borrowing and cleanup
+using NativeTransfer<int> data = NativeTransfer<int>.Create(new[] { 1, 2, 3 });
 
-`Move(ref NativeTransfer<T>? source)` clears the nullable source before attempting
-movement. Failure also consumes that source. A move during an entered borrow
-retires the source and returns its payload after the last entered borrow, without
-invalidating that borrow. An ordinary `Dispose` during a borrow rejects before
-returning storage and preserves the current binding. Bounded access is synchronous;
-an escaping span or native pointer has no ownership authority.
+int sum = data.Read(static view =>
+{
+    int total = 0;
+    foreach (int value in view.AsSpan()) total += value;
+    return total;
+});
+```
 
-A storage-return failure does not receive successful-return credit or free its
-budget charge. Failed ordinary disposal restores the current binding so its
-receiver can call `Dispose` again. A failed consumed retirement remains terminal
-and cannot borrow again; `TryCompletePayloadReturn` can retry that cleanup through
-any surviving non-default control observation without reopening ownership.
-False means it is not an idle consumed terminal source or another attempt owns
-cleanup. It is not a way to consume a still-active or allocator-invalidated value:
-the current binding must dispose that value normally. True means the return
-obligation has genuinely ended. A cleanup failure throws.
+The steps are always the same: create, move, use, dispose.
 
-An abandoned control has emergency finalization. Failure preserves its cleanup
-obligation for a later collection, never a tight retry loop or timely admission
-relief. Once cleanup succeeds, the control clears references to the old allocator,
-generation, allocation record and direct block. A stale alias can still observe
-scalar lineage/history but need not retain detached payload storage. A diagnostic
-failure after successful return cannot reopen native access or free storage twice.
+## 1. Create
 
-Allocator-wide return can independently invalidate a pooled unique handle. That
-handle's CLR control may still require disposal even though no live payload
-authority remains. GC-owned detached backing can stay physically charged until
-actual finalization. An entered borrow survives the supported GC-detach boundary;
-it does not establish fresh authority for another read.
+| Source | Gives you |
+|---|---|
+| `NativeTransfer<T>.Create(span)` | a copy of `span` |
+| `NativeTransfer<T>.Create(length, value)` | `length` elements, all set to `value` |
+| `NativeTransfer<T>.CreateUninitialized(length)` | `length` elements with unspecified contents; write each before reading it |
+| `builder.Complete()` | a builder's output, see [Build a growable native sequence](getting-started.md#build-a-growable-native-sequence) |
+| `NativeConcurrentPool<T>.RentTransferable(...)` | a pool lease that can be moved, see [Transfer ownership across threads](getting-started.md#transfer-ownership-across-threads) |
 
-## Real observations
+Assign the result straight to a local.
 
-`CaptureSnapshot` works on constructed stale/released values and allocates
-nothing. A default capability throws. Fields are sampled during concurrent
-transitions, not an atomic transaction across the control and its allocator.
+## 2. Move
 
-`OwnerId` plus `AllocationId` identifies the acquisition lineage, never a raw
-address. Binding and authority versions distinguish a stale alias from the
-current unique value. `BindingIsActive` checks actual allocator authority as well
-as control/version state. `LiveUniqueOwnerCount` is zero or one for the published
-live unique binding, not the number of copies. `HasReturnObligation` separately
-reports incomplete control cleanup, including invalidated or retiring payloads.
+Assignment never creates a second owner. To pass ownership on, hold the transfer in a nullable local and call `Move`. It sets the source to `null`, so only the destination can use the data.
 
-Active borrows come from real operation admission. Peak borrows are recorded from
-the existing atomic entry result, not reconstructed from a later snapshot.
-`MoveCount` is exactly the authority-publication version minus its initial value:
-that non-wrapping version changes only on a published move. Initial logical
-length and associated backing extent are immutable after acquisition and supply
-the actual lifetime peaks. A pooled acquisition can share a larger physical
-segment with other acquisitions; do not sum their full-backing observations as
-independent domain allocations. Borrowed provider backing is separate.
+```csharp
+NativeTransfer<int>? source = NativeTransfer<int>.Create(new[] { 1, 2, 3 });
+using NativeTransfer<int> owner = NativeTransfer<int>.Move(ref source);
+// source is null from here on.
+```
 
-`PayloadReturnCount` is zero or one after completed control return, including
-empty payloads and reusable pooled storage. It is not backend free count.
-`PayloadReturnFailureCount` counts failed real attempts, excluding invalid use
-rejected before an attempt and diagnostic failures after successful return. Its
-history saturates with `HistoryOverflowed`; current authority/borrow gauges remain
-exact. Native budget and allocator snapshots establish physical charge and free.
+```csharp
+// WRONG, does not compile: NAM1023 (source was already moved)
+using NativeTransfer<int> again = NativeTransfer<int>.Move(ref source);
 
-`ControlFieldBytes` sums actual declared field representations, including inline
-block storage and reference slots. It excludes CLR headers, padding between
-fields and referenced objects. It is not a fabricated heap-size or total-process
-memory measurement. A structural test reconciles it with every actual field.
+// WRONG, does not compile: NAM1021 (assignment is not a move) and NAM1025 (copy is never disposed)
+NativeTransfer<int> copy = owner;
+```
 
-Optional bounded events distinguish `Moved`, `Retired` and `UniqueReturned` from
-physical allocation/free and shared-control events. Unique `CorrelationId` is
-the allocation lineage paired with `OwnerId`; it is not a raw address. Disabled
-tracing constructs no event payload. Required observations remain available.
+A failed `Move` still consumes its source. If another thread is inside `Read` or `Access` when you move, the move throws `InvalidOperationException`: the source is consumed, the destination gets nothing, and the callback finishes safely.
 
-The bundled analyzer retains constructed-control proof separately from current
-authority. Post-cleanup observation therefore does not grant read/move/dispose
-authority. Default assignment, an unsuccessful Try acquisition and a consumed
-nullable ref source do not inherit that proof. Runtime guards remain mandatory
-when analyzer warnings are suppressed.
+Pass a transfer to a method as an ordinary by-value parameter. The method then owns it and must dispose it or move it on. Call it as `Use(NativeTransfer<int>.Move(ref source))`. Do not declare `in`, `ref` or `out` transfer parameters (NAM1027).
+
+## 3. Use
+
+`Read` returns a result and `Access` returns nothing. Both lend you a view that is valid only inside the callback.
+
+```csharp
+// WRONG, does not compile: NAM1024 (the span leaves the callback)
+owner.Access(static view => Keep(view.AsSpan()));
+
+static void Keep(ReadOnlySpan<int> values) { }
+```
+
+A helper that takes `view.AsSpan()` must declare the parameter `scoped`.
+
+## 4. Dispose
+
+End every path with `Dispose()` or a `Move`. A `using` declaration does it.
+
+```csharp
+// WRONG, does not compile: NAM1025 (never disposed)
+NativeTransfer<int> leaked = NativeTransfer<int>.Create(new[] { 1 });
+```
+
+A transfer that nobody disposes is freed later by a finalizer, when the GC gets to it. Do not rely on that to get memory back in time.
+
+## When the analyzer is off
+
+The same mistakes throw at run time.
+
+| Mistake | You get |
+|---|---|
+| `Dispose()` or `Read` after `Dispose()` | `ObjectDisposedException` |
+| any use of an alias whose ownership moved | `InvalidOperationException` |
+| Any call on `default(NativeTransfer<T>)` | `NativeAllocationUninitializedException` |
+| `NativeTransfer<T>.Move(ref source)` with `source == null` | `ArgumentNullException` |
+| `Dispose()` from inside its own `Access` or `Read` callback | `InvalidOperationException`; the transfer stays usable |
+| negative `length` | `ArgumentOutOfRangeException` |
+
+If a cleanup error makes `Dispose` throw, the same value can call `Dispose` again. `TryCompletePayloadReturn()` retries a failed cleanup; it returns `true` once the storage is given back.
+
+## Look at its state
+
+`CaptureSnapshot()` allocates nothing and also works on a disposed or moved value (not on `default`). Fields are read one at a time, so while other threads use the transfer they can be slightly out of step.
+
+```csharp
+NativeTransferStatistics stats = owner.CaptureSnapshot();
+Console.WriteLine($"{stats.Lifecycle} moves={stats.MoveCount} borrows={stats.ActiveBorrowCount}");
+```
+
+| Field | Meaning |
+|---|---|
+| `Lifecycle` | `Active`, `Returned`, `Shared` and so on |
+| `BindingIsActive` | whether this value is the current owner |
+| `MoveCount` | how often ownership moved |
+| `ActiveBorrowCount`, `PeakBorrowCount` | callbacks running now, and the most at once |
+| `InitializedPayloadBytes` | bytes of data the transfer holds |
+| `OwnedBackingBytes` | bytes of native storage behind it |
+| `PayloadReturnCount` | 1 once the storage has been given back |
+| `HasReturnObligation` | cleanup is not finished yet |
+
+A pooled transfer can sit in a larger shared segment. Do not add up `OwnedBackingBytes` across transfers; read the total from the [`NativeMemoryBudget`](memory-budgets.md).
+
+## Diagnostics
+
+| ID | What it catches | How to fix |
+|---|---|---|
+| [NAM1021](diagnostics/NAM1021.md) | copying a transfer by assignment | `NativeTransfer<T>.Move(ref source)` |
+| [NAM1022](diagnostics/NAM1022.md) | using a transfer after dispose or move, or disposing twice | stop using the value after `Dispose` or `Move` |
+| [NAM1023](diagnostics/NAM1023.md) | `Move` from a source that is already empty | move from a source that still owns |
+| [NAM1024](diagnostics/NAM1024.md) | a callback view escaping its callback | copy the data out, or mark the helper parameter `scoped` |
+| [NAM1025](diagnostics/NAM1025.md) | a path that neither disposes nor moves | `using`, `Dispose()` or `Move` |
+| [NAM1026](diagnostics/NAM1026.md) | a transfer acquired straight into a field, collection or expression | acquire into a local, then move |
+| [NAM1027](diagnostics/NAM1027.md) | `in`, `ref` or `out` transfer parameters | take it by value |
+
+## Terms
+
+- **Unmanaged**: a type with no references, so it can live in native memory.
+- **View**: the read or write window a callback receives. It is valid only inside that callback.
+- **Move**: hand ownership to a new variable and empty the old one.
+
+For sharing one block between several readers, see [Immutable sharing](immutable-sharing.md).

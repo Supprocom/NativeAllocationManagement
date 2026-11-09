@@ -1,158 +1,164 @@
-# Immutable native sharing
+# Immutable sharing
 
-NAM remains an optimization tool with explicit memory and lifetime risks, not a
-replacement for ordinary managed ownership. Use `NativeTransfer<T>` as the
-default heap-storable owner. Immutable sharing is justified only when an actual
-fan-out workload avoids more copying or lifetime coordination than its prepared
-metadata, boundary synchronization, and cleanup cost. Correctness and zero
-managed allocation alone do not establish that justification.
+`NativeShared<T>` (`T` must be unmanaged) lets several owners read one block of native data without copying it. The data is read-only. Use `NativeTransfer<T>` ([Unique ownership](unique-ownership.md)) unless several owners really need the same block at once.
 
-## Preparation and ownership
+```csharp
+using Supprocom.NativeAllocationManagement;
 
-`NativeShared<T>.Create(ref NativeTransfer<T>? source, preparation)` first
-allocates fixed strong/weak binding banks and observation metadata, then
-destructively consumes the source. The initial owner occupies one strong slot. With zero weak capacity, no payload
-weak-reference wrapper or private weak bank is allocated.
-Invalid preparation or metadata failure before the move preserves the source.
-Failure during or after destructive movement consumes it; initialization and
-publication failures return its storage. If publication and cleanup both fail,
-an aggregate exception preserves both causes. The ordinary unique path acquires
-no reference-counting bank or shared payload wrapper. Sharing reuses the source's
-acquisition-time custody control and emergency finalizer; it does not allocate a
-second payload owner or transfer responsibility between two finalizers.
+NativeTransfer<int>? source = NativeTransfer<int>.Create(new[] { 1, 2, 3, 4 });
+using NativeShared<int> first = NativeShared<int>.Create(
+    ref source, new NativeSharingPreparation(strongBindingCount: 2, weakBindingCount: 1));
 
-After conversion, the original transfer lineage reports `Lifecycle.Shared`, no
-active unique binding and `LiveUniqueOwnerCount == 0`. Its remaining return
-obligation describes private shared cleanup custody, not access authority. The
-shared value references that same private custody rather than retaining a public
-unique capability. Its allocator generation/allocation admission still protects backing until
-the last strong owner and entered shared reader finish. Preparing this pin does
-not invent a unique borrow or increase the unique borrow peak; earlier genuine
-unique borrows keep their recorded peak. Lineage backing/initialization fields and
-shared snapshots describe the same storage and must not be added together.
+if (first.TryShare(out NativeShared<int> second, out NativeSharingExhaustionReason reason))
+{
+    try { Console.WriteLine(second.Read(static view => view.AsSpan().Length)); }
+    finally { second.Dispose(); }
+}
+```
 
-If storage return completes before an observation/trace step throws, report the
-actual completed return and zero remaining associated backing, preserve the
-exception, and do not schedule another physical free. A failed return before
-completion retains shared cleanup custody and can be retried without reopening
-unique authority. These are correctness contracts, not measured performance
-claims. Full end-to-end comparisons still include preparation, metadata, boundary
-synchronization, cleanup and diagnostics against optimized managed C#.
+The steps are always the same: prepare and convert, share, read, dispose. The examples below continue with `first` and `source` from this one.
 
-Keep the nullable source in a `try/finally` with `source?.Dispose()` around the
-conversion and its result. That cleanup is a no-op after a consumed move, but
-returns the still-owned source if preparation fails before consumption. A using
-builder does not retain return authority after `Complete`.
+## 1. Prepare and convert
 
-Every independent owner must be obtained explicitly through `TryShare`,
-`TrySlice`, or a weak `TryUpgrade`. Assignment only aliases one versioned release
-identity. An alias cannot release a binding twice or affect a reused slot.
-`TryDowngrade` acquires an independent observer. Both banks are fixed for the
-payload lifetime: reuse increments a non-wrapping version, and identity exhaustion
-throws before changing a slot. Valid slot exhaustion returns false, a default
-output, and a specific `NativeSharingExhaustionReason`; it does not allocate or
-silently grow. Invalid/stale bindings throw instead of masquerading as capacity
-exhaustion. Prepare enough slots for all simultaneous owners and observers.
+`NativeShared<T>.Create(ref source, preparation)` consumes a `NativeTransfer<T>` and returns the first owner. `NativeSharingPreparation` fixes, once, how many owners and observers can exist at the same time:
 
-No implicit sharing, automatic copy-on-write, mutable shared span, global owner
-registry, or cycle collector is introduced. `T` must be unmanaged. Read callbacks
-are synchronous and receive only `NativeReadOnlyLeaseView<T>` and its read-only
-span. Admission is at callback entry/exit, not at each element. A result cannot be
-a ref struct. The analyzer also rejects supported source-visible view escapes;
-unsafe consumers still have explicit obligations and are not memory-safe merely
-because a view is read-only.
+| Argument | Meaning |
+|---|---|
+| `strongBindingCount` | most owners at once, including the first (at least 1) |
+| `weakBindingCount` | most weak observers at once (0 or more) |
 
-## Payload and weak-state lifetimes
+The counts never grow. If `Create` fails before it consumes the source (for example `default` preparation throws `ArgumentOutOfRangeException`), you still own the source, so keep a `finally { source?.Dispose(); }` around it. If it fails after, the data is freed.
 
-The last strong release closes upgrades permanently, even while an already
-entered read finishes. It does not free storage underneath that reader. Last
-strong/last read arbitrate one payload return. A pooled transfer holds actual
-allocation/generation admission until return, so pool disposal or generation
-reuse cannot invalidate a live shared read. Returning the payload releases that
-admission and returns the allocation's actual slot. A direct transfer physically
-frees its backing. The original budget charge is carried, never charged again by
-sharing.
+## 2. Share
 
-Weak values contain only bounded control state, including weak references; they
-contain no strong payload, transfer, budget, or allocator reference. Lingering
-observers cannot prevent payload cleanup or pooled-slot reuse. The expired strong bank is dropped immediately, rather than retaining its
-prepared capacity for weak observation. The weak bank is dropped when its final
-observer releases after expiration. Remaining control metadata
-becomes collectible when all actual CLR references end; disposing a value does
-not erase copies of that value held by its caller. Stale strong values retain no
-native return obligation after successful cleanup. A deliberately retained stale
-unique alias also references this custody control: if sharing is abandoned without
-deterministic release, that CLR reference can delay emergency cleanup. It cannot
-access native storage or restore unique authority. Successful deterministic return
-clears the allocator and budget references despite stale unique or shared aliases.
-Failed emergency return is retried at a later collection,
-not spun or treated as timely memory-budget relief.
+Assignment never creates an owner. Ask for one:
 
-A failed return does not receive success credit. Ownership remains expired and
-storage remains charged. `TryCompletePayloadReturn` on a surviving shared or weak
-control retries cleanup without acquiring or reopening ownership. It returns true
-when return has completed and false while a strong binding, entered reader, or
-another return attempt prevents completion. Cleanup errors throw.
-If an abandoned payload's short weak reference has already been cleared, the
-weak observer also returns false while emergency finalization owns that payload;
-it does not resurrect or strongly retain the payload merely to retry it.
-A callback and last-return failure preserve both causes. Emergency cleanup never replaces
-required deterministic disposal.
+| Call | Gives you |
+|---|---|
+| `TryShare(out share, out reason)` | another owner of the whole block |
+| `TrySlice(offset, length, out slice, out reason)` | an owner of a sub-range |
+| `TryDowngrade(out weak, out reason)` | a weak observer (`NativeWeak<T>`) |
+| `weak.TryUpgrade(out strong, out reason)` | an owner again, if one still exists |
 
-## Slices and explicit detach
+Each `Try` call returns `false` when it has nothing to give, and `reason` says why:
 
-A small shared slice still retains the entire backing extent. Its logical
-`Length` is not its memory charge. `TryDetach(destinationBudget, out transfer)`
-admits the initialized slice's complete destination extent before native
-acquisition or copying, including the temporary overlap if both owners use one
-budget. False is budget rejection before acquisition/copy. Other failures throw,
-cancel admission or return any destination, and preserve the source. Only a fully
-initialized independent unique owner is published. Completed copying is counted
-once. Empty detach has no fabricated backend allocation or copied-byte event.
+| `NativeSharingExhaustionReason` | Meaning |
+|---|---|
+| `NoStrongBinding` | all prepared owner slots are in use |
+| `NoWeakBinding` | all prepared observer slots are in use |
+| `ExpiredPayload` | the last owner is gone, so a weak observer cannot upgrade |
 
-## Actual diagnostics
+Use an output only inside the branch where the call returned `true`. Every owner you get needs its own `Dispose()`.
 
-`CaptureSnapshot` is one locked control observation, with no native authority.
-It remains available after release on a non-default value. `Id` identifies the
-non-reusable payload control; `OwnerId` identifies its original backing lineage.
-Current strong/weak/read counts come from real bank occupancy/admission. Peaks
-come from successful publication. Refusals distinguish strong slots, weak slots,
-expiration, and detach admission. Histories count only completed transitions and
-saturate with `HistoryOverflowed`; current gauges stay exact.
+```csharp
+// WRONG, does not compile: NAM1050 (output used without checking the result) and NAM1025
+first.TryShare(out NativeShared<int> extra, out _);
+extra.Dispose();
 
-`OwnedBackingBytes`/`BorrowedBackingBytes` describe the full pinned extent once
-per payload control, not per slice. Distinct payloads sharing a pooled page may
-report the same backing extent: summing these observations is not a domain byte
-total. Use the original `NativeMemoryBudget` for aggregate charge.
-`InitializedPayloadBytes` is the logical initialized range counted once.
-`ManagedBankBytes` is the actual binding-array element storage, explicitly
-excluding CLR headers and control/allocator objects; it is not a fabricated
-measurement of the complete managed heap. Release zeros retained payload gauges,
-not history or surviving observer occupancy.
+// WRONG, does not compile: NAM1025 (slice is never disposed)
+if (first.TrySlice(0, 2, out NativeShared<int> slice, out _)) { }
+```
 
-`PayloadReturnCount` records completed payload-authority returns, including
-reusable pooled slots and empty payloads; it is not physical backend free count.
-`PayloadReturnFailureCount` records failed attempts without crediting success.
-The source budget's actual free/active/committed counters remain authoritative
-for physical extents. Optional bounded trace events distinguish share, weak
-creation, upgrade/rejection, binding release, payload return, and detach. Their
-`CorrelationId` is the shared control, not a physical allocation ordinal. Disabled
-tracing creates no trace event or budget weak-reference wrapper.
+An invalid offset or length throws `ArgumentOutOfRangeException`.
 
-Every output of a Try acquisition must be used only on a branch proving success,
-and every successful independent binding needs its own deterministic cleanup.
-The bundled analyzer authenticates types against the runtime assembly, rejects
-assignment/boxing/storage aliases, tracks destructive conversion, and checks
-guarded outputs and read-only escape boundaries. Runtime version and lifetime
-guards remain effective when analyzer diagnostics are suppressed.
+## 3. Read
 
-The maintained [sharing field contract](../conformance/native-sharing-diagnostic-contracts.json)
-defines all 26 properties, their units, scope, mutation sources, lifetime and
-overflow behavior. The public-only independent oracle compares every field
-through share/slice/observer acquisition and exhaustion, weak
-upgrade, rejected and successful detach, payload return, expiration and final
-bank release. It also runs in an isolated package consumer with bundled ownership
-analysis enabled, in traced and untraced configurations. Its callbacks are static;
-it does not capture owning values to inspect an entered read. Independent local
-fault, nested-read admission/drain and real provider-storage cases verify complete
-snapshots at those boundaries without weakening the package's capture rule.
+`Read` and `Access` run a callback with a read-only view. The view is valid only inside the callback, and the callback's result cannot be a `Span`.
+
+```csharp
+if (first.TrySlice(offset: 1, length: 2, out NativeShared<int> middle, out _))
+{
+    try { Console.WriteLine(middle.Read(static view => view.AsSpan()[0])); }   // 2
+    finally { middle.Dispose(); }
+}
+```
+
+```csharp
+// WRONG, does not compile: NAM1024 (the span leaves the callback)
+first.Access(static view => Keep(view.AsSpan()));
+
+static void Keep(ReadOnlySpan<int> values) { }
+```
+
+A small slice still keeps the whole block alive. Its `Length` is not what it costs.
+
+## 4. Observe without keeping alive
+
+A weak observer holds no data. It lets you ask "is it still there?" later.
+
+```csharp
+if (first.TryDowngrade(out NativeWeak<int> weak, out _))
+{
+    try
+    {
+        if (weak.TryUpgrade(out NativeShared<int> strong, out _))
+        {
+            try { Console.WriteLine(strong.Read(static view => view.AsSpan().Length)); }
+            finally { strong.Dispose(); }
+        }
+    }
+    finally { weak.Dispose(); }
+}
+```
+
+After the last owner is disposed, `TryUpgrade` returns `false` with `ExpiredPayload` and `weak.IsExpired` is `true`. The last owner to leave frees the data, unless a read is still running: then the read finishes first.
+
+## 5. Dispose
+
+Dispose every owner and observer once. A second `Dispose` throws `InvalidOperationException`. `TryCompletePayloadReturn()` on an owner or observer retries a failed cleanup.
+
+## Copy out of a share
+
+`TryDetach(budget, out copy)` copies a share into a new, independent `NativeTransfer<T>`. Use it when a small slice should not keep the whole block alive.
+
+```csharp
+NativeMemoryBudget budget = new(capacityBytes: 1_024);
+
+if (first.TrySlice(0, 2, out NativeShared<int> head, out _))
+{
+    try
+    {
+        if (head.TryDetach(budget, out NativeTransfer<int> copy))
+        {
+            try { Console.WriteLine(copy.Length); }   // 2
+            finally { copy.Dispose(); }
+        }
+    }
+    finally { head.Dispose(); }
+}
+```
+
+It returns `false` when `budget` cannot hold the copy, and copies nothing. Other failures throw, and the share stays valid. If both are charged to one budget, it needs room for both while copying.
+
+## Look at its state
+
+`CaptureSnapshot()` returns a `NativeSharingStatistics` and works on a released value too. Fields are read one at a time.
+
+| Field | Meaning |
+|---|---|
+| `StrongBindingCount`, `WeakBindingCount` | owners and observers now |
+| `PeakStrongBindingCount`, `PeakWeakBindingCount` | the most at once |
+| `ActiveReadCount` | reads running now |
+| `Expired`, `PayloadReleased` | the last owner left; the data is given back |
+| `RejectedStrongCount`, `RejectedWeakCount`, `ExpiredUpgradeCount`, `RejectedDetachCount` | refused calls |
+| `OwnedBackingBytes` | bytes of native storage behind the block |
+| `ManagedBankBytes` | managed memory used by the slot arrays |
+
+`OwnedBackingBytes` is the full block, once per block. Do not add it up across blocks that came from the same pool page; read totals from the [`NativeMemoryBudget`](memory-budgets.md).
+
+## Diagnostics
+
+| ID | What it catches | How to fix |
+|---|---|---|
+| [NAM1021](diagnostics/NAM1021.md) | copying an owner by assignment | call `TryShare`, `TrySlice` or `TryUpgrade` |
+| [NAM1022](diagnostics/NAM1022.md) | using a source after `Create` consumed it, or an owner after `Dispose` | stop using it |
+| [NAM1024](diagnostics/NAM1024.md) | a read view escaping its callback | copy the data out |
+| [NAM1025](diagnostics/NAM1025.md) | an owner or observer that is never disposed | `Dispose()` on every path |
+| [NAM1050](diagnostics/NAM1050.md) | using a `Try` output without checking the result | use it only in the `true` branch |
+
+## Terms
+
+- **Owner (strong binding)**: a `NativeShared<T>`. The data lives while at least one exists.
+- **Observer (weak binding)**: a `NativeWeak<T>`. It does not keep the data alive.
+- **Slot**: one prepared place for an owner or observer.
+- **Slice**: an owner that sees only a sub-range of the block.

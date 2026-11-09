@@ -1,39 +1,83 @@
 # Arena retention policy
 
-The required-argument NativeArena budget/policy constructor opts into cold
-growth and whole-idle-segment retention. Existing, prepared and external-backed
-constructors keep their existing policies. The initial preAllocateBytes is an
-exact usable reservation, not an implicit change to the growth threshold.
+A `NativeArena` created with a retention policy grows in segments when it runs out of room, and gives idle segments back when you reset it or ask it to. Use it for arenas whose peak is much larger than their typical load.
 
-OrdinarySegmentCeilingBytes bounds preferred geometric segment capacity.
-Larger requests receive their exact checked minimum, including required range
-alignment, and are classified as outliers by actual usable capacity. An outlier
-does not become the next ordinary growth basis. Native headers and backend
-padding remain fully charged; the ceiling does not limit live payload demand.
-The existing shared budget can choose a tighter minimum when growth slack would
-otherwise refuse a valid near-cap request.
+```csharp
+using Supprocom.NativeAllocationManagement;
 
-Reset, scoped recycle and MaintainRetention first release idle outliers, then
-retain a fitting ordinary prefix within IdleRetentionBytes, shared across both
-lanes. The limit includes headers and alignment. A partly used bump segment is
-not idle: all its storage remains charged until its generation or scope ends.
-Live scratches and entered callbacks cannot be evicted to satisfy the target.
-Explicit maintenance does not invalidate live scratches, but rejects entered
-callbacks and initialization before any release. A zero idle target is valid.
+NativeMemoryBudget budget = new(1 << 20);
+using NativeArena arena = new(
+    budget,
+    new NativeArenaRetentionPolicy(ordinarySegmentCeilingBytes: 4096, idleRetentionBytes: 8192),
+    preAllocateBytes: 1024,
+    NativeMemoryReturn.Free);
 
-CaptureRetentionSnapshot is thread-confined, allocation-free and does not reset
-history. RetainedBytes includes all physically retained native extent. IdleBytes
-counts reusable whole owned segments, excluding external units and partial slack;
-closed owners expose zero reusable authority. OversizedBytes is a current subset
-of retained extent; PeakOversizedBytes records the highest value it has reached.
-ReleasedBytes records only physical policy-maintenance frees; unrelated trim and
-final disposal receive no invented policy-release credit. MaintenanceCount counts
-actual enabled reset/recycle/maintenance invocations, even if nothing is released.
-History saturates with the owner HistoryOverflowed flag; current gauges stay exact.
-Disabled policy snapshots have Enabled=false and invariant-zero policy histories.
+for (int index = 0; index < 6; index++)
+{
+    ArenaLease<byte> chunk = arena.Scratch<byte>(3000, (byte)1);
+    byte first = chunk.Read(static view => view[0]);
+}
 
-Selection, scans and observations occur at cold growth or explicit maintenance,
-not per element or on a warm bump reservation. No timer or global controller is
-introduced. Reduced outlier retention is not proof of RSS reduction or a general
-speedup. Final measurements must include maintenance, preparation and teardown,
-and compare equivalent managed sizing/retention policies and previous NAM.
+{
+    // An outlier: a request this big gets a segment of its own.
+    ArenaLease<byte> big = arena.Scratch<byte>(100_000, (byte)1);
+    byte last = big.Read(static view => view[99_999]);
+}
+
+arena.Reset();                          // the outlier is released, ordinary segments are kept
+nuint released = arena.MaintainRetention();
+```
+
+Every argument of this constructor is required. Other arena constructors do not grow this way or trim on their own.
+
+## Policy
+
+`preAllocateBytes` is a constructor argument of the arena, not of the policy: the usable bytes reserved at creation. It does not change the growth threshold. A policy has two values:
+
+| Argument | Meaning |
+|---|---|
+| `ordinarySegmentCeilingBytes` | Largest segment the arena picks for ordinary growth. |
+| `idleRetentionBytes` | How many bytes of idle segments to keep, shared by both lanes, headers and alignment included. Zero is valid. |
+
+A ceiling below 64 throws `ArgumentOutOfRangeException`. `MaintainRetention()` on an arena without a policy throws `InvalidOperationException`.
+
+A request larger than the ceiling gets a segment of exactly the size it needs. That segment is an *outlier*: it never becomes the size basis for the next ordinary segment. The ceiling limits segment size, not how much you can have live.
+
+If the budget is nearly full, the arena can pick a smaller segment than the ceiling when a request would otherwise be refused.
+
+## What happens when
+
+| Call | Effect |
+|---|---|
+| `Reset()` | Releases idle outliers, then keeps ordinary idle segments up to `idleRetentionBytes`. |
+| `RecycleScoped()` | The same, after emptying the scoped lane. |
+| `MaintainRetention()` | The same, on demand. Returns the bytes released. |
+
+A segment that is partly used is not idle: all of it stays charged until its generation or scope ends. Live scratch ranges are never evicted to reach the target. `MaintainRetention()` leaves live ranges valid, but throws while a callback or an initializer is running, before it releases anything.
+
+Nothing runs on a timer. The arena looks at its segments only when it grows or when one of these calls runs.
+
+## Snapshot
+
+`arena.CaptureRetentionSnapshot()` returns a value copy. Call it on the arena's thread. It allocates nothing and resets nothing.
+
+| Field | Meaning |
+|---|---|
+| `Enabled` | `false` for an arena without a policy; its other policy fields are zero. |
+| `Policy` | The policy you passed. |
+| `RetainedBytes` | All native bytes the arena holds now. |
+| `IdleBytes` | Whole owned segments that are free to reuse. |
+| `OversizedBytes`, `PeakOversizedBytes` | Outlier bytes now, and the highest so far. |
+| `ReleasedBytes` | Bytes freed by `Reset`, `RecycleScoped` and `MaintainRetention`. Trim and disposal are not counted. |
+| `MaintenanceCount` | How often those three ran, even when they released nothing. |
+| `HistoryOverflowed` | A count reached `long.MaxValue`; counts are lower bounds. |
+
+Releasing outliers lowers the bytes NAM holds. It does not prove lower RSS. When you compare it with a managed buffer policy, include the maintenance calls, creation and teardown.
+
+## Terms
+
+| Term | Meaning |
+|---|---|
+| Segment | One native block the arena owns. |
+| Idle segment | A segment with no live range in it. |
+| Outlier | A segment bigger than the ordinary ceiling, made for one large request. |

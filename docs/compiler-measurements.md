@@ -1,37 +1,57 @@
-# Compiler measurement boundaries
+# Measure the analyzer's compile cost
 
-`Supprocom.NativeAllocationManagement.CompilerHost` is a nonshipping executable
-for measuring the actual pinned SDK compiler. It has no Roslyn reference: loading
-the performance runner's Roslyn version before the SDK compiler can prevent that
-compiler from discovering the bundled NAM analyzers.
+`Supprocom.NativeAllocationManagement.CompilerHost` is a console program in this repository (not in the NuGet package). It runs your SDK's C# compiler (`csc.dll`) with your project's exact compiler arguments and prints what the run cost. Run it twice, once with the NAM analyzer in the arguments and once without, to see what the analyzer adds.
 
-Run the built host through the pinned `dotnet` executable:
+## 1. Export the compiler arguments
 
-```text
-dotnet Supprocom.NativeAllocationManagement.CompilerHost.dll --compiler-cost-worker --compiler <sdk>/Roslyn/bincore/csc.dll --response <exported-compiler-arguments>
+Build your project once with `ProvideCommandLineArgs` and write `CscCommandLineArgs` to a file, one argument per line:
+
+```xml
+<Target Name="ExportCscArgs" AfterTargets="CoreCompile">
+  <WriteLinesToFile File="$(MSBuildProjectDirectory)/csc.rsp" Lines="@(CscCommandLineArgs)" Overwrite="true" />
+</Target>
 ```
 
-The input is the UTF-8, one-argument-per-line stream exported from MSBuild's
-`CscCommandLineArgs`, not an arbitrary shell command. The host passes those
-arguments directly to the compiler, preserving top-level `/noconfig` semantics.
-Use the original working directory and retain the input, its length/hash, the
-compiler identity, complete streams, exit code and emitted binary identities.
-An analyzer-discovery warning, compiler failure or missing observation is not a
-successful performance measurement.
+```text
+dotnet build -c Release --no-incremental -p:ProvideCommandLineArgs=true -p:LangVersion=13
+```
 
-The JSON observation measures whole-process managed allocation, CPU, elapsed
-time and collection deltas while loading and running that compiler, including
-argument-file reading and assembly-load-context setup. It is not NAM-only cost;
-the already-started host and reporting/hashing after compilation are outside the
-measurement. Compare paired analyzer-on/off runs that differ only in the NAM
-analyzer argument. Retain both default tiered-compilation/PGO settings and the
-separate controlled settings. Include cold consumer builds, actual unchanged
-builds and one-source-edit rebuilds; a synthetic analysis cache is insufficient.
+For the comparison, delete the `/analyzer:` line that ends in `Supprocom.NativeAllocationManagement.Analyzers.dll` from a copy of the file.
 
-The separate performance runner's `--analyzer-cancellation-worker` executes the
-NAM analyzers on a real consumer compilation. A private observer cancels when an
-authentic native operation block is entered, then requires cancellation and a
-complete uncancelled follow-up. This observes the shared driver while NAM analysis
-is active; it does not claim interruption inside a NAM callback or cancellation
-of an SDK compiler process. Missing native operations cannot yield a passing
-cancellation observation.
+## 2. Run it
+
+```text
+dotnet build Supprocom.NativeAllocationManagement.CompilerHost -c Release
+dotnet Supprocom.NativeAllocationManagement.CompilerHost/bin/Release/net10.0/Supprocom.NativeAllocationManagement.CompilerHost.dll \
+  --compiler-cost-worker \
+  --compiler <sdk>/Roslyn/bincore/csc.dll \
+  --response csc.rsp
+```
+
+- Start it with the `dotnet` of the SDK you are measuring, in the project's working directory.
+- Rebuild with `--no-incremental` each time you export; an up-to-date build runs the target with no arguments and overwrites `csc.rsp` with an empty file.
+- `-p:LangVersion=13` is only needed for the cancellation check below.
+- The host passes the arguments to the compiler unchanged. It does not reference Roslyn itself, so the compiler can find the analyzers.
+
+## 3. Read the output
+
+The compiler prints its own messages, then one JSON line:
+
+| Field | Meaning |
+|---|---|
+| `ExitCode` | the compiler's exit code; non-zero means the run is not a measurement. An analyzer-discovery warning in the compiler output also makes the run invalid |
+| `AllocatedBytes` | managed bytes allocated while the compiler loaded and ran (the whole process, not only NAM) |
+| `Gen0Collections`, `Gen1Collections`, `Gen2Collections` | GCs during the run |
+| `CpuMilliseconds`, `WallMilliseconds` | process CPU time and elapsed time |
+| `TieredCompilation`, `TieredPGO` | the `DOTNET_` settings of the run (`unset` if absent) |
+| `Compiler`, `ResponseFile` | path, length and SHA-256 of the two inputs |
+
+Compare runs that differ only in the analyzer argument, with the same `TieredCompilation` and `TieredPGO` values. Repeat for a clean build, an unchanged build and a one-file edit. Starting the host and hashing the inputs are outside the measurement.
+
+## Analyzer cancellation check
+
+```text
+dotnet run --project Supprocom.NativeAllocationManagement.Performance -c Release -- --analyzer-cancellation-worker --response csc.rsp --project-directory <project-dir>
+```
+
+This runs the NAM analyzers on your compilation, cancels as soon as one starts analyzing a NAM operation, then runs them again without cancellation. Exit code 0 and `"Cancelled": true`, `"AnalysisWasInFlight": true` and an empty `FollowUpDiagnosticIds` mean cancellation worked and the second run was clean. The step-1 build must use a `LangVersion` that Roslyn 4.14 understands (`-p:LangVersion=13`, as shown). Your sources need at least one method that uses a NAM type.

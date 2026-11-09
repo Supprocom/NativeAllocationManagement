@@ -1,75 +1,109 @@
-# Application admission before production
+# Application admission
 
-Use this contract for a declared unmanaged range when producing a job that cannot
-fit would waste useful work. It is not a scheduler, a process-RSS ceiling or an OS
-allocation guarantee. Prepared pool/arena reuse already has local permission
-checks; do not reserve fresh bytes again for an already charged slot.
+Use admission when a job that cannot fit would waste work already done: reserve the bytes first, produce afterwards. `TryReserve` checks a [budget](memory-budgets.md) before anything is allocated. It is not a scheduler or a process-RSS limit.
 
 ```csharp
+using Supprocom.NativeAllocationManagement;
+
 NativeMemoryBudget budget = new(4096);
+
 if (!budget.TryReserve<int>(1024, out NativeMemoryReservation<int>? permission,
         out NativeMemoryAdmissionExhaustionReason reason))
-    return; // NativeByteCapacity: no control, backing or producer was allocated.
+{
+    return; // reason is NativeByteCapacity: nothing was allocated
+}
+
 try
 {
-    permission.Value.PrepareBacking(); // establish backing before the producer
+    permission.Value.PrepareBacking(); // optional: acquire the memory before producing
     using NativeTransfer<int> owner = NativeMemoryReservation<int>.Activate(
         ref permission, static writer => writer.Fill(42));
-    int result = owner.Read(static values => values[0]);
+    int first = owner.Read(static values => values[0]);
 }
-finally { permission?.Dispose(); }
+finally
+{
+    permission?.Dispose();
+}
 ```
 
-Invalid dimensions and arithmetic overflow throw before admission. Expected
-native-byte exhaustion is the only false result; its nullable output is null.
-Successful admission checks the cap and prepares the optional domain ledger and
-one ownership control before publishing permission. Metadata preparation failure
-throws with its own real counter, without an invented byte reservation or native
-allocation. Zero-length permission still needs metadata and deterministic cleanup.
+The steps are: reserve, prepare (optional), activate, use, dispose.
 
-The nullable ref binding is the actual source, not an invitation to alias it.
-Move consumes that binding, invalidates stale value copies and advances a checked,
-non-reusable version. It allocates no wrapper and creates no second byte charge.
-Activation returns a unique owner over the very same control. Reservation moves
-and unique moves have separate real histories; normal unique owners have no
-reservation-specific fields.
+## 1. Reserve
 
-PrepareBacking runs exclusively before production. A backend failure preserves
-the pending permission for retry/cancellation. A successful native acquisition
-remains actually counted and charged even if a later observation throws. A
-prepared activation performs no native allocation and creates no second control.
-Cancellation checked after preparation can leave prepared backing in a still
-owning permission; dispose it or activate only when cancellation permits.
+`budget.TryReserve<T>(length, out permission, out reason)` returns `false` only when the bytes do not fit. `permission` is then `null`. A length below zero throws `ArgumentOutOfRangeException`. A length of zero is valid.
 
-Activation consumes a current permission after validating its initializer
-argument. It checks cancellation, prepares any remaining backing, initializes
-exactly the declared range, and checks cancellation again before unique
-publication. Backend failure, partial initialization, a throwing producer and
-cancellation publish no unique owner. Failed terminal cleanup remains charged and
-retryable through metadata-only TryCompletePayloadReturn or eventual emergency
-finalization. Neither retry nor snapshot reopens permission. Emergency cleanup
-is not timely admission relief. Unique cancellation/failed handoff still requires
-returning the moved destination, just as ordinary unique ownership does.
+A *permission* (`NativeMemoryReservation<T>`) is the right to produce `length` elements of `T`. It is a struct, held in a nullable local, and `Activate` and `Move` take it by `ref`.
 
-CaptureAdmissionStatistics is consistent within the native budget gate. Its
-outstanding count includes pending permissions and consumed terminal obligations,
-including zero-length metadata. PendingBytes is uncommitted admission;
-PreparedUnpublishedBytes is real prepared extent whose obligation has not
-activated or completed cleanup. Activation removes only those reservation gauges,
-not the unique owner's physical charge. Cancellation of pending bytes is not a
-backend failure or physical free. Domain histories separate rejection, control
-preparation, backing preparation/backend failure, initialization, activation,
-cancellation, abandonment and resource-return failure. Current gauges are exact;
-histories saturate with HistoryOverflowed. A never-retained optional ledger has
-genuine zero storage and no ledger events; refusal/preparation-failure counters
-remain actual even in that case.
+```csharp
+// WRONG, does not compile: NAM1050 (the result is not checked before use), NAM1025 (permission never disposed)
+budget.TryReserve<int>(4, out NativeMemoryReservation<int>? ignored, out _);
+ignored!.Value.PrepareBacking();
+```
 
-CaptureSnapshot is a sampled control observation, not an atomic transaction
-across preparation and the domain. Versions, disposition, pending/owned/peak
-extents, preparation failures, return obligation and failures remain visible on
-stale/released non-default values. Default values reject observation. Field-byte
-measurements sum declared representations, excluding CLR headers, inter-field
-padding, referenced objects and application queue/scheduling storage.
+## 2. Prepare
 
-When benchmarking admission, include metadata preparation and cleanup alongside
-payload production. Compare equivalent byte quotas, pooling and retention.
+`PrepareBacking(cancellationToken)` allocates the native memory now, so that producing later allocates nothing. If it throws (allocator failure or a cancelled token), you still hold the permission: retry it or dispose it.
+
+## 3. Activate
+
+`NativeMemoryReservation<T>.Activate(ref permission, initializer, cancellationToken)` consumes the permission, runs your initializer over exactly the declared range, and returns a `NativeTransfer<T>`: the single owner of the data. `permission` becomes `null`.
+
+If the initializer throws or the token is cancelled, no transfer is returned and the reserved bytes are given back to the budget.
+
+## 4. Use and dispose
+
+Use the transfer as described in [Getting started](getting-started.md#build-a-growable-native-sequence). Dispose it when you are done. Dispose a permission you did not activate: `permission?.Dispose()` in a `finally` does it and does nothing once `Activate` has run.
+
+```csharp
+// WRONG, does not compile: NAM1025 (permission not disposed on every path)
+if (budget.TryReserve<int>(4, out NativeMemoryReservation<int>? forgotten, out _))
+{
+    forgotten.Value.PrepareBacking();
+}
+```
+
+After `Activate` or `Move`, `permission` is `null` and `permission.Value` throws. Take a copy first if you need the snapshot:
+
+```csharp
+NativeMemoryReservationStatistics before = permission.Value.CaptureSnapshot();
+```
+
+## Moving a permission
+
+`NativeMemoryReservation<T>.Move(ref source)` hands the permission to a new variable and sets `source` to `null`. Nothing is allocated and nothing is charged twice.
+
+A permission that failed its final cleanup stays charged. `permission.Value.TryCompletePayloadReturn()` retries that cleanup. `Dispose()` on an unused permission counts in `CancelledReservationCount`.
+
+Analyzer errors in this page:
+
+| ID | What it catches | How to fix |
+|---|---|---|
+| [NAM1050](diagnostics/NAM1050.md) | Using a permission without checking that `TryReserve` returned `true` | Use it only inside `if (TryReserve(...))` |
+| [NAM1025](diagnostics/NAM1025.md) | A permission not disposed or activated on every path | `permission?.Dispose()` in a `finally` |
+
+## Statistics
+
+`budget.CaptureAdmissionStatistics()` counts reservations. Read it when no admission is in progress.
+
+| Field | Meaning |
+|---|---|
+| `PendingBytes` | Reserved, no memory acquired yet. |
+| `PreparedUnpublishedBytes` | Memory acquired by `PrepareBacking`, not yet activated. |
+| `OutstandingReservationCount` | Permissions not yet activated or disposed. |
+| `AdmittedReservationCount`, `RejectedReservationCount` | Reservations that fit, and those that did not. |
+| `ActivationCount` | Successful activations. |
+| `CancelledReservationCount`, `InitializationFailureCount` | Reservations ended by cancellation, or by a failing initializer. |
+| `HistoryOverflowed` | A count reached `long.MaxValue`; it is a lower bound. |
+
+`permission.Value.CaptureSnapshot()` describes one permission, also after it was used up: its outcome (`Pending`, `Prepared`, `Activated`, `Cancelled`, ...), declared length and bytes.
+
+When you benchmark admission, include the reservation and the cleanup, not only the production loop. Compare against the same byte limit, pooling and retention.
+
+## Terms
+
+| Term | Meaning |
+|---|---|
+| Permission | The right to produce one declared range, returned by `TryReserve`. |
+| Admission | Checking a request against a budget before allocating. |
+| Activation | Turning a permission into a `NativeTransfer<T>` by running the initializer. |
+| Transfer | The single owner of finished native data; see [Getting started](getting-started.md#build-a-growable-native-sequence). |

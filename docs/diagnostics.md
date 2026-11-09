@@ -1,281 +1,116 @@
-# Native owner diagnostics
+# Owner statistics and snapshots
 
-`NativePool<T>`, `NativeRegion`, `NativeArena`, `NativeConcurrentPool<T>` and
-`NativeConcurrentArena`, `NativeBuilder<T>` and `NativeWorkspace<T>` expose
-`CaptureDiagnosticSnapshot()` with actual runtime
-structural state. The snapshot is a value containing no owner, allocation,
-pointer or borrowing authority. Keeping it does not retain native storage.
-The voxel NAM serializer copies these fields directly; it does not infer
-private counters from the smaller storage-statistics record.
+Every NAM owner can report what it holds. These calls return plain values that grant no access to the memory:
 
-The [allocator-demo mapping contract](../conformance/voxel-allocator-diagnostic-contracts.json)
-enumerates every declared demo allocator field and links real mapping source,
-units, availability and executable proofs. These cover rooted/scoped and fast
-states, retirement, failed-drain quarantine, saturated history, detached backing,
-physical cleanup, and complete JSON round trips. A default `Unspecified` source
-has `Available=false` and all other fields `null`; measured model-specific zero
-remains zero. Old-generation quarantine does not mark its healthy replacement
-as quarantined. Detachment stays charged until actual finalization, not merely
-until logical disposal. This mapping inventory does not close the remaining
-demo report, configuration, OS, or complete public API/lifecycle inventory.
+| Call | Returns | Use it to |
+|---|---|---|
+| `GetStatistics()` | `NativeOwnerStatistics` | see how many bytes the owner holds and how much is in use |
+| `CaptureDiagnosticSnapshot()` | `NativeOwnerDiagnosticSnapshot` | see the owner's internal structure: segments, records, retired storage |
+| `NativeMemoryDiagnostics.Snapshot()` | `NativeMemoryStatistics` | see native storage for the whole process |
 
-Synchronized capture runs under the owner's lifecycle gate. Fast capture validates
-the construction thread and can observe terminal state without authorizing payload
-use. Entered synchronized callbacks and the fast lane can continue payload/cursor
-work independently. Use a quiescent maintenance
-boundary for reconciliation with other snapshots. Capture is not intended for
-the per-element or timed processing path. It does not reset any counter.
+`NativePool<T>`, `NativeRegion`, `NativeArena`, `NativeConcurrentPool<T>`, `NativeConcurrentArena`, `NativeBuilder<T>`, `NativeWorkspace<T>` and `NativePreparedPool<T>` have both owner calls.
 
-## Fields and scope
+```csharp
+using Supprocom.NativeAllocationManagement;
 
-All fields describe the named owner, except `MetricsEpoch`, which identifies the
-process accounting measurement scope. Counts are integers; bytes are segment
-extent bytes, not process resident memory. Traversal fields are search frontiers,
-not an assertion that a segment is occupied at that index.
+NativeOwnerStatistics stats = MeasureRegion();
+Console.WriteLine($"{stats.Lifecycle}: retained {stats.RetainedBytes} B, peak {stats.PeakOutstandingNativeBytes} B");
 
-| Field | Definition and lifetime |
-| --- | --- |
-| `Model` | Actual thread-confined or synchronized pool, arena or lexical-region model. `Unspecified` is a caller-created default value, not an observed runtime owner. The demo maps the real model and uses `null` when unavailable. |
-| `OwnerId` | Stable positive process-local allocator identity, assigned once without a global owner registry. It remains the same across generations and disposal; it is not an address or borrowing capability. The demo copies it directly and uses `null` when no NAM owner is available. |
-| `Lifecycle` | Actual owner gate state at capture, including unleased, returned and disposed owners. |
-| `Generation` | Current or most recent owner generation identity, starting at zero. Generation transitions precompute overflow before changing authority; identifiers are not addresses. |
-| `ScopeEpoch` | Current generation's scoped epoch, advanced by scoped-lifetime transitions. Zero when there is no current generation. Overflow is checked before committing a transition. |
-| `MetricsEpoch` | Actual process accounting epoch. Internal measurement tests advance it when resetting observations; ordinary production capture does not reset it. Zero is a valid initial epoch. |
-| `ActiveRecords` | Current active allocation-table and materialized composite metadata records plus live arena transfer slots and one grouped fast scoped lane when active. Ordinary fast bump ranges need no individual record until materialized for composite access and are not relabeled as logical lease counts. |
-| `ScopedRecords` | Current scoped allocation-table and materialized composite records, plus the grouped fast scoped lane when active. Repeated access reuses its materialized record; recycle closes the scope and its records. |
-| `ReferenceRoots` | Current non-null managed roots held by the native reference-slot table. Unmanaged payloads genuinely require no roots. |
-| `OrdinaryTraversalIndex` | Index of the current fast ordinary candidate, otherwise the forward bump-search frontier, which can equal the segment-bank length. Minus one without a current generation; zero is the initial frontier of an empty active bank. |
-| `ScopedTraversalIndex` | Index of the current fast scoped candidate, otherwise the reverse scoped-search frontier. Minus one means no candidate is available. It is never manufactured as occupied segment zero. |
-| `RetainedSegmentCount` | Current-generation slab and bump-bank count, including attached external segments. Returning a logical range does not necessarily release a segment. |
-| `AvailableSegmentCount` | Available current-generation slabs plus completely idle bump segments. Partly used backing is not a completely idle segment. |
-| `RetiredGenerationCount` | Generations waiting for entered operations to drain, excluding quarantined generations. Drain removes or rejoins their storage. |
-| `RetiredSegmentCount` | Retired and quarantined segment banks combined. It overlaps `QuarantinedSegmentCount`; do not add them. |
-| `RetiredBytes` | Sum of complete known NAM-owned extents in retired and quarantined banks, including backend size-alignment padding. Provider-owned ranges are excluded and reported through `NativeOwnerStatistics.RetiredBorrowedBytes`. It includes storage that cannot safely be reused yet, not merely live logical payload. |
-| `QuarantinedGenerationCount` | Failed-drain generations prevented from normal reuse, until physical release/detachment under the chosen cleanup policy. |
-| `QuarantinedSegmentCount` | Segments in those quarantined banks; a subset of `RetiredSegmentCount`. |
-| `CurrentGenerationQuarantined` | The current generation's actual quarantine flag, or false without a current generation. A quarantined old generation does not mark its healthy replacement as quarantined. |
+NativeOwnerDiagnosticSnapshot after = MeasureBuilder();
+Console.WriteLine($"{after.Model}: {after.Lifecycle}, {after.RetainedSegmentCount} segments");
 
-Synchronized definitions are implemented by `NativeOwnerKernel.GetDiagnosticSnapshot`,
-not by the demo. Runtime tests cover reference/scoped record changes, real traversal,
-missing-generation sentinels, retirement, failed-drain quarantine, and cleanup.
-Repeated capture allocates no managed object. A snapshot is an observation,
-not a memory reservation or permission to access a stale lease.
+NativeMemoryStatistics process = NativeMemoryDiagnostics.Snapshot();
+Console.WriteLine($"process-wide outstanding: {process.OutstandingNativeBytes} B");
 
-## Thread-confined field interpretation
+static NativeOwnerStatistics MeasureRegion()
+{
+    using NativeRegion region = new();
+    region.Lease<int>(1_024, 0).AsSpan()[0] = 1;
+    return region.GetStatistics();
+}
 
-The model tag is essential when interpreting an owner-independent saved value.
-Fast pool `ActiveRecords` counts its actual live/initializing slab metadata;
-a zero-length lease is a real metadata record but is not a physical segment.
-Retained/available segment counts exclude that zero-extent record. Its ordinary
-traversal index is the actual returned-slab cache candidate, or minus one with
-no candidate/active owner; it is not a bump frontier.
+static NativeOwnerDiagnosticSnapshot MeasureBuilder()
+{
+    using NativeBuilder<uint> builder = new(preLease: 16);
+    builder.Append(1u);
+    using NativeTransfer<uint> output = builder.Complete();
+    return builder.CaptureDiagnosticSnapshot();   // still works after Complete
+}
+```
 
-Fast arena and lexical-region ranges do not acquire individual allocation-table
-records. Their active/scoped record and managed-root counts are genuinely zero,
-not substituted estimates of logical lease count. Ordinary/scoped indices locate
-the actual current segment within each corresponding linked bank, or minus one
-when absent. Region has no scoped bank. A newly reserved region segment is idle
-until its cursor advances; its availability now agrees in both storage and
-structural snapshots, including initializer-failure rollback.
+Rules:
 
-A lexical region's checked append count is also its lifetime successful backing
-acquisition history and non-reusing backing ordinal. It does not reset or trim
-during that lifetime. Native cleanup clears the linked head, so current segment
-counts become zero while completed history is preserved. Identity exhaustion
-rejects before admission or producer execution, before the wider `long` history
-could overflow; `HistoryOverflowed` is genuinely false for this model. Failed
-backend acquisition adds no count. Other models keep their saturating histories.
+- Both calls are observations. Keeping the value keeps no native memory alive.
+- They work after the owner is completed or disposed and then report numbers only. A builder that was completed shows `Lifecycle` `Returned`, no current backing, and its peaks.
+- A thread-confined owner (`NativePool<T>`, `NativeRegion`, `NativeArena`, `NativeWorkspace<T>`) must be read on the thread that created it; another thread gets `NativeAllocationStateException` (pool, arena) or `InvalidOperationException` (workspace).
+- A builder cannot be read while another operation on it runs, for example inside its own `Write` callback: that throws `InvalidOperationException`.
+- Reading never resets a counter. Capture is not for per-element code.
+- Fields are read one after another, not as one atomic instant. To compare fields with each other, read while no other thread is using the owner.
+- Bytes are the extents NAM acquired, including headers and alignment padding. They are not process resident memory (RSS) and do not include the allocator's own bookkeeping.
 
-Fast pool and lexical region have one nongenerational lifetime: generation and
-scope counters are invariant zero. Fast arena reports its real checked UInt64
-generation/scope epoch using the existing signed Int64 bit representation; use
-`unchecked((ulong)value)` for the full sequence domain, rather than inferring an
-overflow or missing value from a negative signed representation. It retains those
-last epochs at terminal capture. Synchronized capture instead uses zero scope
-without a current generation. The model distinguishes these contracts.
+## NativeOwnerStatistics
 
-No fast owner has a generational-retirement or quarantine bank. Those fields are
-invariant zero/false, with explicit invariant tests during active and terminal
-states. GC-detached backing can remain in a closed fast kernel until finalization;
-the retained bank remains observable while physically present, but availability
-is zero for a closed owner. These snapshots do not retain that kernel. Captures
-keep the kernel alive only until the native-header traversal completes.
+| Field | Meaning |
+|---|---|
+| `Lifecycle` | `Active`, `Returned`, `Disposed`, ... at capture |
+| `Model` | Which kind of owner this is (see [Models](#models)) |
+| `OwnerId` | Stable id of this owner within the process; not an address |
+| `Generation` | Current generation of a pool or arena; zero for owners without generations |
+| `RequestedBytes` | Initialized data currently held. A thread-confined arena reports occupied bytes, including padding |
+| `UsableCapacityBytes` | Payload capacity exposed to callers, without headers and tail padding |
+| `RetainedBytes` | Bytes of backing the owner currently keeps |
+| `RetiredBytes` | Bytes in older storage waiting for cleanup |
+| `SegmentCount` | Storage segments kept |
+| `AvailableSegmentCount` | Segments that are completely unused (not a count of free bytes) |
+| `RetiredSegmentCount` | Segments in older storage |
+| `BorrowedBytes` | Bytes of provider-owned memory the owner currently borrows; not counted as owned backing |
+| `RetiredBorrowedBytes` | The same, still held by older storage |
+| `OutstandingNativeBytes` | All bytes NAM currently holds for this owner: retained, retired and detached |
+| `DetachedNativeBytes` | The part of outstanding bytes waiting for final release; do not add it to outstanding |
+| `PeakOutstandingNativeBytes` | Highest outstanding value over the owner's life |
+| `InitializedPayloadBytes` | Initialized data in the current lifetime, without padding |
+| `PeakInitializedPayloadBytes` | Highest initialized value over the owner's life |
+| `TrimmedBytes`, `TrimCallCount` | Bytes released by explicit trims, and how many trims ran |
+| `FreshSegmentAllocationCount` | Segments first acquired from the allocator. Reuse and builder growth are not counted |
+| `HistoryOverflowed` | A running total passed `long.MaxValue`; current values stay exact |
 
-`NativeOwnerStatistics` separately reports exposed owned payload capacity,
-complete retained backing, and borrowed external ranges. See
-[native backing budgets](memory-budgets.md) for backend differences, units and
-the distinction between known extents, opaque allocator bookkeeping and RSS.
+## NativeOwnerDiagnosticSnapshot
 
-The fast typed pool's internal initialization and entered-operation probes scan
-actual slab states and borrow counts at capture; they do not maintain redundant
-hot-path counters. Its metadata capacity probe reports the allocated slab-bank
-length, not live/available slab usage. Free-list membership is stored inside that
-same bank, so both slab-capacity fields describe the same capacity. There are
-genuinely no bump bank, reference-root bank or generational quarantine bank in
-this unmanaged thread-confined model. Prepared fixed-shape mode has a real page
-bank, reported by the segment-owner capacity probe. In that mode physical segment
-counts are pages, available segments are completely idle pages, and active
-records are occupied slots. The actual acquisition-ordinal probe reads retained
-slab/page identities instead of returning an empty placeholder. These
-model-specific absences are not a license to zero-fill synchronized-owner fields.
+The snapshot repeats `Lifecycle`, `Model`, `OwnerId`, `Generation`, `HistoryOverflowed`, the outstanding, detached and peak byte fields and the initialized payload fields, and adds structure:
 
-The maintained [private typed-pool probe inventory](../conformance/native-fast-pool-probe-contracts.json)
-defines all thirteen friend-test observations separately from public capture.
-Its independent transition tests cover initialization, nested borrows, failure,
-empty records, whole-page retention, ordinals and terminal/coordinator cleanup.
-The active-operation probe counts entered initializers as well as actual slab
-borrows; its name still says generation, but the storage is not generational.
-Both slab-capacity tuple elements describe the same allocated metadata bank,
-not two arrays or two physical charges. Page capacity stays allocated after
-native trim. The ordinal probe validates the owner thread and creates a numeric
-array copy; it is not part of the no-allocation public snapshot guarantee.
-Private absent-generation mutation hooks explicitly reject unsupported test
-injection rather than manufacturing a scope or generation counter. This
-inventory does not claim packaged access to private members or close the
-remaining model, demo, API, performance and release inventory.
+| Field | Meaning |
+|---|---|
+| `ScopeEpoch` | Counter of the current generation's scoped lifetime; zero without a current generation |
+| `MetricsEpoch` | Which process measurement window the numbers belong to |
+| `ActiveRecords` | Live bookkeeping records. Plain bump ranges in a region or arena have none, so this can be zero while data is live |
+| `ScopedRecords` | The scoped part of those records |
+| `ReferenceRoots` | Managed references the owner keeps alive for native slots |
+| `OrdinaryTraversalIndex`, `ScopedTraversalIndex` | Where the owner will look next for space; `-1` means no candidate |
+| `RetainedSegmentCount`, `AvailableSegmentCount` | Segments kept now, and the idle ones |
+| `RetiredGenerationCount` | Older generations still draining; quarantined ones are not counted |
+| `RetiredSegmentCount`, `RetiredBytes` | Segments and bytes in retired and quarantined storage |
+| `QuarantinedGenerationCount` | Generations whose cleanup failed and which cannot be reused |
+| `QuarantinedSegmentCount` | Their segments; a subset of `RetiredSegmentCount` |
+| `CurrentGenerationQuarantined` | The current generation is itself quarantined |
 
-The [private fast-bump inventory](../conformance/native-fast-bump-probe-contracts.json)
-separately covers both lifecycle and record observations on lexical regions and
-fast arenas. A default region reports `Uninitialized` without granting any
-owner or payload authority. Live bump ranges need no per-range record table,
-so their zero record counts remain real during initialized work and cleanup.
-Arena reset/recycle changes range epochs, not this invariant. The inventory
-also explicitly classifies the arena's internal initialization-kernel getter
-as an operation capability—not an omitted counter or serializable snapshot.
+## Models
 
-The [concurrent-arena observation repair](../conformance/native-concurrent-arena-observation-contracts.json)
-defines three existing private probes precisely. Initialization includes actual
-fast-lane and compact-transfer reservations; entered operations include nested
-fast-local and compact-transfer borrows. These are different units: an initializing
-fast reservation without an operation token is not a borrowed callback.
-Private traversal reports the real synchronized search frontier; the public
-snapshot separately resolves the cached fast segment. These can legitimately
-differ, so a synchronized frontier of zero is not missing fast-lane telemetry.
-The getters calculate from existing state only on cold reads, with no additional
-allocation-path counters or writes. The kernel gate cannot make fast-lane writes
-an atomic multi-field snapshot: reconcile at a stable callback/handshake or a
-quiescent boundary. Absent-current zeros do not authorize returned handles.
-This narrowly bound registry does not close the remaining full private inventory.
+`Model` says what the numbers mean:
 
-See [prepared page diagnostics](prepared-pools.md#prepared-snapshot-inventory)
-for full retained capacity, past occupancy, exhaustion, managed bank costs
-and sparse-page retention.
+| `Model` | Owner | Notes |
+|---|---|---|
+| `ThreadConfinedPool` | `NativePool<T>`, `NativePreparedPool<T>` | no generations or quarantine |
+| `ThreadConfinedRegion` | `NativeRegion` | no scoped bank; generation and scope are zero |
+| `ThreadConfinedArena` | `NativeArena` | reports its checked epoch in `Generation`; read it with `unchecked((ulong)value)` |
+| `SynchronizedPool`, `SynchronizedArena`, `SynchronizedRegion` | `NativeConcurrentPool<T>`, `NativeConcurrentArena` (`SynchronizedRegion` is used internally) | have generations, retired and quarantined storage |
+| `SingleWriterBuilder` | `NativeBuilder<T>` | one block; nothing retired or quarantined |
+| `ThreadConfinedWorkspace` | `NativeWorkspace<T>` | one fixed block |
+| `Unspecified` | `default` value | not read from an owner |
 
-See [bounded budget tracing](memory-budgets.md#owner-identities-and-optional-tracing)
-for peaks, refused acquisitions, event units, overflow disclosure and copying.
+Fields an owner cannot have are zero (or `-1` for the traversal indexes), not estimates. After `Complete` or `Dispose`, a builder's current backing is zero and its peaks stay. A builder counts its first block once in `FreshSegmentAllocationCount`; growing it is not a new segment.
 
-## Direct builders and workspaces
+For budget statistics see [native backing budgets](memory-budgets.md). For prepared pools see [prepared page diagnostics](prepared-pools.md#prepared-snapshot-inventory).
 
-The `SingleWriterBuilder` and `ThreadConfinedWorkspace` model tags identify direct
-blocks, not generational segment banks. Each owned nonempty direct block is one
-retained segment and one active control record. It is available only when its
-owner is active, no workspace callback is entered, and no logical range is live.
-These unmanaged models have no reference roots, scoped records, generations,
-retired or quarantined banks, or detached backing. Their corresponding values
-are invariant zero/false; both traversal indices are minus one. They never
-borrow external backing. Disposal physically returns their direct block;
-builder completion instead transfers it to the unique owning handle.
+## Process-wide counters
 
-`GetStatistics()` and `CaptureDiagnosticSnapshot()` remain numeric observations
-after completion or disposal. They do not restore `Count`, `Capacity`, `Length`,
-append, processing, or payload authority. Builder capture takes its existing
-exclusive-operation gate and rejects an entered operation without aborting that
-writer. Workspace capture remains confined to its construction thread, including
-after release, and is allowed during that thread's callback.
-
-Backing fields count known acquired block extents in bytes. Builder reallocation
-keeps one growable storage segment, so `FreshSegmentAllocationCount` counts its
-first successful nonempty acquisition once, not reallocations. Budget and process
-statistics separately record actual reallocations. `PeakOutstandingNativeBytes`
-is the largest known acquired extent; it does not reconstruct opaque native
-allocator-internal old/new overlap or RSS. Conservative budget overlap admission
-remains separately enforced. Workspace backing is fixed at construction. Current
-backing becomes zero after disposal or builder completion, while numeric peaks
-survive. No snapshot holds a reference to the transferred payload.
-
-Builder `RequestedBytes` and `InitializedPayloadBytes` are its successfully
-published prefix, not reserved capacity or an unfinished writer. Its monotonic
-published count and capacity keep earlier peaks without added append-time
-accounting. A cancelled terminal operation preserves any prefix actually
-committed before cancellation; an incomplete producer never earns publication
-credit.
-
-Workspace checked `Initialize` publishes a prefix only after full initialization
-and cancellation checks. Its raw `Process` works within already zero-initialized
-reusable storage: current demand is the bounded entered range during its
-callback, then zero, without creating a persistent published range. A callback
-failure still records that genuinely entered range as a peak; an invalid or
-pre-cancelled request does not. `Reset` removes published visibility, not history
-or the retained block. The existing active-use flag encodes `~length` for Process
-and positive one for other uses, preserving nested-use and disposal guards even
-for zero-length Process. One owner-local high-water field records initialized
-demand. These are owner-lifetime histories, independent of process measurement
-resets. Counts and byte products are bounded by checked capacity admission; there
-is no wrapping history or optional-counter mode.
-
-## External demo observations
-
-OS observations are distinct from NAM accounting. Missing, denied, malformed,
-negative, overflowing or unsupported values are `null` (unavailable); successfully
-measured zero remains zero. Cgroup availability requires an actual current-memory
-measurement, not a positive value. A finite limit has `LimitUnlimited=false`; an
-observed unlimited limit has `LimitUnlimited=true` and no finite `LimitBytes`;
-missing limit information leaves both unavailable. Version and source path bind
-the observation. The local reader resolves the process's cgroup membership rather
-than substituting the host mount root. Nonstandard/unresolvable mounts are
-unavailable, not measurements of a guessed group.
-
-Cgroup-v2 `memory.peak` is the highest usage since it was last reset. Resetting it changes later reads through
-the same open descriptor; the harness does not claim a reset performed through
-another Docker command. `ExternalCgroupPeakBytes` is the maximum observed within
-the observation window, a sampling lower bound unless
-`ExternalCgroupPeakIsKernelHighWater` records a newly exceeded kernel high water.
-The before/after snapshots keep their peaks separately. Multi-file
-reads are not an atomic cross-file snapshot. V1 hierarchical RSS (including swap
-cache) and limit-hit counters have separate fields; they are not relabeled as v2
-anonymous bytes or max events.
-
-External process CPU requires observed user/system ticks and a real positive
-`CLK_TCK`. There is no assumed clock rate. Working-set conversion is range checked.
-Host CPU mean uses only valid samples, with `ExternalCpuSampleCount` disclosing
-the count; zero samples yields unavailable mean/peak. Deltas need two valid,
-nondecreasing endpoints. Missing child results leave worker-start measurements
-unavailable. Docker display quantities remain rounded observations, not exact
-native accounting or RSS guarantees.
-
-GC memory/LOH fields describe the last completed collection, identified by
-`LastCompletedGcIndex`, not instantaneous live memory. Before a completed
-collection, those fields are unavailable. Capturing diagnostics does not force a
-collection or change allocator accounting.
-
-## Maintained semantic contracts
-
-The [budget contract inventory](../conformance/native-budget-diagnostic-contracts.json)
-defines all 19 `NativeMemoryBudgetStatistics` fields, their units, domain scope,
-reset and overflow rules, implementation anchors, and executable proof links.
-An [independent whole-snapshot oracle](../conformance/native-budget-diagnostic-oracle.cs)
-checks actual builder growth/refusal/release and pending/prepared reservation
-cancellation with tracing disabled and enabled. The same source runs in local
-tests and an isolated consumer of the packaged library. Local fault tests also
-distinguish ordinary acquisition rollback from application backing failure that
-preserves pending admission for retry. `FailedAllocationCount` counts both;
-cancelling an unprepared permission is neither an allocation failure nor a free.
-
-Tests reject missing, duplicate or newly unmapped budget fields and
-broken source/test links. Source anchors and XML definitions complement, but do
-not replace, the independent transition assertions and actual test evidence.
-
-The [concurrent owner-wrapper probe contracts](../conformance/native-concurrent-wrapper-probe-contracts.json)
-cover exactly 28 typed observations and two internal kernel-authority properties
-declared on `NativeConcurrentPool<int>` and `NativeConcurrentArena`. Definitions
-include actual units, consistency, reset, overflow and cold observation costs,
-including allocating detached ordinal arrays. Pool initializer reservations and
-entered borrow tokens are different units. Current gauges exclude old generations;
-metadata capacities are not live counts. Arena synchronized search frontiers are
-not the public preferred fast cache. Two pool exhaustion-injection hooks are
-classified as mutation, not telemetry.
-
-Executable contracts match complete compiled property names/types and exercise
-initialization/failure, nested borrows, roots, detached copies and stale authority.
-Coordinated quarantine/exhaustion proof links also execute in the full suite.
-These internal probes are not package APIs or an atomic multi-property snapshot.
+`NativeMemoryDiagnostics.Snapshot()` returns the bytes outstanding, detached, retired and at peak for every NAM owner in the process, plus counters. Per-event counters (allocations, reallocations, frees and so on) cost time on hot paths, so they stay zero unless the process starts with the `Supprocom.NativeAllocationManagement.DetailedCounters` AppContext switch or the environment variable `NAM_DETAILED_COUNTERS=1` (`true` also works; any other value turns them off, even over the switch). `NativeMemoryDiagnostics.DetailedCountersEnabled` tells you which mode is active.

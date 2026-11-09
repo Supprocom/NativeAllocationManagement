@@ -1,30 +1,14 @@
 # Getting started
 
-This guide describes the released `0.3.2` package. Its budget, prepared, layout
-and smart-pointer APIs do not exist in 0.2.x. Transfer representation and rebuild
-requirements for consumers built against 0.2.x are described in the ownership
-section below.
+Native Allocation Management (NAM) keeps buffers in native memory, outside the managed heap. The package also bundles a Roslyn analyzer that turns ownership mistakes into compile errors.
 
-`Supprocom.NativeAllocationManagement` combines a native-memory runtime with a
-bundled Roslyn analyzer. Each allocator uses only the state checks that its contract
-needs. The analyzer checks ownership, bounded callbacks, destructive moves, and
-scoped-recycling completion in consuming source.
-
-The package targets .NET 10. The fast `NativePool<T>`, `NativeRegion`, and
-`NativeArena` allocators accept unmanaged values. `NativeBuilder<T>`,
-`NativeWorkspace<T>`, and `NativeTransfer<T>` also require unmanaged values.
-
-`NativeConcurrentPool<T>` and `NativeConcurrentArena` retain the synchronized
-generation model for concurrent ownership. Their ordinary leases can store managed
-references through a separate root-aware path. Transferable leases remain unmanaged.
-
-Install version `0.3.2` with the .NET CLI:
+Install the released `0.3.2` package (it targets .NET 10):
 
 ```powershell
 dotnet add package Supprocom.NativeAllocationManagement --version 0.3.2
 ```
 
-The equivalent project file entry is:
+Or add it to the project file:
 
 ```xml
 <ItemGroup>
@@ -32,341 +16,129 @@ The equivalent project file entry is:
 </ItemGroup>
 ```
 
-The package contains the runtime assembly, the ownership analyzer, and its
-`buildTransitive` analyzer-presence check. Keep analyzer assets enabled in consuming
-projects.
+Keep the analyzer enabled. If the build excludes it, NAM reports [NAM9001](diagnostics/NAM9001.md).
 
-## Build a growable native sequence
+All examples use `using Supprocom.NativeAllocationManagement;` and implicit usings.
 
-`NativeBuilder<T>` owns one unpublished unmanaged sequence. The builder supports one
-writer and remains in one method-local variable.
+## Choose an allocator
 
-`NativeBuilder<T>` owns its native block directly. It does not require a pool or arena.
+An *owner* holds native memory. A *lease* is a handle to one block of it. Every lease is a `ref struct`, so the compiler keeps it in the method that took it.
 
-```csharp
-using Supprocom.NativeAllocationManagement;
+| You need | Use | Section |
+|---|---|---|
+| A temporary buffer of one element type | `NativePool<T>` | [Pool](#pool-buffers-of-one-element-type) |
+| One buffer, reused for every batch | `NativeWorkspace<T>` | [Workspace](#reuse-one-buffer-for-every-batch) |
+| Several element types that end together | `NativeRegion` | [Region](#group-allocations-in-a-region) |
+| Several element types that you free together, again and again | `NativeArena` | [Arena](#free-many-allocations-at-once-with-an-arena) |
+| Output of unknown size | `NativeBuilder<T>` | [Builder](#build-a-growable-native-sequence) |
+| Data that moves to another thread | `NativeTransfer<T>` | [Transfer](#transfer-ownership-across-threads) |
+| One owner used by several threads | `NativeConcurrentPool<T>`, `NativeConcurrentArena` | [Concurrent owners](#share-an-owner-between-threads) |
+| A known number of fixed-size buffers on one thread | `NativePreparedPool<T>` | [prepared pools](prepared-pools.md) |
+| A native-byte cap over several owners | `NativeMemoryBudget` | [memory budgets](memory-budgets.md) |
+| Several regions with one lifetime | `NativeLayout` | [typed layouts](typed-layouts.md) |
+| Immutable data with several owners | `NativeShared<T>`, `NativeWeak<T>` | [immutable sharing](immutable-sharing.md) |
 
-using NativeBuilder<uint> builder = new(
-    preLease: 4_096);
+`NativePool<T>`, `NativeArena` and `NativeWorkspace<T>` belong to the thread that created them. `NativeRegion` is a `ref struct`.
 
-builder.Borrow(EmitPackedWords);
+Use arrays, spans and `ArrayPool<T>` when they are enough; see [allocator selection](allocator-selection.md). For size caps, fixed-shape pools and layouts, see [memory budgets](memory-budgets.md), [prepared pools](prepared-pools.md) and [typed layouts](typed-layouts.md). Unique and shared ownership are covered in [unique ownership](unique-ownership.md) and [immutable sharing](immutable-sharing.md).
 
-NativeTransfer<uint> output = builder.Complete();
-try
-{
-    output.Access(static view => Upload(view.AsSpan()));
-}
-finally
-{
-    output.Dispose();
-}
+## Pool buffers of one element type
 
-static void EmitPackedWords(
-    scoped ref NativeBuilderBorrow<uint> borrow) =>
-    EmitPackedWordsNested(ref borrow);
-
-static void EmitPackedWordsNested(
-    scoped ref NativeBuilderBorrow<uint> borrow)
-{
-    borrow.Write(
-        maximumAdditionalCount: 4_096,
-        static writer => WriteWords(ref writer));
-}
-
-static void WriteWords(
-    scoped ref NativeBuilderWriter<uint> writer)
-{
-    Span<uint> values = writer.AsSpan();
-    for (int index = 0; index < values.Length; index++)
-    {
-        values[index] = checked((uint)index);
-    }
-
-    writer.Commit(values.Length);
-}
-```
-
-`preLease` reserves builder capacity in units of `T`.
-
-`Append(T)` writes one value directly. `Append(ReadOnlySpan<T>)` copies one batch directly
-into the unused native range.
-
-`Write` reserves its maximum range with one capacity check. Its callback writes directly
-into that native range and commits the initialized prefix.
-
-The callback must call `Commit` exactly once. A missing, repeated, negative, or oversized
-commit aborts the complete active builder.
-
-`Borrow` gives one exclusive callback a temporary builder view. Pass that view to nested
-helpers only through `scoped ref NativeBuilderBorrow<T>` parameters.
-
-The borrow supports `Append` and `Write`. It cannot complete, dispose, move, store, return,
-box, or capture the builder owner.
-
-The owner rejects all operations while its borrow is active. The runtime also rejects a
-stale borrow after callback completion.
-
-Growth resizes the native block geometrically. It preserves only the initialized native
-prefix and releases the old block.
-
-`Complete` changes the current allocation from unpublished initialization to active
-transfer ownership. It does not copy elements into another final buffer.
-
-The published transfer has the exact initialized `Length`. Its `Capacity` can remain
-larger because geometric growth retains the current allocation.
-
-Completion invalidates all builder operations. The automatic disposal from a `using`
-declaration is a valid no-op after completion.
-
-Cancellation before or after an append aborts the complete unpublished builder. An
-allocation failure uses the same cleanup path.
-
-Explicit disposal is idempotent. It frees the unpublished native block only once.
-
-The builder has no allocator owner. Completion moves its block directly into one transfer.
-
-An abandoned active builder has an emergency finalizer. The finalizer returns storage but
-does not provide prompt reuse.
-
-The analyzer requires direct constructor initialization into one local. It rejects
-fields, properties, parameters, returns, arguments, aggregates, conversions, and closures.
-
-`NAM1028` rejects ownership copies. `NAM1029` rejects use after completion or disposal.
-`NAM1030` rejects double completion.
-
-`NAM1031` requires completion or disposal on each exit. `NAM1032` requires direct local
-acquisition, and `NAM1033` rejects builder parameters.
-
-`NAM1034` requires `Complete` to publish directly to an exact `NativeTransfer<T>`
-destination. Existing typed return, owned receiver, field, and bounded-channel rules apply.
-
-`NAM1041` rejects direct-write view escape. `NAM1042` permits writer forwarding only through
-a source-visible `scoped ref NativeBuilderWriter<T>` parameter.
-
-`NAM1043` rejects borrow escape. `NAM1044` permits borrow forwarding only through a
-source-visible `scoped ref NativeBuilderBorrow<T>` parameter.
-
-A field destination requires an `IDisposable` containing type. Its verified `Dispose`
-method must release that exact field. A property cannot receive builder completion.
-
-Do not use the builder as cross-method ownership. Complete it and move or store the
-resulting transfer instead.
-
-The builder benchmark creates identical opaque and transparent packed-word streams.
-The managed path uses two `List<uint>` values, `ToArray`, and `Buffer.BlockCopy`.
-
-The native path completes two builders and moves both transfers through a bounded
-channel. The receiver reads GL-compatible byte spans and disposes both transfers.
-
-Run the Release benchmark with this command:
-
-```powershell
-dotnet run --project Supprocom.NativeAllocationManagement.Performance -c Release -- --native-builder --samples 10 --prelease 1024 --output native-builder.json
-```
-
-The focused direct-write regression uses 24 independent builders. It compares millions of
-two-word `Append` calls with one nested-helper `Write` call per builder.
-
-```powershell
-$env:DOTNET_TieredCompilation='0'
-$env:DOTNET_TieredPGO='0'
-dotnet run `
-    --project Supprocom.NativeAllocationManagement.Performance `
-    -c Release `
-    -- `
-    --native-builder-write `
-    --samples 6 `
-    --records-per-builder 100000 `
-    --enforce `
-    --output native-builder-write.json
-```
-
-## Transfer ownership across threads
-
-`NativeTransfer<T>` is a value capability for one initialized unmanaged lease. It
-can be stored on the heap or cross a thread boundary without exposing an unbounded
-pointer. One acquisition-time control validates its unique binding and provides
-emergency cleanup. `Move` changes authority without allocating another wrapper or
-registering another finalizer. Copies of the previous value cannot access or
-release the new binding; they do not create another owner.
-
-This is a representation change in 0.3.0, not binary compatibility with the old
-class. Rebuild consumers, including assemblies that store or pass transfer values.
-A nullable binding uses `binding.Value` after checking
-presence, or `binding?.Dispose()` at a proven cleanup boundary. Default values are
-uninitialized and reject use, including disposal. Passing the same source variable
-to concurrent moves requires caller synchronization; independent aliases compete
-for one authority in the control. A failed move consumes its source binding as
-before. Value and nullable channel/field slots are larger than object references;
-include their storage and the acquisition control in workload comparisons.
-Emergency cleanup runs when the acquisition control becomes unreachable, not
-when an individual copied value disappears. Even a stale copy retains that small
-control; deterministic disposal by the current binding releases the payload
-regardless of surviving stale copies. Never use finalization as timely budget
-relief, and do not manufacture aliases to manage a unique lifetime.
-
-Acquire the lease into a local variable. Then move that local into its next ownership
-location.
-
-```csharp
-using System.Threading.Channels;
-using Supprocom.NativeAllocationManagement;
-
-Channel<NativeTransfer<uint>> channel =
-    Channel.CreateBounded<NativeTransfer<uint>>(1);
-using NativeConcurrentPool<uint> pool = new(preLease: 256);
-
-NativeTransfer<uint>? source = pool.RentTransferable(
-    256,
-    static writer =>
-    {
-        for (int index = 0; index < writer.Length; index++)
-        {
-            writer.Write(checked((uint)(index * 3)));
-        }
-    });
-
-await channel.Writer.WriteAsync(
-    NativeTransfer<uint>.Move(ref source));
-
-NativeTransfer<uint> receiver = await channel.Reader.ReadAsync();
-try
-{
-    uint sum = receiver.Read(
-        static view =>
-        {
-            uint total = 0;
-            foreach (uint value in view.AsSpan())
-            {
-                total = unchecked(total + value);
-            }
-
-            return total;
-        });
-
-    Console.WriteLine(sum);
-}
-finally
-{
-    receiver.Dispose();
-}
-```
-
-The initializer must write all logical elements in order. NAM returns the unpublished
-storage if initialization fails or remains incomplete.
-
-`Move(ref source)` sets the source variable to `null` before it publishes the
-destination. Old aliases fail at runtime even when analyzer diagnostics are disabled.
-
-Only one concurrent move can publish a destination. A move that finds an active
-callback consumes the source and returns its storage after that callback exits.
-
-Run cancellation checks before the move when possible. After the move, the destination
-owns cleanup and must be disposed if the next operation rejects it.
-
-If no code retains the acquisition control, its finalizer returns the lease later.
-Finalization prevents a permanent leak, but it does not give prompt reuse.
-
-An exception from `Access` or `Read` releases the operation token. The destination stays
-active and still requires disposal.
-
-An owner can dispose while a live transfer is idle. This action invalidates the
-transfer, and the receiver must still dispose its current binding.
-
-An entered receiver callback blocks strict owner disposal. Retry owner disposal after
-the callback exits.
-
-`NativeConcurrentArena` provides generation-bound concurrent scratch storage. Its leases
-cannot leave the arena generation. Use `NativeConcurrentPool<T>.RentTransferable` when
-independent storage must move to another thread and return separately.
-
-`NAM1021` rejects ownership copies. `NAM1022` rejects inactive use and double disposal.
-`NAM1023` rejects invalid moves.
-
-`NAM1024` prevents a callback view from escaping. `NAM1025` requires disposal or a move
-on each exit. `NAM1026` requires direct acquisition into a local source. `NAM1027`
-rejects transfer parameters with `in`, `ref`, or `out`.
-
-An ordinary `NativeTransfer<T>` parameter is an owned receiver. Each receiver path must
-dispose the transfer or move it to the next owner. Call the receiver with
-`NativeTransfer<T>.Move(ref source)`. The immediate destination must have the exact
-`NativeTransfer<T>` type. A typed field, proven bounded typed channel, or direct typed
-return can receive ownership. An `object`, `dynamic`, generic `T`, task, tuple, array, or
-other aggregate cannot.
-
-Use `WriteAsync` on a direct `Channel.CreateBounded` result or an unreassigned local from
-that factory. The analyzer rejects `CreateUnbounded` and any channel local that is
-reassigned. This proof keeps the generic `ChannelWriter<T>` parameter from becoming broad
-ownership authority. Do not move directly into `TryWrite`. A failed call keeps ownership
-with its caller.
-
-Do not use application `in`, `ref`, or `out NativeTransfer<T>` parameters. Borrow only
-inside an `Access` or `Read` callback. Use `ref` only in the package move operation.
-
-## Typed pool leases
-
-`NativePool<T>` owns reusable typed slabs. `Rent` returns a token-bound `Pooled<T>`
-value. The using declarations below return the slab and then dispose the owner in the
-normal C# order.
+`NativePool<T>` (`T` must be unmanaged) hands out buffers and takes them back for reuse.
 
 ```csharp
 using Supprocom.NativeAllocationManagement;
 
 using NativePool<int> pool = new(preLease: 1_024);
-using Pooled<int> values = pool.Rent(
-    128,
-    static writer => writer.Fill(default));
+using Pooled<int> values = pool.Rent(128, 0);
 
-values.Access(view =>
+Span<int> span = values.AsSpan();
+for (int index = 0; index < span.Length; index++)
 {
-    for (int index = 0; index < view.Length; index++)
-    {
-        view[index] = index * 2;
-    }
-});
+    span[index] = index * 2;
+}
 
-int total = values.Read(view =>
+int total = values.Read(static view =>
 {
-    int result = 0;
-    for (int index = 0; index < view.Length; index++)
+    int sum = 0;
+    foreach (int value in view.AsSpan())
     {
-        result += view[index];
+        sum += value;
     }
 
-    return result;
+    return sum;
 });
 ```
 
-`preLease` reserves storage in units of `T`. `preAllocateBytes` reserves one
-independent raw byte segment. These values are additive and do not use the same unit.
+`Rent(length, value)` sets every element to `value` before you see it. To compute each element, pass a callback instead; it must write all `length` elements, in order.
 
 ```csharp
-using NativePool<int> pool = new(
-    preLease: 1_024,
-    preAllocateBytes: 64 * 1_024);
+using NativePool<int> pool = new();
+using Pooled<int> squares = pool.Rent(8, static writer =>
+{
+    for (int index = 0; index < writer.Length; index++)
+    {
+        writer.Write(index * index);
+    }
+});
 ```
 
-Only complete `T` values fit in the raw reservation. NAM retains any final partial
-element bytes until trimming or owner cleanup.
+`preLease` is the starting capacity in elements of `T`. `new NativePool<T>(returnMemoryOnDispose: NativeMemoryReturn.Free)` frees its native memory on `Dispose`; the default, `Reuse`, keeps it for the thread's next owner of the same kind.
 
-`Access` and `Read` pass a scoped `NativeLeaseView<T>` only for the synchronous
-callback. Each bounded operation validates the owner and lease token once. The span
-performs element bounds checks inside the callback.
+| Call | Use it to |
+|---|---|
+| `AsSpan()` | get a `Span<T>` over the lease |
+| `Access(static view => ...)` | write through the callback's *view* |
+| `Read(static view => ...)` | read through the view and return a result |
+| `CopyFrom(span)`, `CopyTo(span)`, `Clear()` | copy managed data in or out (`CopyFrom` needs exactly `Length` elements) |
 
-`Pooled<T>.Dispose()` validates the token and returns the slab to its capacity class.
-The next rent must initialize all logical elements before NAM publishes the slab. A
-zero-length lease still has a slab token and exactly-once return authority.
-
-For a uniform initial value, use `pool.Rent(128, 0)`. This fills the complete logical
-range before publication without an initializer callback. Use the writer overload
-when initialization needs to produce different values. Both overloads retain the
-same owner, bounds, budget and stale-lease checks.
-
-When a temporary rental is used entirely within one synchronous operation, use
-`Process`. It fills the requested range, passes a scoped span and explicit state
-to the processor, then returns the slab even if the processor throws:
+A span from `AsSpan()` carries no ownership. Use it only while its lease is alive.
 
 ```csharp
+// WRONG, does not compile: NAM1051 (the span outlives its lease)
+using NativePool<int> pool = new();
+Span<int> kept;
+using (Pooled<int> temp = pool.Rent(8, 0))
+{
+    kept = temp.AsSpan();
+}
+
+kept[0] = 1;
+```
+
+The compiler also checks the span against its lease. A local that starts as `default` has the widest scope, so declare it `scoped` to assign a span later.
+
+```csharp
+// WRONG, does not compile: CS8168
+using NativePool<int> pool = new();
+using Pooled<int> lease = pool.Rent(8, 0);
+Span<int> s = default;
+s = lease.AsSpan();
+
+// RIGHT
+scoped Span<int> t = default;
+t = lease.AsSpan();
+```
+
+A method that owns the lease cannot return its span (`using Pooled<int> p = ...; return p.AsSpan();` is CS8168). A helper that takes the lease by value cannot return the span either (CS8166); pass the span itself.
+
+```csharp
+// WRONG, does not compile: CS8166
+static Span<int> Head(Pooled<int> lease) => lease.AsSpan();
+
+// RIGHT
+static Span<int> HeadOf(Span<int> span) => span.Slice(0, 1);
+```
+
+### Rent for one call
+
+`pool.Process` rents, runs your callback and returns the buffer, even if the callback throws. Pass what the callback needs as state, and make the callback `static`.
+
+```csharp
+using Supprocom.NativeAllocationManagement;
+
+using NativePool<int> pool = new();
+
 int result = pool.Process(128, 0, 42, static (values, input) =>
 {
     values[0] = input;
@@ -374,16 +146,29 @@ int result = pool.Process(128, 0, 42, static (values, input) =>
 });
 ```
 
-The operation owns its rental, so there is no separate lease to dispose or token
-to revalidate at callback entry and exit. Other rentals may be nested inside the
-callback. The pool cannot dispose or retire while the operation is active, and
-trimming cannot release its slab. Use `Rent` when the lease needs a wider lexical
-lifetime or multiple independent accesses.
+The arguments are `length`, the fill value, your state, then the callback.
 
-## Borrow a local pool in a helper
+### Lease rules
 
-A source-visible synchronous helper can borrow a `NativePool<T>` parameter by value. The
-caller keeps ownership when the helper returns.
+| Rule | If you break it |
+|---|---|
+| Dispose each lease exactly once | A second `Dispose` throws `NativeAllocationReturnedException`, as does any use after `Dispose`; the analyzer reports NAM1004. |
+| End every lease on every path | A lease that is never disposed is NAM1003. |
+| Use a lease you got from `Rent` or `Scratch` | A `Pooled` or `ArenaLease` is checked at runtime (a disposed or reset lease throws) and a discarded result is NAM1013. |
+| Dispose all leases before the pool | `pool.Dispose()` with a live lease throws `InvalidOperationException`. |
+| Use the pool on the thread that created it | Another thread gets `NativeAllocationStateException`. |
+| Do not hold a lease across `await` | Compile error CS4007, and NAM1011. |
+
+All `NativeAllocation*Exception` types derive from `NativeAllocationException`, which derives from `InvalidOperationException`.
+
+```csharp
+// WRONG, does not compile: NAM1013 (the lease leaves its owner's method)
+static Pooled<int> Make(NativePool<int> pool) => pool.Rent(8, 0);
+```
+
+### Pass a pool to a helper
+
+A helper in your own source can take the pool by value. The caller keeps ownership.
 
 ```csharp
 using Supprocom.NativeAllocationManagement;
@@ -396,50 +181,43 @@ static void RunBatch<T>(NativePool<T> pool, int count)
 {
     for (int index = 0; index < count; index++)
     {
-        using Pooled<T> values = pool.Rent(
-            128,
-            static writer => writer.Fill(default));
-        values.Access(static span => span[0] = default);
+        using Pooled<T> values = pool.Rent(128, default(T));
+        values.Access(static view => view[0] = default);
     }
 }
 ```
 
-The analyzer reads the helper source. It permits `Rent`, `Process`,
-`GetStatistics`, and a call to another verified helper.
+The analyzer reads the helper. It may call `Rent`, `Process`, `GetStatistics` and other helpers that pass the same check. It may not store, return, box, capture or forward the pool to a call the analyzer cannot read. An `async` method, an iterator, or a `ref` or `out` parameter fails the check.
 
-The produced lease, transfer, or builder must end on every path. The helper cannot store,
-return, box, convert, capture, or forward the pool to an unknown call.
+```csharp
+// WRONG, does not compile: NAM1001 (the pool is stored)
+static class Registry
+{
+    private static NativePool<int>? s_kept;
 
-An async method, iterator, `ref` parameter, or `out` parameter fails the proof. A local
-pool therefore cannot cross a suspension or enter retained state through this contract.
+    public static void Keep(NativePool<int> pool) => s_kept = pool;
+}
+```
 
-## Rent from a persistent worker pool
+### Keep a pool in a field
 
-A long-running worker can keep one pool in a readonly instance field. The declaring type
-must provide a verified disposal path for that exact field.
+A long-lived worker can own a pool in a `readonly` field. Always dispose it in the class's `Dispose`; the analyzer reports a missing disposal (NAM1015) only for pools that use `NativeMemoryReturn.Free`.
 
 ```csharp
 using Supprocom.NativeAllocationManagement;
 
 public sealed class Worker : IDisposable
 {
-    private readonly NativePool<int> _pool = new(preLease: 1_024);
+    private readonly NativePool<int> _pool = new(
+        preLease: 1_024,
+        returnMemoryOnDispose: NativeMemoryReturn.Free);
 
-    public void Process(int count)
+    public void Run(int count)
     {
         for (int index = 0; index < count; index++)
         {
-            Pooled<int> lease = _pool.Rent(
-                128,
-                static writer => writer.Fill(default));
-            try
-            {
-                lease.Access(static values => values[0] = 1);
-            }
-            finally
-            {
-                lease.Dispose();
-            }
+            using Pooled<int> lease = _pool.Rent(128, 0);
+            lease.Access(static view => view[0] = 1);
         }
     }
 
@@ -447,41 +225,44 @@ public sealed class Worker : IDisposable
 }
 ```
 
-The field stays active for the complete worker lifetime. Each lease must still end on
-every branch, early return, and exception path.
+```csharp
+// WRONG, does not compile: NAM1015 (no Dispose releases the field)
+public sealed class Leaky
+{
+    private readonly NativePool<int> _pool = new(
+        preLease: 1_024,
+        returnMemoryOnDispose: NativeMemoryReturn.Free);
 
-A return, field store, capture, or async suspension of `Pooled<T>` remains invalid. An
-owner return, release, or disposal also invalidates later field operations.
+    public void Run()
+    {
+        using Pooled<int> lease = _pool.Rent(128, 0);
+    }
+}
+```
 
-## Reuse one fixed worker workspace
+## Reuse one buffer for every batch
 
-`NativeWorkspace<T>` owns one fixed native block for one worker thread. Use it when each
-batch has a known maximum size. The workspace does not rent from a pool or publish an
-allocation record.
-
-The explicit-state `Process` overload gives one bounded span to one static callback.
-It passes caller state without a closure allocation.
+`NativeWorkspace<T>` allocates one fixed block of `preLease` elements when you create it. It belongs to one thread.
 
 ```csharp
 using Supprocom.NativeAllocationManagement;
 
-using NativeWorkspace<float> workspace = new(preLease: 51_200);
+using NativeWorkspace<float> workspace = new(preLease: 25_600);
 
 ulong checksum = 0;
-for (int batchIndex = 0; batchIndex < 729; batchIndex++)
+for (int batch = 0; batch < 729; batch++)
 {
-    var state = new MapState(batchIndex, checksum);
     checksum = workspace.Process(
         25_600,
-        in state,
-        static (values, current) =>
+        in checksum,
+        static (values, previous) =>
         {
             for (int index = 0; index < values.Length; index++)
             {
-                values[index] = current.BatchIndex + index;
+                values[index] = index;
             }
 
-            ulong result = current.Checksum;
+            ulong result = previous;
             foreach (float value in values)
             {
                 result = unchecked(result * 31 + (uint)value);
@@ -490,162 +271,522 @@ for (int batchIndex = 0; batchIndex < 729; batchIndex++)
             return result;
         });
 }
-
-readonly record struct MapState(
-    int BatchIndex,
-    ulong Checksum);
 ```
 
-Construction allocates the block once. `Reset` removes only its logical publication.
-Disposal or emergency finalization frees the block exactly once.
+`Process(length, in state, callback)` gives the callback a span of `length` elements. A `length` above the capacity throws `ArgumentOutOfRangeException`. The block is not cleared between calls, so write each element before you read it.
 
-`Initialize` writes the requested prefix without clearing it first. Direct `Process`
-access clears previously uninitialized bytes before exposing them, only once per
-newly reached prefix. Later calls and `Reset` retain initialized contents; neither
-promises fresh zeros. A failed checked initializer publishes no range, and its
-partially written contents are unspecified.
+To keep a range between calls, publish it, then read it with `Access` and `Read`. `Process` throws `InvalidOperationException` until you call `Reset()`.
 
-The workspace checks its owner thread before each operation. The callback cannot keep
-the scoped span after `Process` returns.
+```csharp
+using NativeWorkspace<int> workspace = new(preLease: 64);
 
-Cancellation is checked before and after the callback. A callback exception or
-cancellation leaves the workspace ready for the next `Process` call.
+workspace.Initialize(64, static writer => writer.Fill(7));
+int first = workspace.Read(static view => view[0]);
 
-The overload does not publish the temporary range. `Length` remains zero. Call
-`Initialize` when later `Access` or `Read` operations must use a published range.
+workspace.Reset();
+```
 
-## Heterogeneous regions
+| Rule | If you break it |
+|---|---|
+| Use it on the thread that created it | `InvalidOperationException` |
+| Do not start a second operation inside a callback | `InvalidOperationException` |
+| `Access` and `Read` need a published range | `InvalidOperationException` |
 
-`NativeRegion` is a one-shot heterogeneous lexical owner. Its only accepted ownership
-shape is an explicit braced using statement whose direct resource is the region. The
-analyzer rejects using declarations, ordinary locals, factories, aliases, parameters,
-fields, unbraced forms, and nested active regions.
+```csharp
+// WRONG, does not compile: NAM1036, NAM1038 (a second owner that is never disposed)
+using NativeWorkspace<int> workspace = new(preLease: 8);
+NativeWorkspace<int> alias = workspace;
+```
+
+To share it with a helper, pass it as `scoped in NativeWorkspace<T>`.
+
+```csharp
+static int Peek(scoped in NativeWorkspace<int> workspace) =>
+    workspace.Read(static view => view[0]);
+```
+
+```csharp
+// WRONG, does not compile: NAM1040 (by-value parameter)
+static void Fill(NativeWorkspace<int> workspace) { }
+```
+
+## Group allocations in a region
+
+`NativeRegion` ends every lease when its `using` scope ends; storage is kept for reuse unless you pass `NativeMemoryReturn.Free`. Use it for several allocations, of different types, that live and die together.
 
 ```csharp
 using Supprocom.NativeAllocationManagement;
 
-using (NativeRegion region = new(
-    preAllocateBytes: 4_096,
-    returnMemoryOnDispose: NativeMemoryReturn.Free))
+using NativeRegion region = new(preAllocateBytes: 4_096);
+
+Local<int> ids = region.Lease<int>(64, 0);
+Local<double> weights = region.Lease<double>(64, 0.5);
+
+Span<int> idSpan = ids.AsSpan();
+for (int index = 0; index < idSpan.Length; index++)
 {
-    Local<int> identifiers = region.Lease<int>(
-        64,
-        static writer => writer.Fill(0));
-    Local<double> weights = region.Lease<double>(
-        64,
-        static writer => writer.Fill(0.0));
+    idSpan[index] = index + 1;
+}
 
-    identifiers.Access(static view =>
-    {
-        Span<int> values = view.AsSpan();
-        for (int index = 0; index < values.Length; index++)
-        {
-            values[index] = index + 1;
-        }
-    });
+double firstWeight = weights.Read(static view => view[0]);
+```
 
-    weights.Access(static view => view.Fill(0.5));
-    double firstWeight = weights.Read(static view => view[0]);
-    _ = identifiers.Process(
-        checked((int)(firstWeight * 100)),
-        static (values, value) =>
-        {
-            values[0] = value;
-            return values[0];
-        });
+The compiler binds each `Local<T>` and its span to the region's scope, so returning one is a compile error (CS8352, CS8168). `preAllocateBytes` reserves bytes up front. A `Local<T>` has no `Dispose`; it ends with the region. It offers `AsSpan`, `Access`, `Read`, `Process`, `CopyFrom`, `CopyTo` and `Clear`.
+
+| Rule | If you break it |
+|---|---|
+| Create the region as the resource of a `using` | NAM1006 |
+| Keep every `Local<T>` and span inside the region's scope | NAM1012, NAM1051 |
+| Avoid managed allocations inside the scope | warning NAM1035 |
+
+```csharp
+// WRONG, does not compile: NAM1006 (not a using resource)
+NativeRegion region = new();
+Local<int> values = region.Lease<int>(4, 0);
+```
+
+```csharp
+// WRONG, does not compile: NAM1012 (the lease leaves the region)
+static Local<int> Make()
+{
+    using NativeRegion region = new();
+    return region.Lease<int>(4, 0);
 }
 ```
 
-Region locals have no individual physical return. Leaving the braced body invalidates
-the complete Region lifetime, so a `Local<T>` cannot be returned, stored, or passed to an
-unknown retaining call.
+## Free many allocations at once with an arena
 
-`Local<T>` does not expose a per-element indexer. Use `Access`, `Read`, or `Process`
-to validate the owner once. Call `AsSpan()` once before a hot element loop.
-
-## Reusable heterogeneous arenas
-
-`NativeArena` is a reusable heterogeneous owner for values that should become stale at
-one explicit generation boundary. It may be a local, a using-owned object, or a field.
-`Scratch<T>` and `ScratchScoped<T>` are its only acquisition methods; `ArenaLease<T>`
-has no individual disposal because arena storage is reclaimed as a group.
+`NativeArena` hands out leases of any unmanaged type. They have no individual `Dispose`; `Reset()` ends them all and keeps the memory for the next round.
 
 ```csharp
 using Supprocom.NativeAllocationManagement;
 
 using NativeArena arena = new(preAllocateBytes: 64 * 1024);
-ArenaLease<int> coordinates = arena.Scratch<int>(
-    1_024,
-    static writer => writer.Fill(0));
-ArenaLease<double> weights = arena.ScratchScoped<double>(
-    32,
-    static writer => writer.Fill(0.5));
 
-coordinates.Access(static view => view.AsSpan()[0] = 7);
-double firstWeight = weights.Read(static view => view[0]);
+for (int frame = 0; frame < 3; frame++)
+{
+    {
+        ArenaLease<int> coordinates = arena.Scratch<int>(1_024, 0);
+        ArenaLease<double> weights = arena.Scratch<double>(32, 0.5);
 
-arena.RecycleScoped();
-arena.Reset();
+        coordinates.Access(static view => view[0] = 7);
+        double first = weights.Read(static view => view[0]);
+    }
+
+    arena.Reset();
+}
 ```
 
-The arena has separate ordinary and scoped bump lanes. `Reset()` invalidates both lanes
-and retains their segments. `RecycleScoped()` invalidates only the scoped lane.
+Leases must be out of scope when you call `Reset()`. Using one afterwards throws `NativeAllocationReturnedException`.
 
-An active bounded callback blocks reset and disposal. A stale generation or scoped epoch
-cannot access reused storage.
+```csharp
+// WRONG, does not compile: NAM1007 (a lease is live at Reset), NAM1004 (and used after it)
+using NativeArena arena = new();
+ArenaLease<int> values = arena.Scratch<int>(1, 0);
+arena.Reset();
+values.Access(static view => view[0] = 1);
+```
 
-Typed pools are preferred when repeated element types and lease shapes are known, and a
-region is preferred when heterogeneous values share one braced lexical lifetime. Use an
-arena only for a heterogeneous reusable bulk lifetime. The base arena is single-writer
-and accepts unmanaged values. It uses bump allocation and does not reclaim individual
-ranges. The developer controls scoped recycle, generation reset, trim, and final disposal.
+```csharp
+// WRONG, does not compile: NAM1051 (the span outlives Reset)
+using NativeArena arena = new();
+Span<int> kept = arena.Scratch<int>(4, 0).AsSpan();
+arena.Reset();
+kept[0] = 1;
+```
 
-## Concurrent owner generations
+### Recycle only the scratch part of a frame
 
-`NativeConcurrentPool<T>` and `NativeConcurrentArena` keep the broader synchronized
-generation contract. Use them only for concurrent access, managed-reference roots, or
-explicit memory-return transitions. Only the pool provides separately returned transfer
-ownership.
-
-Each thread that rents from a `NativeConcurrentPool<T>` of unmanaged values keeps up
-to four of the pool's returned leases for its own next rents, so threads sharing a
-pool do not contend for its lock. Statistics, snapshots, trims, lease release, memory
-return and disposal first take those leases back, so they always see the pool's
-exact state. A thread's kept leases count as retained memory until the next trim; the
-pool grows only when no thread keeps an idle lease that fits. Transferable leases
-returned on another thread go back to the thread that rented them. Scoped leases and
-leases that hold managed references are not kept per thread.
-
-Threads can scratch from one `NativeConcurrentArena` at the same time. Each thread
-other than the one that created the arena takes chunks of the arena's segments and
-allocates unmanaged scratch from them without a lock. Statistics, trims, lease release,
-memory return and disposal first give back the unused end of each chunk.
-
-Construction normally publishes an active generation. Passing
-`doNotLeaseOnDeclaration: true` defers that generation. The configured reservation
-remains private until `LeaseFromMemory()` succeeds.
+`ScratchScoped` leases come from a separate lane. `RecycleScoped()` ends only those, so leases from `Scratch` stay valid. Put `RecycleScoped()` in a `finally` block.
 
 ```csharp
 using Supprocom.NativeAllocationManagement;
 
-using NativeConcurrentPool<byte> pool = new(
-    preLease: 4_096,
-    doNotLeaseOnDeclaration: true);
+using NativeArena arena = new();
 
-pool.LeaseFromMemory();
-using ConcurrentPooled<byte> buffer = pool.Rent(
-    4_096,
-    static writer => writer.Fill(default));
-buffer.Access(view => view.Fill(0x2A));
+for (int frame = 0; frame < 3; frame++)
+{
+    try
+    {
+        scoped ArenaLease<int> scratch = arena.ScratchScoped<int>(4_096, 0);
+        int length = scratch.Read(static view => view.Length);
+    }
+    finally
+    {
+        arena.RecycleScoped();
+    }
+}
 ```
 
-`NativeConcurrentArena` uses `Scratch<T>` and generation-bound leases. Acquisition and
-lifecycle operations reject an unleased owner. Disposal before activation is valid and
-terminal. A failed activation does not publish a partial generation.
+```csharp
+// WRONG, does not compile: NAM1018 (a scoped lease must initialize a scoped local)
+static ArenaLease<int> Make(NativeArena arena) => arena.ScratchScoped<int>(4, 0);
+```
 
-Memory return ends the current concurrent-owner generation. A later
-`LeaseFromMemory()` creates the next generation. Lease release invalidates current
-leases, retains reusable storage, and leaves the owner active.
+Two warnings cover the rest: [NAM1019](diagnostics/NAM1019.md) for `Scratch` into a `scoped` local, and [NAM1020](diagnostics/NAM1020.md) for a path that skips `RecycleScoped()`.
+
+## Build a growable native sequence
+
+Use `NativeBuilder<T>` (`T` must be unmanaged) when you produce output of unknown size and then hand it on. It writes straight into native memory; `Complete` passes that memory on as a `NativeTransfer<T>` without copying.
+
+```csharp
+using Supprocom.NativeAllocationManagement;
+
+using NativeBuilder<uint> builder = new(preLease: 1_024);
+
+builder.Append(1u);
+builder.Append(new uint[] { 2, 3, 4 });
+
+using NativeTransfer<uint> output = builder.Complete();
+output.Access(static view => Upload(view.AsSpan()));
+
+static void Upload(scoped ReadOnlySpan<uint> words) { /* send to the GPU, a socket, ... */ }
+```
+
+The steps are always the same: create, fill, complete, use, dispose.
+
+### 1. Create
+
+`new NativeBuilder<T>()` starts empty. `new NativeBuilder<T>(preLease: n)` reserves room for `n` elements up front (a negative `n` throws `ArgumentOutOfRangeException`).
+
+Declare the builder as a local and initialize it in the same statement. Keep it in that method.
+
+```csharp
+// WRONG, does not compile: NAM1032 (stored in a field), NAM1033 (passed as a parameter)
+static NativeBuilder<uint> shared = new();
+static void Fill(NativeBuilder<uint> builder) { }
+```
+
+### 2. Fill
+
+A builder takes one operation at a time. Starting another operation while one is running throws `InvalidOperationException`. Each call below also takes an optional `CancellationToken` as its last argument.
+
+| Call | Use it to |
+|---|---|
+| `Append(T)` | add one value |
+| `Append(ReadOnlySpan<T>)` | copy a batch |
+| `Write(maximumAdditionalCount, callback)` | fill up to that many new elements in place |
+| `Borrow(callback)` | let several helper methods append and write |
+
+The builder grows as needed and keeps what you already wrote.
+
+#### Write in place
+
+`Write` hands your callback a *writer*: a span of `maximumAdditionalCount` uninitialized native elements. Fill a prefix of it, then call `Commit(count)` once. Only the committed prefix is added.
+
+```csharp
+builder.Write(maximumAdditionalCount: 8, static writer =>
+{
+    Span<uint> values = writer.AsSpan();
+    for (int index = 0; index < 5; index++)
+    {
+        values[index] = (uint)index;
+    }
+
+    writer.Commit(5);
+});
+```
+
+The span is valid only inside the callback, because the builder can move or free its storage afterwards. To split the work into helpers, pass the writer as `scoped ref NativeBuilderWriter<T>`.
+
+```csharp
+builder.Write(4_096, static writer => WriteWords(ref writer));
+
+static void WriteWords(scoped ref NativeBuilderWriter<uint> writer)
+{
+    Span<uint> values = writer.AsSpan();
+    values.Fill(7);
+    writer.Commit(values.Length);
+}
+```
+
+#### Borrow for helpers
+
+`Borrow` lends the builder to one callback as a *borrow*, a temporary handle that supports `Append`, `Write`, `Count` and `Capacity`. Pass it to helpers as `scoped ref NativeBuilderBorrow<T>`. While the callback runs, use the borrow, not the builder.
+
+```csharp
+builder.Borrow(static (scoped ref NativeBuilderBorrow<uint> borrow) =>
+    AppendHeader(ref borrow));
+
+static void AppendHeader(scoped ref NativeBuilderBorrow<uint> borrow)
+{
+    borrow.Append(0xCAFEu);
+    borrow.Append(2u);
+}
+```
+
+#### When a fill goes wrong
+
+Any failure inside an operation frees the whole builder: a cancelled token (`OperationCanceledException`), a failed allocation, an exception thrown by your callback, or a bad commit. Later calls then throw `ObjectDisposedException`. Pass the callback straight to `Write` or `Borrow`, not through a stored delegate.
+
+| Mistake | You get |
+|---|---|
+| Callback never calls `Commit` | `InvalidOperationException` |
+| `Commit` called twice | `InvalidOperationException` |
+| `Commit` count negative or above `maximumAdditionalCount` | `ArgumentOutOfRangeException` |
+| Negative `maximumAdditionalCount` | `ArgumentOutOfRangeException` |
+| `builder.Append(...)` or `builder.Complete()` inside a `Borrow` callback | `InvalidOperationException` (and NAM1044) |
+
+```csharp
+// WRONG, does not compile: NAM1041 (the span leaves the callback)
+builder.Write(2, static writer => { Keep(writer.AsSpan()); writer.Commit(2); });
+
+// WRONG, does not compile: NAM1042 (a second handle to the writer)
+builder.Write(2, static writer => { NativeBuilderWriter<uint> copy = writer; copy.Commit(0); });
+
+// WRONG, does not compile: NAM1044 (borrow passed by value)
+static void AppendHeader(NativeBuilderBorrow<uint> borrow) { }
+```
+
+### 3. Complete
+
+`Complete()` ends the builder and returns the data as a `NativeTransfer<T>`: the single owner of the finished sequence. You can return it, or move it into a field or to another thread: assign `Complete()` to a `NativeTransfer<T>?` local first, because `Move` takes `ref NativeTransfer<T>?`. `Length` is the number of elements you wrote. `Capacity` can be larger, because the builder keeps the block it grew into.
+
+Assign the result straight to a `NativeTransfer<T>` local, or return it. After `Complete` the builder is finished: using it or completing it again throws `InvalidOperationException`. Disposing it is allowed and does nothing.
+
+```csharp
+// WRONG, does not compile
+builder.Complete();                       // NAM1034: result discarded
+builder.Append(5u);                       // NAM1029: builder already completed
+using NativeTransfer<uint> again = builder.Complete(); // NAM1030: second completion
+```
+
+### 4. Use
+
+Read the data through the transfer. `Access` and `Read` give you a view that is valid only inside the callback.
+
+```csharp
+int count = output.Read(static view => view.AsSpan().Length);
+```
+
+A helper that receives `view.AsSpan()` must declare the parameter `scoped` (as `Upload` does above); otherwise the analyzer reports NAM1024. To store the transfer in a field or send it to another thread, assign `Complete()` to a `NativeTransfer<T>?` local and move it with `Move(ref ...)`; see [Transfer ownership across threads](#transfer-ownership-across-threads).
+
+### 5. Dispose
+
+Every path must end in `Complete()` or `Dispose()` on the builder, and then in `Dispose()` on the transfer. A `using` declaration does both. Disposing a builder twice is safe. Disposing a transfer twice throws `ObjectDisposedException`.
+
+A builder that is never completed or disposed is freed by a finalizer, but only when the GC gets to it. The analyzer reports it instead (NAM1031).
+
+```csharp
+// WRONG, does not compile: NAM1031 (no Complete or Dispose on exit)
+NativeBuilder<uint> leaked = new();
+leaked.Append(1u);
+```
+
+To pass the data to another method, complete the builder first and pass the transfer, not the builder.
+
+### Diagnostics for builders
+
+| ID | What it catches | How to fix |
+|---|---|---|
+| [NAM1028](diagnostics/NAM1028.md) | Builder copied, boxed or stored | Keep one local variable |
+| [NAM1029](diagnostics/NAM1029.md) | Use after `Complete` or `Dispose` | Do all appends before `Complete` |
+| [NAM1030](diagnostics/NAM1030.md) | `Complete` on a builder that is already completed or disposed | Complete once |
+| [NAM1031](diagnostics/NAM1031.md) | Exit path without `Complete` or `Dispose` | Use a `using` declaration |
+| [NAM1032](diagnostics/NAM1032.md) | Builder not created directly into a local (field, return, discarded) | `using NativeBuilder<T> b = new();` |
+| [NAM1033](diagnostics/NAM1033.md) | Builder passed as a parameter | Complete it and pass the `NativeTransfer<T>` |
+| [NAM1034](diagnostics/NAM1034.md) | `Complete` result discarded, widened, or stored in a field or property | Assign to a `NativeTransfer<T>` local or return it |
+| [NAM1041](diagnostics/NAM1041.md) | Write span passed out of the callback | Use the span inside the callback |
+| [NAM1042](diagnostics/NAM1042.md) | Writer copied, or callback passed indirectly | Pass the lambda to `Write`; forward as `scoped ref` |
+| [NAM1043](diagnostics/NAM1043.md) | Borrow returned, stored or captured | Use it only inside the `Borrow` callback |
+| [NAM1044](diagnostics/NAM1044.md) | Borrow parameter not `scoped ref`, or builder used during a borrow | Declare `scoped ref NativeBuilderBorrow<T>`; use the borrow |
+| [NAM1024](diagnostics/NAM1024.md) | Transfer view span passed to an unscoped parameter | Declare the parameter `scoped` |
+
+### Terms
+
+- **Builder**: the `NativeBuilder<T>` object that owns the unfinished sequence.
+- **preLease**: the starting capacity of a builder, counted in elements of `T`.
+- **Writer**: the `NativeBuilderWriter<T>` that `Write` gives your callback.
+- **Commit**: tells the writer how many elements of its span are initialized.
+- **Borrow**: the temporary `NativeBuilderBorrow<T>` handle that `Borrow` gives your callback.
+- **Complete**: ends the builder and returns its data as a transfer.
+- **Transfer**: a `NativeTransfer<T>`, the single owner of finished native data; it must be disposed or moved on.
+
+## Transfer ownership across threads
+
+`NativeTransfer<T>` is the single owner of a block of initialized native memory. Unlike a lease it is an ordinary struct: you can store it, send it through a channel and read it on another thread. Ownership moves with `Move`, and the last owner disposes it.
+
+```csharp
+using System.Threading.Channels;
+using Supprocom.NativeAllocationManagement;
+
+Channel<NativeTransfer<uint>> channel =
+    Channel.CreateBounded<NativeTransfer<uint>>(1);
+
+NativeTransfer<uint>? source = NativeTransfer<uint>.Create(new uint[] { 1, 2, 3 });
+await channel.Writer.WriteAsync(NativeTransfer<uint>.Move(ref source));
+
+NativeTransfer<uint> receiver = await channel.Reader.ReadAsync();
+try
+{
+    uint sum = receiver.Read(static view =>
+    {
+        uint total = 0;
+        foreach (uint value in view.AsSpan())
+        {
+            total += value;
+        }
+
+        return total;
+    });
+}
+finally
+{
+    receiver.Dispose();
+}
+```
+
+`Move(ref source)` returns the next owner and sets `source` to `null`. A copy of the old value then throws `InvalidOperationException` when used.
+
+### Where transfers come from
+
+| Source | Result |
+|---|---|
+| `NativeTransfer<T>.Create(span)` | a copy of `span` |
+| `NativeTransfer<T>.Create(length, value)` | `length` elements set to `value` |
+| `NativeBuilder<T>.Complete()` | the builder's data, without a copy |
+| `pool.RentTransferable(length, value)` on a `NativeConcurrentPool<T>` | pooled memory; `Dispose` gives it back to the pool |
+
+Assign the result to a local in the same statement (`NativeTransfer<T>? source = ...`).
+
+### Where ownership can go
+
+Pass it on with `Move(ref source)` to one of these:
+
+- a by-value `NativeTransfer<T>` parameter; the callee disposes it or moves it on
+- a `NativeTransfer<T>` field
+- a `return`
+- `WriteAsync` on a `Channel.CreateBounded<NativeTransfer<T>>` local
+
+```csharp
+using Supprocom.NativeAllocationManagement;
+
+NativeTransfer<uint>? source = NativeTransfer<uint>.Create(new uint[] { 5, 6 });
+uint length = Consume(NativeTransfer<uint>.Move(ref source));
+
+static uint Consume(NativeTransfer<uint> data)
+{
+    try
+    {
+        return data.Read(static view => (uint)view.Length);
+    }
+    finally
+    {
+        data.Dispose();
+    }
+}
+```
+
+### Rules
+
+| Step | Rule | If you break it |
+|---|---|---|
+| Create | Assign into a local | NAM1026 |
+| Hand over | Move, never copy | NAM1021, NAM1023 |
+| Use | The view from `Access` or `Read` stays in the callback | NAM1024 |
+| End | Every path disposes the transfer or moves it on | NAM1025 |
+| End | Do not use a transfer after `Dispose` or `Move` | NAM1022 |
+
+```csharp
+// WRONG, does not compile: NAM1021 (a copy is not a second owner)
+NativeTransfer<uint>? source = NativeTransfer<uint>.Create(new uint[] { 1 });
+NativeTransfer<uint> owner = NativeTransfer<uint>.Move(ref source);
+NativeTransfer<uint> copy = owner;
+copy.Dispose();
+```
+
+```csharp
+// WRONG, does not compile: NAM1023 (source was already moved)
+NativeTransfer<uint>? source = NativeTransfer<uint>.Create(new uint[] { 1 });
+NativeTransfer<uint> first = NativeTransfer<uint>.Move(ref source);
+NativeTransfer<uint> second = NativeTransfer<uint>.Move(ref source);
+first.Dispose();
+second.Dispose();
+```
+
+```csharp
+// WRONG, does not compile: NAM1022 (used after Dispose)
+NativeTransfer<uint> data = NativeTransfer<uint>.Create(new uint[] { 1 });
+data.Dispose();
+int length = data.Length;
+```
+
+```csharp
+// WRONG, does not compile: NAM1024 (the span leaves the callback)
+using NativeTransfer<uint> data = NativeTransfer<uint>.Create(new uint[] { 1 });
+data.Access(static view => Keep(view.AsSpan()));
+
+static void Keep(Span<uint> values) { }
+```
+
+```csharp
+// WRONG, does not compile: NAM1027 (ref parameter)
+static void Receive(ref NativeTransfer<uint> transfer) { }
+```
+
+```csharp
+// WRONG, does not compile: NAM1025 (the unbounded channel is not accepted as a hand-over)
+Channel<NativeTransfer<uint>> channel = Channel.CreateUnbounded<NativeTransfer<uint>>();
+NativeTransfer<uint>? source = NativeTransfer<uint>.Create(new uint[] { 1 });
+await channel.Writer.WriteAsync(NativeTransfer<uint>.Move(ref source));
+```
+
+A transfer rented from a `NativeConcurrentPool<T>` belongs to that pool. Dispose the transfer before the pool.
+
+```csharp
+// WRONG: throws NativeAllocationDisposedException (the pool was disposed first)
+NativeConcurrentPool<uint> pool = new();
+NativeTransfer<uint> block = pool.RentTransferable(4, 0u);
+try
+{
+    pool.Dispose();
+    int length = block.Read(static view => view.Length);
+}
+finally
+{
+    block.Dispose();
+}
+```
+
+If the owner is disposed while a transfer is idle, the transfer is invalid but its receiver must still dispose it. `default(NativeTransfer<T>)` rejects every use, including `Dispose` (`NativeAllocationUninitializedException`).
+
+## Share an owner between threads
+
+`NativeConcurrentPool<T>` and `NativeConcurrentArena` can be used by many threads at once. Each thread rents, uses and disposes its own leases. Unlike `NativePool<T>`, the pool also accepts element types that hold managed references.
+
+```csharp
+using Supprocom.NativeAllocationManagement;
+
+using NativeConcurrentPool<int> pool = new(preLease: 256);
+
+Parallel.For(0, 100, _ =>
+{
+    using ConcurrentPooled<int> buffer = pool.Rent(256, 0);
+    buffer.Access(static view => view.Fill(42));
+});
+```
+
+`ConcurrentPooled<T>.Process(length, in state, callback)` runs a callback with a span. Put the data the callback needs in `state` and make the callback `static`; otherwise the analyzer reports [NAM1047](diagnostics/NAM1047.md), [NAM1048](diagnostics/NAM1048.md) or [NAM1049](diagnostics/NAM1049.md).
+
+```csharp
+using NativeConcurrentPool<int> pool = new();
+using ConcurrentPooled<int> buffer = pool.Rent(4, 3);
+int offset = 5;
+int sum = buffer.Process(4, in offset, static (values, add) => values[0] + add);
+```
+
+### Owner generations
+
+A concurrent owner works in *generations*. These calls end the current one:
+
+| Call | Effect |
+|---|---|
+| `ReleaseLeasesToNativeMemory()` | Ends all leases, keeps the memory, and the owner stays usable |
+| `ReturnMemoryToNativeMemory()` | Ends the generation and frees its memory |
+| `ReturnMemoryToGarbageCollector()` | Ends the generation and leaves its memory to finalization |
+| `LeaseFromMemory()` | Starts the next generation |
+
+Old leases throw `NativeAllocationReturnedException` once their generation has ended. With `doNotLeaseOnDeclaration: true` the owner starts without a generation, and renting throws `NativeAllocationStateException` until `LeaseFromMemory()`.
 
 ```csharp
 using Supprocom.NativeAllocationManagement;
@@ -656,21 +797,16 @@ NativeConcurrentPool<int> pool = new(
 
 try
 {
-    ConcurrentPooled<int> first = pool.Rent(
-        64,
-        static writer => writer.Fill(default));
-    first.Access(view => view.Fill(1));
-    first.Dispose();
+    using (ConcurrentPooled<int> first = pool.Rent(64, 1))
+    {
+        first.Access(static view => view.Fill(2));
+    }
 
     pool.ReleaseLeasesToNativeMemory();
-    ConcurrentPooled<int> second = pool.Rent(
-        64,
-        static writer => writer.Fill(default));
-    second.Access(view => view.Fill(2));
-    second.Dispose();
-
     pool.ReturnMemoryToNativeMemory();
     pool.LeaseFromMemory();
+
+    using ConcurrentPooled<int> second = pool.Rent(64, 3);
 }
 finally
 {
@@ -678,87 +814,92 @@ finally
 }
 ```
 
-`ReturnMemoryToNativeMemory()` frees the current segments after its safety gate
-succeeds. `ReturnMemoryToGarbageCollector()` detaches the current generation for later
-finalization. Old handles become stale when either operation succeeds.
-
-The analyzer uses one liveness query for both policies. A live root, active bounded
-callback, alias, escape, or unknown-retention path produces `NAM1007` error for native
-return or strict lease release and ordinary warning `NAM1017` for garbage-collector
-return or tolerant lease release. The finding path is equivalent across the pair. A
-plain stale root is a source-liveness fact; an entered operation token is the runtime
-object that retains detached native storage.
-
-## Scoped recycling
-
-Scoped recycling uses the C# `scoped` local plus the matching owner acquisition. The
-only public completion operation is parameterless `RecycleScoped()`.
+On an owner declared with `using`, `ReturnMemoryTo*`, `LeaseFromMemory()` and an explicit `Dispose()` are NAM1005; use `try`/`finally` as above. `ReleaseLeasesTo*` has no such restriction.
 
 ```csharp
-using Supprocom.NativeAllocationManagement;
-
-using NativeArena arena = new();
-
-while (ShouldContinue())
-{
-    {
-        scoped ArenaLease<int> scratch = arena.ScratchScoped<int>(
-            4_096,
-            static writer => writer.Fill(0));
-        Process(scratch);
-    }
-
-    arena.RecycleScoped();
-}
+// WRONG, does not compile: NAM1007 (a lease is live), NAM1004 (and used afterwards)
+NativeConcurrentPool<int> pool = new();
+ConcurrentPooled<int> lease = pool.Rent(4, 0);
+pool.ReturnMemoryToNativeMemory();
+lease.Access(static view => view[0] = 1);
 ```
 
-`NativeArena.ScratchScoped` and the concurrent scoped methods must directly initialize
-a `scoped` local. The analyzer reports `NAM1018` for an escape. It reports `NAM1019`
-when an ordinary acquisition uses a scoped local. It reports `NAM1020` when code does
-not recycle a pending scoped set on each path.
+`ReturnMemoryToGarbageCollector()` and `ReleaseLeasesToGarbageCollector()` with a live lease are warning [NAM1017](diagnostics/NAM1017.md) instead of an error. The lease is stale either way.
 
-Early returns and exceptions require `RecycleScoped()` in a `finally` block. The base
-arena resets its scoped bump lane and advances its scoped epoch. Concurrent owners also
-clear their root-aware scoped state. Trimming cannot complete a scoped obligation.
+## Statistics and trimming
 
-## Owner statistics
-
-`NativePool<T>`, `NativeRegion`, `NativeArena`, and the concurrent owners expose
-`GetStatistics()` for diagnostics and capacity policy. The snapshot reports lifecycle,
-requested bytes, retained bytes, segment counts, trimming, and fresh segment allocations.
-Generation and retired fields apply only when the selected owner uses those concepts.
+`GetStatistics()` on a pool, region, arena, workspace or concurrent owner returns a snapshot.
 
 ```csharp
 using Supprocom.NativeAllocationManagement;
 
 using NativePool<int> pool = new(preLease: 4_096);
-using Pooled<int> values = pool.Rent(
-    1_024,
-    static writer => writer.Fill(default));
+using Pooled<int> values = pool.Rent(1_024, 0);
 
 NativeOwnerStatistics snapshot = pool.GetStatistics();
 Console.WriteLine(
     $"requested={snapshot.RequestedBytes}, "
     + $"retained={snapshot.RetainedBytes}, "
     + $"segments={snapshot.SegmentCount}");
+
+nuint freed = pool.TrimRetainedMemory();
+
+NativeMemoryStatistics process = NativeMemoryDiagnostics.Snapshot();
+Console.WriteLine($"outstanding={process.OutstandingNativeBytes}");
 ```
 
-The operation is a point-in-time diagnostic, not a free hot-path counter. Some owners
-scan retained storage or take a synchronization gate. Capture it at a maintenance
-boundary. Do not call it for each lease or inside a benchmark loop.
+Take the snapshot at a maintenance point, not inside a hot loop; some owners scan their storage or take a lock. `NativeMemoryDiagnostics.Snapshot()` counts the native memory NAM allocated across all owners; buffers owned by a provider are excluded.
 
-`NativeMemoryDiagnostics.Snapshot()` provides the corresponding process-wide physical
-native counters. It is useful for proving that terminal cleanup returned to a known
-baseline, while `GetStatistics()` explains which live owner retained a particular
-capacity.
+Memory the owner holds but no live lease uses is *retained* for later rents. `TrimRetainedMemory()` on a pool, arena or concurrent owner frees the idle part and returns the number of bytes freed. Live leases stay valid. A region has no trim; it ends every lease when its scope ends and keeps the storage for reuse unless `NativeMemoryReturn.Free` was passed.
 
-## Trimming and runtime fallback
+## Diagnostics
 
-Pool trimming releases idle slabs. Arena trimming releases unused tail segments. These
-operations do not invalidate a live handle or complete scoped storage. `NativeRegion`
-has no trim operation because its complete segment chain ends with its lexical lifetime.
+Builder diagnostics are listed in the builder section. Every ID links to its page.
 
-The runtime repeats the checks required by each allocator contract when analyzer
-diagnostics are unavailable. Pool handles validate owner identity and lease tokens.
-Arena handles validate generation or scoped epoch. Region handles validate owner state
-and owner thread. Bounded callbacks prevent reset, return, or disposal during access.
+| ID | What it catches | How to fix |
+|---|---|---|
+| [NAM1001](diagnostics/NAM1001.md) | Pool, arena or region assigned to another variable, stored, or passed to a call the analyzer cannot read | Keep one owner variable; pass it only to helpers in your source |
+| [NAM1002](diagnostics/NAM1002.md) | Lease copied | Use the original lease |
+| [NAM1003](diagnostics/NAM1003.md) | Lease not disposed on some exit | Use a `using` declaration |
+| [NAM1004](diagnostics/NAM1004.md) | Lease used after `Dispose`, `Reset` or a generation return | Rent again |
+| [NAM1005](diagnostics/NAM1005.md) | Lifecycle call on an owner declared with `using` | Dispose in `try`/`finally` instead |
+| [NAM1006](diagnostics/NAM1006.md) | Region not created as a `using` resource | `using NativeRegion region = new();` |
+| [NAM1007](diagnostics/NAM1007.md) | `Reset` or memory return while a lease is live | End every lease first |
+| [NAM1009](diagnostics/NAM1009.md) | Call the owner's current state does not allow, such as `Rent` after `ReturnMemoryToNativeMemory()` | Call `LeaseFromMemory()` first |
+| [NAM1011](diagnostics/NAM1011.md) | Lease held across `await` or `yield` | Finish the work before the `await` |
+| [NAM1012](diagnostics/NAM1012.md) | Region lease leaves its region | Keep it inside the `using` scope, or copy the data out |
+| [NAM1013](diagnostics/NAM1013.md) | Pooled lease returned or stored | Do the work in the method that rented it |
+| [NAM1015](diagnostics/NAM1015.md) | Field pool created with `NativeMemoryReturn.Free` and no `Dispose` for it | Dispose the field in the class's `Dispose` |
+| [NAM1016](diagnostics/NAM1016.md) | Lease passed to a call the analyzer cannot read | Use `Access`, `Read` or `Process` |
+| [NAM1017](diagnostics/NAM1017.md) | Warning: garbage-collector return or release with a live lease | End leases first |
+| [NAM1018](diagnostics/NAM1018.md) | `ScratchScoped` result not assigned to a `scoped` local | `scoped ArenaLease<T> x = arena.ScratchScoped<T>(...)` |
+| [NAM1019](diagnostics/NAM1019.md) | Warning: `Scratch` result assigned to a `scoped` local | Use `ScratchScoped` |
+| [NAM1020](diagnostics/NAM1020.md) | Warning: scoped lease without `RecycleScoped()` on every exit | Call it in `finally` |
+| [NAM1021](diagnostics/NAM1021.md) | Transfer copied | `Move(ref source)` |
+| [NAM1022](diagnostics/NAM1022.md) | Transfer used after `Dispose` or `Move` | Use the new owner |
+| [NAM1023](diagnostics/NAM1023.md) | `Move` of a transfer that was already moved or disposed | Move once |
+| [NAM1024](diagnostics/NAM1024.md) | Transfer view or span leaves its callback | Use it inside the callback; declare helper parameters `scoped` |
+| [NAM1025](diagnostics/NAM1025.md) | Transfer not disposed or moved on every path | `try`/`finally` with `Dispose` |
+| [NAM1026](diagnostics/NAM1026.md) | Transfer not assigned to a local | Assign to a local, then `Move` |
+| [NAM1027](diagnostics/NAM1027.md) | Transfer parameter declared `in`, `ref` or `out` | Take it by value |
+| [NAM1035](diagnostics/NAM1035.md) | Warning: managed allocation inside a region's scope | Allocate before the region |
+| [NAM1036](diagnostics/NAM1036.md) | Workspace copied | Keep one owner |
+| [NAM1037](diagnostics/NAM1037.md) | Workspace used after `Dispose` | Create a new one |
+| [NAM1038](diagnostics/NAM1038.md) | Workspace not disposed on every exit | Use a `using` declaration |
+| [NAM1039](diagnostics/NAM1039.md) | Workspace not created directly into a local | `using NativeWorkspace<T> w = new(...);` |
+| [NAM1040](diagnostics/NAM1040.md) | Workspace helper parameter not `scoped in` | `scoped in NativeWorkspace<T>` |
+| [NAM1047](diagnostics/NAM1047.md) | `ConcurrentPooled<T>.Process` callback captures variables or is not passed directly | Pass a `static` lambda; put its data in `state` |
+| [NAM1048](diagnostics/NAM1048.md) | Native owner inside the `Process` state | Keep owners out of `state` |
+| [NAM1049](diagnostics/NAM1049.md) | `Process` state stored, boxed or returned | Use it inside the callback |
+| [NAM1051](diagnostics/NAM1051.md) | Span used after its lease ended | Take a new span from a live lease |
+| [NAM9001](diagnostics/NAM9001.md) | The package's analyzer is missing | Restore the analyzer from the package |
+
+## Terms
+
+- **Owner**: an object that holds native memory (pool, region, arena, workspace, builder).
+- **Lease**: a handle to one block of an owner's memory. Pool, region, arena and concurrent leases are `ref struct`s.
+- **View**: the bounded handle that `Access` and `Read` give a callback; it is valid only inside the callback.
+- **Published range**: the elements of a workspace that `Initialize` made readable by `Access` and `Read`.
+- **Scoped lease**: an arena lease from `ScratchScoped`; `RecycleScoped()` ends it.
+- **Generation**: the period between `LeaseFromMemory()` and the call that returns the owner's memory; leases do not outlive it.
+- **Retained memory**: memory an owner keeps for later rents; `TrimRetainedMemory()` frees it.

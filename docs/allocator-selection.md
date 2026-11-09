@@ -1,52 +1,42 @@
-# Choose managed storage first
+# Choose an allocator
 
-NAM must remove useful-work or retention costs that an expert managed equivalent
-cannot remove under the same output, capacity, ownership and concurrency contract.
-Use arrays, spans, direct destination writes and appropriate managed pooling when
-they satisfy that contract. Zero GC allocation alone does not justify native risk.
-Include control/shape metadata, retained capacity, initialization, preparation,
-handoff and teardown in the comparison. Do not compare NAM to a deliberately
-materializing, copying or allocating managed path.
+Start with managed storage: arrays, spans and `ArrayPool<T>`. Move to NAM when you can show it removes a cost the managed version cannot, for the same output, memory cap and thread use. Zero GC allocations alone is not a reason.
 
-| Real requirement | NAM candidate | Required tradeoff |
-| --- | --- | --- |
-| One lexical unmanaged allocation boundary | NativeRegion | No escape or suspension; direct using construction and complete initialization. |
-| Fixed-shape reusable buffers on one thread | NativePreparedPool | Prove simultaneous slot bounds; sparse pages and retained capacity still cost memory. |
-| Variable-size same-type buffers on one thread | NativePool | Explicit size-class reuse and growth; return policy controls physical cleanup. |
-| Heterogeneous ranges with one thread-affine lifetime | NativeArena | Use prepared bounds and required composite APIs; reset/recycle cannot invalidate entered work. |
-| Actual concurrent owner operations | Concurrent pool/arena | Measure coordination and generation retention; do not select it solely for an API gap. |
-| Grow unknown-size output into one contiguous result | NativeBuilder | Admit conservative resize overlap; copying/reallocation and peak capacity matter. |
-| Persistent mutable application state | NativeWorkspace | Pay preparation once over a real amortization boundary and prove owner-local teardown. |
-| Independently moved initialized storage | NativeTransfer | One acquisition-time control, no shared refcount; source versions become stale. |
-| Immutable fan-out needing independent owners | NativeShared/NativeWeak | Explicit transitions and prepared binding limits; weak observers must not retain payload. |
-| Variable-sized production under a shared native cap | NativeMemoryBudget reservation | Reserve before production; prepare backing before a no-growth producer; distinguish metadata/backend errors. |
-| Several regions with genuinely coincident lifetime | NativeLayout | Reuse checked shape; count padding/slack/metadata; independent fields require explicit overlap-admitted copy. |
+```csharp
+using Supprocom.NativeAllocationManagement;
 
-The budget covers complete NAM-requested native extents, including retained,
-retired and deferred-owned storage until real physical release. It is not RSS,
-opaque backend headers, managed control memory or an OS-residency guarantee.
-Borrowed mapped backing is reported separately and requires the provider's proven
-lifetime. A native-byte ceiling cannot stand in for a process/container cap.
+// Managed first:
+float[] managed = System.Buffers.ArrayPool<float>.Shared.Rent(1_024);
+System.Buffers.ArrayPool<float>.Shared.Return(managed);
 
-Preparation must cover backing, metadata and handle/slot capacity for the actual
-simultaneously live shapes. Within that declared boundary, use the supported
-nonallocating refusal path instead of hidden growth. Preparing bytes alone does
-not prove independently available slots. Reusing already charged storage is not
-a new budget grant.
+// NAM, when the managed version is measurably worse:
+using Pooled<float> native = NativePool<float>.Shared.Rent(1_024, 0f);
+```
 
-Unique ownership is the default. Sharing is justified only when it eliminates
-more copying or coordination than its binding/control transitions add. A small
-shared slice retains full backing until explicit detach; lingering weak observers
-retain control state, not payload. Grouping unrelated layout lifetimes can worsen
-retention even when it reduces the number of handles.
+## Pick by need
 
-Use actual snapshots and correlated bounded traces to explain ownership, peaks,
-rejections, copies, clear work and eventual return. Do not substitute zeros for
-private counters or claim RSS relief from a NAM backend free. Compare controlled
-and production tiering/PGO, paired ordering, identical outputs, uncertainty and
-preserved workload regressions before calling a workload superior.
+| You need | Use | Guide |
+|---|---|---|
+| Scratch ranges of several types inside one block of code | `NativeRegion` | [Group allocations in a region](getting-started.md#group-allocations-in-a-region) |
+| Same-type buffers of varying size on one thread | `NativePool<T>` | [Pool buffers of one element type](getting-started.md#pool-buffers-of-one-element-type) |
+| Fixed-shape buffers on one thread | `NativePreparedPool<T>` | [Prepared pools](prepared-pools.md) |
+| Ranges of several types that are reset together on one thread | `NativeArena` | [Free many allocations at once with an arena](getting-started.md#free-many-allocations-at-once-with-an-arena), [Prepared arenas](prepared-arenas.md) |
+| The same, shared by several threads | `NativeConcurrentPool<T>`, `NativeConcurrentArena` | [Share an owner between threads](getting-started.md#share-an-owner-between-threads), [Owner generations](getting-started.md#owner-generations) |
+| Output of unknown size as one contiguous result | `NativeBuilder<T>` | [Build a growable native sequence](getting-started.md#build-a-growable-native-sequence) |
+| Mutable state that a worker keeps and reuses | `NativeWorkspace<T>` | [Reuse one buffer for every batch](getting-started.md#reuse-one-buffer-for-every-batch) |
+| One initialized block that moves between owners or threads | `NativeTransfer<T>` | [Unique ownership](unique-ownership.md) |
+| One block read by several independent owners | `NativeShared<T>`, `NativeWeak<T>` | [Immutable sharing](immutable-sharing.md) |
+| Several arrays of different types with one lifetime | `NativeLayout` | [Typed layouts](typed-layouts.md) |
+| A cap on total native bytes | `NativeMemoryBudget` | [Memory budgets](memory-budgets.md), [Application admission](application-admission.md) |
 
-Start with [budget contracts](memory-budgets.md), [prepared pools](prepared-pools.md),
-[arenas](prepared-arenas.md), [admission](application-admission.md),
-[unique ownership](unique-ownership.md), [sharing](immutable-sharing.md),
-[layouts](typed-layouts.md), and [all diagnostics](diagnostics/README.md).
+## Rules of thumb
+
+- One owner is the default. Share only when copying or coordinating costs more than the sharing setup.
+- A small slice of a shared block keeps the whole block alive. A layout owner keeps the whole block alive.
+- Group fields in one layout only if they live and die together.
+- Concurrent owners cost coordination. Choose one for real multi-thread use, not to fill an API gap.
+- A budget counts the native bytes NAM requests. It is not process memory (RSS) and not a container limit.
+
+When you compare NAM with managed code, include setup, spare capacity, handoff and cleanup on both sides, and compare against an efficient managed version, not one that copies or allocates needlessly.
+
+Every rule the analyzer enforces has a page in the [diagnostic index](diagnostics/README.md).

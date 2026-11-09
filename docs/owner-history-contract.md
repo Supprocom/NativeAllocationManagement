@@ -1,23 +1,40 @@
-# Owner event histories and authority
+# Owner statistics: totals and gauges
 
-`FreshSegmentAllocationCount`, `TrimCallCount`, and `TrimmedBytes` are lifetime
-observations, not allocation authority. Histories saturate at `long.MaxValue` and
-the owner reports `HistoryOverflowed` after an event would exceed that value.
-Reaching the maximum exactly remains an exact observation until another event
-occurs. No history overflow can interrupt completed acquisition, publication,
-physical release or final cleanup.
+`GetStatistics()` on a pool, prepared pool, region, arena, builder, workspace or concurrent owner returns a `NativeOwnerStatistics`. It has two kinds of fields:
 
-Current retained, retired and requested-byte gauges remain exact and are not
-derived by subtracting saturated histories. Allocation ordinals, generation
-epochs and handle versions remain separately checked, non-reusing authority;
-exhaustion rejects before producer work or publication instead of wrapping or
-reusing a saturated diagnostic count. Traces preserve the real acquisition
-ordinal even when the completed-acquisition count has saturated.
+| Kind | Fields | Behaviour |
+|---|---|---|
+| Gauges (the state right now) | `RequestedBytes`, `RetainedBytes`, `RetiredBytes`, `SegmentCount`, `AvailableSegmentCount`, `RetiredSegmentCount` | always exact |
+| Totals (the owner's lifetime) | `FreshSegmentAllocationCount`, `TrimCallCount`, `TrimmedBytes` | only grow |
 
-These histories update at their existing physical-event or maintenance boundary.
-They add no budget admission, reference count, registry, synchronization or event
-payload construction to warmed lease or element access. The added saturation
-comparison and lifetime overflow state still belong in the complete performance
-and memory comparison. Production/process accounting and the full field
-inventory are separate essential work; this contract is not a claim that those
-remaining requirements are implemented.
+```csharp
+using Supprocom.NativeAllocationManagement;
+
+using NativePool<int> pool = new(preLease: 4_096);
+using (Pooled<int> values = pool.Rent(1_024, 0))
+{
+}
+
+nuint released = pool.TrimRetainedMemoryByBytes(4_096);
+NativeOwnerStatistics stats = pool.GetStatistics();
+
+Console.WriteLine($"fresh={stats.FreshSegmentAllocationCount} trims={stats.TrimCallCount} "
+    + $"trimmed={stats.TrimmedBytes} overflowed={stats.HistoryOverflowed} released={released}");
+```
+
+## Reading the totals
+
+| Field | Counts |
+|---|---|
+| `FreshSegmentAllocationCount` | first-time backing allocations; reusing a segment does not count |
+| `TrimCallCount` | completed trim calls, including calls that released nothing |
+| `TrimmedBytes` | bytes physically released by trimming |
+| `HistoryOverflowed` | `true` once a total would pass `long.MaxValue` |
+
+A total stops at `long.MaxValue` and sets `HistoryOverflowed`. Nothing throws and no operation fails because of it. Gauges stay exact, so do not compute them by subtracting totals.
+
+## When to capture
+
+Capture at a maintenance point, not for every lease. Some owners take a lock or scan their storage to answer. See [Statistics and trimming](getting-started.md#statistics-and-trimming).
+
+Process-wide counters come from `NativeMemoryDiagnostics.Snapshot()`; see [Production accounting](production-accounting-contract.md).

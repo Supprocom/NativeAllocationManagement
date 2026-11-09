@@ -1,74 +1,64 @@
-# Demo kernel observations
+# Demo: Linux cgroup memory and CPU
 
-`CgroupMemorySnapshot` observes a Linux kernel cgroup, not NAM's budget or one
-process's exclusive memory. Its 29-property inventory is checked against compiled
-metadata by [the diagnostic contracts](../conformance/cgroup-diagnostic-contracts.json).
+`CgroupMemorySnapshot` is part of the voxel demo's shared contract (`SharedContract`), not the NuGet package (reference `SharedContract/SharedContract.csproj` to use it). It reads the Linux cgroup the process runs in. That is the container's or service's total, not NAM's budget and not this process alone.
 
-`Read` resolves `/proc/self/cgroup` memberships through `/proc/self/mountinfo`
-filesystem/controller, mounted subtree root and mountpoint. It uses whole path
-and controller boundaries, decodes kernel mount escapes once, and refuses
-traversal, unmatched roots and ambiguous equal-specificity mounts. A more specific
-matching subtree is used when available. No mount, namespace or cgroup setting
-is changed. Missing/inaccessible proc data does not fall back to a guessed group.
-Namespace-private mounts rooted at `/` work normally; an inaccessible/outside
-namespace subtree is unavailable, not a guessed host-wide measurement.
+```csharp
+using Supprocom.NativeAllocationManagement.Demos.VoxelChunkPipeline.SharedContract;
 
-`ReadFromDirectory` reads explicit colocated roots; `ReadFromDirectories` accepts
-separate memory, CPU bandwidth and CPU accounting roots. `ReadFromProcFiles`
-performs the same observation using supplied proc identities. V1 controllers may
-belong to different hierarchies, so memory-path provenance never pretends to
-identify CPU. `FromFiles` parses supplied contents without inventing source paths.
+CgroupMemorySnapshot cgroup = CgroupMemorySnapshot.Read();
+Console.WriteLine(cgroup.Available
+    ? $"cgroup v{cgroup.Version}: {cgroup.CurrentBytes} of {cgroup.LimitBytes?.ToString() ?? "no limit"} bytes"
+    : "no cgroup memory data");
+```
 
-Each file is sampled independently, not one atomic transaction. Kernel counters,
-peaks and limits belong to their external hierarchy, including the kernel's
-documented descendants; the reader neither resets them nor establishes a new
-measurement epoch. External reset/replacement means a decreasing history cannot
-be treated as a valid monotonic delta. Null means missing, invalid, unsupported,
-ambiguous or unrepresentable. Valid zero is a real observation. Unsigned v1
-nanoseconds are divided by 1000 before conversion to Int64; sub-microsecond
-remainder is truncated, not claimed as measured precision.
+| Call | Reads |
+|---|---|
+| `Read()` | this process's cgroup, found through `/proc/self/cgroup` and `/proc/self/mountinfo` |
+| `ReadFromDirectory(root)` | one directory holding the memory and CPU files |
+| `ReadFromDirectories(memoryRoot, cpuRoot, accountingRoot)` | separate directories (cgroup v1 can keep them in different hierarchies) |
+| `ReadFromProcFiles(membership, mountinfo)` | the same lookup as `Read()`, on supplied proc text |
+| `FromFiles(files)` | supplied file contents, with no source path |
+
+## Reading the values
+
+- Every count and byte value is `long?`. `null` means missing, unreadable, unsupported or ambiguous. A real zero is `0`.
+- If the mount cannot be resolved, the values are `null`. The reader does not guess a group.
+- Files are read one after another, so fields are not one atomic instant.
+- Counters belong to the kernel's hierarchy. The reader never resets them. If a counter went down between two reads, something reset it; do not subtract.
+- Version 1 nanosecond CPU values are divided by 1000; the remainder is dropped.
+- JSON keeps `null`, zeros and the source paths.
 
 | Property | Source and units |
-| --- | --- |
-| `Available` | Whether the actual memory-current value parsed; false is not a measured zero and does not erase separately valid fields. |
-| `LimitBytes` | V2 `memory.max` or v1 `memory.limit_in_bytes`, bytes; unlimited is not a zero-byte cap. |
-| `CurrentBytes` | V2 `memory.current` or v1 `memory.usage_in_bytes`, bytes. |
-| `PeakBytes` | V2 `memory.peak` or v1 `memory.max_usage_in_bytes`, kernel high-water bytes, not a reset per request. |
-| `LowEvents` | V2 `memory.events` low events; v1 unavailable. |
-| `HighEvents` | V2 high events; v1 unavailable. |
-| `MaxEvents` | V2 max events; not v1 fail count. |
-| `OomEvents` | V2 oom events; v1 under_oom state is not an event history. |
-| `OomKillEvents` | V2 `memory.events` or v1 `memory.oom_control` oom_kill events. |
-| `OomGroupKillEvents` | V2 oom_group_kill events; absent kernels/v1 unavailable. |
-| `AnonBytes` | V2 `memory.stat` anon bytes; v1 RSS is not substituted. |
-| `FileBytes` | V2 file bytes or v1 total_cache bytes. |
-| `SwapCurrentBytes` | V2 `memory.swap.current` or v1 total_swap bytes. |
-| `SwapPeakBytes` | V2 `memory.swap.peak` high-water bytes; v1 unavailable. |
-| `CpuUsageMicroseconds` | V2 usage_usec or v1 unsigned `cpuacct.usage` nanoseconds / 1000. |
-| `CpuUserMicroseconds` | V2 user_usec or v1 unsigned `cpuacct.usage_user` nanoseconds / 1000. |
-| `CpuSystemMicroseconds` | V2 system_usec or v1 unsigned `cpuacct.usage_sys` nanoseconds / 1000. |
-| `CpuPeriods` | `cpu.stat` nr_periods count on the actual CPU bandwidth hierarchy. |
-| `CpuThrottledPeriods` | `cpu.stat` nr_throttled count, not an invented ratio. |
-| `CpuThrottledMicroseconds` | V2 throttled_usec or v1 unsigned throttled_time nanoseconds / 1000. |
-| `PageFaults` | V2 pgfault or v1 total_pgfault events. |
-| `MajorPageFaults` | V2 pgmajfault or v1 total_pgmajfault events. |
-| `LimitUnlimited` | Explicit v2 max or v1 unlimited/sentinel state; unknown remains null. |
-| `Version` | Actual memory/CPU-interface identity, one or two; absent interfaces are unavailable. |
-| `V1RssBytes` | V1 total_rss bytes, including swap cache; not v2 anon. |
-| `LimitHitEvents` | V1 memory.failcnt events; not OOM-kill or v2 max events. |
-| `SourcePath` | Actual resolved/explicit memory directory, not a pointer/owner identity. |
-| `CpuSourcePath` | Actual directory whose cpu.stat was read; missing file means null. |
-| `CpuAccountingSourcePath` | Actual v1 directory with read cpuacct.usage/user/sys files; v2/missing means null. |
+|---|---|
+| `Available` | `CurrentBytes` was read. `false` is not a measured zero and does not blank the other fields |
+| `Version` | `1` or `2`; absent interfaces are unavailable |
+| `LimitBytes` | v2 `memory.max`, v1 `memory.limit_in_bytes`, bytes |
+| `LimitUnlimited` | `true` for an explicit "no limit", `false` for a finite limit; `null` if unknown. Unlimited is not a zero-byte cap |
+| `CurrentBytes` | v2 `memory.current`, v1 `memory.usage_in_bytes`, bytes |
+| `PeakBytes` | v2 `memory.peak`, v1 `memory.max_usage_in_bytes`: the kernel's high-water mark, not reset per request |
+| `LowEvents`, `HighEvents`, `MaxEvents` | v2 `memory.events` counts; v1: unavailable |
+| `OomEvents` | v2 `oom` count; v1: unavailable |
+| `OomKillEvents` | v2 `memory.events` or v1 `memory.oom_control` `oom_kill` count |
+| `OomGroupKillEvents` | v2 `oom_group_kill` count; v1 and older kernels: unavailable |
+| `AnonBytes` | v2 `memory.stat` `anon`, bytes; v1: unavailable (v1 RSS is separate) |
+| `FileBytes` | v2 `file` or v1 `total_cache`, bytes |
+| `SwapCurrentBytes` | v2 `memory.swap.current`, v1 `total_swap`, bytes |
+| `SwapPeakBytes` | v2 `memory.swap.peak`; v1: unavailable |
+| `V1RssBytes` | v1 `total_rss` (includes swap cache), bytes; not the same as v2 `anon` |
+| `LimitHitEvents` | v1 `memory.failcnt`; not an OOM kill and not v2 `max` |
+| `PageFaults`, `MajorPageFaults` | v2 `pgfault`, `pgmajfault`; v1 `total_pgfault`, `total_pgmajfault` |
+| `CpuUsageMicroseconds` | v2 `usage_usec`, v1 `cpuacct.usage` |
+| `CpuUserMicroseconds` | v2 `user_usec`, v1 `cpuacct.usage_user` |
+| `CpuSystemMicroseconds` | v2 `system_usec`, v1 `cpuacct.usage_sys` |
+| `CpuPeriods` | `cpu.stat` `nr_periods` of the CPU-bandwidth hierarchy |
+| `CpuThrottledPeriods` | `cpu.stat` `nr_throttled` |
+| `CpuThrottledMicroseconds` | v2 `throttled_usec`, v1 `throttled_time` |
+| `SourcePath` | the memory directory that was read |
+| `CpuSourcePath` | the directory whose `cpu.stat` was read; `null` if the file was missing |
+| `CpuAccountingSourcePath` | the v1 directory with `cpuacct.usage`, `.usage_user`, `.usage_sys`; `null` for v2 or if missing |
 
-Older v1 `cpuacct.stat` user/system values use USER_HZ. They are not guessed as
-microseconds when the precise nanosecond files are unavailable. Unsupported
-interfaces remain explicitly unavailable; no private-runtime counter is filled
-with a pretend zero. JSON preserves null and measured zero plus each source path.
-Sampling/parser/serialization work is cold observability cost, not allocator
-per-element work or evidence of native performance superiority.
+If the v1 `cpuacct` nanosecond files are missing, the CPU fields are `null`.
 
-Definitions follow the primary [proc mountinfo contract](https://docs.kernel.org/filesystems/proc.html),
-[v1 CPU accounting units](https://docs.kernel.org/admin-guide/cgroup-v1/cpuacct.html),
-[v1 bandwidth statistics](https://docs.kernel.org/scheduler/sched-bwc.html),
-[v2 CPU interface](https://docs.kernel.org/admin-guide/cgroup-v2.html) and
-[pinned v6.17 accounting fields](https://github.com/torvalds/linux/blob/v6.17/kernel/sched/cpuacct.c).
+Reading is a cold operation. Do not call it in per-element code, and do not read its cost as an allocator result.
+
+The values follow the kernel documentation: [proc mountinfo](https://docs.kernel.org/filesystems/proc.html), [v1 CPU accounting](https://docs.kernel.org/admin-guide/cgroup-v1/cpuacct.html), [v1 bandwidth statistics](https://docs.kernel.org/scheduler/sched-bwc.html) and [the v2 interface](https://docs.kernel.org/admin-guide/cgroup-v2.html).
