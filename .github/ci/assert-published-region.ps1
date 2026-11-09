@@ -43,7 +43,7 @@ foreach ($namVariant in @('Published', 'Candidate')) {
     }
     $namIdentityCommand = @($namCommands | Where-Object Name -ceq "identity-$namVariant")[0]
     $namActual = [IO.File]::ReadAllText((Join-Path $namRoot "identity-$namVariant/stdout.log")) | ConvertFrom-Json
-    if ($namIdentityCommand.ObservedExitCode -ne 0 -or $namIdentityCommand.TimedOut -or $namActual.Framework -cne '.NET 10.0.10' -or
+    if ($namIdentityCommand.ObservedExitCode -ne 0 -or $namIdentityCommand.TimedOut -or $namActual.Framework -cne '.NET 10.0.14' -or
         $namActual.Rid -cne $namCapture.NativeRid -or
         -not [string]::Equals($namActual.Architecture, $namCapture.NativeRid.Split('-')[1], [StringComparison]::OrdinalIgnoreCase) -or
         $namActual.RuntimePath -cne (Join-Path $namRoot "$namVariant/Supprocom.NativeAllocationManagement.dll")) {

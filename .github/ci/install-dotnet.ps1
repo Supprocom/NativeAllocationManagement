@@ -26,8 +26,8 @@ $namHashes = @{
     'win-arm64' = '241abb2b345cff1b32d87a9e29da5e9d52f899f691e7b34661274477564c4717054c489814a9fd7a5526fc9e0d8174a0d951a4a845556eee53add526f71917e7'
 }
 $namExtension = if ($namWindows) { 'zip' } else { 'tar.gz' }
-$namName = "dotnet-sdk-10.0.302-$ExpectedRid.$namExtension"
-$namUri = "https://builds.dotnet.microsoft.com/dotnet/Sdk/10.0.302/$namName"
+$namName = "dotnet-sdk-10.0.403-$ExpectedRid.$namExtension"
+$namUri = "https://builds.dotnet.microsoft.com/dotnet/Sdk/10.0.403/$namName"
 $namArchive = Join-Path $namEvidence $namName
 if (Test-Path -LiteralPath $namArchive) { throw 'An existing SDK archive must not be overwritten.' }
 $namStarted = [DateTimeOffset]::UtcNow
@@ -46,7 +46,7 @@ $env:DOTNET_ROOT = $namTools
 $env:DOTNET_MULTILEVEL_LOOKUP = '0'
 $env:DOTNET_CLI_UI_LANGUAGE = 'en-US'
 $namVersion = & $namExecutable --version
-if ($LASTEXITCODE -ne 0 -or $namVersion.Trim() -ne '10.0.302') { throw 'The exact SDK did not execute.' }
+if ($LASTEXITCODE -ne 0 -or $namVersion.Trim() -ne '10.0.403') { throw 'The exact SDK did not execute.' }
 $namRuntimes = @(& $namExecutable --list-runtimes)
 if ($LASTEXITCODE -ne 0) { throw 'The isolated SDK did not enumerate its actual runtimes.' }
 Write-Output ($namRuntimes -join "`n")

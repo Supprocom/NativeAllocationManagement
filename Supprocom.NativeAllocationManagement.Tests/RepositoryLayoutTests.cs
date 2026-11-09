@@ -16,7 +16,7 @@ public sealed class RepositoryLayoutTests
 #pragma warning restore HLQ005
         using JsonDocument selection = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "global.json")));
         JsonElement sdk = selection.RootElement.GetProperty("sdk");
-        Assert.Equal("10.0.302", sdk.GetProperty("version").GetString());
+        Assert.Equal("10.0.403", sdk.GetProperty("version").GetString());
         Assert.Equal("disable", sdk.GetProperty("rollForward").GetString());
         Assert.False(sdk.GetProperty("allowPrerelease").GetBoolean());
         Assert.Contains("<LangVersion>13.0</LangVersion>", PackageFixtureEvidence.BuildProperties, StringComparison.Ordinal);

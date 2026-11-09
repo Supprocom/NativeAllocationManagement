@@ -27,7 +27,7 @@ public sealed class NativeCompilerEvidenceTests
         DirectoryInfo runtime = new(Path.GetDirectoryName(typeof(object).Assembly.Location)!);
         string sdkRoot = runtime.Parent!.Parent!.Parent!.FullName;
         string dotnet = Path.Combine(sdkRoot, OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet");
-        string compiler = Path.Combine(sdkRoot, "sdk", "10.0.302", "Roslyn", "bincore", "csc.dll");
+        string compiler = Path.Combine(sdkRoot, "sdk", "10.0.403", "Roslyn", "bincore", "csc.dll");
         Assert.True(File.Exists(dotnet), dotnet);
         Assert.True(File.Exists(compiler), compiler);
         string directory = Path.Combine(Path.GetTempPath(), "nam-compiler-host-" + Guid.NewGuid().ToString("N"), "input with spaces");
@@ -90,7 +90,7 @@ public sealed class NativeCompilerEvidenceTests
             Assert.Equal(response, evidence.ResponseFile.Path);
             Assert.Equal(new FileInfo(response).Length, evidence.ResponseFile.Length);
             Assert.Equal(64, evidence.ResponseFile.SHA256.Length);
-            Assert.Contains("csc, Version=5.6.0.0", evidence.CompilerAssembly, StringComparison.Ordinal);
+            Assert.Contains("csc, Version=5.9.0.0", evidence.CompilerAssembly, StringComparison.Ordinal);
             Assert.True(evidence.AllocatedBytes > 0);
             Assert.True(double.IsFinite(evidence.CpuMilliseconds) && evidence.CpuMilliseconds > 0);
             Assert.True(double.IsFinite(evidence.WallMilliseconds) && evidence.WallMilliseconds > 0);

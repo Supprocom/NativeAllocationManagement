@@ -123,7 +123,7 @@ try {
         $namIdentity = Invoke-NamPublishedChild "identity-$namVariant" dotnet @($namWorker, '--identity') 10 'Default'
         if ($namIdentity.Exit -ne 0 -or $namIdentity.Error.Length -ne 0) { throw 'Actual native worker identity failed.' }
         $namActual = $namIdentity.Output | ConvertFrom-Json
-        if ($namActual.Framework -cne '.NET 10.0.10' -or $namActual.Rid -cne $ExpectedRid -or
+        if ($namActual.Framework -cne '.NET 10.0.14' -or $namActual.Rid -cne $ExpectedRid -or
             -not [string]::Equals($namActual.Architecture, $ExpectedRid.Split('-')[1], [StringComparison]::OrdinalIgnoreCase) -or
             $namActual.RuntimePath -cne (Join-Path $namDirectory 'Supprocom.NativeAllocationManagement.dll')) { throw 'Actual worker/runtime selection differs.' }
     }

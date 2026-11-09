@@ -126,7 +126,7 @@ try {
         ImageOS = $env:ImageOS; ImageVersion = $env:ImageVersion; RunnerOS = $env:RUNNER_OS; RunnerArch = $env:RUNNER_ARCH;
         RunID = $env:GITHUB_RUN_ID; RunAttempt = $env:GITHUB_RUN_ATTEMPT } |
         ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $namRoot 'native-identity.json') -Encoding utf8
-    if ((& dotnet --version).Trim() -ne '10.0.302' -or $LASTEXITCODE -ne 0) { throw 'Exact canonical SDK is required.' }
+    if ((& dotnet --version).Trim() -ne '10.0.403' -or $LASTEXITCODE -ne 0) { throw 'Exact canonical SDK is required.' }
     $namRuntimes = @(& dotnet --list-runtimes)
     if ($LASTEXITCODE -ne 0) { throw 'Actual runtime enumeration failed.' }
     Assert-NamRuntimeInventory -ExpectedRid $ExpectedRid -Runtimes $namRuntimes
