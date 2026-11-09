@@ -1790,19 +1790,19 @@ public sealed class VoxelSharedContractTests
             project,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Fix NativeConcurrentArena",
+            "Spans from NAM leases are now bound to the lease.",
             project,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Scratch initializers on the same arena",
+            "scoped Span&lt;int&gt; span = default;",
             project,
             StringComparison.Ordinal);
         Assert.Contains(
-            "could share memory",
+            "NAM1012 no longer reports a discarded region lease.",
             project,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Fix NativeTransfer",
+            "take the span, not the lease",
             project,
             StringComparison.Ordinal);
     }
