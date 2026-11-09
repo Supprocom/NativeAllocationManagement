@@ -5,6 +5,9 @@ namespace Supprocom.NativeAllocationManagement.Tests;
 
 public sealed class RepositoryLayoutTests
 {
+    private const string DemoBenchmarkProject =
+        ".Demos/01-VoxelChunkPipeline/InProcessBenchmark/Supprocom.NativeAllocationManagement.Demos.VoxelChunkPipeline.InProcessBenchmark.csproj";
+
     [Fact]
     public void CanonicalToolchainUsesStableLanguageAndExactSdk()
     {
@@ -56,12 +59,14 @@ public sealed class RepositoryLayoutTests
         string[] actual = Directory.EnumerateDirectories(root)
             .SelectMany(directory => Directory.EnumerateFiles(directory, "*.csproj"))
             .Select(project => Path.GetRelativePath(root, project).Replace(Path.DirectorySeparatorChar, '/'))
+            .Append(DemoBenchmarkProject)
             .Order(StringComparer.Ordinal)
             .ToArray();
 
         Assert.NotEmpty(projects);
+        Assert.True(File.Exists(Path.Combine(root, DemoBenchmarkProject)));
         Assert.Equal(actual, projects);
-        foreach (string project in projects)
+        foreach (string project in projects.Where(project => !string.Equals(project, DemoBenchmarkProject, StringComparison.Ordinal)))
         {
             string[] parts = project.Split('/');
             Assert.Equal(2, parts.Length);

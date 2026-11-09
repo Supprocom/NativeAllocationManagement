@@ -9,4 +9,5 @@
   <Project Path="SafeCSharp/SafeCSharp.csproj" />
   <Project Path="NAM/NAM.csproj" />
   <Project Path="Harness/Harness.csproj" />
+  <Project Path=".Demos/01-VoxelChunkPipeline/InProcessBenchmark/Supprocom.NativeAllocationManagement.Demos.VoxelChunkPipeline.InProcessBenchmark.csproj" />
 </Solution>
