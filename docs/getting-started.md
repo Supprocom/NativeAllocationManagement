@@ -95,7 +95,7 @@ using Pooled<int> squares = pool.Rent(8, static writer =>
 A span from `AsSpan()` carries no ownership. Use it only while its lease is alive.
 
 ```csharp
-// WRONG, does not compile: NAM1051 (the span outlives its lease)
+// WRONG, does not compile: CS8168, NAM1051 (the span outlives its lease)
 using NativePool<int> pool = new();
 Span<int> kept;
 using (Pooled<int> temp = pool.Rent(8, 0))
@@ -131,6 +131,27 @@ static Span<int> HeadOf(Span<int> span) => span.Slice(0, 1);
 ```
 
 ### Rent for one call
+
+Borrow a temporary buffer for one call. It goes back to the pool at the end of the method:
+
+```csharp
+using Supprocom.NativeAllocationManagement;
+
+static float Peak(ReadOnlySpan<short> pcm)
+{
+    using Pooled<float> samples = NativePool<float>.Shared.Rent(pcm.Length, 0f);
+    Span<float> buffer = samples.AsSpan();
+
+    float peak = 0f;
+    for (int index = 0; index < pcm.Length; index++)
+    {
+        buffer[index] = pcm[index] / 32768f;
+        peak = MathF.Max(peak, MathF.Abs(buffer[index]));
+    }
+
+    return peak;
+}
+```
 
 `pool.Process` rents, runs your callback and returns the buffer, even if the callback throws. Pass what the callback needs as state, and make the callback `static`.
 
@@ -352,6 +373,17 @@ static Local<int> Make()
     using NativeRegion region = new();
     return region.Lease<int>(4, 0);
 }
+```
+
+```csharp
+// WRONG, does not compile: CS8168, NAM1051 (the span outlives its region)
+Span<int> kept;
+using (NativeRegion region = new())
+{
+    kept = region.Lease<int>(16, 0).AsSpan();
+}
+
+kept[0] = 1;
 ```
 
 ## Free many allocations at once with an arena

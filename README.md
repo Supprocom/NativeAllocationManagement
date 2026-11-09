@@ -19,43 +19,8 @@ Install the released `0.3.2` package (it targets .NET 10):
 dotnet add package Supprocom.NativeAllocationManagement --version 0.3.2
 ```
 
-Borrow a temporary buffer for one call. It goes back to the pool at the end of the method:
-
-```csharp
-using Supprocom.NativeAllocationManagement;
-
-static float Peak(ReadOnlySpan<short> pcm)
-{
-    using Pooled<float> samples = NativePool<float>.Shared.Rent(pcm.Length, 0f);
-    Span<float> buffer = samples.AsSpan();
-
-    float peak = 0f;
-    for (int index = 0; index < pcm.Length; index++)
-    {
-        buffer[index] = pcm[index] / 32768f;
-        peak = MathF.Max(peak, MathF.Abs(buffer[index]));
-    }
-
-    return peak;
-}
-```
-
-Using a span after its region is disposed does not compile:
-
-```csharp
-// WRONG, does not compile
-Span<int> kept;
-using (NativeRegion region = new())
-{
-    kept = region.Lease<int>(16, 0).AsSpan();
-}
-
-kept[0] = 1; // error NAM1051: Span 'kept' comes from a NAM lease and is used after 'region.Dispose()'.
-```
-
-Every rule has a page in the [diagnostic index][diagnostics], for example
-[NAM1051](https://github.com/Supprocom/NativeAllocationManagement/blob/main/docs/diagnostics/NAM1051.md).
-The full walkthrough is in [Getting started][getting-started].
+The full walkthrough is in [Getting started][getting-started], and every rule has a page in
+the [diagnostic index][diagnostics].
 
 For raw speed, unsafe C# is probably the better option until proven otherwise. NAM aims
 to let you stay comfortably trapped in safe C#'s pit of success while still enjoying
@@ -80,6 +45,34 @@ allocation is not a measured bottleneck. NAM's fast types store unmanaged values
 (numbers and structs without references). The
 [allocator selection guide][allocator-selection] starts with the managed options and
 says when NAM is worth it.
+
+## How much faster?
+
+It depends on how much of your time goes into memory. The repository's voxel-meshing
+demo does the same work twice, once in carefully optimized safe C# and once with NAM,
+and checks that both produce identical output.
+
+| | Time per request (median of 9) |
+|---|---|
+| Safe C# | 103.4 ms |
+| NAM | 50.6 ms |
+| Safe / NAM | 2.05x (1.88x to 2.16x across rounds) |
+
+Measured on NAM 0.3.0: one worker, 256 MiB requests, process CPU time per request, on a
+4-core i5-7600K under Linux. Much of the gain comes from NAM writing results straight
+into the buffer that is uploaded to the GPU; the safe version builds them in managed
+arrays and copies them over.
+
+Reproduce it from the repository root (Linux, about a minute):
+
+```bash
+dotnet run --project .Demos/01-VoxelChunkPipeline/InProcessBenchmark/Supprocom.NativeAllocationManagement.Demos.VoxelChunkPipeline.InProcessBenchmark.csproj -c Release -- compare
+```
+
+Results depend on workload, memory limits and runtime configuration. Measure your
+own: the [voxel demo][voxel-guide] has runnable commands, and the
+[builder benchmark][builder-benchmark] compares known-size and growing output.
+Compare elapsed time and total managed/native allocation for your workload.
 
 ## The building blocks
 
@@ -206,34 +199,6 @@ NativeBuilder<uint> leaked = new();
 
 Every rule has a page in the [diagnostic index][diagnostics]. IDE code fixes can apply
 the [common fixes][analyzer-usability]; they never switch the checks off.
-
-## How much faster?
-
-It depends on how much of your time goes into memory. The repository's voxel-meshing
-demo does the same work twice, once in carefully optimized safe C# and once with NAM,
-and checks that both produce identical output.
-
-| | Time per request (median of 9) |
-|---|---|
-| Safe C# | 103.4 ms |
-| NAM | 50.6 ms |
-| Safe / NAM | 2.05x (1.88x to 2.16x across rounds) |
-
-Measured on NAM 0.3.0: one worker, 256 MiB requests, process CPU time per request, on a
-4-core i5-7600K under Linux. Much of the gain comes from NAM writing results straight
-into the buffer that is uploaded to the GPU; the safe version builds them in managed
-arrays and copies them over.
-
-Reproduce it from the repository root (Linux, about a minute):
-
-```bash
-dotnet run --project .Demos/01-VoxelChunkPipeline/InProcessBenchmark/Supprocom.NativeAllocationManagement.Demos.VoxelChunkPipeline.InProcessBenchmark.csproj -c Release -- compare
-```
-
-Results depend on workload, memory limits and runtime configuration. Measure your
-own: the [voxel demo][voxel-guide] has runnable commands, and the
-[builder benchmark][builder-benchmark] compares known-size and growing output.
-Compare elapsed time and total managed/native allocation for your workload.
 
 ## Documentation
 
