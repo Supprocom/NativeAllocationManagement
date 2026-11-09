@@ -9,7 +9,7 @@
     <PackageId>Supprocom.NativeAllocationManagement</PackageId>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
-    <Version>0.3.1</Version>
+    <Version>0.3.2</Version>
     <Authors>Supprocom</Authors>
     <Company>Supprocom</Company>
     <Description>Explicit C# owners for growable native builders, reusable typed pools, cross-thread transferable leases, lexical regions, and heterogeneous native arenas.</Description>
