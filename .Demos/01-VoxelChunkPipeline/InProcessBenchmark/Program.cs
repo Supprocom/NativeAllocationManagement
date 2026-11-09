@@ -41,12 +41,15 @@ catch (Exception exception) when (exception is FormatException or ArgumentExcept
 
 static long ParseDemand(string mib) => long.Parse(mib, CultureInfo.InvariantCulture) * 1024 * 1024;
 
+// The caller owns and disposes the returned session.
+#pragma warning disable CA2000
 static WorkerLocalPressureSession CreateSession(string mode) => mode switch
 {
     "nam" => new("NAM", static () => new NativeSession(), maximumWorkerCount: 1),
     "safe" => new("SafeCSharp", static () => new SafeSession(), maximumWorkerCount: 1),
     _ => throw new ArgumentException($"Unknown mode '{mode}'; expected nam or safe.", nameof(mode)),
 };
+#pragma warning restore CA2000
 
 static PressureProfileRequest CreateRequest(long demand) => new(
     (int)(demand * 100 / CapBytes), CapBytes, demand, 1e9, 0x4E414D, 1, int.MaxValue,
@@ -65,15 +68,16 @@ static void Check(PressureProfileResult result)
 
 static void RunVerify(string mode, long demand, string[] seeds)
 {
-    using WorkerLocalPressureSession session = CreateSession(mode);
-    PressureProfileRequest request = CreateRequest(demand);
-    long ordinal = 1;
-    Check(session.Run(WarmupRequest(request, ordinal++), static _ => { }));
     foreach (string seedText in seeds)
     {
+        // A session's plan is fixed by the seed of its first request, so each seed gets its own session.
         int seed = Convert.ToInt32(seedText, 16);
+        using WorkerLocalPressureSession session = CreateSession(mode);
+        PressureProfileRequest request = CreateRequest(demand) with { Seed = seed };
+        long ordinal = 1;
+        Check(session.Run(WarmupRequest(request, ordinal++), static _ => { }));
         PressureProfileResult result = session.Run(
-            request with { Seed = seed, ExecutionMode = PressureExecutionMode.Verification, RequestOrdinal = ordinal++ },
+            request with { ExecutionMode = PressureExecutionMode.Verification, RequestOrdinal = ordinal++ },
             static _ => { });
         Check(result);
         StringBuilder text = new();
