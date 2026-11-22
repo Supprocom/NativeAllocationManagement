@@ -47,7 +47,13 @@ Analyzer errors in this page:
 | `slotCapacity` | Elements per slot. |
 | `slotsPerPage` | Slots per native allocation. |
 
-The example above is 64 slots of 4096 bytes in 4 pages. Each page is one native allocation. A shorter last page holds the remaining slots. Slots are packed at the CLR element stride, with no cache-line padding and no SIMD-alignment guarantee. The pool asks the budget for all pages before it allocates any, and frees what it got if one allocation fails. Its charge is exactly the slot bytes. If the budget cannot hold them, the constructor throws `NativeMemoryBudgetExceededException` and the budget's committed and reserved bytes stay at 0. Pass `null` as the budget to run without a limit.
+The example above is 64 slots of 4096 bytes in 4 pages. Each page is one native allocation. A shorter last page holds the remaining slots.
+
+Slots are packed one after another at the element size, with no cache-line padding and no SIMD-alignment guarantee.
+
+The pool asks the budget for all pages before it allocates any, and frees what it got if one allocation fails. Its charge is exactly the slot bytes. If the budget cannot hold them, the constructor throws `NativeMemoryBudgetExceededException` and the budget's committed and reserved bytes stay at 0.
+
+Pass `null` as the budget to run without a limit.
 
 The pool belongs to the thread that created it. Using it from another thread throws `NativeAllocationStateException`.
 
@@ -132,7 +138,7 @@ Small leases still use a whole slot, and a slot keeps its page. If most leases a
 
 With a budget that has [tracing](memory-budgets.md#owner-identities-and-optional-tracing) enabled, the pool emits `PageAcquired`, `Prepared`, `Trimmed` and `Released` events, and `Moved` for each `Move`.
 
-Renting, moving, reading, returning, snapshots and refusals allocate no managed or native memory while the pool keeps its pages. Your callbacks can still allocate. There is no refill, and no promise about page faults or other runtime work.
+Renting, moving, reading, returning, snapshots and refusals allocate no managed or native memory while the pool keeps its pages. Your callbacks can still allocate.
 
 ## Terms
 

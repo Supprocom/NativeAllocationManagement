@@ -1,6 +1,8 @@
 # Mapped arenas and grouped operations
 
-A prepared arena can run on memory somebody else provides, such as a memory-mapped file. NAM carves ranges out of it and never allocates the payload. Grouped operations then create or read several scoped ranges in one call.
+Use a *mapped arena* when the memory comes from somewhere else, such as a memory-mapped file. NAM carves ranges out of the buffer you provide and never allocates the data itself. *Grouped operations* then create or read several ranges in one call.
+
+An arena has two fixed areas, called *lanes*: the ordinary lane (ranges end at `Reset()`) and the scoped lane (ranges end at `RecycleScoped()`). See [prepared arenas](prepared-arenas.md).
 
 ```csharp
 using System.Runtime.InteropServices;
@@ -68,24 +70,28 @@ Everything else about the arena works as in [prepared arenas](prepared-arenas.md
 | The start address is 64-byte aligned. | `ArgumentException` |
 | If the scoped lane is not empty, `ordinaryBytes` is a multiple of 64. | `ArgumentException` |
 
-Both lanes are fixed: they cannot grow or map more memory. NAM allocates one small aligned header block outside your buffer (128 bytes for two lanes) and writes only to the ranges you ask for. The budget charges that block, not your buffer. Count your provider's own allocation and alignment costs yourself if you cap the application's memory.
+Both lanes are fixed: they cannot grow or map more memory. NAM writes only to the ranges you ask for.
+
+NAM allocates one small header block of its own for bookkeeping, outside your buffer (128 bytes for two lanes). The budget charges that block, not your buffer. If you cap the application's memory, count your own buffer yourself.
 
 NAM does not check that your `SafeBuffer` honours its own contract.
 
 ## 2. Dispose
 
-Disposing the arena releases the headers and the hold on your buffer. Disposing the buffer first does not free memory that the arena still holds.
+Disposing the arena releases the header block and NAM's hold on your buffer. Disposing the buffer first does not free memory that the arena still holds.
 
 ## Group several ranges
 
-`NativeLeaseOperations.InitializeScoped` and `TryInitializeScoped` create four or eight scoped ranges under one owner and call one initializer. `source` is an existing lease of the same arena that the initializer can read.
+`NativeLeaseOperations.InitializeScoped` and `TryInitializeScoped` create four or eight scoped ranges in one call and run one initializer. `source` is a lease from the same arena that the initializer can read.
 
 | Call | When the scoped lane is full |
 |---|---|
 | `InitializeScoped(source, arena, lengths..., initializer, out leases...)` | throws |
 | `TryInitializeScoped(source, arena, lengths..., initializer, out leases...)` | returns `false`, before the initializer runs |
 
-Returning from the initializer means every span is completely written. If it throws, or the lane is full, all the scoped ranges are rolled back, the outputs are default, and ranges you created earlier stay valid. `TryInitializeScoped` returns `false` only for lack of space. Bad authority, a negative length, an arena that is not prepared, and a failing initializer throw.
+Returning from the initializer means every span is completely written. If the initializer throws, or the lane is full, all the new ranges are rolled back and the outputs are default. Ranges you created earlier stay valid.
+
+`TryInitializeScoped` returns `false` only for lack of space. These throw instead: a stale, default or foreign `source`, a negative length, an arena that is not prepared, and a failing initializer.
 
 Use the outputs only when `TryInitializeScoped` returned `true`:
 
@@ -99,18 +105,13 @@ _ = a1.Read(static view => view[0]);
 
 ## Read several ranges
 
-`NativeLeaseOperations.Access` has overloads for 2, 3, 4, 5, 7 and 8 leases of the same arena and one callback that sees all of their views. Every lease is checked before the callback starts, so a stale, default or foreign lease fails without exposing any view. `Reset`, `RecycleScoped`, trim and disposal cannot run while the callback does.
+`NativeLeaseOperations.Access` has overloads for 2, 3, 4, 5, 7 and 8 leases of the same arena. One callback sees all of their views.
 
-Analyzer messages in this page:
-
-| ID | What it catches | How to fix |
-|---|---|---|
-| [NAM1050](diagnostics/NAM1050.md) | Using the outputs of `TryInitializeScoped` without checking the result | Use them only when it returned `true` |
-| [NAM1020](diagnostics/NAM1020.md) | A scoped batch that is not recycled on every exit | `RecycleScoped()` in a `finally` |
+Every lease is checked before the callback starts, so a stale, default or foreign lease fails without exposing any view. `Reset`, `RecycleScoped`, trim and disposal cannot run while the callback does.
 
 ## Recycling a batch
 
-A scoped batch ends with `RecycleScoped()` on every path, including exceptions. Put it in a `finally`, as in the first example. The analyzer warns when a batch is never recycled:
+A scoped batch ends with `RecycleScoped()` on every path, including exceptions. Put it in a `finally`, as in the first example. The analyzer warns when a batch is never recycled ([NAM1020](diagnostics/NAM1020.md)):
 
 ```csharp
 // WRONG: warning NAM1020 (the scoped batch is never recycled)
@@ -140,4 +141,5 @@ Trimming frees a lane only when no range in it is live. The header block is free
 |---|---|
 | Mapped arena | An arena whose memory comes from a `SafeBuffer` you provide. |
 | Header block | NAM's small bookkeeping block, allocated outside your buffer. |
+| Lane | One fixed area of the arena: ordinary or scoped. |
 | Scoped batch | The ranges created since the last `RecycleScoped()`. |

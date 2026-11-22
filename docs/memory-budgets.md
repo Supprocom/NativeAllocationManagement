@@ -2,7 +2,7 @@
 
 A `NativeMemoryBudget` caps the native memory that NAM owners request. Give several owners the same budget and they draw from one limit.
 
-A budget does not claim to bound process RSS, CLR object headers, external storage owned by another provider, or opaque native allocator bookkeeping. Borrowed storage and managed metadata require separate accounting and preparation limits.
+A budget does not limit process memory (RSS), CLR object headers, the allocator's own bookkeeping, or storage that someone else owns. Memory lent to an owner by someone else (borrowed storage) and managed-heap metadata are not counted. Limit those separately.
 
 ```csharp
 using Supprocom.NativeAllocationManagement;
@@ -28,8 +28,10 @@ Budgeted constructors take every argument; none is optional.
 |---|---|
 | `NativeBuilder<T>` | `new(budget, preLease)` |
 | `NativeWorkspace<T>` | `new(budget, preLease)` |
-| `NativePool<T>`, `NativeConcurrentPool<T>` | `new(budget, preLease, preAllocateBytes, returnMemoryOnDispose, ...)` |
-| `NativeArena`, `NativeRegion`, `NativeConcurrentArena` | `new(budget, preAllocateBytes, returnMemoryOnDispose, ...)` |
+| `NativePool<T>` | `new(budget, preLease, preAllocateBytes, returnMemoryOnDispose)` |
+| `NativeConcurrentPool<T>` | the same, plus `doNotLeaseOnDeclaration` |
+| `NativeArena`, `NativeRegion` | `new(budget, preAllocateBytes, returnMemoryOnDispose)` |
+| `NativeConcurrentArena` | the same, plus `doNotLeaseOnDeclaration` |
 | `NativePreparedPool<T>` | [prepared pools](prepared-pools.md) |
 | `NativeArena` with exact lane bounds | [prepared arenas](prepared-arenas.md) |
 | `NativeArena` that grows and trims | [arena retention policy](arena-retention-policy.md) |
@@ -56,21 +58,20 @@ When full is a normal outcome, ask first. `TryEnsureCapacity(total)` takes the *
 | Growth | The whole new extent is admitted while the old one is still charged, so growing needs room for both. |
 | Complete and move | `Complete()` and moving a transfer do not release the charge. Dispose does. |
 | Growth near the ceiling | If the preferred larger size does not fit, growth falls back to the exact capacity needed. `TryEnsureCapacity` returns `false` only if even that does not fit. |
-| Kept storage | An owner that keeps storage for reuse (`NativeMemoryReturn.Reuse`) stays charged after disposal. Before refusing, the budget takes that storage back. A budget created with a trace capacity keeps no storage: owners free it on disposal. |
+| Kept storage | An owner that keeps storage for reuse (`NativeMemoryReturn.Reuse`) stays charged after disposal. Before refusing, the budget takes that storage back. |
+| Tracing | A budget created with a trace capacity keeps no storage: owners free it on disposal. |
 | Not charged | Ranges provided by someone else (`BorrowedBytes`) and unknown allocator bookkeeping. |
 
-Measured with an unlimited budget:
+Examples of what an owner is charged (on Unix, where sizes round up to 64 bytes):
 
 | Owner | Charge |
 |---|---|
-| `NativeBuilder<int>` or `NativeWorkspace<int>`, 100 elements | 400 bytes: no header, no padding |
-| `NativePreparedPool<int>`, 10 slots of 10 | 400 bytes: exactly the slot bytes |
+| `NativeBuilder<int>` or `NativeWorkspace<int>`, 100 elements | 400 bytes: the elements only |
+| `NativePreparedPool<int>`, 10 slots of 10 | 400 bytes: the slots only |
 | `NativePool<int>`, 100 elements | 448 bytes |
-| `NativeArena` or `NativeRegion`, 100 usable bytes | 192 bytes: 64-byte header plus usable bytes, rounded up |
-| Prepared arena, 1024 + 1024 | 2176 bytes |
-| Mapped arena headers | 128 bytes; your buffer is not charged |
+| `NativeArena` or `NativeRegion`, 100 usable bytes | 192 bytes: a 64-byte header plus the usable bytes, rounded up |
 
-Rounding to 64 bytes happens on Unix. Windows passes the size through.
+Read the real numbers for your owners from `CaptureStatistics()`.
 
 ## Read the budget
 
@@ -106,7 +107,7 @@ The byte totals measure what NAM requested. They do not include allocator overhe
 
 ### Owner statistics
 
-`GetStatistics()` exists on `NativeBuilder<T>`, `NativeWorkspace<T>`, the pools, the arenas and `NativeRegion`. A `NativeTransfer<T>` has `CaptureSnapshot()` instead; `NativeShared<T>` and `PreparedPooled<T>` have neither. Capture it when the owner is idle, so the numbers add up.
+`GetStatistics()` exists on `NativeBuilder<T>`, `NativeWorkspace<T>`, the pools, the arenas and `NativeRegion`. `NativeTransfer<T>`, `NativeShared<T>` and `NativeWeak<T>` have `CaptureSnapshot()` instead. `PreparedPooled<T>` has neither. Capture it when the owner is idle, so the numbers add up.
 
 | Field | Meaning |
 |---|---|
@@ -143,14 +144,14 @@ for (int index = 0; index < count; index++)
 |---|---|
 | `Sequence` | Event number. |
 | `TimestampTicks` | `Stopwatch` ticks; divide by `Stopwatch.Frequency`. Not UTC. |
-| `Kind` | `Admitted`, `Allocated`, `Reallocated`, `Released`, `Rejected`, `AcquisitionFailed`, plus sharing, reservation, page and generation kinds. |
-| `RequestedBytes` | The extent the event is about. Its exact meaning depends on `Kind`: backing and admission events use the complete native extent, layout and copy events use payload extents. |
+| `Kind` | What happened: `Admitted`, `Allocated`, `Reallocated`, `Released`, `Rejected`, `AcquisitionFailed`, plus sharing, reservation, page and generation kinds. |
+| `RequestedBytes` | The size the event is about. Backing and admission events use the full native block; layout and copy events use the data size. |
 | `PreviousBytes` | The extent before a `Reallocated` event; zero for every other kind. |
 | `CommittedBytes`, `ReservedBytes` | Budget totals after the transition. |
 | `BudgetId`, `OwnerId` | Where it happened. `OwnerId` is `null` for internal operations that have no owner. |
 | `AllocationOrdinal` | The owner's n-th backing block, or `null` if the event has none. |
 | `Generation` | Generation number for generation events, otherwise `null`. |
-| `CorrelationId` | Meaning depends on the kind: pointer or control identity for ownership events, layout descriptor for layout events, generation for generation events. |
+| `CorrelationId` | An id that links related events. What it identifies depends on `Kind`. |
 
 Tracing records admissions, refusals, acquisitions, resizes, releases, prepared page events and generation events. It does not record each element, callback or reuse of warm storage. When the ring is full, the oldest events are overwritten and counted in `DroppedTraceEventCount`.
 

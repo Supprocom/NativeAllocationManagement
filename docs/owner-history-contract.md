@@ -31,7 +31,7 @@ Console.WriteLine($"fresh={stats.FreshSegmentAllocationCount} trims={stats.TrimC
 | `TrimmedBytes` | bytes physically released by trimming |
 | `HistoryOverflowed` | `true` once a total would pass `long.MaxValue` |
 
-A total stops at `long.MaxValue` and sets `HistoryOverflowed`. Nothing throws and no operation fails because of it. Gauges stay exact, so do not compute them by subtracting totals.
+A total stops at `long.MaxValue` and sets `HistoryOverflowed`. Nothing throws and no operation fails because of it. Gauges are always exact, so read them directly. Do not derive them by subtracting totals.
 
 ## When to capture
 

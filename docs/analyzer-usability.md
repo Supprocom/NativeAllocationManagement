@@ -2,7 +2,7 @@
 
 Every diagnostic has a [help page](diagnostics/README.md). The package also ships a code-fix provider for editors that support Roslyn code fixes. The analyzer itself runs in every build, with or without the provider.
 
-The provider offers "Use verified lexical cleanup" for four diagnostics:
+The provider offers one fix, "Use verified lexical cleanup", for four diagnostics. It rewrites the declaration as a `using` declaration:
 
 | ID | Owner it fixes |
 |---|---|

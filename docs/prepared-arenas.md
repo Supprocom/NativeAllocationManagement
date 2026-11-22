@@ -24,7 +24,7 @@ The arena belongs to the thread that created it. Using it from another thread th
 
 `new NativeArenaPreparation(ordinaryBytes, scopedBytes)` sets the usable bytes of each lane. Zero is allowed. Alignment between ranges uses up usable bytes.
 
-The constructor asks the budget for both lanes before it allocates either. The budget is charged the usable bytes plus NAM's headers and allocator padding (2176 bytes for the example above). If the budget cannot hold both, the constructor throws `NativeMemoryBudgetExceededException` and the budget's committed and reserved bytes stay at 0.
+The constructor asks the budget for both lanes before it allocates either. The budget is charged the usable bytes plus NAM's headers and allocator padding (2176 bytes for the example above: 2048 usable bytes plus 128 for headers and padding). If the budget cannot hold both, the constructor throws `NativeMemoryBudgetExceededException` and the budget's committed and reserved bytes stay at 0.
 
 ## 2. Scratch
 
@@ -105,7 +105,7 @@ finally
 | `InitializerFailureCount` | Initializers that threw or did not write the range. |
 | `HistoryOverflowed` | A count reached `long.MaxValue`; counts are lower bounds. |
 
-A prepared arena has no per-lease table: its managed cost is the owner object and your initializer. Compare it with equivalent prepared managed storage including creation and teardown, not only the allocation count.
+A prepared arena allocates no managed memory per lease. The only managed allocations are the owner object and whatever your initializer does. Compare it with equivalent prepared managed storage including creation and teardown, not only the allocation count.
 
 ## Terms
 

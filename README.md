@@ -34,6 +34,25 @@ dotnet add package Supprocom.NativeAllocationManagement --version 0.3.4
 The full walkthrough is in [Getting started][getting-started], and every rule has a page in
 the [diagnostic index][diagnostics].
 
+## A first example
+
+Rent a buffer from a pool, fill it, read it back. The buffer returns to the pool at the end of the method.
+
+```csharp
+using Supprocom.NativeAllocationManagement;
+
+using NativePool<int> pool = new(preLease: 1_024);
+using Pooled<int> values = pool.Rent(128, 0);
+
+Span<int> span = values.AsSpan();
+for (int i = 0; i < span.Length; i++)
+{
+    span[i] = i * 2;
+}
+
+int first = values.Read(static view => view[0]);
+```
+
 ## What it is good for
 
 - **Hot loops that need temporary buffers.** Parsing, serialization, image and audio
@@ -78,8 +97,7 @@ dotnet run --project .Demos/01-VoxelChunkPipeline/InProcessBenchmark/Supprocom.N
 ```
 
 Results depend on workload, memory limits and runtime configuration. Measure your
-own: the [voxel demo][voxel-guide] has runnable commands, and the
-[builder benchmark][builder-benchmark] compares known-size and growing output.
+own: the [voxel demo][voxel-guide] has runnable commands.
 Compare elapsed time and total managed/native allocation for your workload.
 
 ## The building blocks
@@ -98,7 +116,8 @@ Compare elapsed time and total managed/native allocation for your workload.
 `NativePool<T>` and `NativeArena` have thread-safe versions (`NativeConcurrentPool<T>`,
 `NativeConcurrentArena`). `NativeTransfer<T>`, `NativeShared<T>` and `NativeWeak<T>`
 are unique, shared and weak ownership, like C++'s `unique_ptr`, `shared_ptr` and
-`weak_ptr`. All of them store unmanaged values only.
+`weak_ptr`. Element types must be unmanaged, except for `NativeConcurrentPool<T>`, which
+has no such constraint.
 
 ## Mistakes the analyzer rejects
 
@@ -106,18 +125,25 @@ The bundled analyzer turns ownership mistakes into compile errors.
 
 ```csharp
 // WRONG, does not compile: NAM1025 (transfer never disposed or moved)
+using NativeBuilder<uint> builder = new();
 NativeTransfer<uint> output = builder.Complete();
+```
 
+```csharp
 // WRONG, does not compile: NAM1029 (builder already completed)
+using NativeBuilder<uint> builder = new();
+using NativeTransfer<uint> output = builder.Complete();
 builder.Append(5u);
+```
 
+```csharp
 // WRONG, does not compile: NAM1031 (builder never completed or disposed)
 NativeBuilder<uint> leaked = new();
 ```
 
 | ID | What it catches | How to fix |
 |---|---|---|
-| [NAM1051](https://github.com/Supprocom/NativeAllocationManagement/blob/main/docs/diagnostics/NAM1051.md) | A span used after its lease ended | Take a new span from a current lease |
+| [NAM1051](https://github.com/Supprocom/NativeAllocationManagement/blob/main/docs/diagnostics/NAM1051.md) | A span used after the buffer it points into was returned | Take a new span while the buffer is still rented |
 | [NAM1025](https://github.com/Supprocom/NativeAllocationManagement/blob/main/docs/diagnostics/NAM1025.md) | A transfer not disposed or moved | Use a `using` declaration |
 | [NAM1029](https://github.com/Supprocom/NativeAllocationManagement/blob/main/docs/diagnostics/NAM1029.md) | A builder used after `Complete` or `Dispose` | Do all appends before `Complete` |
 | [NAM1031](https://github.com/Supprocom/NativeAllocationManagement/blob/main/docs/diagnostics/NAM1031.md) | A builder never completed or disposed | Use a `using` declaration |
@@ -147,7 +173,6 @@ complete terms and [NOTICE][notice] for the project notice and source offer.
 [analyzer-usability]: https://github.com/Supprocom/NativeAllocationManagement/blob/main/docs/analyzer-usability.md
 [memory-budgets]: https://github.com/Supprocom/NativeAllocationManagement/blob/main/docs/memory-budgets.md
 [statistics]: https://github.com/Supprocom/NativeAllocationManagement/blob/main/docs/diagnostics.md
-[builder-benchmark]: https://github.com/Supprocom/NativeAllocationManagement/blob/main/docs/builder-benchmark.md
 [voxel-guide]: https://github.com/Supprocom/NativeAllocationManagement/blob/main/.Demos/01-VoxelChunkPipeline/README.md
 [license]: https://github.com/Supprocom/NativeAllocationManagement/blob/main/LICENSE
 [notice]: https://github.com/Supprocom/NativeAllocationManagement/blob/main/NOTICE

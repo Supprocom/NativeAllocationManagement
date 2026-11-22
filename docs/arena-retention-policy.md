@@ -32,6 +32,8 @@ Every argument of this constructor is required. Other arena constructors do not 
 
 ## Policy
 
+An arena has two areas, called lanes: the ordinary lane (`Scratch`) and the scoped lane (`ScratchScoped`); see [prepared arenas](prepared-arenas.md).
+
 `preAllocateBytes` is a constructor argument of the arena, not of the policy: the usable bytes reserved at creation. It does not change the growth threshold. A policy has two values:
 
 | Argument | Meaning |
@@ -53,7 +55,7 @@ If the budget is nearly full, the arena can pick a smaller segment than the ceil
 | `RecycleScoped()` | The same, after emptying the scoped lane. |
 | `MaintainRetention()` | The same, on demand. Returns the bytes released. |
 
-A segment that is partly used is not idle: all of it stays charged until its generation or scope ends. Live scratch ranges are never evicted to reach the target. `MaintainRetention()` leaves live ranges valid, but throws while a callback or an initializer is running, before it releases anything.
+A segment that is partly used is not idle: all of it stays charged until its generation (the period before `Reset`) or scope ends. Live scratch ranges are never evicted to reach the target. `MaintainRetention()` leaves live ranges valid. It throws, and releases nothing, while a callback or an initializer is running.
 
 Nothing runs on a timer. The arena looks at its segments only when it grows or when one of these calls runs.
 

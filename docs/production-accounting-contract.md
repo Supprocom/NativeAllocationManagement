@@ -16,10 +16,10 @@ The snapshot allocates nothing. For a per-budget view see [memory budgets](memor
 
 ## Gauges and event counters
 
-| Group | Fields | Available |
-|---|---|---|
-| Byte gauges | `OutstandingNativeBytes`, `PeakOutstandingNativeBytes`, `DetachedNativeBytes`, `RetiredNativeBytes`, `RetainedNativeBytes` | Always |
-| Event counters | `AllocationCount`, `ReallocationCount`, `FreeCount`, `ZeroedAllocationCount`, `DetachedGenerationCount`, `ReusedNativeSegmentCount`, `ReclaimedRangeReuseCount`, `ReclaimedRangeReuseBytes`, `BumpTraversalVisitCount`, `StorageClearCount`, `StorageClearBytes`, `WrittenClearBytes`, `CopiedBytes` | Only in detailed mode, otherwise `0` |
+There are two kinds of fields:
+
+- **Byte gauges** say how much native memory NAM holds right now: `OutstandingNativeBytes`, `PeakOutstandingNativeBytes`, `DetachedNativeBytes`, `RetiredNativeBytes`, `RetainedNativeBytes`. They are always available.
+- **Event counters** count things that happened: allocations, reallocations, frees, clears, copies and reuse (the full list is in the table below). They stay `0` unless detailed mode is on.
 
 Detailed mode costs cycles on hot paths, so it is off by default. Turn it on before the process starts. `NativeMemoryDiagnostics.DetailedCountersEnabled` tells you which mode is active.
 
@@ -56,14 +56,13 @@ NAM_DETAILED_COUNTERS=1 dotnet run
 | `StorageClearCount`, `StorageClearBytes` | Clears NAM performed on non-empty ranges, and the bytes they visited. |
 | `WrittenClearBytes` | Bytes actually zeroed. Can be lower than `StorageClearBytes` because empty reference slots are skipped. |
 | `CopiedBytes` | Bytes copied by NAM bulk operations. |
-| `MetricsEpoch` | Measurement epoch. Only internal test resets advance it. |
 | `HistoryOverflowed` | An event or byte total reached `long.MaxValue`. Gauges stay exact. |
 
 Clears and copies that you do through `AsSpan()` are not counted.
 
 ## Reading the numbers
 
-- Read at a point where no other thread allocates or frees. Each thread keeps its own running change, and a snapshot adds them, so the result is exact only then.
-- The peak is exact while one thread allocates. When several allocate at once it can miss up to 256 KiB per other thread.
+- Read at a point where no other thread allocates or frees. Each thread counts its own changes and the snapshot adds them up, so the total is exact only then.
+- The peak is exact while one thread allocates. When several threads allocate at once, it can be low by up to 256 KiB per other thread.
 - Counters saturate at `long.MaxValue` and set `HistoryOverflowed`; they never wrap or throw.
 - The snapshot does not include allocator-internal copying or RSS.

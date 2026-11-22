@@ -2,6 +2,8 @@
 
 Two implementations of one voxel chunk pipeline: expert safe C# (`Span<T>`, stack storage, worker-local `ArrayPool<T>`, no `unsafe`) and the same design with Native Allocation Management (NAM). Both build, render, prerender and upload the same 32 by 32 by 32 chunks, and produce equal typed outputs and equal upload bytes.
 
+The projects are in the repository root, next to `.Demos`.
+
 | Project | Contains |
 |---|---|
 | `SharedContract` | Input, output, workload and result types |
@@ -59,7 +61,7 @@ nam seed 4E414D correct True chunks 32 canonical 44A23E69DCDDC91471F1D5EF62FDACD
 safe seed 4E414D correct True chunks 32 canonical 44A23E69DCDDC91471F1D5EF62FDACD34DA2094D543C08AAB7F1EA13D78F1C3D chunk-evidence 886614B8918E017F14F54443DF542B2485DB439CCE1313FF6277F60DF60F8B51
 ```
 
-`canonical` and `chunk-evidence` are SHA-256 hashes of the output; equal hashes mean equal output.
+`canonical` and `chunk-evidence` are SHA-256 hashes of the output. Equal hashes on the `nam` and `safe` lines mean the outputs are equal.
 
 ## Memory-constrained matrix
 
@@ -75,20 +77,18 @@ $commit = (git rev-parse HEAD).Trim()
 $image = "nam-voxel-pressure:$($commit.Substring(0, 12))"
 
 & .Demos/01-VoxelChunkPipeline/Pressure/run-constrained.ps1 `
-  -RepoRoot E:\source\Supprocom\NativeAllocationManagement `
   -Image $image `
   -CompilationOutputPath artifacts\voxel-compilation-final.json `
   -SetupOnly
 ```
 
-Run the matrix from the repository root:
+Run the matrix from the repository root (the script finds the repository root itself):
 
 ```powershell
 $commit = (git rev-parse HEAD).Trim()
 $image = "nam-voxel-pressure:$($commit.Substring(0, 12))"
 
 & .Demos/01-VoxelChunkPipeline/Pressure/run-constrained.ps1 `
-  -RepoRoot E:\source\Supprocom\NativeAllocationManagement `
   -Image $image `
   -CompilationOutputPath artifacts\voxel-compilation-final.json `
   -OutputPath artifacts\voxel-pressure-final.json `
@@ -102,7 +102,7 @@ How to read it:
 
 - Each profile runs `-SamplesPerProfile` paired samples (default 6, must be even). Each pair uses fresh Safe and NAM containers, and each implementation runs first equally often.
 - `-OutputPath` receives a JSON report: per-sample correctness, timing, GC, cgroup, CPU and native-memory data. A failed sample stays in the report.
-- Before the runtime matrix, a compiler gate requires NAM's compile time and complete build time to each stay within 1.10 times Safe's.
-- With `-Enforce`, the command exits nonzero when any gate fails and writes a terminal report for the failed profile.
-- The wrapper stops a run with no activity for 120 seconds and keeps the latest checkpoint.
+- Before the memory-constrained runs, the script compares the compile time and the full build time of the two versions. It fails if NAM's is more than 1.10 times the Safe version's.
+- With `-Enforce`, the command exits nonzero when any check fails and writes a terminal report for the failed profile.
+- The script stops a run that shows no activity for 120 seconds and keeps the latest checkpoint.
 - The command writes local files only.
