@@ -293,6 +293,39 @@ public readonly ref struct ConcurrentPooled<T>
         }
     }
 
+    /// <summary>Gets a <see cref="Memory{T}"/> over the logical range, for synchronous code that waits on memory-based I/O.</summary>
+    /// <returns>The memory; repeated calls on the same lease allocate nothing.</returns>
+    /// <remarks>
+    /// The memory is valid only while this lease is. After <see cref="Dispose"/>, reading its
+    /// <see cref="Memory{T}.Span"/> throws <see cref="ObjectDisposedException"/>.
+    /// Pinning it keeps the storage alive: disposing the lease while pinned does not throw, and the
+    /// lease is returned after the last pin is released. The memory can be used from another thread
+    /// while this lease is live. Requires storage without managed references.
+    /// </remarks>
+    /// <exception cref="NotSupportedException"><typeparamref name="T"/> is or contains a reference type.</exception>
+    public Memory<T> AsMemory()
+    {
+        if (RuntimeHelpers.IsReferenceOrContainsReferences<T>())
+        {
+            throw new NotSupportedException("Memory<T> requires storage without managed references.");
+        }
+
+        NativeAllocation allocation = GetAllocationState(nameof(AsMemory));
+        if (allocation.LeaseMemory is NativeLeaseMemoryManager<T> cached && cached.AllocationId == _allocationId)
+        {
+            if (!cached.IsLive)
+            {
+                throw new ObjectDisposedException(nameof(ConcurrentPooled<T>), "AsMemory cannot run after disposal.");
+            }
+
+            return cached.CachedMemory;
+        }
+
+        // The operation validates the lease with the pool's own checks and exceptions.
+        EnterOperation(nameof(AsMemory)).Dispose();
+        return NativeLeaseMemoryManager<T>.Create(GetKernel(nameof(AsMemory)), allocation, _allocationId, _length).CachedMemory;
+    }
+
     /// <summary>Returns this synchronized lease exactly once.</summary>
     public void Dispose() =>
         Return(_kernel, _allocationState, _allocationId);
@@ -305,6 +338,12 @@ public readonly ref struct ConcurrentPooled<T>
         NativeAllocation? allocation,
         long allocationId)
     {
+        // A lease whose Memory<T> is pinned returns after the last unpin.
+        if (allocation?.LeaseMemory is { } memory && memory.TryDeferReturn(allocationId))
+        {
+            return;
+        }
+
         if (allocation?.CacheOwner is NativePoolThreadCache cache
             && NativeOwnerKernel.TryReturnCachedLease(cache, allocation, allocationId))
         {

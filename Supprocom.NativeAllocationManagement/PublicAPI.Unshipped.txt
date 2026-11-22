@@ -11,3 +11,6 @@ Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>.Process<TState, TRe
 Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>.Process<TState, TResult>(int length, T value, TState state, Supprocom.NativeAllocationManagement.NativeSpanStateProcessor<T, TState, TResult>! processor) -> TResult
 Supprocom.NativeAllocationManagement.NativeMemoryReturn.Free = 1 -> Supprocom.NativeAllocationManagement.NativeMemoryReturn
 Supprocom.NativeAllocationManagement.NativeMemoryReturn.Reuse = 0 -> Supprocom.NativeAllocationManagement.NativeMemoryReturn
+Supprocom.NativeAllocationManagement.NativeTransfer<T>.AsMemory() -> System.Memory<T>
+Supprocom.NativeAllocationManagement.NativeShared<T>.AsMemory() -> System.ReadOnlyMemory<T>
+Supprocom.NativeAllocationManagement.ConcurrentPooled<T>.AsMemory() -> System.Memory<T>

@@ -340,6 +340,12 @@ internal sealed class NativeSharedControl<T> where T : unmanaged
     // marks expiry and fences before counting readers (BeginReleaseIfReady).
     // Each side therefore sees the other: the reader backs out, or release
     // waits for the last reader, whose exit then completes it.
+    internal int StrongBindingCount => _preparation.StrongBindingCount;
+
+    // Whether a binding may read now: the check EnterRead makes, without entering.
+    internal bool IsReadable(int slot, long version) =>
+        !Volatile.Read(ref _expired) && Volatile.Read(ref _strong).IsActiveConcurrent(slot, version);
+
     internal void EnterRead(NativeTransferControl<T> payload, int slot, long version)
     {
         ref int readers = ref ReaderCount(slot);

@@ -1552,6 +1552,11 @@ internal sealed class NativeAllocation
 
     internal int InitializedLength { get; set; }
 
+    // The memory manager of the lease this record last served through
+    // ConcurrentPooled.AsMemory; it decides whether a return waits for pins.
+    // Null for a record no lease asked memory of.
+    internal INativeLeaseMemory? LeaseMemory;
+
     // The thread cache that holds this record, free or leased; see NativePoolThreadCache.
     internal NativePoolThreadCache? CacheOwner;
 
@@ -8738,6 +8743,11 @@ internal sealed partial class NativeOwnerKernel
 
         ExitGenerationOperation(generation);
     }
+
+    // Ends one operation a pinned Memory<T> held on the generation; the same
+    // exit an operation token makes.
+    internal void ExitPinnedOperation(NativeGeneration generation) =>
+        ExitGenerationOperation(generation);
 
     private void ExitGenerationOperation(NativeGeneration generation)
     {

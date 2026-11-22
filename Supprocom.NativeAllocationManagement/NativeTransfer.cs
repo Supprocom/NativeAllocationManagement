@@ -138,6 +138,19 @@ public readonly struct NativeTransfer<T> : IDisposable
         where TProcessor : struct, INativeSpanProcessor<T, TState, TResult> =>
         GetControl(nameof(Process)).Process<TState, TResult, TProcessor>(_authorityVersion, in state);
 
+    /// <summary>Gets a <see cref="Memory{T}"/> over the initialized range, for APIs that cannot take a span across an await.</summary>
+    /// <returns>The memory; repeated calls on the same binding allocate nothing.</returns>
+    /// <remarks>
+    /// The memory is valid only while this binding owns the storage. After <see cref="Dispose"/> or
+    /// <see cref="Move"/>, reading its <see cref="Memory{T}.Span"/> throws <see cref="ObjectDisposedException"/>.
+    /// Pinning it (as sockets and streams do for an operation) keeps the storage alive: disposing the
+    /// owner while pinned does not throw, and the storage is returned after the last pin is released.
+    /// It can be used from any thread while this binding is valid.
+    /// </remarks>
+    /// <exception cref="InvalidOperationException">This binding no longer owns the storage.</exception>
+    /// <exception cref="ObjectDisposedException">This binding was disposed.</exception>
+    public Memory<T> AsMemory() => GetControl(nameof(AsMemory)).AsMemory(_authorityVersion);
+
     /// <summary>Releases this unique binding exactly once.</summary>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1065", Justification = "Disposal rejects stale authority and active bounded use before freeing native memory.")]
     public void Dispose() => GetControl(nameof(Dispose)).Dispose(_authorityVersion);
@@ -553,6 +566,15 @@ internal partial class NativeTransferControl<T>
                 "NativeTransfer.Dispose cannot run during an active callback.");
         }
 
+        // Pinned Memory<T> keeps the storage: the binding ends here, the
+        // return waits for the last unpin. The pin count is read after the
+        // state CAS above, which orders it against a pin's increment.
+        if (Volatile.Read(ref _pins) != 0)
+        {
+            RetireForPins();
+            return;
+        }
+
         try
         {
             // A handed-off control already published Disposed and may serve
@@ -839,6 +861,11 @@ internal partial class NativeTransferControl<T>
             {
                 return;
             }
+        }
+
+        if (Volatile.Read(ref _pins) != 0)
+        {
+            return;
         }
 
         if (Interlocked.CompareExchange(ref _state, Disposing, Retiring) == Retiring)

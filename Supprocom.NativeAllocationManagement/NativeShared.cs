@@ -42,6 +42,11 @@ public readonly struct NativeShared<T> : IDisposable where T : unmanaged
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(preparation.StrongBindingCount, nameof(preparation));
         ArgumentOutOfRangeException.ThrowIfNegative(preparation.WeakBindingCount, nameof(preparation));
         NativeTransfer<T> observed = source ?? throw new ArgumentNullException(nameof(source));
+        if (observed.CustodyForSharing.MemoryIsPinned)
+        {
+            throw new InvalidOperationException("The transfer has a pinned Memory<T>; release the pin before sharing it.");
+        }
+
         int length = observed.Length;
         NativeMemoryTestHooks.CheckManagedPublicationBoundary("NativeShared.Create", 1, "sharing metadata preparation");
         NativeSharedControl<T> control = NativeSharedControl<T>.Acquire(preparation, observed.Id, length);
@@ -96,6 +101,26 @@ public readonly struct NativeShared<T> : IDisposable where T : unmanaged
     /// <summary>Acquires one weak observer without retaining the payload or its pooled owner.</summary>
     public bool TryDowngrade(out NativeWeak<T> weak, out NativeSharingExhaustionReason reason) =>
         Control.TryDowngrade(_slot, _version, _offset, _length, out weak, out reason);
+
+    /// <summary>Gets a <see cref="ReadOnlyMemory{T}"/> over this binding's range, for APIs that cannot take a span across an await.</summary>
+    /// <returns>The memory; repeated calls on the same binding allocate nothing.</returns>
+    /// <remarks>
+    /// The memory is valid only while this binding is live. After <see cref="Dispose"/>, reading its
+    /// <see cref="ReadOnlyMemory{T}.Span"/> throws <see cref="ObjectDisposedException"/>.
+    /// Pinning it keeps the payload alive: disposing the binding while pinned does not throw, and the
+    /// payload is returned after the last pin is released. It can be used from any thread.
+    /// </remarks>
+    /// <exception cref="InvalidOperationException">This binding is stale, released or expired.</exception>
+    public ReadOnlyMemory<T> AsMemory()
+    {
+        NativeSharedControl<T> control = Control;
+        if (!control.IsReadable(_slot, _version))
+        {
+            throw new InvalidOperationException("This strong binding is stale, released or expired.");
+        }
+
+        return Payload.SharedMemory(control, _slot, _version, _offset, _length);
+    }
 
     /// <summary>Runs one entered synchronous read-only bounded callback.</summary>
     public void Access(NativeReadOnlyLeaseAction<T> action)
