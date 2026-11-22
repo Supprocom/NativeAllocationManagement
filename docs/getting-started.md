@@ -2,17 +2,17 @@
 
 Native Allocation Management (NAM) keeps buffers in native memory, outside the managed heap. The package also bundles a Roslyn analyzer that turns ownership mistakes into compile errors.
 
-Install the released `0.3.3` package (it targets .NET 10):
+Install the released `0.3.4` package (it targets .NET 10):
 
 ```powershell
-dotnet add package Supprocom.NativeAllocationManagement --version 0.3.3
+dotnet add package Supprocom.NativeAllocationManagement --version 0.3.4
 ```
 
 Or add it to the project file:
 
 ```xml
 <ItemGroup>
-  <PackageReference Include="Supprocom.NativeAllocationManagement" Version="0.3.3" />
+  <PackageReference Include="Supprocom.NativeAllocationManagement" Version="0.3.4" />
 </ItemGroup>
 ```
 

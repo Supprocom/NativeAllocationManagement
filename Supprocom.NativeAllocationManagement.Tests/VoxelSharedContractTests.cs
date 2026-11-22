@@ -1716,7 +1716,7 @@ public sealed class VoxelSharedContractTests
                 "Supprocom.NativeAllocationManagement.csproj"));
 
         Assert.Contains(
-            "<Version>0.3.3</Version>",
+            "<Version>0.3.4</Version>",
             project,
             StringComparison.Ordinal);
     }

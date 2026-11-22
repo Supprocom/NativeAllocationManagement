@@ -9,7 +9,7 @@
     <PackageId>Supprocom.NativeAllocationManagement</PackageId>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
-    <Version>0.3.3</Version>
+    <Version>0.3.4</Version>
     <Authors>Supprocom</Authors>
     <Company>Supprocom</Company>
     <PackageLicenseFile>PACKAGE-LICENSE.txt</PackageLicenseFile>
@@ -17,7 +17,7 @@
     <PackageDescription>Commercial or AGPL-3.0. Explicit C# owners for growable native builders, typed pools, transferable leases, lexical regions, and reusable arenas with bundled ownership analysis.</PackageDescription>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageTags>native-memory;native-builder;memory-pool;native-transfer;cross-thread;native-region;native-arena;roslyn-analyzer;scoped-recycling</PackageTags>
-    <PackageReleaseNotes>Dual-licensed: Commercial or AGPL-3.0. Adds the Supprocom Commercial License as an alternative to the AGPL-3.0.
+    <PackageReleaseNotes>Dual-licensed: Commercial or AGPL-3.0. The Supprocom Commercial License 2.0 comes with a Patreon membership (https://www.patreon.com/cw/mkn8rn); see the COMMERCIAL-LICENSE file.
 Security support until November 2031</PackageReleaseNotes>
     <PackageOutputPath>$(MSBuildThisFileDirectory)..\artifacts\packages\</PackageOutputPath>
   </PropertyGroup>
@@ -65,7 +65,7 @@ Security support until November 2031</PackageReleaseNotes>
       <_SupprocomPackageLicenseText>Commercial or AGPL-3.0
 
 This package is available under your choice of two licenses:
-- the Supprocom Commercial License 1.0, for businesses with a registered Supprocom sponsorship (https://github.com/sponsors/Supprocom)%3B or
+- the Supprocom Commercial License 2.0, for businesses with a Patreon membership (https://www.patreon.com/cw/mkn8rn)%3B or
 - the GNU Affero General Public License, version 3 (AGPL-3.0).
 
 Both texts follow. For each version, the COMMERCIAL-LICENSE file in the project's GitHub repository at the commit this package was built from prevails over this copy.
