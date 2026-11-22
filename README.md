@@ -13,6 +13,18 @@ memory management without its usual cost: a bundled Roslyn analyzer turns owners
 mistakes, such as using a buffer after it was returned, into compile errors, and
 runtime checks reject stale handles instead of letting them read reused memory.
 
+For raw speed, unsafe C# is probably the better option until proven otherwise. NAM aims
+to let you stay comfortably trapped in safe C#'s pit of success while still enjoying
+potentially massive gains.
+
+## Install
+
+> **NAM is a regular NuGet package. Add it and you're done.**
+>
+> It runs on the standard .NET runtime and is checked by the normal C# compiler. Its
+> analyzer ships inside the package and runs on its own in `dotnet build` and in your IDE.
+> No custom compiler, no modified runtime, no IL rewriting, nothing to configure.
+
 Install the released `0.3.2` package (it targets .NET 10):
 
 ```powershell
@@ -21,10 +33,6 @@ dotnet add package Supprocom.NativeAllocationManagement --version 0.3.2
 
 The full walkthrough is in [Getting started][getting-started], and every rule has a page in
 the [diagnostic index][diagnostics].
-
-For raw speed, unsafe C# is probably the better option until proven otherwise. NAM aims
-to let you stay comfortably trapped in safe C#'s pit of success while still enjoying
-potentially massive gains.
 
 ## What it is good for
 
