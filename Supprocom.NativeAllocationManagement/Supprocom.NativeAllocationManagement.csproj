@@ -21,7 +21,7 @@
 
 To upgrade: declare a span local scoped when it starts as default and is assigned a lease span later (scoped Span&lt;int&gt; span = default;). A helper that needs a lease's elements should take the span, not the lease.
 
-Analyzer: NAM1001, NAM1012, NAM1013, NAM1040 and NAM1050 messages name the value and the destination instead of placeholders. NAM1012 no longer reports a discarded region lease. NAM1045 and NAM1046 no longer report a Write callback that reads a primitive or enum state. NAM1027, NAM1033 and NAM1040 now also check local functions and top-level helpers.</PackageReleaseNotes>
+Analyzer: NAM1001, NAM1012, NAM1013, NAM1040 and NAM1050 messages name the value and the destination instead of placeholders. NAM1012 no longer reports a discarded region lease. NAM1003 no longer reports a lease that a helper takes as an in, ref or ref readonly parameter. NAM1045 and NAM1046 no longer report a Write callback that reads a primitive or enum state. NAM1027, NAM1033 and NAM1040 now also check local functions and top-level helpers.</PackageReleaseNotes>
     <PackageOutputPath>$(MSBuildThisFileDirectory)..\artifacts\packages\</PackageOutputPath>
   </PropertyGroup>
 
