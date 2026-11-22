@@ -25,10 +25,10 @@ potentially massive gains.
 > analyzer ships inside the package and runs on its own in `dotnet build` and in your IDE.
 > No custom compiler, no modified runtime, no IL rewriting, nothing to configure.
 
-Install the released `0.3.2` package (it targets .NET 10):
+Install the released `0.3.3` package (it targets .NET 10):
 
 ```powershell
-dotnet add package Supprocom.NativeAllocationManagement --version 0.3.2
+dotnet add package Supprocom.NativeAllocationManagement --version 0.3.3
 ```
 
 The full walkthrough is in [Getting started][getting-started], and every rule has a page in

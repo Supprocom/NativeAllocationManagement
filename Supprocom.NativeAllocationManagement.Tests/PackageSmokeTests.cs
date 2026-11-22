@@ -2716,8 +2716,8 @@ public sealed class PackageSmokeTests
             ?? throw new InvalidDataException("The package nuspec does not contain license metadata.");
         Assert.Equal("Supprocom", authors);
         Assert.DoesNotContain("Package Description", description, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal("expression", license);
-        Assert.Equal("AGPL-3.0-only", licenseElement.Value);
+        Assert.Equal("file", license);
+        Assert.Equal("PACKAGE-LICENSE.txt", licenseElement.Value);
         string runtimeHash = HashEntry(archive, "lib/net10.0/Supprocom.NativeAllocationManagement.dll");
         string analyzerHash = HashEntry(archive, "analyzers/dotnet/cs/Supprocom.NativeAllocationManagement.Analyzers.dll");
         string codeFixHash = HashEntry(archive, "analyzers/dotnet/cs/Supprocom.NativeAllocationManagement.CodeFixes.dll");
