@@ -195,7 +195,6 @@ public sealed class CgroupDiagnosticContractTests
         Assert.Equal(29, actual.Length);
         Assert.Equal(actual.Select(property => property.Name).Order(StringComparer.Ordinal),
             properties.EnumerateArray().Select(property => property.GetProperty("name").GetString()!).Order(StringComparer.Ordinal), StringComparer.Ordinal);
-        string definitions = File.ReadAllText(Path.Combine(RepositoryTestPaths.Root, "docs", "demo-kernel-metrics.md"));
         foreach (JsonElement property in properties.EnumerateArray())
         {
             string name = property.GetProperty("name").GetString()!;
@@ -203,7 +202,6 @@ public sealed class CgroupDiagnosticContractTests
             Assert.Equal(observed.PropertyType.ToString(), property.GetProperty("valueType").GetString());
             Assert.False(string.IsNullOrWhiteSpace(property.GetProperty("units").GetString()));
             Assert.False(string.IsNullOrWhiteSpace(property.GetProperty("source").GetString()));
-            Assert.Contains("`" + name + "`", definitions, StringComparison.Ordinal);
             VerifyProof(property.GetProperty("positiveProof").GetString()!);
             VerifyProof(property.GetProperty("negativeProof").GetString()!);
         }

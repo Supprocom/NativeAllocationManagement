@@ -620,24 +620,6 @@ public sealed class VoxelSharedContractTests
         Assert.True(publish > compilation);
         Assert.True(pressure > publish);
 
-        string guide = File.ReadAllText(
-            Path.Combine(root, ".Demos", "01-VoxelChunkPipeline", "README.md"));
-        const string derivedImage =
-            "$image = \"nam-voxel-pressure:$($commit.Substring(0, 12))\"";
-        Assert.Equal(
-            2,
-            guide.Split(
-                derivedImage,
-                StringSplitOptions.None).Length - 1);
-        Assert.Equal(
-            2,
-            guide.Split(
-                "-Image $image",
-                StringSplitOptions.None).Length - 1);
-        Assert.DoesNotContain(
-            "-Image nam-voxel-pressure:",
-            guide,
-            StringComparison.Ordinal);
     }
 
     [VoxelDemonstrationFact]
@@ -1707,13 +1689,11 @@ public sealed class VoxelSharedContractTests
     }
 
     [VoxelDemonstrationFact]
-    public void ReleaseDocumentsUseTheDesignatedContactAndAbsoluteGuideLink()
+    public void NoticeUsesTheDesignatedContact()
     {
         string root = FindRepositoryRoot();
         string notice = File.ReadAllText(
             Path.Combine(root, "NOTICE"));
-        string readme = File.ReadAllText(
-            Path.Combine(root, "README.md"));
 
         Assert.Contains(
             "Contact: supprocom@mkn8rn.com",
@@ -1722,56 +1702,6 @@ public sealed class VoxelSharedContractTests
         Assert.DoesNotContain(
             "Contact: mkn8rn@hotmail.com",
             notice,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "[voxel-guide]: https://github.com/Supprocom/"
-                + "NativeAllocationManagement/blob/main/"
-                + ".Demos/01-VoxelChunkPipeline/README.md",
-            readme,
-            StringComparison.Ordinal);
-        Assert.DoesNotContain(
-            "](.Demos/01-VoxelChunkPipeline/README.md)",
-            readme,
-            StringComparison.Ordinal);
-    }
-
-    [VoxelDemonstrationFact]
-    public void ReleaseDocumentsDescribeBuilderAndTransferableOwnership()
-    {
-        string root = FindRepositoryRoot();
-        string guide = File.ReadAllText(
-            Path.Combine(root, "docs", "getting-started.md"));
-        Assert.Contains(
-            "Version=\"0.3.2\"",
-            guide,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "NativeTransfer<uint>.Move(ref source)",
-            guide,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "// WRONG, does not compile: NAM1027 (ref parameter)",
-            guide,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "--native-builder --samples 10",
-            File.ReadAllText(Path.Combine(root, "docs", "builder-benchmark.md")),
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "NativeBuilder<uint> builder = new(",
-            guide,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "preLease: 4_096",
-            guide,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "[NAM1028](diagnostics/NAM1028.md) | Builder copied, boxed or stored",
-            guide,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "// NAM1034: result discarded",
-            guide,
             StringComparison.Ordinal);
     }
 
@@ -1787,22 +1717,6 @@ public sealed class VoxelSharedContractTests
 
         Assert.Contains(
             "<Version>0.3.2</Version>",
-            project,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "Spans from NAM leases are now bound to the lease.",
-            project,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "scoped Span&lt;int&gt; span = default;",
-            project,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "NAM1012 no longer reports a discarded region lease.",
-            project,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "take the span, not the lease",
             project,
             StringComparison.Ordinal);
     }

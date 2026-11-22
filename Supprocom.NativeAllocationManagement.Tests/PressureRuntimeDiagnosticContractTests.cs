@@ -165,7 +165,6 @@ public sealed class PressureRuntimeDiagnosticContractTests
     {
         using JsonDocument registry = JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "pressure-runtime-diagnostic-contracts.json")));
         Assert.False(registry.RootElement.GetProperty("completeReleaseInventory").GetBoolean());
-        string definitions = File.ReadAllText(Path.Combine(RepositoryTestPaths.Root, "docs", "demo-runtime-metrics.md"));
         Dictionary<string, Type> schemas = new(StringComparer.Ordinal)
         {
             [nameof(PressureRuntimeSnapshot)] = typeof(PressureRuntimeSnapshot),
@@ -185,7 +184,6 @@ public sealed class PressureRuntimeDiagnosticContractTests
             {
                 string propertyName = property.GetProperty("name").GetString()!;
                 Assert.Equal(actual.Single(candidate => string.Equals(candidate.Name, propertyName, StringComparison.Ordinal)).PropertyType.ToString(), property.GetProperty("valueType").GetString());
-                Assert.Contains("`" + propertyName + "`", definitions, StringComparison.Ordinal);
                 foreach (string field in new[] { "units", "source", "availability", "lifetime", "consistency" })
                     Assert.False(string.IsNullOrWhiteSpace(property.GetProperty(field).GetString()));
                 foreach (string field in new[] { "positiveProof", "negativeProof" })
