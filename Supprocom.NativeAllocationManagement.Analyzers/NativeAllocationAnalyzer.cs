@@ -694,6 +694,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 {
                     if (handle.Returned && !handle.Ambiguous && handle.GenerationRelation != GenerationRelationKind.Unknown
                         || handle.IsUsing
+                        || handle.IsBorrowed
                         || handle.Owner.IsRegion
                         || handle.Owner.IsArena && handle.Owner.IsUsing)
                     {
@@ -5812,6 +5813,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         private void ReportPooledBindingReplacement(ISymbol symbol, SyntaxNode syntax)
         {
             if (_handles.TryGetValue(symbol, out HandleState? previous)
+                && !previous.IsBorrowed
                 && !IsHandleEnded(previous)
                 && !previous.Owner.IsArena
                 && !previous.Owner.IsRegion)
@@ -6497,6 +6499,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             {
                 if ((!handle.Returned || handle.Ambiguous || handle.GenerationRelation == GenerationRelationKind.Unknown)
                     && !handle.IsUsing
+                    && !handle.IsBorrowed
                     && !handle.Owner.IsRegion
                     && !(handle.Owner.IsArena && handle.Owner.IsUsing))
                 {
@@ -6655,7 +6658,11 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 isField: false,
                 requiresDeterministicReturn: false,
                 operation.Syntax);
-            HandleState handle = new(symbol, owner, 0, isUsing: false, operation.Syntax);
+            HandleState handle = new(symbol, owner, 0, isUsing: false, operation.Syntax)
+            {
+                // A lease passed by in, ref or ref readonly stays owned by the caller.
+                IsBorrowed = symbol is IParameterSymbol { RefKind: RefKind.In or RefKind.Ref or RefKind.RefReadOnlyParameter }
+            };
             if (symbol is not null)
             {
                 _handles[symbol] = handle;
@@ -8511,6 +8518,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             internal int Generation { get; set; }
             internal bool IsUsing { get; set; }
             internal bool IsScoped { get; set; }
+            internal bool IsBorrowed { get; set; }
             internal bool Returned { get; set; }
             internal bool Ambiguous { get; set; }
             internal bool ConditionalPending { get; set; }
@@ -8524,7 +8532,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 HandleState copy = new(Symbol, owner, Generation, IsUsing, Syntax)
                 {
                     Returned = Returned,
-                    IsScoped = IsScoped
+                    IsScoped = IsScoped,
+                    IsBorrowed = IsBorrowed
                 };
                 copy.Ambiguous = Ambiguous;
                 copy.ConditionalPending = ConditionalPending;
