@@ -67,9 +67,10 @@ int first = values.Read(static view => view[0]);
 - **A hard memory limit.** A budget can cap how much native memory a component may
   use and refuse work before it starts, rather than failing halfway through.
 
-Plain C# is the better choice when your data holds object references, or when
-allocation is not a measured bottleneck. NAM's fast types store unmanaged values
-(numbers and structs without references). The
+Plain C# is the better choice when the values you store contain managed objects, such
+as strings or class instances, or when allocation is not a measured bottleneck. NAM
+keeps its buffers outside the garbage collector's view, so most of its types accept
+only unmanaged element types: numbers, and structs without reference fields. The
 [allocator selection guide][allocator-selection] starts with the managed options and
 says when NAM is worth it.
 
