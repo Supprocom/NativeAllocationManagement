@@ -27,8 +27,8 @@ Security support until November 2031</PackageReleaseNotes>
     <ProjectReference Include="..\Supprocom.NativeAllocationManagement.Analyzers\Supprocom.NativeAllocationManagement.Analyzers.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\Supprocom.NativeAllocationManagement.CodeFixes\Supprocom.NativeAllocationManagement.CodeFixes.csproj" ReferenceOutputAssembly="false" />
     <None Include="..\README.md" Pack="true" PackagePath="README.md" />
-    <None Include="..\LICENSE" Pack="true" PackagePath="LICENSE" />
-    <None Include="..\NOTICE" Pack="true" PackagePath="NOTICE" />
+    <None Include="..\LICENSE" Pack="true" PackagePath="" />
+    <None Include="..\NOTICE" Pack="true" PackagePath="" />
   </ItemGroup>
 
   <Target Name="BuildBundledAnalyzer" BeforeTargets="Build;_IntermediatePack">
