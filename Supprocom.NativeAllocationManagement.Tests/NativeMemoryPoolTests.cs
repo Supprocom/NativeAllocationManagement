@@ -130,8 +130,8 @@ public sealed class NativeMemoryPoolTests
 
         Task writer = Task.Run(async () =>
         {
-            await pipe.Writer.WriteAsync(payload).ConfigureAwait(false);
-            await pipe.Writer.CompleteAsync().ConfigureAwait(false);
+            await pipe.Writer.WriteAsync(payload).ConfigureAwait(true);
+            await pipe.Writer.CompleteAsync().ConfigureAwait(true);
         });
 
         using MemoryStream received = new();
