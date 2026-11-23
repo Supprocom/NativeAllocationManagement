@@ -30,10 +30,33 @@ internal partial class NativeTransferControl<T>
         {
             manager = NativeTransferMemoryManager<T>.Create(this, authorityVersion);
             Volatile.Write(ref _memory, manager);
+            ArmMemory(manager, authorityVersion);
         }
 
         return manager.CachedMemory;
     }
+
+    // A direct block's pointer and length cannot change while one authority version is
+    // Active: the shape is published before Active, and a move, disposal or sharing
+    // conversion ends the version (and clears the manager's pointer, see RetireMemory)
+    // before the storage can go anywhere. A pooled lease can be invalidated by its pool,
+    // and an empty block has no address, so those managers keep the validating path.
+    private void ArmMemory(NativeTransferMemoryManager<T> manager, long authorityVersion)
+    {
+        if (_kernel is null && _length > 0)
+        {
+            manager.Arm(_block.Pointer);
+            // Re-check after publishing the pointer: a disposal that ran meanwhile has already retired it.
+            if (Volatile.Read(ref _state) != Active || Volatile.Read(ref _authorityVersion) != authorityVersion)
+            {
+                manager.Retire();
+            }
+        }
+    }
+
+    // Called once the binding's end is certain, before its storage can be returned or
+    // handed on: a stale Memory<T> then takes the validating path and throws.
+    private void RetireMemory() => Volatile.Read(ref _memory)?.Retire();
 
     internal unsafe Span<T> GetMemorySpan(long authorityVersion)
     {
@@ -202,6 +225,10 @@ internal sealed class NativeTransferMemoryManager<T> : MemoryManager<T>
     private readonly NativeTransferControl<T> _control;
     private int _pins;
     private Memory<T> _memory;
+    // The storage address while the binding is live and its storage is a direct block; zero
+    // otherwise. GetSpan is then one read and a check.
+    private nint _pointer;
+    private int _length;
 
     private NativeTransferMemoryManager(NativeTransferControl<T> control, long version)
     {
@@ -220,7 +247,19 @@ internal sealed class NativeTransferMemoryManager<T> : MemoryManager<T>
         return manager;
     }
 
-    public override Span<T> GetSpan() => _control.GetMemorySpan(Version);
+    internal void Arm(nint pointer)
+    {
+        _length = _memory.Length;
+        Volatile.Write(ref _pointer, pointer);
+    }
+
+    internal void Retire() => Volatile.Write(ref _pointer, 0);
+
+    public override unsafe Span<T> GetSpan()
+    {
+        nint pointer = Volatile.Read(ref _pointer);
+        return pointer != 0 ? new Span<T>((void*)pointer, _length) : _control.GetMemorySpan(Version);
+    }
 
     public override unsafe MemoryHandle Pin(int elementIndex = 0)
     {

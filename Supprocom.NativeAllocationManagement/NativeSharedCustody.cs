@@ -32,6 +32,7 @@ internal partial class NativeTransferControl<T> where T : unmanaged
             return false;
         }
 
+        RetireMemory();
         Volatile.Write(ref _authorityVersion, checked(authorityVersion + 1));
         NativeMemoryBudget? budget = _block.Budget;
         TraceOwnership(budget, NativeMemoryTraceKind.Moved);

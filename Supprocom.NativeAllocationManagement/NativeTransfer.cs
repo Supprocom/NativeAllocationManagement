@@ -566,6 +566,9 @@ internal partial class NativeTransferControl<T>
                 "NativeTransfer.Dispose cannot run during an active callback.");
         }
 
+        // The binding ends here: a Memory<T> taken from it must stop reading.
+        RetireMemory();
+
         // Pinned Memory<T> keeps the storage: the binding ends here, the
         // return waits for the last unpin. The pin count is read after the
         // state CAS above, which orders it against a pin's increment.
@@ -895,6 +898,9 @@ internal partial class NativeTransferControl<T>
             Volatile.Write(ref _state, Active);
             ThrowInactive(nameof(Move), Moved);
         }
+
+        // The old version ends here, moved or consumed: its Memory<T> must stop reading.
+        RetireMemory();
 
         if (NativeOperationAdmission.Close(ref _operationAdmission) + Volatile.Read(ref _loneBorrow) != 0
             && BorrowsRemainActive())
