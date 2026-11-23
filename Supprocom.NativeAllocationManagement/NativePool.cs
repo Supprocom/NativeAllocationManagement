@@ -29,12 +29,28 @@ public sealed partial class NativePool<T> : IDisposable
     {
         get
         {
+#if NAM_ABL_SHAREDLOOKUP
+            // Measurement only: one plain static in place of the thread-static
+            // slot and the lifecycle check (single-threaded runs).
+            NativePool<T>? cached = s_ablationShared;
+            if (cached is not null)
+            {
+                return cached;
+            }
+
+            return s_ablationShared = CreateShared();
+#else
             NativePool<T>? pool = t_shared;
             return pool is not null && pool._lifecycle == NativeOwnerLifecycle.Active
                 ? pool
                 : CreateShared();
+#endif
         }
     }
+
+#if NAM_ABL_SHAREDLOOKUP
+    private static NativePool<T>? s_ablationShared;
+#endif
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static NativePool<T> CreateShared()

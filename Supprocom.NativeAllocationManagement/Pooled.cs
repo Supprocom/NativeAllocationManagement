@@ -8,12 +8,46 @@ namespace Supprocom.NativeAllocationManagement;
 public readonly ref struct Pooled<T>
     where T : unmanaged
 {
+#if !NAM_ABL_SMALLPOOLED
     private readonly NativePool<T>? _kernel;
+#endif
+#if NAM_ABL_FLATSLAB
+    private readonly int _slabIndex;
+    private NativePool<T>.Slab? _slab => _kernel?.SlabAt(_slabIndex);
+#else
     private readonly NativePool<T>.Slab? _slab;
+#endif
     private readonly long _token;
     private readonly int _length;
+#if !NAM_ABL_SMALLPOOLED
     private readonly int _capacity;
+#endif
 
+#if NAM_ABL_FLATSLAB
+    internal Pooled(
+        NativePool<T> kernel,
+        NativePool<T>.Slab slab,
+        long token,
+        int length,
+        int capacity)
+        : this(kernel, slab.Index, token, length, capacity)
+    {
+    }
+
+    internal Pooled(
+        NativePool<T> kernel,
+        int slabIndex,
+        long token,
+        int length,
+        int capacity)
+    {
+        _kernel = kernel;
+        _slabIndex = slabIndex;
+        _token = token;
+        _length = length;
+        _capacity = capacity;
+    }
+#else
     internal Pooled(
         NativePool<T> kernel,
         NativePool<T>.Slab slab,
@@ -21,18 +55,28 @@ public readonly ref struct Pooled<T>
         int length,
         int capacity)
     {
+#if !NAM_ABL_SMALLPOOLED
         _kernel = kernel;
+        _capacity = capacity;
+#else
+        _ = kernel;
+        _ = capacity;
+#endif
         _slab = slab;
         _token = token;
         _length = length;
-        _capacity = capacity;
     }
+#endif
 
     /// <summary>Gets the immutable logical element count.</summary>
     public int Length => _length;
 
     /// <summary>Gets the immutable physical element capacity.</summary>
+    #if NAM_ABL_SMALLPOOLED
+    public int Capacity => _slab?.Capacity ?? 0;
+#else
     public int Capacity => _capacity;
+#endif
 
     /// <summary>Moves this lexical lease without allocating or copying its payload and clears the source.</summary>
     /// <remarks>
@@ -46,7 +90,7 @@ public readonly ref struct Pooled<T>
         NativePool<T> kernel = source.GetKernel(nameof(Move));
         long token = kernel.Move(source._slab!, source._token);
         Pooled<T> destination = new(kernel, source._slab!, token,
-            source._length, source._capacity);
+            source._length, source.Capacity);
         source = default;
         return destination;
     }
@@ -183,10 +227,17 @@ public readonly ref struct Pooled<T>
     }
 
     /// <summary>Returns this slab exactly once.</summary>
+#if NAM_ABL_FLATSLAB
+    public void Dispose() => GetKernel(nameof(Dispose)).ReturnFlat(
+        _slabIndex,
+        _token,
+        _length);
+#else
     public void Dispose() => GetKernel(nameof(Dispose)).Return(
         _slab!,
         _token,
         _length);
+#endif
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal PooledBorrow<T> EnterBorrow(string operation)
@@ -206,7 +257,11 @@ public readonly ref struct Pooled<T>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private NativePool<T> GetKernel(string operation)
     {
+#if NAM_ABL_SMALLPOOLED
+        NativePool<T>? kernel = _slab?.Owner;
+#else
         NativePool<T>? kernel = _kernel;
+#endif
         if (kernel is null)
         {
             ThrowUninitialized(operation);

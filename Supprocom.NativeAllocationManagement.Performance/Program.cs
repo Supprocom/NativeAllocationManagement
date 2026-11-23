@@ -93,6 +93,12 @@ internal static class Program
             return NativeOwnershipFullCostMeasurement.RunCommand(args);
         }
 
+        if (args.Length != 0
+            && args[0] is "--shared-rent-ablation" or "--shared-rent-worker" or "--shared-rent-offsets")
+        {
+            return await SharedRentAblation.RunCommandAsync(args).ConfigureAwait(false);
+        }
+
         if (args is ["--detailed-counters-probe"])
         {
             return DetailedCountersProbe.Run();
