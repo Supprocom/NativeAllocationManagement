@@ -322,7 +322,7 @@ public sealed class NativeMemoryReservationTests
         string[] expected = ["_kernel", "_sharingControl", "_allocationState", "_ownerId",
             "_borrowedBacking", "_block", "_length", "_capacity", "_state",
             "_operationAdmission", "_loneBorrow", "_authorityVersion", "_peakBorrows", "_borrowed", "_payloadReturned", "_returnFailures", "_historyOverflowed",
-            "_sharingAllocationEntered", "_sharingGenerationEntered"];
+            "_sharingAllocationEntered", "_sharingGenerationEntered", "_memory", "_pins", "_sharedMemory"];
         Assert.Equal(expected.Order(StringComparer.Ordinal),
             typeof(NativeTransferControl<int>).GetFields(BindingFlags.Instance | BindingFlags.NonPublic)
                 .Select(static field => field.Name).Order(StringComparer.Ordinal));

@@ -27,9 +27,20 @@ public sealed class NativeSpanLifetimeAnalyzer : DiagnosticAnalyzer
         helpLinkUri: "https://github.com/Supprocom/NativeAllocationManagement/blob/main/docs/diagnostics/NAM1051.md",
         customTags: WellKnownDiagnosticTags.Telemetry);
 
+    private static readonly DiagnosticDescriptor MemoryAfterOwnerEnd = new(
+        "NAM1052",
+        "Owner memory is used after its storage ended",
+        "Memory '{0}' comes from a NAM owner's AsMemory() and is used after '{1}'. A Memory<T> is valid only while its owner is; take a new one from a current owner.",
+        "Supprocom.NativeAllocationManagement",
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true,
+        description: "Memory '{0}' comes from a NAM owner's AsMemory() and is used after '{1}'. A Memory<T> is valid only while its owner is; take a new one from a current owner.",
+        helpLinkUri: "https://github.com/Supprocom/NativeAllocationManagement/blob/main/docs/diagnostics/NAM1052.md",
+        customTags: WellKnownDiagnosticTags.Telemetry);
+
     /// <inheritdoc />
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics =>
-        ImmutableArray.Create(SpanAfterLeaseEnd);
+        ImmutableArray.Create(SpanAfterLeaseEnd, MemoryAfterOwnerEnd);
 
     /// <inheritdoc />
     public override void Initialize(AnalysisContext context)
@@ -57,7 +68,7 @@ public sealed class NativeSpanLifetimeAnalyzer : DiagnosticAnalyzer
     {
         foreach (IOperation block in context.OperationBlocks)
         {
-            if (!block.DescendantsAndSelf().Any(operation => symbols.IsLeaseAsSpan(operation)))
+            if (!block.DescendantsAndSelf().Any(operation => symbols.IsLeaseAsSpan(operation) || symbols.IsOwnerAsMemory(operation)))
             {
                 continue;
             }
@@ -129,12 +140,12 @@ public sealed class NativeSpanLifetimeAnalyzer : DiagnosticAnalyzer
                 continue;
             }
 
-            Walker walker = new(symbols, leases, state.Clone(), (syntax, span, reason) =>
+            Walker walker = new(symbols, leases, state.Clone(), (syntax, span, reason, isMemory) =>
             {
                 Location location = syntax.GetLocation();
                 if (reported.Add(location))
                 {
-                    context.ReportDiagnostic(Diagnostic.Create(SpanAfterLeaseEnd, location, span, reason));
+                    context.ReportDiagnostic(Diagnostic.Create(isMemory ? MemoryAfterOwnerEnd : SpanAfterLeaseEnd, location, span, reason));
                 }
             });
             walker.VisitBlock(block);
@@ -204,6 +215,9 @@ public sealed class NativeSpanLifetimeAnalyzer : DiagnosticAnalyzer
     private static ISymbol? SymbolOf(IOperation? operation) => operation is null ? null : Unwrap(operation) switch
     {
         ILocalReferenceOperation local => local.Local,
+        // owner.Value of a nullable owner is the owner variable itself.
+        IPropertyReferenceOperation { Property.Name: "Value", Instance: { } nullable }
+            when nullable.Type?.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T => SymbolOf(nullable),
         IParameterReferenceOperation parameter => parameter.Parameter,
         IFieldReferenceOperation field => field.Field,
         IPropertyReferenceOperation property => property.Property,
@@ -215,13 +229,13 @@ public sealed class NativeSpanLifetimeAnalyzer : DiagnosticAnalyzer
         private readonly Symbols _symbols;
         private readonly Dictionary<ISymbol, LeaseOrigin> _leases;
         private readonly FlowState _state;
-        private readonly Action<SyntaxNode, string, string>? _report;
+        private readonly Action<SyntaxNode, string, string, bool>? _report;
 
         internal Walker(
             Symbols symbols,
             Dictionary<ISymbol, LeaseOrigin> leases,
             FlowState state,
-            Action<SyntaxNode, string, string>? report)
+            Action<SyntaxNode, string, string, bool>? report)
         {
             _symbols = symbols;
             _leases = leases;
@@ -247,13 +261,13 @@ public sealed class NativeSpanLifetimeAnalyzer : DiagnosticAnalyzer
             switch (operation)
             {
                 case ISimpleAssignmentOperation { Target: ILocalReferenceOperation target } assignment
-                    when Symbols.IsSpan(target.Local.Type):
+                    when Symbols.IsSpan(target.Local.Type) || Symbols.IsMemory(target.Local.Type):
                     Visit(assignment.Value);
                     Assign(target.Local, assignment.Value);
                     return;
                 case ILocalReferenceOperation reference
                     when _state.Spans.TryGetValue(reference.Local, out SpanFact? fact) && fact.EndedBy is not null:
-                    _report?.Invoke(reference.Syntax, reference.Local.Name, fact.EndedBy);
+                    _report?.Invoke(reference.Syntax, reference.Local.Name, fact.EndedBy, fact.IsMemory);
                     return;
                 case IInvocationOperation invocation:
                     if (invocation.Instance is not null)
@@ -297,9 +311,24 @@ public sealed class NativeSpanLifetimeAnalyzer : DiagnosticAnalyzer
                 return copied;
             }
 
+            // A range of a tracked memory (memory[2..]) is the compiler's Slice.
+            if (value is IImplicitIndexerReferenceOperation { Instance: { } indexed }
+                && Symbols.IsMemory(value.Type)
+                && Unwrap(indexed) is ILocalReferenceOperation indexedLocal
+                && _state.Spans.TryGetValue(indexedLocal.Local, out SpanFact? ranged))
+            {
+                return ranged;
+            }
+
             if (value is not IInvocationOperation invocation)
             {
                 return null;
+            }
+
+            if (_symbols.IsOwnerAsMemory(invocation))
+            {
+                ISymbol? owner = invocation.Instance is null ? null : SymbolOf(invocation.Instance);
+                return owner is null ? null : new SpanFact(owner, null, false, null, isMemory: true);
             }
 
             if (_symbols.IsLeaseAsSpan(invocation))
@@ -307,20 +336,20 @@ public sealed class NativeSpanLifetimeAnalyzer : DiagnosticAnalyzer
                 IOperation? receiver = invocation.Instance is null ? null : Unwrap(invocation.Instance);
                 if (receiver is IInvocationOperation acquisition && _symbols.IsAcquisition(acquisition.TargetMethod))
                 {
-                    return new SpanFact(null, SymbolOf(acquisition.Instance), acquisition.TargetMethod.Name.IndexOf("Scoped", StringComparison.Ordinal) >= 0, null);
+                    return new SpanFact(null, SymbolOf(acquisition.Instance), acquisition.TargetMethod.Name.IndexOf("Scoped", StringComparison.Ordinal) >= 0, null, isMemory: false);
                 }
 
                 ISymbol? lease = SymbolOf(receiver);
                 LeaseOrigin? origin = lease is not null && _leases.TryGetValue(lease, out LeaseOrigin? known) ? known : null;
-                return new SpanFact(lease, origin?.Owner, origin?.Scoped ?? false, null);
+                return new SpanFact(lease, origin?.Owner, origin?.Scoped ?? false, null, isMemory: false);
             }
 
             // Slices and conversions of a tracked span share its storage.
-            if (Symbols.IsSpan(invocation.TargetMethod.ContainingType)
+            if ((Symbols.IsSpan(invocation.TargetMethod.ContainingType) || Symbols.IsMemory(invocation.TargetMethod.ContainingType))
                 && invocation.Instance is not null
                 && Unwrap(invocation.Instance) is ILocalReferenceOperation source
                 && _state.Spans.TryGetValue(source.Local, out SpanFact? sliced)
-                && Symbols.IsSpan(invocation.Type))
+                && (Symbols.IsSpan(invocation.Type) || Symbols.IsMemory(invocation.Type)))
             {
                 return sliced;
             }
@@ -342,7 +371,7 @@ public sealed class NativeSpanLifetimeAnalyzer : DiagnosticAnalyzer
             ISymbol? receiver = SymbolOf(invocation.Instance);
             if (string.Equals(name, "Move", StringComparison.Ordinal)
                 && invocation.Instance is null
-                && _symbols.IsLease(invocation.TargetMethod.ContainingType))
+                && (_symbols.IsLease(invocation.TargetMethod.ContainingType) || _symbols.IsMemoryOwner(invocation.TargetMethod.ContainingType)))
             {
                 foreach (IArgumentOperation argument in invocation.Arguments)
                 {
@@ -355,12 +384,29 @@ public sealed class NativeSpanLifetimeAnalyzer : DiagnosticAnalyzer
                 return;
             }
 
+            // Sharing consumes the unique transfer it is given by reference.
+            if (string.Equals(name, "Create", StringComparison.Ordinal)
+                && invocation.Instance is null
+                && _symbols.IsSharedOwner(invocation.TargetMethod.ContainingType))
+            {
+                foreach (IArgumentOperation argument in invocation.Arguments)
+                {
+                    if (argument.Parameter?.RefKind == RefKind.Ref && SymbolOf(argument.Value) is ISymbol consumed)
+                    {
+                        End(fact => SymbolEqualityComparer.Default.Equals(fact.Lease, consumed), consumed.Name + " was shared");
+                    }
+                }
+
+                return;
+            }
+
             if (receiver is null)
             {
                 return;
             }
 
-            if (string.Equals(name, "Dispose", StringComparison.Ordinal) && _symbols.IsLease(invocation.TargetMethod.ContainingType))
+            if (string.Equals(name, "Dispose", StringComparison.Ordinal)
+                && (_symbols.IsLease(invocation.TargetMethod.ContainingType) || _symbols.IsMemoryOwner(invocation.TargetMethod.ContainingType)))
             {
                 End(fact => SymbolEqualityComparer.Default.Equals(fact.Lease, receiver), receiver.Name + ".Dispose()");
             }
@@ -405,13 +451,17 @@ public sealed class NativeSpanLifetimeAnalyzer : DiagnosticAnalyzer
 
     private sealed class SpanFact : IEquatable<SpanFact>
     {
-        internal SpanFact(ISymbol? lease, ISymbol? owner, bool scoped, string? endedBy)
+        internal SpanFact(ISymbol? lease, ISymbol? owner, bool scoped, string? endedBy, bool isMemory)
         {
             Lease = lease;
             Owner = owner;
             Scoped = scoped;
             EndedBy = endedBy;
+            IsMemory = isMemory;
         }
+
+        // A Memory<T> or ReadOnlyMemory<T> from an owner's AsMemory(), reported as NAM1052.
+        internal bool IsMemory { get; }
 
         internal ISymbol? Lease { get; }
 
@@ -421,13 +471,14 @@ public sealed class NativeSpanLifetimeAnalyzer : DiagnosticAnalyzer
 
         internal string? EndedBy { get; }
 
-        internal SpanFact WithEnd(string reason) => new(Lease, Owner, Scoped, reason);
+        internal SpanFact WithEnd(string reason) => new(Lease, Owner, Scoped, reason, IsMemory);
 
         public bool Equals(SpanFact? other) =>
             other is not null
             && SymbolEqualityComparer.Default.Equals(Lease, other.Lease)
             && SymbolEqualityComparer.Default.Equals(Owner, other.Owner)
             && Scoped == other.Scoped
+            && IsMemory == other.IsMemory
             && string.Equals(EndedBy, other.EndedBy, StringComparison.Ordinal);
 
         public override bool Equals(object? obj) => Equals(obj as SpanFact);
@@ -482,6 +533,9 @@ public sealed class NativeSpanLifetimeAnalyzer : DiagnosticAnalyzer
         private readonly INamedTypeSymbol? _local;
         private readonly INamedTypeSymbol? _arena;
         private readonly INamedTypeSymbol? _region;
+        private readonly INamedTypeSymbol? _transfer;
+        private readonly INamedTypeSymbol? _shared;
+        private readonly INamedTypeSymbol? _concurrentPooled;
 
         internal Symbols(Compilation compilation)
         {
@@ -497,12 +551,30 @@ public sealed class NativeSpanLifetimeAnalyzer : DiagnosticAnalyzer
             _local = runtime.GetTypeByMetadataName(Namespace + "Local`1");
             _arena = runtime.GetTypeByMetadataName(Namespace + "NativeArena");
             _region = runtime.GetTypeByMetadataName(Namespace + "NativeRegion");
+            _transfer = runtime.GetTypeByMetadataName(Namespace + "NativeTransfer`1");
+            _shared = runtime.GetTypeByMetadataName(Namespace + "NativeShared`1");
+            _concurrentPooled = runtime.GetTypeByMetadataName(Namespace + "ConcurrentPooled`1");
         }
 
         internal bool IsAvailable => _pooled is not null;
 
         internal bool IsLease(ITypeSymbol? type) =>
             Is(type, _pooled) || Is(type, _preparedPooled) || Is(type, _arenaLease) || Is(type, _local);
+
+        // The owners whose AsMemory() hands out a Memory<T> bound to their lifetime.
+        internal bool IsMemoryOwner(ITypeSymbol? type) =>
+            Is(type, _transfer) || Is(type, _shared) || Is(type, _concurrentPooled);
+
+        internal bool IsSharedOwner(ITypeSymbol? type) => Is(type, _shared);
+
+        internal static bool IsMemory(ITypeSymbol? type) =>
+            type is INamedTypeSymbol named
+            && named.OriginalDefinition.ToDisplayString() is "System.Memory<T>" or "System.ReadOnlyMemory<T>";
+
+        internal bool IsOwnerAsMemory(IOperation operation) =>
+            operation is IInvocationOperation invocation
+            && string.Equals(invocation.TargetMethod.Name, "AsMemory", StringComparison.Ordinal)
+            && IsMemoryOwner(invocation.TargetMethod.ContainingType);
 
         internal bool IsBumpOwner(ITypeSymbol? type) => Is(type, _arena) || Is(type, _region);
 

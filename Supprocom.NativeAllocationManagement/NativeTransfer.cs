@@ -314,7 +314,7 @@ internal partial class NativeTransferControl<T>
             PayloadReturnCount = returned ? 1 : 0,
             PayloadReturnFailureCount = Volatile.Read(ref _returnFailures),
             HistoryOverflowed = Volatile.Read(ref _historyOverflowed),
-            ControlFieldBytes = 3L * IntPtr.Size + 3L * sizeof(long) + 7L * sizeof(int) + 5L * sizeof(bool) + Unsafe.SizeOf<NativeBlockSlot>()
+            ControlFieldBytes = 5L * IntPtr.Size + 3L * sizeof(long) + 8L * sizeof(int) + 5L * sizeof(bool) + Unsafe.SizeOf<NativeBlockSlot>()
         };
     }
 
