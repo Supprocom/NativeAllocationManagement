@@ -269,6 +269,14 @@ public sealed class NativeSpanLifetimeAnalyzer : DiagnosticAnalyzer
                     when _state.Spans.TryGetValue(reference.Local, out SpanFact? fact) && fact.EndedBy is not null:
                     _report?.Invoke(reference.Syntax, reference.Local.Name, fact.EndedBy, fact.IsMemory);
                     return;
+                case IFlowCaptureOperation { Value: { } captured } capture:
+                    // A using over an existing variable disposes the captured resource.
+                    if (Unwrap(captured) is ILocalReferenceOperation or IParameterReferenceOperation && SymbolOf(captured) is ISymbol resource)
+                    {
+                        _state.Captures[capture.Id] = resource;
+                    }
+
+                    break;
                 case IInvocationOperation invocation:
                     if (invocation.Instance is not null)
                     {
@@ -368,7 +376,10 @@ public sealed class NativeSpanLifetimeAnalyzer : DiagnosticAnalyzer
         private void ApplyEnd(IInvocationOperation invocation)
         {
             string name = invocation.TargetMethod.Name;
-            ISymbol? receiver = SymbolOf(invocation.Instance);
+            ISymbol? receiver = invocation.Instance is IFlowCaptureReferenceOperation captureReference
+                && _state.Captures.TryGetValue(captureReference.Id, out ISymbol? captured)
+                    ? captured
+                    : SymbolOf(invocation.Instance);
             if (string.Equals(name, "Move", StringComparison.Ordinal)
                 && invocation.Instance is null
                 && (_symbols.IsLease(invocation.TargetMethod.ContainingType) || _symbols.IsMemoryOwner(invocation.TargetMethod.ContainingType)))
@@ -405,8 +416,10 @@ public sealed class NativeSpanLifetimeAnalyzer : DiagnosticAnalyzer
                 return;
             }
 
+            // A using over a variable disposes through IDisposable on the captured resource.
+            bool disposesCapture = invocation.Instance is IFlowCaptureReferenceOperation;
             if (string.Equals(name, "Dispose", StringComparison.Ordinal)
-                && (_symbols.IsLease(invocation.TargetMethod.ContainingType) || _symbols.IsMemoryOwner(invocation.TargetMethod.ContainingType)))
+                && (disposesCapture || _symbols.IsLease(invocation.TargetMethod.ContainingType) || _symbols.IsMemoryOwner(invocation.TargetMethod.ContainingType)))
             {
                 End(fact => SymbolEqualityComparer.Default.Equals(fact.Lease, receiver), receiver.Name + ".Dispose()");
             }
@@ -493,9 +506,16 @@ public sealed class NativeSpanLifetimeAnalyzer : DiagnosticAnalyzer
     {
         internal Dictionary<ILocalSymbol, SpanFact> Spans { get; } = new(SymbolEqualityComparer.Default);
 
+        internal Dictionary<CaptureId, ISymbol> Captures { get; } = [];
+
         internal FlowState Clone()
         {
             FlowState copy = new();
+            foreach (KeyValuePair<CaptureId, ISymbol> capture in Captures)
+            {
+                copy.Captures[capture.Key] = capture.Value;
+            }
+
             foreach (KeyValuePair<ILocalSymbol, SpanFact> pair in Spans)
             {
                 copy.Spans[pair.Key] = pair.Value;
@@ -508,6 +528,11 @@ public sealed class NativeSpanLifetimeAnalyzer : DiagnosticAnalyzer
         internal FlowState Merge(FlowState other)
         {
             FlowState merged = Clone();
+            foreach (KeyValuePair<CaptureId, ISymbol> capture in other.Captures)
+            {
+                merged.Captures[capture.Key] = capture.Value;
+            }
+
             foreach (KeyValuePair<ILocalSymbol, SpanFact> pair in other.Spans)
             {
                 if (!merged.Spans.TryGetValue(pair.Key, out SpanFact? existing) || (existing.EndedBy is null && pair.Value.EndedBy is not null))

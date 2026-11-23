@@ -32,12 +32,8 @@ internal static class MemoryBenchmarks
         }
         else
         {
-            string? directory = ReadString(args, "--dir");
-            if (directory is null)
-            {
-                PrintError("--memory-pipe-copy requires --dir <temporary directory>.");
-                return 2;
-            }
+            // On disk: /tmp and the scratchpad are memory-backed and shared.
+            string directory = ReadString(args, "--dir") ?? "/home/claude/nam-bench-tmp";
 
             int megabytes = ReadInt(args, "--size-mb", quick ? 16 : 1024);
             exit = await RunPipeCopyAsync(samples, megabytes, directory).ConfigureAwait(false);
@@ -49,8 +45,6 @@ internal static class MemoryBenchmarks
 
     // A plain method, so the report lines are not localizable resources and do not block an async caller's analyzer.
     private static void Print(string line) => Console.Out.WriteLine(line);
-
-    private static void PrintError(string line) => Console.Error.WriteLine(line);
 
     private static int ReadInt(string[] args, string name, int fallback)
     {

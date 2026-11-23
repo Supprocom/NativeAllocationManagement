@@ -13,6 +13,7 @@ public sealed class NativeMemoryLifetimeAnalyzerTests
     [InlineData("NativeTransfer<byte> buffer = NativeTransfer<byte>.CreateUninitialized(16); ReadOnlyMemory<byte> mem = buffer.AsMemory(); buffer.Dispose(); Consume(mem);")]
     [InlineData("NativeTransfer<byte>? source = NativeTransfer<byte>.CreateUninitialized(16); Memory<byte> mem = source.Value.AsMemory(); NativeTransfer<byte> moved = NativeTransfer<byte>.Move(ref source); Fill(mem); moved.Dispose();")]
     [InlineData("NativeTransfer<byte>? source = NativeTransfer<byte>.CreateUninitialized(16); Memory<byte> mem = source.Value.AsMemory(); NativeShared<byte> shared = NativeShared<byte>.Create(ref source, new NativeSharingPreparation(1, 0)); Fill(mem); shared.Dispose();")]
+    [InlineData("NativeTransfer<byte> buffer = NativeTransfer<byte>.CreateUninitialized(16); Memory<byte> mem = buffer.AsMemory(); using (buffer) { Fill(mem); } Fill(mem);")]
     [InlineData("NativeTransfer<byte> buffer = NativeTransfer<byte>.CreateUninitialized(16); Memory<byte> mem = buffer.AsMemory(); if (condition) { buffer.Dispose(); } Fill(mem); if (!condition) { buffer.Dispose(); }")]
     public async Task MemoryUsedAfterTransferEndsIsRejected(string body)
     {
