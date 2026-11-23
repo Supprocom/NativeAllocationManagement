@@ -147,6 +147,12 @@ internal static class Program
             return await PooledPerformanceRegression.RunCommandAsync(args).ConfigureAwait(false);
         }
 
+        if (args.Length != 0
+            && args[0] is "--memory-echo" or "--memory-pipe-copy")
+        {
+            return await MemoryBenchmarks.RunCommandAsync(args).ConfigureAwait(false);
+        }
+
         if (args is ["--pool-size-class-probe"])
         {
             Console.WriteLine(JsonSerializer.Serialize(
