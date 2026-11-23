@@ -14,7 +14,7 @@ internal static class MemoryCostBenchmarks
     private const int Runs = 9;
     private const int BufferSize = 64 * 1024;
     private const long FileBytes = 256L * 1024 * 1024;
-    private const string TemporaryDirectory = "/home/claude/nam-bench-tmp";
+    private static readonly string TemporaryDirectory = Environment.GetEnvironmentVariable("NAM_BENCH_TMP") is { Length: > 0 } dir ? dir : "/home/claude/nam-bench-tmp";
 
     private static long s_sink;
 
