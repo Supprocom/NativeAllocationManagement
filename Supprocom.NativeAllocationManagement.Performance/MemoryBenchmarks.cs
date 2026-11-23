@@ -36,6 +36,8 @@ internal static class MemoryBenchmarks
             string directory = ReadString(args, "--dir") ?? "/home/claude/nam-bench-tmp";
 
             int megabytes = ReadInt(args, "--size-mb", quick ? 16 : 1024);
+            // --null-output: discard the copy, so the run measures the pipe and its buffers rather than the disk.
+            s_nullOutput = args.Contains("--null-output", StringComparer.Ordinal);
             exit = await RunPipeCopyAsync(samples, megabytes, directory).ConfigureAwait(false);
         }
 
@@ -288,7 +290,8 @@ internal static class MemoryBenchmarks
         Default,
         ArrayPool,
         MemoryPool,
-        Nam
+        Nam,
+        NamReused
     }
 
     private sealed record CopyResult(double MegabytesPerSecond, double AllocatedMegabytes);
@@ -354,6 +357,8 @@ internal static class MemoryBenchmarks
         }
     }
 
+    private static bool s_nullOutput;
+
     private static async Task<CopyResult> CopyOnceAsync(PipePool kind, string source, string destination)
     {
         MemoryPool<byte>? pool = CreatePool(kind);
@@ -361,7 +366,9 @@ internal static class MemoryBenchmarks
         {
             Pipe pipe = new(new PipeOptions(pool, minimumSegmentSize: 64 * 1024, useSynchronizationContext: false));
             FileStream input = new(source, FileMode.Open, FileAccess.Read, FileShare.Read, 1, FileOptions.Asynchronous | FileOptions.SequentialScan);
-            FileStream output = new(destination, FileMode.Create, FileAccess.Write, FileShare.None, 1, FileOptions.Asynchronous);
+            Stream output = s_nullOutput
+                ? Stream.Null
+                : new FileStream(destination, FileMode.Create, FileAccess.Write, FileShare.None, 1, FileOptions.Asynchronous);
             long copied = 0;
             GC.Collect();
             GC.WaitForPendingFinalizers();
@@ -432,6 +439,7 @@ internal static class MemoryBenchmarks
         PipePool.Default => null,
         PipePool.ArrayPool => new ArrayPoolMemoryPool(),
         PipePool.MemoryPool => MemoryPool<byte>.Shared,
+        PipePool.NamReused => new NamReusingMemoryPool(),
         _ => new NamMemoryPool()
     };
 
@@ -496,6 +504,88 @@ internal static class MemoryBenchmarks
             }
         }
     }
+
+    // MemoryPool<byte> that keeps returned native buffers for reuse, as ArrayPool keeps arrays. A returned
+    // buffer is moved to a new binding, so Memory<byte> taken before the return throws instead of reading it.
+#pragma warning disable CA2000 // A popped owner is either handed out or freed; the analyzer can't follow the stack.
+    private sealed class NamReusingMemoryPool : MemoryPool<byte>
+    {
+        private readonly Lock _gate = new();
+        private readonly Stack<Owner> _free = new();
+
+        public override int MaxBufferSize => int.MaxValue;
+
+        public override IMemoryOwner<byte> Rent(int minBufferSize = -1)
+        {
+            int size = minBufferSize <= 0 ? 4096 : minBufferSize;
+            lock (_gate)
+            {
+                if (_free.TryPop(out Owner? owner))
+                {
+                    if (owner.Capacity >= size)
+                    {
+                        owner.Reopen();
+                        return owner;
+                    }
+
+                    owner.Free();
+                }
+            }
+
+            return new Owner(this, NativeTransfer<byte>.CreateUninitialized(size));
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            lock (_gate)
+            {
+                while (_free.TryPop(out Owner? owner))
+                {
+                    owner.Free();
+                }
+            }
+        }
+
+        private void Return(Owner owner)
+        {
+            lock (_gate)
+            {
+                _free.Push(owner);
+            }
+        }
+
+        private sealed class Owner : IMemoryOwner<byte>
+        {
+            private readonly NamReusingMemoryPool _pool;
+            private NativeTransfer<byte>? _transfer;
+            private int _rented = 1;
+
+            internal Owner(NamReusingMemoryPool pool, NativeTransfer<byte> transfer)
+            {
+                _pool = pool;
+                _transfer = transfer;
+            }
+
+            internal int Capacity => _transfer!.Value.Capacity;
+
+            public Memory<byte> Memory => _transfer!.Value.AsMemory();
+
+            internal void Reopen() => Volatile.Write(ref _rented, 1);
+
+            internal void Free() => _transfer!.Value.Dispose();
+
+            public void Dispose()
+            {
+                if (Interlocked.Exchange(ref _rented, 0) == 1)
+                {
+                    _transfer = NativeTransfer<byte>.Move(ref _transfer);
+                    _pool.Return(this);
+                }
+            }
+        }
+    }
+
+#pragma warning restore CA2000
 
     // ---- statistics ----
 
