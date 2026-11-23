@@ -79,6 +79,20 @@ internal static class MemoryCostBenchmarks
         Row("NamMemoryPool (fresh)", ops, 0, bodyOps => PoolCycle(fresh, bodyOps));
         Row("NamReusingMemoryPool", ops, 0, bodyOps => PoolCycle(reusing, bodyOps));
         Row("NativeMemoryPool", ops, 0, bodyOps => PoolCycle(NativeMemoryPool.Default, bodyOps));
+        Print("   -- NativeMemoryPool split --");
+        long callsBefore = NativeMemoryDiagnostics.Snapshot().AllocationCount;
+        _ = PoolCycle(NativeMemoryPool.Default, ops);
+        Print(string.Create(CultureInfo.InvariantCulture, $"   allocator calls during {ops} cycles: {NativeMemoryDiagnostics.Snapshot().AllocationCount - callsBefore}"));
+        int missesBefore = NativeThreadState.Current.BlockMisses;
+        _ = PoolCycle(NativeMemoryPool.Default, ops);
+        Print(string.Create(CultureInfo.InvariantCulture, $"   stack-block lookup misses during {ops} cycles: {NativeThreadState.Current.BlockMisses - missesBefore}"));
+        Row("cycle: Rent + Dispose only", ops, 0, bodyOps => PartialCycle(bodyOps, touchMemory: false, writeSpan: false));
+        Row("cycle: Rent + .Memory + Dispose", ops, 0, bodyOps => PartialCycle(bodyOps, touchMemory: true, writeSpan: false));
+        Row("cycle: Rent + .Memory.Span[0] + Dispose", ops, 0, bodyOps => PartialCycle(bodyOps, touchMemory: true, writeSpan: true));
+        Row("probe: NativeThreadState.Current", ops, 0, NativeMemoryPool.ProbeThreadState);
+        Row("probe: Current + GetTyped + cache take/add", ops, 0, NativeMemoryPool.ProbeCache);
+        Row("probe: Owner.Create + Memory.Length", ops, 0, bodyOps => NativeMemoryPool.ProbeOwner(bodyOps, dispose: false));
+        Row("probe: Owner create + Dispose + take back", ops, 0, bodyOps => NativeMemoryPool.ProbeOwner(bodyOps, dispose: true));
         Row("raw ArrayPool<byte>.Shared Rent/Return", ops, 0, RawArrayPoolCycle);
         Row("raw NativeTransfer Create/Dispose", ops, 0, RawTransferCycle);
         Row("raw NativeTransfer Create/AsMemory/Dispose", ops, 0, RawTransferMemoryCycle);
@@ -93,6 +107,26 @@ internal static class MemoryCostBenchmarks
             using IMemoryOwner<byte> owner = pool.Rent(BufferSize);
             owner.Memory.Span[0] = 1;
             sum += owner.Memory.Length;
+        }
+
+        return sum;
+    }
+
+    private static long PartialCycle(int ops, bool touchMemory, bool writeSpan)
+    {
+        long sum = 0;
+        for (int index = 0; index < ops; index++)
+        {
+            using IMemoryOwner<byte> owner = NativeMemoryPool.Default.Rent(BufferSize);
+            if (touchMemory)
+            {
+                sum += owner.Memory.Length;
+            }
+
+            if (writeSpan)
+            {
+                owner.Memory.Span[0] = 1;
+            }
         }
 
         return sum;
