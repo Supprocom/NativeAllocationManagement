@@ -46,7 +46,7 @@ internal static class MemoryBenchmarks
     }
 
     // A plain method, so the report lines are not localizable resources and do not block an async caller's analyzer.
-    private static void Print(string line) => Console.Out.WriteLine(line);
+    internal static void Print(string line) => Console.Out.WriteLine(line);
 
     private static int ReadInt(string[] args, string name, int fallback)
     {
@@ -60,7 +60,7 @@ internal static class MemoryBenchmarks
         return index >= 0 && index + 1 < args.Length ? args[index + 1] : null;
     }
 
-    private static string ReadLoadAverage()
+    internal static string ReadLoadAverage()
     {
         try
         {
@@ -291,7 +291,8 @@ internal static class MemoryBenchmarks
         ArrayPool,
         MemoryPool,
         Nam,
-        NamReused
+        NamReused,
+        NamPool
     }
 
     private sealed record CopyResult(double MegabytesPerSecond, double AllocatedMegabytes);
@@ -440,11 +441,12 @@ internal static class MemoryBenchmarks
         PipePool.ArrayPool => new ArrayPoolMemoryPool(),
         PipePool.MemoryPool => MemoryPool<byte>.Shared,
         PipePool.NamReused => new NamReusingMemoryPool(),
+        PipePool.NamPool => NativeMemoryPool.Default,
         _ => new NamMemoryPool()
     };
 
     // MemoryPool<byte> over ArrayPool<byte>.Shared, what the default pool does, as a baseline of the same shape as the NAM pool.
-    private sealed class ArrayPoolMemoryPool : MemoryPool<byte>
+    internal sealed class ArrayPoolMemoryPool : MemoryPool<byte>
     {
         public override int MaxBufferSize => int.MaxValue;
 
@@ -475,7 +477,7 @@ internal static class MemoryBenchmarks
     }
 
     // MemoryPool<byte> over NativeTransfer<byte>: each rent is a native range, returned by Dispose on whichever thread ends the segment.
-    private sealed class NamMemoryPool : MemoryPool<byte>
+    internal sealed class NamMemoryPool : MemoryPool<byte>
     {
         public override int MaxBufferSize => int.MaxValue;
 
@@ -508,7 +510,7 @@ internal static class MemoryBenchmarks
     // MemoryPool<byte> that keeps returned native buffers for reuse, as ArrayPool keeps arrays. A returned
     // buffer is moved to a new binding, so Memory<byte> taken before the return throws instead of reading it.
 #pragma warning disable CA2000 // A popped owner is either handed out or freed; the analyzer can't follow the stack.
-    private sealed class NamReusingMemoryPool : MemoryPool<byte>
+    internal sealed class NamReusingMemoryPool : MemoryPool<byte>
     {
         private readonly Lock _gate = new();
         private readonly Stack<Owner> _free = new();
