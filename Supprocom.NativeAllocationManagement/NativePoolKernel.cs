@@ -1424,9 +1424,13 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void ValidateThread(string operation)
     {
-        if (_isShared
-            ? ReferenceEquals(t_shared, this)
-            : _owner.IsCurrent())
+        // One check for every pool, shared or not: the stack block of the
+        // thread that made this pool, confirmed by thread serial when the
+        // block differs. A shared pool is made on, and confined to, the thread
+        // that owns it, so a thread-static read and reference compare would
+        // prove nothing more (and cost a second read of t_shared per rent
+        // through NativePool<T>.Shared).
+        if (_owner.IsCurrent())
         {
             return;
         }

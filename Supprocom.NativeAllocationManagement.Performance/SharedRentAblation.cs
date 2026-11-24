@@ -77,7 +77,7 @@ internal static class SharedRentAblation
             if (o.Quick)
             {
                 o.Samples = 1;
-                o.Iterations = Math.Min(o.Iterations, 20_000);
+                o.Iterations = Math.Min(o.Iterations, 300_000);
             }
 
             return o;
