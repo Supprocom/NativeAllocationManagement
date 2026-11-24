@@ -21,6 +21,9 @@ internal static class MemoryHandoffBenchmarks
 
     private static ulong s_checksum;
 
+    // Kept across runs, as ArrayPool.Shared is, so a run reuses the arrays earlier runs made.
+    private static readonly PinnedHeapMemoryPool s_pinnedHeap = new();
+
     private enum Mode
     {
         NamPool,
@@ -118,7 +121,7 @@ internal static class MemoryHandoffBenchmarks
         MemoryPool<byte> pool = mode switch
         {
             Mode.NamPool => NativeMemoryPool.Shared,
-            Mode.PinnedHeapPool => new PinnedHeapMemoryPool(),
+            Mode.PinnedHeapPool => s_pinnedHeap,
             _ => new MemoryBenchmarks.ArrayPoolMemoryPool()
         };
         try

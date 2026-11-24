@@ -80,7 +80,8 @@ internal static class MemoryBenchmarks
 
     private enum Provider
     {
-        Nam,
+        NamPool,
+        NamTransfer,
         ArrayPool,
         MemoryPool
     }
@@ -234,6 +235,7 @@ internal static class MemoryBenchmarks
     private sealed class BufferSet : IDisposable
     {
         private readonly Provider _provider;
+        private NativeTransfer<byte> _transfer;
         private byte[]? _array;
         private IMemoryOwner<byte>? _owner;
 
@@ -247,7 +249,10 @@ internal static class MemoryBenchmarks
                 case Provider.ArrayPool:
                     set._array = ArrayPool<byte>.Shared.Rent(size);
                     break;
-                case Provider.Nam:
+                case Provider.NamTransfer:
+                    set._transfer = NativeTransfer<byte>.CreateUninitialized(size);
+                    break;
+                case Provider.NamPool:
                     set._owner = NativeMemoryPool.Shared.Rent(size);
                     break;
                 default:
@@ -260,6 +265,7 @@ internal static class MemoryBenchmarks
 
         internal Memory<byte> Get() => _provider switch
         {
+            Provider.NamTransfer => _transfer.AsMemory(),
             Provider.ArrayPool => _array.AsMemory(),
             _ => _owner!.Memory
         };
@@ -268,6 +274,9 @@ internal static class MemoryBenchmarks
         {
             switch (_provider)
             {
+                case Provider.NamTransfer:
+                    _transfer.Dispose();
+                    break;
                 case Provider.ArrayPool:
                     ArrayPool<byte>.Shared.Return(_array!);
                     break;
