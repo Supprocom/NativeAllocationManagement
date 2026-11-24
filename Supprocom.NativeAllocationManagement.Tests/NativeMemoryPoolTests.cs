@@ -14,7 +14,7 @@ public sealed class NativeMemoryPoolTests
     [Fact]
     public void RentedMemoryRoundTrips()
     {
-        using IMemoryOwner<byte> owner = NativeMemoryPool.Default.Rent(5000);
+        using IMemoryOwner<byte> owner = NativeMemoryPool.Shared.Rent(5000);
         Memory<byte> memory = owner.Memory;
         Assert.True(memory.Length >= 5000);
         for (int index = 0; index < 5000; index++)
@@ -28,7 +28,7 @@ public sealed class NativeMemoryPoolTests
     [Fact]
     public void StaleMemoryThrowsAfterDispose()
     {
-        IMemoryOwner<byte> owner = NativeMemoryPool.Default.Rent(64);
+        IMemoryOwner<byte> owner = NativeMemoryPool.Shared.Rent(64);
         Memory<byte> memory = owner.Memory;
         memory.Span[0] = 1;
         owner.Dispose();
@@ -41,12 +41,12 @@ public sealed class NativeMemoryPoolTests
     [Fact]
     public void StaleMemoryStaysStaleWhenTheStorageIsRentedAgain()
     {
-        IMemoryOwner<byte> first = NativeMemoryPool.Default.Rent(64);
+        IMemoryOwner<byte> first = NativeMemoryPool.Shared.Rent(64);
         Memory<byte> stale = first.Memory;
         nint address = Address(first);
         first.Dispose();
 
-        using IMemoryOwner<byte> second = NativeMemoryPool.Default.Rent(64);
+        using IMemoryOwner<byte> second = NativeMemoryPool.Shared.Rent(64);
         Assert.Equal(address, Address(second));
         Assert.Throws<ObjectDisposedException>(() => stale.Span.Length);
     }
@@ -54,13 +54,13 @@ public sealed class NativeMemoryPoolTests
     [Fact]
     public void DisposingTwiceReturnsTheStorageOnce()
     {
-        IMemoryOwner<byte> owner = NativeMemoryPool.Default.Rent(64);
+        IMemoryOwner<byte> owner = NativeMemoryPool.Shared.Rent(64);
         nint address = Address(owner);
         owner.Dispose();
         owner.Dispose();
 
-        using IMemoryOwner<byte> first = NativeMemoryPool.Default.Rent(64);
-        using IMemoryOwner<byte> second = NativeMemoryPool.Default.Rent(64);
+        using IMemoryOwner<byte> first = NativeMemoryPool.Shared.Rent(64);
+        using IMemoryOwner<byte> second = NativeMemoryPool.Shared.Rent(64);
         Assert.Equal(address, Address(first));
         Assert.NotEqual(Address(first), Address(second));
     }
@@ -68,32 +68,32 @@ public sealed class NativeMemoryPoolTests
     [Fact]
     public void PinningDefersTheStorageReuse()
     {
-        IMemoryOwner<byte> owner = NativeMemoryPool.Default.Rent(64);
+        IMemoryOwner<byte> owner = NativeMemoryPool.Shared.Rent(64);
         nint address = Address(owner);
         MemoryHandle handle = owner.Memory.Pin();
         owner.Dispose();
 
-        using (IMemoryOwner<byte> other = NativeMemoryPool.Default.Rent(64))
+        using (IMemoryOwner<byte> other = NativeMemoryPool.Shared.Rent(64))
         {
             Assert.NotEqual(address, Address(other));
         }
 
         handle.Dispose();
         handle.Dispose();
-        using IMemoryOwner<byte> reused = NativeMemoryPool.Default.Rent(64);
+        using IMemoryOwner<byte> reused = NativeMemoryPool.Shared.Rent(64);
         Assert.Equal(address, Address(reused));
     }
 
     [Fact]
     public async Task ReturningOnAnotherThreadFeedsThatThreadsCache()
     {
-        IMemoryOwner<byte> owner = NativeMemoryPool.Default.Rent(4096);
+        IMemoryOwner<byte> owner = NativeMemoryPool.Shared.Rent(4096);
         nint address = Address(owner);
 
         bool reused = await Task.Run(() =>
         {
             owner.Dispose();
-            using IMemoryOwner<byte> next = NativeMemoryPool.Default.Rent(4096);
+            using IMemoryOwner<byte> next = NativeMemoryPool.Shared.Rent(4096);
             return Address(next) == address;
         }).ConfigureAwait(true);
 
@@ -105,7 +105,7 @@ public sealed class NativeMemoryPoolTests
     {
         for (int warm = 0; warm < 100; warm++)
         {
-            using IMemoryOwner<byte> owner = NativeMemoryPool.Default.Rent(65536);
+            using IMemoryOwner<byte> owner = NativeMemoryPool.Shared.Rent(65536);
             owner.Memory.Span[0] = 1;
         }
 
@@ -113,7 +113,7 @@ public sealed class NativeMemoryPoolTests
         long before = GC.GetAllocatedBytesForCurrentThread();
         for (int index = 0; index < rounds; index++)
         {
-            using IMemoryOwner<byte> owner = NativeMemoryPool.Default.Rent(65536);
+            using IMemoryOwner<byte> owner = NativeMemoryPool.Shared.Rent(65536);
             owner.Memory.Span[0] = 1;
         }
 
@@ -126,7 +126,7 @@ public sealed class NativeMemoryPoolTests
     {
         byte[] payload = new byte[300_000];
         RandomNumberGenerator.Fill(payload);
-        Pipe pipe = new(new PipeOptions(NativeMemoryPool.Default, minimumSegmentSize: 8192, useSynchronizationContext: false));
+        Pipe pipe = new(new PipeOptions(NativeMemoryPool.Shared, minimumSegmentSize: 8192, useSynchronizationContext: false));
 
         Task writer = Task.Run(async () =>
         {

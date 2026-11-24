@@ -15,7 +15,8 @@ namespace Supprocom.NativeAllocationManagement;
 //
 // A pin keeps the storage: disposing the owner while pinned does not return it until the last
 // unpin. Storage comes through NativeBlockAllocator, so native-byte accounting sees it.
-internal sealed class NativeMemoryPool : MemoryPool<byte>
+/// <summary>A memory pool over native memory.</summary>
+public sealed class NativeMemoryPool : MemoryPool<byte>
 {
     private const int MinClassShift = 12;
     private const int ClassCount = 19;
@@ -31,10 +32,17 @@ internal sealed class NativeMemoryPool : MemoryPool<byte>
     private static readonly int s_cacheSlot = NativeThreadState.AllocateTypedSlot();
     private static readonly SharedStack[] s_shared = CreateShared();
 
-    internal static NativeMemoryPool Default { get; } = new();
+    private NativeMemoryPool()
+    {
+    }
 
+    /// <summary>Gets the shared pool.</summary>
+    public static new NativeMemoryPool Shared { get; } = new();
+
+    /// <summary>Gets the largest buffer the pool rents.</summary>
     public override int MaxBufferSize => 1 << MaxClassShift;
 
+    /// <summary>Rents a buffer of at least the requested size.</summary>
     public override IMemoryOwner<byte> Rent(int minBufferSize = -1)
     {
         int size = minBufferSize <= 0 ? 1 << MinClassShift : minBufferSize;
@@ -176,6 +184,7 @@ internal sealed class NativeMemoryPool : MemoryPool<byte>
     }
 
     // The shared instance is never disposed; cached storage belongs to threads, not to the pool.
+    /// <inheritdoc />
     protected override void Dispose(bool disposing)
     {
     }
