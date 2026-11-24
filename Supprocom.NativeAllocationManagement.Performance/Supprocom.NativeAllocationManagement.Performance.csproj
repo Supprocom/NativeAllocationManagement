@@ -6,6 +6,7 @@
     <AssemblyName>Supprocom.NativeAllocationManagement.Performance</AssemblyName>
     <IsPackable>false</IsPackable>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>

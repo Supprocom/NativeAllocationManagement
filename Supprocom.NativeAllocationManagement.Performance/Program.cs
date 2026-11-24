@@ -147,6 +147,11 @@ internal static class Program
             return await PooledPerformanceRegression.RunCommandAsync(args).ConfigureAwait(false);
         }
 
+        if (args.Length != 0 && string.Equals(args[0], "--memory-native-handoff", StringComparison.Ordinal))
+        {
+            return await MemoryHandoffBenchmarks.RunCommandAsync(args).ConfigureAwait(false);
+        }
+
         if (args.Length != 0 && string.Equals(args[0], "--memory-cost", StringComparison.Ordinal))
         {
             return MemoryCostBenchmarks.RunCommand();

@@ -591,14 +591,14 @@ internal static class MemoryBenchmarks
 
     // ---- statistics ----
 
-    private static double Median(List<double> values)
+    internal static double Median(List<double> values)
     {
         double[] sorted = [.. values];
         Array.Sort(sorted);
         return sorted.Length == 0 ? 0 : sorted[sorted.Length / 2];
     }
 
-    private static string Summary(List<double> values)
+    internal static string Summary(List<double> values)
     {
         if (values.Count == 0)
         {
