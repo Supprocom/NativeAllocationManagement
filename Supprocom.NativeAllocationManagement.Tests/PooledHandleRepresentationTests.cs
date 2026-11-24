@@ -15,7 +15,7 @@ public sealed class PooledHandleRepresentationTests
         Assert.Equal(16, Unsafe.SizeOf<Span<int>>());
         string[] fields = typeof(Pooled<int>).GetFields(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly)
             .Select(static field => field.Name).Order(StringComparer.Ordinal).ToArray();
-        Assert.Equal(["_capacity", "_kernel", "_length", "_slab", "_token"], fields);
+        Assert.Equal(["_capacity", "_kernel", "_length", "_slabIndex", "_token"], fields);
     }
 
     [Fact]
