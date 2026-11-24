@@ -117,7 +117,7 @@ internal static class MemoryHandoffBenchmarks
     {
         MemoryPool<byte> pool = mode switch
         {
-            Mode.NamPool => NativeMemoryPool.Default,
+            Mode.NamPool => NativeMemoryPool.Shared,
             Mode.PinnedHeapPool => new PinnedHeapMemoryPool(),
             _ => new MemoryBenchmarks.ArrayPoolMemoryPool()
         };

@@ -234,7 +234,6 @@ internal static class MemoryBenchmarks
     private sealed class BufferSet : IDisposable
     {
         private readonly Provider _provider;
-        private NativeTransfer<byte> _transfer;
         private byte[]? _array;
         private IMemoryOwner<byte>? _owner;
 
@@ -245,11 +244,11 @@ internal static class MemoryBenchmarks
             BufferSet set = new(provider);
             switch (provider)
             {
-                case Provider.Nam:
-                    set._transfer = NativeTransfer<byte>.CreateUninitialized(size);
-                    break;
                 case Provider.ArrayPool:
                     set._array = ArrayPool<byte>.Shared.Rent(size);
+                    break;
+                case Provider.Nam:
+                    set._owner = NativeMemoryPool.Shared.Rent(size);
                     break;
                 default:
                     set._owner = MemoryPool<byte>.Shared.Rent(size);
@@ -261,7 +260,6 @@ internal static class MemoryBenchmarks
 
         internal Memory<byte> Get() => _provider switch
         {
-            Provider.Nam => _transfer.AsMemory(),
             Provider.ArrayPool => _array.AsMemory(),
             _ => _owner!.Memory
         };
@@ -270,9 +268,6 @@ internal static class MemoryBenchmarks
         {
             switch (_provider)
             {
-                case Provider.Nam:
-                    _transfer.Dispose();
-                    break;
                 case Provider.ArrayPool:
                     ArrayPool<byte>.Shared.Return(_array!);
                     break;
@@ -331,7 +326,6 @@ internal static class MemoryBenchmarks
                     $"{pool,-12} {Summary(list.ConvertAll(static r => r.MegabytesPerSecond)),-34} {Median(list.ConvertAll(static r => r.AllocatedMegabytes)),10:F2}"));
             }
 
-            Print("NAM pool: a benchmark-internal MemoryPool<byte> over NativeTransfer<byte>; no public pool type was needed.");
             return 0;
         }
         finally
@@ -441,7 +435,7 @@ internal static class MemoryBenchmarks
         PipePool.ArrayPool => new ArrayPoolMemoryPool(),
         PipePool.MemoryPool => MemoryPool<byte>.Shared,
         PipePool.NamReused => new NamReusingMemoryPool(),
-        PipePool.NamPool => NativeMemoryPool.Default,
+        PipePool.NamPool => NativeMemoryPool.Shared,
         _ => new NamMemoryPool()
     };
 
