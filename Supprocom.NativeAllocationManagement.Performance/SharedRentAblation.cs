@@ -11,21 +11,20 @@ namespace Supprocom.NativeAllocationManagement.Performance;
 // over eight code layouts (see LayoutAveraging.cs).
 //
 //   --shared-rent-ablation [--length 64] [--samples 9] [--iterations 2000000]
-//       [--variants-root artifacts/shared-rent-ablation] [--variants A,B,..] [--quick]
+//       [--variants-root artifacts/shared-rent-ablation] [--variants A,B,.. (default: none)] [--quick]
 //       drives the rows; every NativePool row runs against the library build in
 //       <variants-root>/<Variant>/ (Default = the unmodified library).
 //   --shared-rent-worker --row array-pool|native-pool ...   one process, one row.
 //   --shared-rent-offsets [--variants-root ..]   disassembles the layout copies of
 //       the Default build and prints each copy's loop start offset mod 32.
 //
-// The variant libraries are built by shared-rent-ablation.sh (one
-// `-p:NamAblation=<Variant>` build each, in sequence); the constants only exist
-// in those builds.
+// Extra rows are Release builds of other commits placed in <variants-root>/<Name>/
+// and named with --variants; samples interleave across all rows.
 internal static class SharedRentAblation
 {
     private const string Footnote = "ns per op (rent + fill + return), median over samples per layout; avg is the mean of the layouts.";
     private const string DllName = "Supprocom.NativeAllocationManagement.Performance.dll";
-    private static readonly string[] AllVariants = ["SmallPooled"];
+    private static readonly string[] AllVariants = [];
 
     internal static async Task<int> RunCommandAsync(string[] args)
     {
@@ -188,10 +187,12 @@ internal static class SharedRentAblation
         }
 
         table.AppendLine(CultureInfo.InvariantCulture, $"{"avg",8}{"min",7}{"max",7}");
-        foreach (Row row in rows.ToArray())
+        // Samples interleave across the rows (sample 1 of every row, then sample 2 ...), so a
+        // slow stretch of the shared host lands on every row alike instead of on one.
+        List<double[]>[] collected = rows.Select(_ => new List<double[]>()).ToArray();
+        for (int s = 0; s < o.Samples; s++)
         {
-            List<double[]> samples = [];
-            for (int s = 0; s < o.Samples; s++)
+            for (int r = 0; r < rows.Count; r++)
             {
                 if (wall.Elapsed.TotalMinutes > o.MaxMinutes)
                 {
@@ -199,9 +200,14 @@ internal static class SharedRentAblation
                     return 4;
                 }
 
-                samples.Add(await RunWorkerProcessAsync(row, o).ConfigureAwait(false));
+                collected[r].Add(await RunWorkerProcessAsync(rows[r], o).ConfigureAwait(false));
             }
+        }
 
+        for (int r = 0; r < rows.Count; r++)
+        {
+            Row row = rows[r];
+            List<double[]> samples = collected[r];
             double[] median = new double[LayoutLoop.Layouts];
             for (int l = 0; l < LayoutLoop.Layouts; l++)
             {

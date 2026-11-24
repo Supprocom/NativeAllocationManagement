@@ -67,8 +67,6 @@ public sealed partial class NativePool<T> : IDisposable
 
     internal Slab SlabForTest(int index) => _slabs[index];
 
-    internal int CapacityForLease(int slabIndex) => _slabs[slabIndex].Capacity;
-
     // These structures genuinely do not exist in the unmanaged, thread-confined
     // pool model. There is no reference-root bank or generational retirement.
 #pragma warning disable CA1822

@@ -12,9 +12,7 @@ public readonly ref struct Pooled<T>
     private readonly int _slabIndex;
     private readonly long _token;
     private readonly int _length;
-#if !NAM_ABL_SMALLPOOLED
     private readonly int _capacity;
-#endif
 
     internal Pooled(
         NativePool<T> kernel,
@@ -27,23 +25,14 @@ public readonly ref struct Pooled<T>
         _slabIndex = slabIndex;
         _token = token;
         _length = length;
-#if !NAM_ABL_SMALLPOOLED
         _capacity = capacity;
-#else
-        _ = capacity;
-#endif
     }
 
     /// <summary>Gets the immutable logical element count.</summary>
     public int Length => _length;
 
     /// <summary>Gets the immutable physical element capacity.</summary>
-#if NAM_ABL_SMALLPOOLED
-    // Measurement only: the struct drops its capacity and reads the slab's.
-    public int Capacity => _kernel?.CapacityForLease(_slabIndex) ?? 0;
-#else
     public int Capacity => _capacity;
-#endif
 
     /// <summary>Moves this lexical lease without allocating or copying its payload and clears the source.</summary>
     /// <remarks>

@@ -2,11 +2,9 @@ using System.Reflection;
 
 namespace Supprocom.NativeAllocationManagement.Tests;
 
-// The shared-rent ablation (-p:NamAblation=SmallPooled) drops one field from
-// Pooled<T> for measurement. A normal build defines no such constant, so the
-// shipped path must keep its shape and every check it had. The slab state is a
-// flat struct table indexed by the lease; these tests pin the checks whose code
-// moved with it.
+// The shared-rent benchmark compares builds of other commits, so the pool has
+// no ablation switches. These tests pin the shape and the checks that moved
+// with the flat slab table: leases hold a slot index into a struct table.
 public sealed class NativePoolAblationSwitchTests
 {
     private const BindingFlags Any = BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
