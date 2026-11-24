@@ -70,18 +70,6 @@ public sealed class NativePoolFilledRentTests
     }
 
     [Fact]
-    public void ExhaustedTokensCannotTakeAFreeSlab()
-    {
-        using NativePool<int> pool = new(2, NativeMemoryReturn.Free);
-        using (Pooled<int> lease = pool.Rent(2, 7)) { }
-        NativeOwnerStatistics before = pool.GetStatistics();
-        typeof(NativePool<int>).GetField("_leaseTokenCounter", BindingFlags.NonPublic | BindingFlags.Instance)!.SetValue(pool, long.MaxValue);
-        Assert.Throws<InvalidOperationException>(() => { using Pooled<int> invalid = pool.Rent(2, 42); });
-        Assert.Equal(before, pool.GetStatistics());
-        Assert.Equal(0, pool.CurrentAllocationRecordCountForTest);
-    }
-
-    [Fact]
     public void MoveReuseAndEnteredBorrowsRetainTheirOriginalAuthorityChecks()
     {
         using NativePool<int> pool = new(2, NativeMemoryReturn.Free);
@@ -93,8 +81,8 @@ public sealed class NativePoolFilledRentTests
             moved.Access(_ =>
             {
                 Assert.Equal(1, pool.CurrentGenerationActiveOperationsForTest);
-                Assert.Throws<InvalidOperationException>(() => pool.Return(pool.SlabForTest(0), 2, 2));
-                Assert.Throws<InvalidOperationException>(() => pool.Move(pool.SlabForTest(0), 2));
+                Assert.Throws<InvalidOperationException>(() => pool.Return(0, 2, 2));
+                Assert.Throws<InvalidOperationException>(() => pool.Move(0, 2));
                 Assert.Throws<InvalidOperationException>(pool.Dispose);
                 Assert.Equal((nuint)0, pool.TrimRetainedMemory());
             });

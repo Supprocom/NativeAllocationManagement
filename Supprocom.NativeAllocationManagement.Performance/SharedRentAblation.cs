@@ -25,7 +25,7 @@ internal static class SharedRentAblation
 {
     private const string Footnote = "ns per op (rent + fill + return), median over samples per layout; avg is the mean of the layouts.";
     private const string DllName = "Supprocom.NativeAllocationManagement.Performance.dll";
-    private static readonly string[] AllVariants = ["SharedLookup", "NoValidation", "NoToken", "NoAccounting", "SmallPooled", "FlatSlab"];
+    private static readonly string[] AllVariants = ["SmallPooled"];
 
     internal static async Task<int> RunCommandAsync(string[] args)
     {

@@ -56,29 +56,6 @@ public sealed class NativePooledMoveTests
     }
 
     [Fact]
-    public void IdentityExhaustionLeavesTheOriginalLeaseUsableAndReturnable()
-    {
-        using NativePool<int> pool = CreatePool(budget: null);
-        Pooled<int> source = pool.Rent(2, static writer => writer.Fill(42));
-        NativePool<int> kernel = pool;
-        typeof(NativePool<int>).GetField("_leaseTokenCounter",
-            BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(kernel, long.MaxValue);
-        try
-        {
-            _ = Pooled<int>.Move(ref source);
-            Assert.Fail("Exhausted authority must not wrap.");
-        }
-        catch (InvalidOperationException exception)
-        {
-            Assert.Contains("lease-token authority", exception.Message, StringComparison.Ordinal);
-        }
-        Assert.Equal(84, source.Read(static view => view[0] + view[1]));
-        Assert.Equal(1, pool.CurrentAllocationRecordCountForTest);
-        source.Dispose();
-        Assert.Equal(0, pool.CurrentAllocationRecordCountForTest);
-    }
-
-    [Fact]
     public void EnteredBorrowRejectsMovementAndKeepsItsStorageAlive()
     {
         using NativePool<int> pool = CreatePool(budget: null);

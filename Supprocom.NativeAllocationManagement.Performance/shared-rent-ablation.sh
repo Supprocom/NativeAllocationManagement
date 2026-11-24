@@ -9,7 +9,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="${NAM_ABLATION_ROOT:-artifacts/shared-rent-ablation}"
 RUNNER="${NAM_RUNNER:-heavy-slot nice -n 19}"
-VARIANTS="${NAM_ABLATION_VARIANTS:-Default SharedLookup NoValidation NoToken NoAccounting SmallPooled FlatSlab}"
+VARIANTS="${NAM_ABLATION_VARIANTS:-Default SmallPooled}"
 PROJECT=Supprocom.NativeAllocationManagement.Performance
 export DOTNET_SYSTEM_NET_DISABLEIPV6=1 DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
 

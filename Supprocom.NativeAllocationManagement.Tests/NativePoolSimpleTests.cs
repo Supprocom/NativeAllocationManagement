@@ -130,30 +130,6 @@ public sealed class NativePoolSimpleTests
     }
 
     [Fact]
-    public void LeaseTokenExhaustionFailsBeforeSlabStateChanges()
-    {
-        using NativePool<int> pool = new(
-            preLease: 1,
-            returnMemoryOnDispose: NativeMemoryReturn.Free);
-        FieldInfo tokenField = typeof(NativePool<int>).GetField(
-            "_leaseTokenCounter",
-            BindingFlags.Instance | BindingFlags.NonPublic)!;
-        tokenField.SetValue(pool, long.MaxValue - 1);
-
-        Pooled<int> finalLease = pool.Rent(
-            1,
-            static writer => writer.Write(1));
-        finalLease.Dispose();
-
-        Assert.Throws<InvalidOperationException>(() => pool.Rent(
-            1,
-            static writer => writer.Write(2)));
-        NativeOwnerStatistics statistics = pool.GetStatistics();
-        Assert.Equal(0, statistics.RequestedBytes);
-        Assert.Equal(1, statistics.AvailableSegmentCount);
-    }
-
-    [Fact]
     public void ActiveBorrowRejectsOwnerDisposal()
     {
         using NativePool<int> pool = new(

@@ -22,8 +22,8 @@ Security support until November 2031</PackageReleaseNotes>
     <PackageOutputPath>$(MSBuildThisFileDirectory)..\artifacts\packages\</PackageOutputPath>
   </PropertyGroup>
 
-  <!-- Measurement only: -p:NamAblation=SharedLookup|NoValidation|NoToken|NoAccounting|SmallPooled|FlatSlab
-       defines NAM_ABL_<NAME> for the #if blocks in the pool kernel. The default build defines nothing. -->
+  <!-- Measurement only: -p:NamAblation=SmallPooled
+       defines NAM_ABL_<NAME> for the #if blocks in Pooled<T>. The default build defines nothing. -->
   <PropertyGroup Condition="'$(NamAblation)' != ''">
     <DefineConstants>$(DefineConstants);NAM_ABL_$([System.String]::Copy('$(NamAblation)').ToUpperInvariant())</DefineConstants>
   </PropertyGroup>

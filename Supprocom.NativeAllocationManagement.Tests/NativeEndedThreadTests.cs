@@ -20,11 +20,10 @@ public sealed class NativeEndedThreadTests
             pool.Dispose();
         });
 
-        NativePool<int>.Slab slab = pool!.SlabForTest(0);
-        Assert.NotEqual(IntPtr.Zero, slab.Pointer);
+        Assert.NotEqual(IntPtr.Zero, pool!.SlabForTest(0).Pointer);
         NativeEndedThreads.ReleaseEndedForTest();
 
-        Assert.Equal(IntPtr.Zero, slab.Pointer);
+        Assert.Equal(IntPtr.Zero, pool.SlabForTest(0).Pointer);
         GC.KeepAlive(state);
     }
 
@@ -42,13 +41,12 @@ public sealed class NativeEndedThreadTests
             pool.Dispose();
         });
 
-        NativePool<int>.Slab slab = pool!.SlabForTest(0);
-        for (int started = 0; started < 1000 && slab.Pointer != IntPtr.Zero; started++)
+        for (int started = 0; started < 1000 && pool!.SlabForTest(0).Pointer != IntPtr.Zero; started++)
         {
             TestThread.Run(static () => { });
         }
 
-        Assert.Equal(IntPtr.Zero, slab.Pointer);
+        Assert.Equal(IntPtr.Zero, pool!.SlabForTest(0).Pointer);
         GC.KeepAlive(state);
     }
 
@@ -96,11 +94,10 @@ public sealed class NativeEndedThreadTests
             _ = shared.Rent(64, 1);
         });
 
-        NativePool<long>.Slab slab = shared!.SlabForTest(0);
         NativeEndedThreads.ReleaseEndedForTest();
 
-        Assert.Equal(NativeOwnerLifecycle.Disposed, shared.CurrentLifecycle);
-        Assert.Equal(IntPtr.Zero, slab.Pointer);
+        Assert.Equal(NativeOwnerLifecycle.Disposed, shared!.CurrentLifecycle);
+        Assert.Equal(IntPtr.Zero, shared.SlabForTest(0).Pointer);
         Assert.Throws<NativeAllocationStateException>(() => shared.GetStatistics());
         GC.KeepAlive(state);
     }
@@ -119,12 +116,11 @@ public sealed class NativeEndedThreadTests
             shared.Retire();
         });
 
-        NativePool<short>.Slab slab = shared!.SlabForTest(0);
         NativeEndedThreads.ReleaseEndedForTest();
-        Assert.NotEqual(IntPtr.Zero, slab.Pointer);
+        Assert.NotEqual(IntPtr.Zero, shared!.SlabForTest(0).Pointer);
 
         shared.ReleaseRetiredStorage();
-        Assert.Equal(IntPtr.Zero, slab.Pointer);
+        Assert.Equal(IntPtr.Zero, shared.SlabForTest(0).Pointer);
         GC.KeepAlive(state);
     }
 
