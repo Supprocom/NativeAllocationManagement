@@ -1,3 +1,4 @@
+#pragma warning disable CA1303, CA5392, CA5394, HLQ004, HLQ012, HLQ013 // Measurement tool: literals, seeded random, plain loops.
 using System.Buffers;
 using System.Diagnostics;
 using System.Globalization;
@@ -293,7 +294,7 @@ internal static partial class MappedFileBenchmark
         long sum = 0;
         foreach (long index in indices)
         {
-            sum += view.Read(index).Time;
+            sum += view.Get(index).Time;
         }
 
         return (sum, indices.Length, indices.LongLength * TickBytes);

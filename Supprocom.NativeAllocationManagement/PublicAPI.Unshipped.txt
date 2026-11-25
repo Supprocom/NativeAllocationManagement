@@ -21,9 +21,8 @@ Supprocom.NativeAllocationManagement.MappedView<T>.Flush() -> void
 Supprocom.NativeAllocationManagement.MappedView<T>.IsDisposed.get -> bool
 Supprocom.NativeAllocationManagement.MappedView<T>.IsReadOnly.get -> bool
 Supprocom.NativeAllocationManagement.MappedView<T>.Length.get -> long
-Supprocom.NativeAllocationManagement.MappedView<T>.Read(long index) -> T
-Supprocom.NativeAllocationManagement.MappedView<T>.Write(long index, T value) -> void
-Supprocom.NativeAllocationManagement.MappedView<T>.~MappedView() -> void
+Supprocom.NativeAllocationManagement.MappedView<T>.Get(long index) -> T
+Supprocom.NativeAllocationManagement.MappedView<T>.Set(long index, T value) -> void
 Supprocom.NativeAllocationManagement.NativeMappedFile
 Supprocom.NativeAllocationManagement.NativeMappedFile.Dispose() -> void
 Supprocom.NativeAllocationManagement.NativeMappedFile.Flush() -> void

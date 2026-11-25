@@ -48,10 +48,7 @@ internal static class MappedRange
     internal static int RestOf(long start, long count)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(start);
-        if (start > count)
-        {
-            throw new ArgumentOutOfRangeException(nameof(start));
-        }
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(start, count);
 
         long rest = count - start;
         if (rest > int.MaxValue)

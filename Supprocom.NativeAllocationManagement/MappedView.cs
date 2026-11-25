@@ -18,9 +18,6 @@ public sealed class MappedView<T> : IDisposable
         _start = segment is null ? null : (T*)((byte*)segment.Pointer + byteOffset);
     }
 
-    /// <summary>Releases an unreleased mapping reference when the view was never disposed.</summary>
-    ~MappedView() => Release();
-
     /// <summary>[wording: Length]</summary>
     public long Length { get; }
 
@@ -57,8 +54,8 @@ public sealed class MappedView<T> : IDisposable
     public Span<T> AsSpan(long start) =>
         AsSpan(start, MappedRange.RestOf(start, Length));
 
-    /// <summary>[wording: Read]</summary>
-    public unsafe T Read(long index)
+    /// <summary>[wording: Get]</summary>
+    public unsafe T Get(long index)
     {
         ThrowIfDisposed();
         ArgumentOutOfRangeException.ThrowIfNegative(index);
@@ -66,8 +63,8 @@ public sealed class MappedView<T> : IDisposable
         return _start[index];
     }
 
-    /// <summary>[wording: Write]</summary>
-    public unsafe void Write(long index, T value)
+    /// <summary>[wording: Set]</summary>
+    public unsafe void Set(long index, T value)
     {
         ThrowIfDisposed();
         ThrowIfReadOnly();
@@ -87,7 +84,6 @@ public sealed class MappedView<T> : IDisposable
     public void Dispose()
     {
         Release();
-        GC.SuppressFinalize(this);
     }
 
     private void Release()

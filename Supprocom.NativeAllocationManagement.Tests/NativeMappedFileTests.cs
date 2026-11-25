@@ -46,7 +46,7 @@ public sealed class NativeMappedFileTests : IDisposable
         using MappedView<Tick> view = file.View<Tick>();
         Assert.Equal(TickCount, view.Length);
         Assert.True(view.IsReadOnly);
-        Assert.Equal(7, view.Read(7).Time);
+        Assert.Equal(7, view.Get(7).Time);
         ReadOnlySpan<Tick> window = view.AsReadOnlySpan(100, 16);
         Assert.Equal(16, window.Length);
         Assert.Equal(115, window[15].Time);
@@ -58,12 +58,13 @@ public sealed class NativeMappedFileTests : IDisposable
     {
         using NativeMappedFile file = NativeMappedFile.OpenRead(Fixture(headerBytes: 16));
         using MappedView<Tick> view = file.View<Tick>(16, TickCount);
-        Assert.Equal(3, view.Read(3).Time);
+        Assert.Equal(3, view.Get(3).Time);
         Assert.Throws<ArgumentOutOfRangeException>(() => file.View<Tick>(16, TickCount + 1));
         Assert.Throws<ArgumentException>(() => file.View<Tick>(4, 1));
         Assert.Throws<ArgumentOutOfRangeException>(() => file.View<Tick>(-8, 1));
         Assert.Throws<ArgumentOutOfRangeException>(() => file.View<Tick>(0, -1));
-        Assert.Throws<InvalidOperationException>(() => file.View<Tick>());
+        using NativeMappedFile odd = NativeMappedFile.OpenRead(Fixture(headerBytes: 4));
+        Assert.Throws<InvalidOperationException>(() => odd.View<Tick>());
     }
 
     [Fact]
@@ -74,7 +75,7 @@ public sealed class NativeMappedFileTests : IDisposable
         using (MappedView<Tick> view = file.View<Tick>())
         {
             view.AsSpan(10, 2)[1] = new Tick { Time = -5, Price = 1 };
-            view.Write(0, new Tick { Time = -1, Price = 2 });
+            view.Set(0, new Tick { Time = -1, Price = 2 });
             view.Flush();
             using FileStream other = new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
             byte[] raw = new byte[Marshal.SizeOf<Tick>()];
@@ -85,7 +86,7 @@ public sealed class NativeMappedFileTests : IDisposable
 
         using NativeMappedFile reopened = NativeMappedFile.OpenRead(path);
         using MappedView<Tick> back = reopened.View<Tick>();
-        Assert.Equal(-1, back.Read(0).Time);
+        Assert.Equal(-1, back.Get(0).Time);
     }
 
     [Fact]
@@ -95,7 +96,7 @@ public sealed class NativeMappedFileTests : IDisposable
         using MappedView<Tick> view = file.View<Tick>();
         Assert.Throws<InvalidOperationException>(() => view.AsSpan(0, 1));
         Assert.Throws<InvalidOperationException>(() => view.AsSpan(0));
-        Assert.Throws<InvalidOperationException>(() => view.Write(0, default));
+        Assert.Throws<InvalidOperationException>(() => view.Set(0, default));
         view.Flush();
     }
 
@@ -108,7 +109,7 @@ public sealed class NativeMappedFileTests : IDisposable
         Assert.Throws<ArgumentOutOfRangeException>(() => view.AsReadOnlySpan(0, -1));
         Assert.Throws<ArgumentOutOfRangeException>(() => view.AsReadOnlySpan(50, 51));
         Assert.Throws<ArgumentOutOfRangeException>(() => view.AsReadOnlySpan(101));
-        Assert.Throws<ArgumentOutOfRangeException>(() => view.Read(100));
+        Assert.Throws<ArgumentOutOfRangeException>(() => view.Get(100));
         Assert.Equal(0, view.AsReadOnlySpan(100).Length);
         Assert.Equal(50, view.AsReadOnlySpan(50).Length);
     }
@@ -123,8 +124,8 @@ public sealed class NativeMappedFileTests : IDisposable
         a.Dispose();
         Assert.True(a.IsDisposed);
         Assert.False(b.IsDisposed);
-        Assert.Equal(5, b.Read(0).Time);
-        Assert.Throws<ObjectDisposedException>(() => a.Read(0));
+        Assert.Equal(5, b.Get(0).Time);
+        Assert.Throws<ObjectDisposedException>(() => a.Get(0));
         Assert.Throws<ObjectDisposedException>(() => a.AsReadOnlySpan(0, 1));
         Assert.Throws<ObjectDisposedException>(a.Flush);
     }
@@ -138,7 +139,7 @@ public sealed class NativeMappedFileTests : IDisposable
         file.Dispose();
         Assert.True(file.IsDisposed);
         Assert.True(view.IsDisposed);
-        Assert.Throws<ObjectDisposedException>(() => view.Read(0));
+        Assert.Throws<ObjectDisposedException>(() => view.Get(0));
         Assert.Throws<ObjectDisposedException>(() => view.AsReadOnlySpan(0, 1));
         Assert.Throws<ObjectDisposedException>(() => file.View<Tick>());
         Assert.Throws<ObjectDisposedException>(file.Flush);
@@ -180,6 +181,12 @@ public sealed class NativeMappedFileTests : IDisposable
     [Fact]
     public void OpenFileBlocksAWriterWhileMapped()
     {
+        if (!OperatingSystem.IsWindows())
+        {
+            // Unix share modes are advisory and do not refuse a second writer.
+            return;
+        }
+
         string path = Fixture();
         using NativeMappedFile file = NativeMappedFile.OpenRead(path);
         Assert.Throws<IOException>(() => new FileStream(path, FileMode.Open, FileAccess.Write, FileShare.ReadWrite));

@@ -268,6 +268,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 || Is(type, Pooled)
                 || Is(type, PreparedPooled)
                 || Is(type, ConcurrentPooled)
+                || Is(type, MappedView)
                 || Is(type, Local)
                 || Is(type, ArenaLease)
                 || Is(type, ConcurrentArenaLease)
@@ -291,7 +292,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 || Is(type, ConcurrentPool)
                 || Is(type, Region)
                 || Is(type, Arena)
-                || Is(type, ConcurrentArena);
+                || Is(type, ConcurrentArena)
+                || Is(type, MappedFile);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -1080,7 +1082,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             if (block.FallThroughSuccessor?.Semantics
                     != ControlFlowBranchSemantics.Return
                 || !IsOwnerType(value.Type)
-                || Unwrap(value) is IObjectCreationOperation)
+                || Unwrap(value) is IObjectCreationOperation
+                || IsMappedFileFactory(value))
             {
                 return;
             }
@@ -2340,6 +2343,16 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         public override void VisitInvocation(IInvocationOperation operation)
         {
             _context.CancellationToken.ThrowIfCancellationRequested();
+            if (operation.TargetMethod.IsStatic
+                && operation.TargetMethod.Name is "OpenRead" or "OpenReadWrite"
+                && NativeSymbols.Is(operation.TargetMethod.ContainingType, _symbols.MappedFile))
+            {
+                // The mapped file is an owner created by a factory instead of a constructor.
+                RegisterOwner(operation);
+                base.VisitInvocation(operation);
+                return;
+            }
+
             if (operation.IsImplicit && IsNullableValueExtraction(operation) && IsNativeTransfer(operation.Type))
             {
                 base.VisitInvocation(operation);
@@ -2851,7 +2864,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     value);
             }
 
-            if (value is not null && value is not IObjectCreationOperation
+            if (value is not null && value is not IObjectCreationOperation && !IsMappedFileFactory(value)
                 && !IsHandleCreatingInvocation(value) && !IsPooledMoveInvocation(value))
             {
                 Target target = GetTarget(operation.Target);
@@ -2903,7 +2916,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                     value);
             }
 
-            if (value is not null && value is not IObjectCreationOperation
+            if (value is not null && value is not IObjectCreationOperation && !IsMappedFileFactory(value)
                 && !IsHandleCreatingInvocation(value) && !IsPooledMoveInvocation(value))
             {
                 Target target = new(operation.Symbol, operation.Syntax);
@@ -3003,7 +3016,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 }
             }
 
-            if (value is not null && value is not IObjectCreationOperation)
+            if (value is not null && value is not IObjectCreationOperation && !IsMappedFileFactory(value))
             {
                 if (operation.Parent is IInvocationOperation composite
                     && (IsNonRetainingCompositeLeaseOperation(composite)
@@ -3117,7 +3130,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 }
             }
 
-            if (value is not null && value is not IObjectCreationOperation)
+            if (value is not null && value is not IObjectCreationOperation && !IsMappedFileFactory(value))
             {
                 if (IsHandleType(value.Type) && GetHandle(value) is HandleState handle)
                 {
@@ -3312,7 +3325,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             }
 
             if (operand is not null
-                && IsOwnerType(operand.Type)
+                && (IsOwnerType(operand.Type) || NativeSymbols.Is(operand.Type, _symbols.MappedView))
                 && operation.IsImplicit
                 && IsDirectUsingResourceConversion(operation.Syntax))
             {
@@ -5499,14 +5512,15 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             }
         }
 
-        private void RegisterOwner(IObjectCreationOperation operation)
+        private void RegisterOwner(IOperation operation)
         {
+            IObjectCreationOperation? creation = operation as IObjectCreationOperation;
             Target target = FindTarget(operation);
             bool isRegion = IsNativeRegion(operation.Type);
             bool isUsing = isRegion
                 ? IsDirectRegionUsingSyntax(operation.Syntax, target.Symbol)
                 : IsUsingSyntax(operation.Syntax, target.Symbol);
-            bool requiresDeterministicReturn = IsNativeArena(operation.Type) || RequiresDeterministicReturn(operation);
+            bool requiresDeterministicReturn = IsNativeArena(operation.Type) || (creation is not null && RequiresDeterministicReturn(creation));
             TextSpan? regionScope = isRegion && isUsing ? GetUsingScope(operation.Syntax, target.Symbol) : null;
 
             if (target.Symbol is null)
@@ -5544,7 +5558,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 && IsStableFieldOwner(stableField);
             owner.ScopedOwnerEligible = target.Symbol is ILocalSymbol
                 && (!isRegion || isUsing);
-            switch (GetDeclarationActivation(operation))
+            switch (creation is null ? DeclarationActivation.Active : GetDeclarationActivation(creation))
             {
                 case DeclarationActivation.Unleased:
                     owner.Unleased = true;
@@ -5637,7 +5651,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             }
 
             Target target = FindTarget(operation);
-            bool scopedAcquisition = AcquisitionName(operation.TargetMethod.Name) is "LeaseScoped" or "ScratchScoped";
+            bool scopedAcquisition = AcquisitionName(operation.TargetMethod) is "LeaseScoped" or "ScratchScoped";
             if (target.Symbol is null
                 && !scopedAcquisition
                 && (owner.IsArena || owner.IsRegion)
@@ -5711,7 +5725,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             }
             else if (owner.ScopedOwnerEligible
                 && IsDirectScopedLocalInitialization(operation.Syntax, target.Symbol)
-                && AcquisitionName(operation.TargetMethod.Name) is "Rent" or "Lease" or "Scratch")
+                && AcquisitionName(operation.TargetMethod) is "Rent" or "Lease" or "Scratch")
             {
                 Report(
                     NativeAllocationDiagnosticDescriptors.OrdinaryAcquisitionScopedWarning,
@@ -5908,7 +5922,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 }
                 return;
             }
-            if (AcquisitionName(name) is "Rent" or "TryRent" or "TryScratch" or "TryScratchScoped" or "Lease" or "Scratch" or "LeaseScoped" or "ScratchScoped"
+            if ((string.Equals(name, "View", StringComparison.Ordinal) && NativeSymbols.Is(owner.Type, _symbols.MappedFile))
+                || AcquisitionName(name) is "Rent" or "TryRent" or "TryScratch" or "TryScratchScoped" or "Lease" or "Scratch" or "LeaseScoped" or "ScratchScoped"
                 || (string.Equals(name, "Process", StringComparison.Ordinal) && NativeSymbols.Is(owner.Type, _symbols.Pool)))
             {
                 CheckOwnerActive(owner, syntax, name);
@@ -7435,7 +7450,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             string name = invocation.TargetMethod.Name;
             if (IsNativePool(invocation.TargetMethod.ContainingType))
             {
-                return IsPoolProcess(invocation) || AcquisitionName(name) is "Rent" or "TryRent" or "GetStatistics"
+                return IsPoolProcess(invocation) || AcquisitionName(invocation.TargetMethod) is "Rent" or "TryRent" or "GetStatistics"
                     or "CaptureDiagnosticSnapshot" or "CapturePreparedSnapshot";
             }
 
@@ -7916,10 +7931,14 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
             return DeclarationActivation.Active;
         }
 
+        private bool IsMappedFileFactory(IOperation operation) =>
+            Unwrap(operation) is IInvocationOperation { TargetMethod: { IsStatic: true, Name: "OpenRead" or "OpenReadWrite" } method }
+            && NativeSymbols.Is(method.ContainingType, _symbols.MappedFile);
+
         private bool IsHandleCreatingInvocation(IOperation operation)
         {
             return operation is IInvocationOperation invocation
-                && AcquisitionName(invocation.TargetMethod.Name) is var name
+                && AcquisitionName(invocation.TargetMethod) is var name
                 && (((name is "Rent" or "LeaseScoped") && IsNativePool(invocation.TargetMethod.ContainingType))
                     || ((name is "Lease" or "LeaseScoped") && IsNativeRegion(invocation.TargetMethod.ContainingType))
                     || ((name is "Scratch" or "ScratchScoped") && IsNativeArena(invocation.TargetMethod.ContainingType)));
@@ -7935,11 +7954,17 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 _ => false
             };
 
+        // A mapped file's View follows the pool Rent rules; no other type's View does.
+        private string AcquisitionName(IMethodSymbol method) =>
+            string.Equals(method.Name, "View", StringComparison.Ordinal)
+            && NativeSymbols.Is(method.ContainingType, _symbols.MappedFile)
+                ? "Rent"
+                : AcquisitionName(method.Name);
+
         // An uninitialized acquisition follows its filled counterpart's ownership rules.
         private static string AcquisitionName(string name) => name switch
         {
             "RentUninitialized" => "Rent",
-            "View" => "Rent",
             "LeaseUninitialized" => "Lease",
             "ScratchUninitialized" => "Scratch",
             "ScratchScopedUninitialized" => "ScratchScoped",

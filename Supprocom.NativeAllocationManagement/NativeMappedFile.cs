@@ -1,4 +1,5 @@
 using System.IO.MemoryMappedFiles;
+using System.Runtime.InteropServices;
 
 namespace Supprocom.NativeAllocationManagement;
 
