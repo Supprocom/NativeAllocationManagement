@@ -122,6 +122,10 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
                 Namespace + "PreparedPooled`1");
             ConcurrentPooled = runtimeAssembly.GetTypeByMetadataName(
                 Namespace + "ConcurrentPooled`1");
+            MappedFile = runtimeAssembly.GetTypeByMetadataName(
+                Namespace + "NativeMappedFile");
+            MappedView = runtimeAssembly.GetTypeByMetadataName(
+                Namespace + "MappedView`1");
             Local = runtimeAssembly.GetTypeByMetadataName(
                 Namespace + "Local`1");
             ArenaLease = runtimeAssembly.GetTypeByMetadataName(
@@ -169,6 +173,11 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         internal INamedTypeSymbol? PreparedPooled { get; }
 
         internal INamedTypeSymbol? ConcurrentPooled { get; }
+
+        // A mapped file follows the pool rules and its views follow the lease rules.
+        internal INamedTypeSymbol? MappedFile { get; }
+
+        internal INamedTypeSymbol? MappedView { get; }
 
         internal INamedTypeSymbol? Local { get; }
 
@@ -7930,6 +7939,7 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         private static string AcquisitionName(string name) => name switch
         {
             "RentUninitialized" => "Rent",
+            "View" => "Rent",
             "LeaseUninitialized" => "Lease",
             "ScratchUninitialized" => "Scratch",
             "ScratchScopedUninitialized" => "ScratchScoped",
@@ -8145,7 +8155,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         {
             return NativeSymbols.Is(type, _symbols.Pool)
                 || NativeSymbols.Is(type, _symbols.PreparedPool)
-                || NativeSymbols.Is(type, _symbols.ConcurrentPool);
+                || NativeSymbols.Is(type, _symbols.ConcurrentPool)
+                || NativeSymbols.Is(type, _symbols.MappedFile);
         }
 
         private bool IsNativeRegion(ITypeSymbol? type)
@@ -8163,7 +8174,8 @@ public sealed class NativeAllocationAnalyzer : DiagnosticAnalyzer
         {
             return NativeSymbols.Is(type, _symbols.Pooled)
                 || NativeSymbols.Is(type, _symbols.PreparedPooled)
-                || NativeSymbols.Is(type, _symbols.ConcurrentPooled);
+                || NativeSymbols.Is(type, _symbols.ConcurrentPooled)
+                || NativeSymbols.Is(type, _symbols.MappedView);
         }
 
         private bool IsNativeLocal(ITypeSymbol? type)
