@@ -412,10 +412,15 @@ internal sealed class NativeLeaseMemoryManager<T> : MemoryManager<T>, INativeLea
     private readonly NativeGeneration _generation;
     private readonly long _generationNumber;
     private readonly int _length;
-    private readonly Lock _gate = new();
-    private int _pins;
+    // The pin count in the low bits; the top bit is set once a dispose found pins, so the last unpin returns.
+    private int _state;
+    private const int Deferred = int.MinValue;
+    private const int PinMask = int.MaxValue;
     private volatile bool _disposed;
     private Memory<T> _memory;
+    // Set for a manager that is also a pool's IMemoryOwner: disposing it returns the lease, once.
+    private bool _ownsLease;
+    private int _returned;
 
     private NativeLeaseMemoryManager(NativeOwnerKernel kernel, NativeAllocation allocation, long allocationId, int length)
     {
@@ -442,6 +447,26 @@ internal sealed class NativeLeaseMemoryManager<T> : MemoryManager<T>, INativeLea
         return manager;
     }
 
+    // Rents a transferable lease, so any thread can return it, and publishes a manager that owns it.
+    internal static NativeLeaseMemoryManager<T> RentOwned(NativeOwnerKernel kernel, int length)
+    {
+        NativePoolLease lease = kernel.RentFilled(length, default(T)!, fill: false, transferable: true);
+        NativeLeaseMemoryManager<T> manager = new(kernel, lease.AllocationState, lease.AllocationId, lease.AllocationState.Length);
+        manager._memory = manager.Memory;
+        manager._ownsLease = true;
+        lease.AllocationState.LeaseMemory = manager;
+        return manager;
+    }
+
+    // The return of an owned lease: after the last unpin when pinned, else at once; only the first call returns.
+    private void ReturnOwned()
+    {
+        if (Interlocked.Exchange(ref _returned, 1) == 0)
+        {
+            _kernel.ReturnTransferLease(_allocation, _generationNumber, AllocationId, "NativeConcurrentPool.AsMemoryPool");
+        }
+    }
+
     [System.Diagnostics.CodeAnalysis.DoesNotReturn]
     private static void ThrowDisposed() =>
         throw new ObjectDisposedException(
@@ -465,17 +490,35 @@ internal sealed class NativeLeaseMemoryManager<T> : MemoryManager<T>, INativeLea
             throw new ArgumentOutOfRangeException(nameof(elementIndex));
         }
 
-        lock (_gate)
+        // The pin count is taken first, so a dispose that runs meanwhile defers its return to the last unpin.
+        int state = Volatile.Read(ref _state);
+        while (true)
         {
-            // The generation's count keeps the pool from being disposed or
-            // rolled over under a pin; the pin count makes the lease's own
-            // return wait.
-            if (!IsLive || !_generation.TryEnterOperation())
+            if (state < 0)
             {
                 ThrowDisposed();
             }
 
-            _pins++;
+            int observed = Interlocked.CompareExchange(ref _state, state + 1, state);
+            if (observed == state)
+            {
+                break;
+            }
+
+            state = observed;
+        }
+
+        // The generation's count keeps the pool from being disposed or
+        // rolled over under a pin; the pin count makes the lease's own
+        // return wait.
+        if (!IsLive || !_generation.TryEnterOperation())
+        {
+            if (ReleasePin())
+            {
+                CompleteReturn();
+            }
+
+            ThrowDisposed();
         }
 
         try
@@ -492,20 +535,43 @@ internal sealed class NativeLeaseMemoryManager<T> : MemoryManager<T>, INativeLea
 
     public override void Unpin()
     {
-        bool completeReturn;
-        lock (_gate)
+        if ((Volatile.Read(ref _state) & PinMask) == 0)
         {
-            if (_pins == 0)
-            {
-                return;
-            }
-
-            _pins--;
-            completeReturn = _pins == 0 && _disposed;
+            return;
         }
 
+        bool completeReturn = ReleasePin();
         _kernel.ExitPinnedOperation(_generation);
         if (completeReturn)
+        {
+            CompleteReturn();
+        }
+    }
+
+    // Drops one pin; true when it was the last of a disposed lease.
+    private bool ReleasePin()
+    {
+        int state = Volatile.Read(ref _state);
+        while (true)
+        {
+            int next = state - 1;
+            int observed = Interlocked.CompareExchange(ref _state, next, state);
+            if (observed == state)
+            {
+                return next == Deferred;
+            }
+
+            state = observed;
+        }
+    }
+
+    private void CompleteReturn()
+    {
+        if (_ownsLease)
+        {
+            ReturnOwned();
+        }
+        else
         {
             _kernel.ReturnLease(_generationNumber, AllocationId, "ConcurrentPooled.Dispose");
         }
@@ -518,19 +584,27 @@ internal sealed class NativeLeaseMemoryManager<T> : MemoryManager<T>, INativeLea
             return false;
         }
 
-        lock (_gate)
+        int state = Volatile.Read(ref _state);
+        while ((state & PinMask) != 0)
         {
-            if (_pins == 0)
+            int observed = Interlocked.CompareExchange(ref _state, state | Deferred, state);
+            if (observed == state)
             {
-                return false;
+                _disposed = true;
+                return true;
             }
 
-            _disposed = true;
-            return true;
+            state = observed;
         }
+
+        return false;
     }
 
     protected override void Dispose(bool disposing)
     {
+        if (disposing && _ownsLease && !TryDeferReturn(AllocationId))
+        {
+            ReturnOwned();
+        }
     }
 }

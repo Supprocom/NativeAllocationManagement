@@ -1,3 +1,5 @@
+using System.Buffers;
+
 namespace Supprocom.NativeAllocationManagement;
 
 /// <summary>Owns synchronized typed storage for transferable native values.</summary>
@@ -10,6 +12,9 @@ public sealed class NativeConcurrentPool<T> : IDisposable
     public long Id => _kernel.Id;
 
     internal NativeOwnerKernel KernelForTransfer => _kernel;
+
+    // The pool's one MemoryPool<byte> view, created by AsMemoryPool.
+    internal MemoryPool<byte>? MemoryPoolView;
 
     internal NativeOwnerLifecycle CurrentLifecycle => _kernel.Lifecycle;
 

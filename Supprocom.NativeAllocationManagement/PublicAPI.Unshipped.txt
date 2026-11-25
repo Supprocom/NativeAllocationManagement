@@ -14,7 +14,5 @@ Supprocom.NativeAllocationManagement.NativeMemoryReturn.Reuse = 0 -> Supprocom.N
 Supprocom.NativeAllocationManagement.NativeTransfer<T>.AsMemory() -> System.Memory<T>
 Supprocom.NativeAllocationManagement.NativeShared<T>.AsMemory() -> System.ReadOnlyMemory<T>
 Supprocom.NativeAllocationManagement.ConcurrentPooled<T>.AsMemory() -> System.Memory<T>
-Supprocom.NativeAllocationManagement.NativeMemoryPool
-static Supprocom.NativeAllocationManagement.NativeMemoryPool.Shared.get -> Supprocom.NativeAllocationManagement.NativeMemoryPool!
-override Supprocom.NativeAllocationManagement.NativeMemoryPool.MaxBufferSize.get -> int
-override Supprocom.NativeAllocationManagement.NativeMemoryPool.Rent(int minBufferSize = -1) -> System.Buffers.IMemoryOwner<byte>!
+Supprocom.NativeAllocationManagement.NativeConcurrentPoolExtensions
+static Supprocom.NativeAllocationManagement.NativeConcurrentPoolExtensions.AsMemoryPool(this Supprocom.NativeAllocationManagement.NativeConcurrentPool<byte>! pool) -> System.Buffers.MemoryPool<byte>!

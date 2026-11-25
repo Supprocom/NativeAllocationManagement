@@ -50,9 +50,9 @@ internal static class MemoryCostBenchmarks
         Memory<byte> transferMemory = transfer.AsMemory();
         Row("NativeTransfer.AsMemory()", ops, bytesPerOp: 0, bodyOps => SumSpan(transferMemory, bodyOps));
 
-        using IMemoryOwner<byte> poolOwner = NativeMemoryPool.Shared.Rent(BufferSize);
+        using IMemoryOwner<byte> poolOwner = MemoryBenchmarks.NamConcurrent.Rent(BufferSize);
         Memory<byte> poolMemory = poolOwner.Memory;
-        Row("NativeMemoryPool Memory", ops, bytesPerOp: 0, bodyOps => SumSpan(poolMemory, bodyOps));
+        Row("NamConcurrent Memory", ops, bytesPerOp: 0, bodyOps => SumSpan(poolMemory, bodyOps));
     }
 
     private static long SumSpan(Memory<byte> memory, int ops)
@@ -78,21 +78,10 @@ internal static class MemoryCostBenchmarks
         Row("ArrayPool adapter", ops, 0, bodyOps => PoolCycle(adapter, bodyOps));
         Row("NamMemoryPool (fresh)", ops, 0, bodyOps => PoolCycle(fresh, bodyOps));
         Row("NamReusingMemoryPool", ops, 0, bodyOps => PoolCycle(reusing, bodyOps));
-        Row("NativeMemoryPool", ops, 0, bodyOps => PoolCycle(NativeMemoryPool.Shared, bodyOps));
-        Print("   -- NativeMemoryPool split --");
-        long callsBefore = NativeMemoryDiagnostics.Snapshot().AllocationCount;
-        _ = PoolCycle(NativeMemoryPool.Shared, ops);
-        Print(string.Create(CultureInfo.InvariantCulture, $"   allocator calls during {ops} cycles: {NativeMemoryDiagnostics.Snapshot().AllocationCount - callsBefore}"));
-        int missesBefore = NativeThreadState.Current.BlockMisses;
-        _ = PoolCycle(NativeMemoryPool.Shared, ops);
-        Print(string.Create(CultureInfo.InvariantCulture, $"   stack-block lookup misses during {ops} cycles: {NativeThreadState.Current.BlockMisses - missesBefore}"));
+        Row("NamConcurrent", ops, 0, bodyOps => PoolCycle(MemoryBenchmarks.NamConcurrent, bodyOps));
         Row("cycle: Rent + Dispose only", ops, 0, bodyOps => PartialCycle(bodyOps, touchMemory: false, writeSpan: false));
         Row("cycle: Rent + .Memory + Dispose", ops, 0, bodyOps => PartialCycle(bodyOps, touchMemory: true, writeSpan: false));
         Row("cycle: Rent + .Memory.Span[0] + Dispose", ops, 0, bodyOps => PartialCycle(bodyOps, touchMemory: true, writeSpan: true));
-        Row("probe: NativeThreadState.Current", ops, 0, NativeMemoryPool.ProbeThreadState);
-        Row("probe: Current + GetTyped + cache take/add", ops, 0, NativeMemoryPool.ProbeCache);
-        Row("probe: Owner.Create + Memory.Length", ops, 0, bodyOps => NativeMemoryPool.ProbeOwner(bodyOps, dispose: false));
-        Row("probe: Owner create + Dispose + take back", ops, 0, bodyOps => NativeMemoryPool.ProbeOwner(bodyOps, dispose: true));
         Row("raw ArrayPool<byte>.Shared Rent/Return", ops, 0, RawArrayPoolCycle);
         Row("raw NativeTransfer Create/Dispose", ops, 0, RawTransferCycle);
         Row("raw NativeTransfer Create/AsMemory/Dispose", ops, 0, RawTransferMemoryCycle);
@@ -117,7 +106,7 @@ internal static class MemoryCostBenchmarks
         long sum = 0;
         for (int index = 0; index < ops; index++)
         {
-            using IMemoryOwner<byte> owner = NativeMemoryPool.Shared.Rent(BufferSize);
+            using IMemoryOwner<byte> owner = MemoryBenchmarks.NamConcurrent.Rent(BufferSize);
             if (touchMemory)
             {
                 sum += owner.Memory.Length;
@@ -210,7 +199,7 @@ internal static class MemoryCostBenchmarks
         Row("ArrayPool adapter", ops, 0, bodyOps => HandOver(adapter, bodyOps), processWide: true);
         Row("NamMemoryPool (fresh)", ops, 0, bodyOps => HandOver(fresh, bodyOps), processWide: true);
         Row("NamReusingMemoryPool", ops, 0, bodyOps => HandOver(reusing, bodyOps), processWide: true);
-        Row("NativeMemoryPool", ops, 0, bodyOps => HandOver(NativeMemoryPool.Shared, bodyOps), processWide: true);
+        Row("NamConcurrent", ops, 0, bodyOps => HandOver(MemoryBenchmarks.NamConcurrent, bodyOps), processWide: true);
     }
 
     private static long HandOver(MemoryPool<byte> pool, int ops)
@@ -288,10 +277,10 @@ internal static class MemoryCostBenchmarks
             ReportAddress("NativeTransfer", NativeAlignedBuffer.AddressOf(transferMemory.Span));
             Row("-> NativeTransfer storage", chunks, BufferSize, _ => ReadPass(handle, transferMemory.Span));
 
-            using IMemoryOwner<byte> owner = NativeMemoryPool.Shared.Rent(BufferSize);
+            using IMemoryOwner<byte> owner = MemoryBenchmarks.NamConcurrent.Rent(BufferSize);
             Memory<byte> poolMemory = owner.Memory;
-            ReportAddress("NativeMemoryPool", NativeAlignedBuffer.AddressOf(poolMemory.Span));
-            Row("-> NativeMemoryPool buffer", chunks, BufferSize, _ => ReadPass(handle, poolMemory.Span));
+            ReportAddress("NamConcurrent", NativeAlignedBuffer.AddressOf(poolMemory.Span));
+            Row("-> NamConcurrent buffer", chunks, BufferSize, _ => ReadPass(handle, poolMemory.Span));
 
             using NativeAlignedBuffer aligned64 = NativeAlignedBuffer.Allocate(BufferSize, 64);
             ReportAddress("AlignedAlloc 64", NativeAlignedBuffer.AddressOf(aligned64.Span));

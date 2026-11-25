@@ -26,7 +26,7 @@ internal static class MemoryHandoffBenchmarks
 
     private enum Mode
     {
-        NamPool,
+        NamConcurrent,
         ArrayPoolPinned,
         ArrayPoolCopied,
         PinnedHeapPool
@@ -79,7 +79,7 @@ internal static class MemoryHandoffBenchmarks
 
     private static string Describe(Mode mode) => mode switch
     {
-        Mode.NamPool => "NAM pool, pointer as is",
+        Mode.NamConcurrent => "NamConcurrent, pointer as is",
         Mode.ArrayPoolPinned => "ArrayPool adapter, pinned",
         Mode.ArrayPoolCopied => "ArrayPool adapter, copied",
         _ => "pinned-heap arrays, pointer as is"
@@ -120,7 +120,7 @@ internal static class MemoryHandoffBenchmarks
     {
         MemoryPool<byte> pool = mode switch
         {
-            Mode.NamPool => NativeMemoryPool.Shared,
+            Mode.NamConcurrent => MemoryBenchmarks.NamConcurrent,
             Mode.PinnedHeapPool => s_pinnedHeap,
             _ => new MemoryBenchmarks.ArrayPoolMemoryPool()
         };

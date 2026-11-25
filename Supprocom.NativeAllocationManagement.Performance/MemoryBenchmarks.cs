@@ -15,6 +15,9 @@ namespace Supprocom.NativeAllocationManagement.Performance;
 // minimum and maximum of its samples.
 internal static class MemoryBenchmarks
 {
+    // A default-options concurrent pool, viewed as a MemoryPool<byte>; shared by every NAM pool row.
+    internal static readonly MemoryPool<byte> NamConcurrent = new NativeConcurrentPool<byte>().AsMemoryPool();
+
     private const int SmallMessage = 64;
     private const int LargeMessage = 64 * 1024;
 
@@ -80,7 +83,7 @@ internal static class MemoryBenchmarks
 
     private enum Provider
     {
-        NamPool,
+        NamConcurrent,
         NamTransfer,
         ArrayPool,
         MemoryPool
@@ -252,8 +255,8 @@ internal static class MemoryBenchmarks
                 case Provider.NamTransfer:
                     set._transfer = NativeTransfer<byte>.CreateUninitialized(size);
                     break;
-                case Provider.NamPool:
-                    set._owner = NativeMemoryPool.Shared.Rent(size);
+                case Provider.NamConcurrent:
+                    set._owner = MemoryBenchmarks.NamConcurrent.Rent(size);
                     break;
                 default:
                     set._owner = MemoryPool<byte>.Shared.Rent(size);
@@ -296,7 +299,7 @@ internal static class MemoryBenchmarks
         MemoryPool,
         Nam,
         NamReused,
-        NamPool
+        NamConcurrent
     }
 
     private sealed record CopyResult(double MegabytesPerSecond, double AllocatedMegabytes);
@@ -444,7 +447,7 @@ internal static class MemoryBenchmarks
         PipePool.ArrayPool => new ArrayPoolMemoryPool(),
         PipePool.MemoryPool => MemoryPool<byte>.Shared,
         PipePool.NamReused => new NamReusingMemoryPool(),
-        PipePool.NamPool => NativeMemoryPool.Shared,
+        PipePool.NamConcurrent => MemoryBenchmarks.NamConcurrent,
         _ => new NamMemoryPool()
     };
 
