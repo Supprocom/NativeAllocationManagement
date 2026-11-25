@@ -12,6 +12,8 @@ namespace Supprocom.NativeAllocationManagement;
 // ObjectDisposedException instead of reading storage that has gone to another rent. The storage
 // goes to a small per-thread cache by power-of-two size class (4 KiB up), as ArrayPool keeps its
 // arrays; a block returned on another thread joins that thread's cache. A full cache frees.
+// Nothing else frees on its own: not time, not memory pressure. TrimCurrentThread and TrimAllThreads
+// free what the pool keeps, and only that: a buffer someone holds is in no cache or store.
 //
 // A pin keeps the storage: disposing the owner while pinned does not return it until the last
 // unpin. Storage comes through NativeBlockAllocator, so native-byte accounting sees it.
@@ -28,9 +30,19 @@ public sealed class NativeMemoryPool : MemoryPool<byte>
     private const int Batch = SlotsPerClass / 2;
     private const nuint SharedBytesPerClass = 4 * 1024 * 1024;
     private const int MaxSharedBlocks = 64;
+    // Classes from 8 MiB up share one byte budget per thread cache: a returned block that would take
+    // the cache's large blocks past it is freed instead.
+    private const int LargeIndex = 10;
+    private const long LargeCacheBytes = 64L * 1024 * 1024;
 
     private static readonly int s_cacheSlot = NativeThreadState.AllocateTypedSlot();
     private static readonly SharedStack[] s_shared = CreateShared();
+
+    // Raised by TrimAllThreads; a thread cache that has not seen the current value frees its blocks
+    // at its next rent or return.
+    private static int s_trimGeneration;
+    private static long s_allocatedBlocks;
+    private static long s_freedBlocks;
 
     private NativeMemoryPool()
     {
@@ -41,6 +53,29 @@ public sealed class NativeMemoryPool : MemoryPool<byte>
 
     /// <summary>Gets the largest buffer the pool rents.</summary>
     public override int MaxBufferSize => 1 << MaxClassShift;
+
+    /// <summary>Frees the buffers the pool keeps for reuse in its shared store and on the calling thread.</summary>
+    public static void TrimCurrentThread()
+    {
+        foreach (SharedStack shared in s_shared)
+        {
+            shared.Drain();
+        }
+
+        ThreadCache? cache = NativeThreadState.Current.GetTyped<ThreadCache>(s_cacheSlot);
+        if (cache is not null)
+        {
+            cache.SeenGeneration = Volatile.Read(ref s_trimGeneration);
+            cache.ReleaseAll();
+        }
+    }
+
+    /// <summary>Frees the buffers the pool keeps for reuse in its shared store and on the calling thread, and on every other thread at its next use of the pool.</summary>
+    public static void TrimAllThreads()
+    {
+        Interlocked.Increment(ref s_trimGeneration);
+        TrimCurrentThread();
+    }
 
     /// <summary>Rents a buffer of at least the requested size.</summary>
     public override IMemoryOwner<byte> Rent(int minBufferSize = -1)
@@ -54,6 +89,11 @@ public sealed class NativeMemoryPool : MemoryPool<byte>
         int shift = Math.Max(MinClassShift, BitOperations.Log2((uint)(size - 1)) + 1);
         NativeThreadState thread = NativeThreadState.Current;
         ThreadCache cache = thread.GetTyped<ThreadCache>(s_cacheSlot) ?? CreateCache(thread);
+        if (cache.SeenGeneration != Volatile.Read(ref s_trimGeneration))
+        {
+            Resync(cache);
+        }
+
         if (!cache.TryTake(shift - MinClassShift, out CachedBlock block))
         {
             block = Refill(cache, shift - MinClassShift);
@@ -73,6 +113,7 @@ public sealed class NativeMemoryPool : MemoryPool<byte>
         }
 
         NativeBlock fresh = NativeBlockAllocator.Allocate((nuint)1 << (index + MinClassShift), nameof(NativeMemoryPool), "NativeMemoryPool.Rent");
+        Interlocked.Increment(ref s_allocatedBlocks);
         return new CachedBlock(fresh.Pointer, fresh.MetricsEpoch);
     }
 
@@ -82,6 +123,11 @@ public sealed class NativeMemoryPool : MemoryPool<byte>
         int index = BitOperations.Log2((uint)length) - MinClassShift;
         NativeThreadState thread = NativeThreadState.Current;
         ThreadCache cache = thread.GetTyped<ThreadCache>(s_cacheSlot) ?? CreateCache(thread);
+        if (cache.SeenGeneration != Volatile.Read(ref s_trimGeneration))
+        {
+            Resync(cache);
+        }
+
         if (!cache.TryAdd(index, block))
         {
             Spill(cache, index, block);
@@ -101,13 +147,24 @@ public sealed class NativeMemoryPool : MemoryPool<byte>
         FreeBlock(block, index);
     }
 
-    private static void FreeBlock(CachedBlock block, int index) =>
+    // A TrimAllThreads since this cache last looked: it frees what it holds and records the new generation.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void Resync(ThreadCache cache)
+    {
+        cache.SeenGeneration = Volatile.Read(ref s_trimGeneration);
+        cache.ReleaseAll();
+    }
+
+    private static void FreeBlock(CachedBlock block, int index)
+    {
         NativeBlockAllocator.Free(new NativeBlock(block.Pointer, (nuint)1 << (index + MinClassShift), block.Epoch));
+        Interlocked.Increment(ref s_freedBlocks);
+    }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static ThreadCache CreateCache(NativeThreadState thread)
     {
-        ThreadCache cache = new();
+        ThreadCache cache = new() { SeenGeneration = Volatile.Read(ref s_trimGeneration) };
         thread.SetTyped(s_cacheSlot, cache);
         return cache;
     }
@@ -183,6 +240,31 @@ public sealed class NativeMemoryPool : MemoryPool<byte>
         return sum;
     }
 
+    // Counts for tests: the calling thread's cache, the shared store, and blocks allocated and freed.
+    internal static void ProbeCurrentThreadCache(out int blocks, out long bytes)
+    {
+        ThreadCache? cache = NativeThreadState.Current.GetTyped<ThreadCache>(s_cacheSlot);
+        blocks = cache?.BlockCount ?? 0;
+        bytes = cache?.CachedBytes ?? 0;
+    }
+
+    internal static int ProbeStoredBlocks()
+    {
+        int total = 0;
+        foreach (SharedStack shared in s_shared)
+        {
+            total += shared.Count;
+        }
+
+        return total;
+    }
+
+    internal static void ProbeBlockCounts(out long allocated, out long freed)
+    {
+        allocated = Volatile.Read(ref s_allocatedBlocks);
+        freed = Volatile.Read(ref s_freedBlocks);
+    }
+
     // The shared instance is never disposed; cached storage belongs to threads, not to the pool.
     /// <inheritdoc />
     protected override void Dispose(bool disposing)
@@ -203,6 +285,41 @@ public sealed class NativeMemoryPool : MemoryPool<byte>
         internal SharedStack(int capacity) => _blocks = new CachedBlock[capacity];
 
         internal int Capacity => _blocks.Length;
+
+        internal int Count
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    return _count;
+                }
+            }
+        }
+
+        // Takes every block out under the lock, then frees them outside it, so two drains
+        // (or a drain and a batch) never see the same block.
+        internal void Drain()
+        {
+            if (_blocks.Length == 0)
+            {
+                return;
+            }
+
+            Span<CachedBlock> taken = stackalloc CachedBlock[MaxSharedBlocks];
+            int count;
+            lock (_gate)
+            {
+                count = _count;
+                _blocks.AsSpan(0, count).CopyTo(taken);
+                _count = 0;
+            }
+
+            foreach (ref readonly CachedBlock block in taken[..count])
+            {
+                FreeBlock(block, IndexOf(_blocks.Length));
+            }
+        }
 
         // Moves up to a batch into the caller's cache and returns one for the caller.
         internal bool TryTakeBatch(ThreadCache cache, int index, out CachedBlock first)
