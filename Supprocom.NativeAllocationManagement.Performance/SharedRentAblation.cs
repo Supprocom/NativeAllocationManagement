@@ -204,6 +204,7 @@ internal static class SharedRentAblation
             }
         }
 
+        double[][] perSample = new double[rows.Count][];
         for (int r = 0; r < rows.Count; r++)
         {
             Row row = rows[r];
@@ -224,14 +225,53 @@ internal static class SharedRentAblation
             }
 
             table.AppendLine(CultureInfo.InvariantCulture, $"{median.Average(),8:F2}{median.Min(),7:F2}{median.Max(),7:F2}");
+            // Every sample's layout mean, raw, then their mean and spread (max - min).
+            double[] sampleMeans = samples.Select(x => x.Average()).ToArray();
+            perSample[r] = sampleMeans;
+            table.AppendLine(CultureInfo.InvariantCulture, $"{"",-40}samples: {string.Join(' ', sampleMeans.Select(v => v.ToString("F2", CultureInfo.InvariantCulture)))}");
+            table.AppendLine(CultureInfo.InvariantCulture, $"{"",-40}mean {sampleMeans.Average():F2}  spread {sampleMeans.Max() - sampleMeans.Min():F2}");
             Console.WriteLine(table.ToString().TrimEnd());
             Console.WriteLine();
             table.Clear();
         }
 
+        Console.WriteLine(Verdict(rows, perSample, "TlsFree", "NativePool<int>.Shared [TlsFree]", "Default", "NativePool<int>.Shared (default)", o.Samples));
+        Console.WriteLine(Verdict(rows, perSample, "Default", "NativePool<int>.Shared (default)", "Main", "NativePool<int>.Shared [Main]", o.Samples));
+
         await Console.Out.WriteLineAsync(Footnote).ConfigureAwait(false);
         Console.WriteLine($"end {DateTime.Now:HH:mm:ss} loadavg {LoadAverage()} elapsed {wall.Elapsed.TotalMinutes:F1} min");
         return 0;
+    }
+
+    private const int MinSamples = 7;
+
+    // The owner's rule: the candidate is kept only if it beats the baseline in EVERY
+    // interleaved sample by more than twice the larger sample spread (max - min) of
+    // the two rows. Margins are baseline minus candidate, in ns/op (lower is faster).
+    private static string Verdict(List<Row> rows, double[][] perSample, string candidate, string candidateRow, string baseline, string baselineRow, int samples)
+    {
+        string title = $"{candidate} vs {baseline}";
+        int c = rows.FindIndex(r => string.Equals(r.Name, candidateRow, StringComparison.Ordinal));
+        int b = rows.FindIndex(r => string.Equals(r.Name, baselineRow, StringComparison.Ordinal));
+        if (c < 0 || b < 0)
+        {
+            return $"{title}: n/a (row missing)";
+        }
+
+        double[] cs = perSample[c];
+        double[] bs = perSample[b];
+        double minMargin = double.MaxValue;
+        for (int i = 0; i < cs.Length; i++)
+        {
+            minMargin = Math.Min(minMargin, bs[i] - cs[i]);
+        }
+
+        double spread = Math.Max(cs.Max() - cs.Min(), bs.Max() - bs.Min());
+        bool keep = minMargin > 2 * spread;
+        string numbers = $"smallest per-sample margin {minMargin:F2} ns vs 2 x larger spread {2 * spread:F2} ns (mean {baseline} {bs.Average():F2}, {candidate} {cs.Average():F2}, {cs.Length} samples)";
+        return samples < MinSamples
+            ? $"{title}: INVALID (needs at least {MinSamples} samples), would be {(keep ? "KEEP" : "DROP")}: {numbers}"
+            : $"{title}: {(keep ? "KEEP" : "DROP")}: {numbers}";
     }
 
     private static ProcessStartInfo WorkerStartInfo(string directory, string row, Options o)
