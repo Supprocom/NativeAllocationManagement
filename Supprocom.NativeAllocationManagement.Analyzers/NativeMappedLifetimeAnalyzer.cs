@@ -17,7 +17,7 @@ public sealed class NativeMappedLifetimeAnalyzer : DiagnosticAnalyzer
         "Supprocom.NativeAllocationManagement",
         DiagnosticSeverity.Error,
         isEnabledByDefault: true,
-        description: "[wording: NAM1053 description]",
+        description: "[wording: NAM1053 description].",
         helpLinkUri: "https://github.com/Supprocom/NativeAllocationManagement/blob/main/docs/diagnostics/NAM1053.md",
         customTags: WellKnownDiagnosticTags.Telemetry);
 
@@ -28,7 +28,11 @@ public sealed class NativeMappedLifetimeAnalyzer : DiagnosticAnalyzer
     /// <inheritdoc />
     public override void Initialize(AnalysisContext context)
     {
-        ArgumentNullException.ThrowIfNull(context);
+        if (context is null)
+        {
+            throw new ArgumentNullException(nameof(context));
+        }
+
         context.EnableConcurrentExecution();
         context.ConfigureGeneratedCodeAnalysis(GeneratedCodeAnalysisFlags.None);
         context.RegisterCompilationStartAction(startContext =>

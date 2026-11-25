@@ -1,1 +1,5 @@
 #nullable enable
+Supprocom.NativeAllocationManagement.Analyzers.NativeMappedLifetimeAnalyzer
+Supprocom.NativeAllocationManagement.Analyzers.NativeMappedLifetimeAnalyzer.NativeMappedLifetimeAnalyzer() -> void
+override Supprocom.NativeAllocationManagement.Analyzers.NativeMappedLifetimeAnalyzer.Initialize(Microsoft.CodeAnalysis.Diagnostics.AnalysisContext! context) -> void
+override Supprocom.NativeAllocationManagement.Analyzers.NativeMappedLifetimeAnalyzer.SupportedDiagnostics.get -> System.Collections.Immutable.ImmutableArray<Microsoft.CodeAnalysis.DiagnosticDescriptor!>
