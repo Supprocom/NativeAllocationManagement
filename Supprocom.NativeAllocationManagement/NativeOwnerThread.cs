@@ -72,6 +72,9 @@ internal struct NativeOwnerThread
 
     // A block no frame is in, so the next check takes the serial path.
     internal void ForgetBlockForTest() => _block = 0;
+
+    // The block the owner is taken to run on, as a thread that reused it would find.
+    internal void SetBlockForTest(nuint block) => _block = block;
 }
 
 // Tests simulate a thread whose stack reuses an exited thread's memory by

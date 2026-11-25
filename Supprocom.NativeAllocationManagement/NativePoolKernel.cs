@@ -19,6 +19,8 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
     // slot, which the Shared getter has just read: no second thread-static
     // lookup on its rents.
     private bool _isShared;
+    // A shared pool's owner thread where the runtime marks ended threads.
+    private Thread? _sharedThread;
     private int[] _freeHeads = [];
     // Every constructor path assigns the slab table, the adopting ones
     // included: an empty-array initializer would only add a write barrier
@@ -1424,14 +1426,25 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void ValidateThread(string operation)
     {
-        if (_isShared
-            ? ReferenceEquals(t_shared, this)
-            : _owner.IsCurrent())
+        if (_isShared ? SharedOwnerIsCurrent() : _owner.IsCurrent())
         {
             return;
         }
 
         ThrowWrongThread(operation);
+    }
+
+    // A shared pool's owner check without a thread-static read: the stack
+    // block (thread serial when it differs), and the owner's thread not dead. A
+    // new thread whose stack reuses a dead owner's block passes the first test
+    // and fails the second, so it is refused as any other thread is.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private bool SharedOwnerIsCurrent()
+    {
+        Thread? owner = _sharedThread;
+        return owner is null
+            ? ReferenceEquals(t_shared, this)
+            : _owner.IsCurrent() && !NativeThreadEnded.Read(owner);
     }
 
     [DoesNotReturn]

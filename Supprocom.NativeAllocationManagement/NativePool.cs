@@ -29,7 +29,21 @@ public sealed partial class NativePool<T> : IDisposable
     {
         get
         {
-            NativePool<T>? pool = t_shared;
+            NativePool<T>? pool;
+            if (NativeThreadEnded.CanRead)
+            {
+                // The calling thread's state by its stack block, with no
+                // thread-static read. Current refuses a state whose thread
+                // ended, so a thread that reuses a dead thread's stack block
+                // never finds that thread's pool: it takes its own state, and
+                // its own pool below.
+                pool = NativeThreadState.Current.GetTyped<ReusablePools>(s_reuseSlot)?.Shared;
+            }
+            else
+            {
+                pool = t_shared;
+            }
+
             return pool is not null && pool._lifecycle == NativeOwnerLifecycle.Active
                 ? pool
                 : CreateShared();
@@ -40,6 +54,10 @@ public sealed partial class NativePool<T> : IDisposable
     private static NativePool<T> CreateShared()
     {
         NativePool<T> pool = new() { _isShared = true };
+        // Where the runtime marks ended threads, the pool keeps its thread
+        // object, so a thread that reuses a dead owner's stack block still
+        // fails the owner check.
+        pool._sharedThread = NativeThreadEnded.CanRead ? NativeThreadState.Current.Thread : null;
         RegisterShared(pool);
         return t_shared = pool;
     }
@@ -66,6 +84,9 @@ public sealed partial class NativePool<T> : IDisposable
         CurrentBankCapacitiesForTest => (_slabs.Length, _slabs.Length, 0, 0);
 
     internal Slab SlabForTest(int index) => _slabs[index];
+
+    // Simulates an owner whose stack block the calling thread reuses.
+    internal void SetOwnerBlockForTest(nuint block) => _owner.SetBlockForTest(block);
 
     // These structures genuinely do not exist in the unmanaged, thread-confined
     // pool model. There is no reference-root bank or generational retirement.
