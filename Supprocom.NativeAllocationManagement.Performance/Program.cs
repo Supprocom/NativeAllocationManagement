@@ -40,6 +40,11 @@ internal static class Program
             return await NativeAnalyzerCancellationWorker.RunAsync(cancellationResponse, projectDirectory).ConfigureAwait(false);
         }
 
+        if (args.Length != 0 && string.Equals(args[0], "--mapped-files", StringComparison.Ordinal))
+        {
+            return MappedFileBenchmark.Run(args);
+        }
+
         if (args is ["--allocator-regression-worker", "--kind", "Region"])
         {
             RegionRegressionReport report =
