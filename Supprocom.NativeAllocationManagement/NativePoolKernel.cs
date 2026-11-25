@@ -253,6 +253,13 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
     {
         ArgumentOutOfRangeException.ThrowIfNegative(length);
         ValidateOwner(nameof(Rent));
+        return RentFilled(length, value);
+    }
+
+    // Everything after validation; shared with the scope pool's entry.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private Pooled<T> RentFilled(int length, T value)
+    {
         long token = TakeLeaseToken();
         // Take the index first: growth can replace the slot table.
         int slabIndex = TakeOrAddSlab(length);
@@ -279,6 +286,13 @@ public sealed unsafe partial class NativePool<T> : INativeFinalizationTarget, IN
     {
         ArgumentOutOfRangeException.ThrowIfNegative(length);
         ValidateOwner(nameof(RentUninitialized));
+        return RentUnfilled(length);
+    }
+
+    // Everything after validation; shared with the scope pool's entry.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private Pooled<T> RentUnfilled(int length)
+    {
         long token = TakeLeaseToken();
         int slabIndex = TakeOrAddSlab(length);
         ref Slab slab = ref _slabs[slabIndex];

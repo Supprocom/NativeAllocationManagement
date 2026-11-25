@@ -11,3 +11,14 @@ Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>.Process<TState, TRe
 Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>.Process<TState, TResult>(int length, T value, TState state, Supprocom.NativeAllocationManagement.NativeSpanStateProcessor<T, TState, TResult>! processor) -> TResult
 Supprocom.NativeAllocationManagement.NativeMemoryReturn.Free = 1 -> Supprocom.NativeAllocationManagement.NativeMemoryReturn
 Supprocom.NativeAllocationManagement.NativeMemoryReturn.Reuse = 0 -> Supprocom.NativeAllocationManagement.NativeMemoryReturn
+Supprocom.NativeAllocationManagement.NativePoolScope
+static Supprocom.NativeAllocationManagement.NativePoolScope.Run<T, TState, TResult>(TState state, Supprocom.NativeAllocationManagement.NativePoolScopeBody<T, TState, TResult>! body) -> TResult
+static Supprocom.NativeAllocationManagement.NativePoolScope.Run<T, TState>(TState state, Supprocom.NativeAllocationManagement.NativePoolScopeAction<T, TState>! body) -> void
+Supprocom.NativeAllocationManagement.NativePoolScopeBody<T, TState, TResult>
+virtual Supprocom.NativeAllocationManagement.NativePoolScopeBody<T, TState, TResult>.Invoke(scoped ref Supprocom.NativeAllocationManagement.NativeScopePool<T> pool, TState state) -> TResult
+Supprocom.NativeAllocationManagement.NativePoolScopeAction<T, TState>
+virtual Supprocom.NativeAllocationManagement.NativePoolScopeAction<T, TState>.Invoke(scoped ref Supprocom.NativeAllocationManagement.NativeScopePool<T> pool, TState state) -> void
+Supprocom.NativeAllocationManagement.NativeScopePool<T>
+Supprocom.NativeAllocationManagement.NativeScopePool<T>.NativeScopePool() -> void
+Supprocom.NativeAllocationManagement.NativeScopePool<T>.Rent(int length, T value) -> Supprocom.NativeAllocationManagement.Pooled<T>
+Supprocom.NativeAllocationManagement.NativeScopePool<T>.RentUninitialized(int length) -> Supprocom.NativeAllocationManagement.Pooled<T>

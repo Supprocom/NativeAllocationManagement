@@ -99,6 +99,11 @@ internal static class Program
             return await SharedRentAblation.RunCommandAsync(args).ConfigureAwait(false);
         }
 
+        if (args.Length != 0 && args[0] is "--scope-pool" or "--scope-pool-worker")
+        {
+            return await ScopePoolBenchmark.RunCommandAsync(args).ConfigureAwait(false);
+        }
+
         if (args is ["--detailed-counters-probe"])
         {
             return DetailedCountersProbe.Run();
