@@ -2363,7 +2363,8 @@ public sealed class AnalyzerContractTests
                 new NativeAllocationAnalyzer(),
                 new NativeBuilderWriteAnalyzer(),
                 new NativeLeaseStateAnalyzer(),
-                new NativeSpanLifetimeAnalyzer()));
+                new NativeSpanLifetimeAnalyzer(),
+                new NativeMappedLifetimeAnalyzer()));
         return treatWarningsAsErrors
             ? await analyzed.GetAllDiagnosticsAsync().ConfigureAwait(true)
             : await analyzed.GetAnalyzerDiagnosticsAsync().ConfigureAwait(true);
