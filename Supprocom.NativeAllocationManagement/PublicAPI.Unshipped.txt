@@ -11,3 +11,26 @@ Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>.Process<TState, TRe
 Supprocom.NativeAllocationManagement.NativeConcurrentPool<T>.Process<TState, TResult>(int length, T value, TState state, Supprocom.NativeAllocationManagement.NativeSpanStateProcessor<T, TState, TResult>! processor) -> TResult
 Supprocom.NativeAllocationManagement.NativeMemoryReturn.Free = 1 -> Supprocom.NativeAllocationManagement.NativeMemoryReturn
 Supprocom.NativeAllocationManagement.NativeMemoryReturn.Reuse = 0 -> Supprocom.NativeAllocationManagement.NativeMemoryReturn
+Supprocom.NativeAllocationManagement.MappedView<T>
+Supprocom.NativeAllocationManagement.MappedView<T>.AsReadOnlySpan(long start) -> System.ReadOnlySpan<T>
+Supprocom.NativeAllocationManagement.MappedView<T>.AsReadOnlySpan(long start, int length) -> System.ReadOnlySpan<T>
+Supprocom.NativeAllocationManagement.MappedView<T>.AsSpan(long start) -> System.Span<T>
+Supprocom.NativeAllocationManagement.MappedView<T>.AsSpan(long start, int length) -> System.Span<T>
+Supprocom.NativeAllocationManagement.MappedView<T>.Dispose() -> void
+Supprocom.NativeAllocationManagement.MappedView<T>.Flush() -> void
+Supprocom.NativeAllocationManagement.MappedView<T>.IsDisposed.get -> bool
+Supprocom.NativeAllocationManagement.MappedView<T>.IsReadOnly.get -> bool
+Supprocom.NativeAllocationManagement.MappedView<T>.Length.get -> long
+Supprocom.NativeAllocationManagement.MappedView<T>.Read(long index) -> T
+Supprocom.NativeAllocationManagement.MappedView<T>.Write(long index, T value) -> void
+Supprocom.NativeAllocationManagement.MappedView<T>.~MappedView() -> void
+Supprocom.NativeAllocationManagement.NativeMappedFile
+Supprocom.NativeAllocationManagement.NativeMappedFile.Dispose() -> void
+Supprocom.NativeAllocationManagement.NativeMappedFile.Flush() -> void
+Supprocom.NativeAllocationManagement.NativeMappedFile.IsDisposed.get -> bool
+Supprocom.NativeAllocationManagement.NativeMappedFile.IsReadOnly.get -> bool
+Supprocom.NativeAllocationManagement.NativeMappedFile.Length.get -> long
+Supprocom.NativeAllocationManagement.NativeMappedFile.View<T>() -> Supprocom.NativeAllocationManagement.MappedView<T>!
+Supprocom.NativeAllocationManagement.NativeMappedFile.View<T>(long byteOffset, long count) -> Supprocom.NativeAllocationManagement.MappedView<T>!
+static Supprocom.NativeAllocationManagement.NativeMappedFile.OpenRead(string! path) -> Supprocom.NativeAllocationManagement.NativeMappedFile!
+static Supprocom.NativeAllocationManagement.NativeMappedFile.OpenReadWrite(string! path) -> Supprocom.NativeAllocationManagement.NativeMappedFile!
