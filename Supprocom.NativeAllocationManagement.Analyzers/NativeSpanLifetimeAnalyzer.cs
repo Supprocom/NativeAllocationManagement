@@ -482,6 +482,8 @@ public sealed class NativeSpanLifetimeAnalyzer : DiagnosticAnalyzer
         private readonly INamedTypeSymbol? _local;
         private readonly INamedTypeSymbol? _arena;
         private readonly INamedTypeSymbol? _region;
+        private readonly INamedTypeSymbol? _mappedView;
+        private readonly INamedTypeSymbol? _mappedFile;
 
         internal Symbols(Compilation compilation)
         {
@@ -497,14 +499,16 @@ public sealed class NativeSpanLifetimeAnalyzer : DiagnosticAnalyzer
             _local = runtime.GetTypeByMetadataName(Namespace + "Local`1");
             _arena = runtime.GetTypeByMetadataName(Namespace + "NativeArena");
             _region = runtime.GetTypeByMetadataName(Namespace + "NativeRegion");
+            _mappedView = runtime.GetTypeByMetadataName(Namespace + "MappedView`1");
+            _mappedFile = runtime.GetTypeByMetadataName(Namespace + "NativeMappedFile");
         }
 
         internal bool IsAvailable => _pooled is not null;
 
         internal bool IsLease(ITypeSymbol? type) =>
-            Is(type, _pooled) || Is(type, _preparedPooled) || Is(type, _arenaLease) || Is(type, _local);
+            Is(type, _pooled) || Is(type, _preparedPooled) || Is(type, _arenaLease) || Is(type, _local) || Is(type, _mappedView);
 
-        internal bool IsBumpOwner(ITypeSymbol? type) => Is(type, _arena) || Is(type, _region);
+        internal bool IsBumpOwner(ITypeSymbol? type) => Is(type, _arena) || Is(type, _region) || Is(type, _mappedFile);
 
         // Span may be visible through several reference assemblies; match its definition by name.
         internal static bool IsSpan(ITypeSymbol? type) =>
@@ -513,12 +517,12 @@ public sealed class NativeSpanLifetimeAnalyzer : DiagnosticAnalyzer
 
         internal bool IsLeaseAsSpan(IOperation operation) =>
             operation is IInvocationOperation invocation
-            && string.Equals(invocation.TargetMethod.Name, "AsSpan", StringComparison.Ordinal)
+            && invocation.TargetMethod.Name is "AsSpan" or "AsReadOnlySpan"
             && IsLease(invocation.TargetMethod.ContainingType);
 
         internal bool IsAcquisition(IMethodSymbol method) =>
             method.Name is "Rent" or "TryRent" or "Scratch" or "ScratchScoped" or "TryScratch" or "TryScratchScoped" or "Lease"
-                or "RentUninitialized" or "LeaseUninitialized" or "ScratchUninitialized" or "ScratchScopedUninitialized"
+                or "View" or "RentUninitialized" or "LeaseUninitialized" or "ScratchUninitialized" or "ScratchScopedUninitialized"
             && IsLease(method.ReturnType is INamedTypeSymbol { SpecialType: SpecialType.System_Boolean }
                 ? method.Parameters.LastOrDefault(parameter => parameter.RefKind == RefKind.Out && IsLease(parameter.Type))?.Type
                 : method.ReturnType);

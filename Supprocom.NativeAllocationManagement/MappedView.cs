@@ -6,21 +6,16 @@ public sealed class MappedView<T> : IDisposable
     where T : unmanaged
 {
     private readonly NativeMappedFile _file;
-    private readonly SafeBuffer? _buffer;
+    private readonly NativeSegment? _segment;
     private readonly unsafe T* _start;
     private int _released;
 
-    internal unsafe MappedView(NativeMappedFile file, SafeBuffer? buffer, byte* start, long length)
+    internal unsafe MappedView(NativeMappedFile file, NativeSegment? segment, long byteOffset, long length)
     {
         _file = file;
+        _segment = segment;
         Length = length;
-        _start = (T*)start;
-        if (buffer is not null)
-        {
-            bool added = false;
-            buffer.DangerousAddRef(ref added);
-            _buffer = buffer;
-        }
+        _start = segment is null ? null : (T*)((byte*)segment.Pointer + byteOffset);
     }
 
     /// <summary>Releases an unreleased mapping reference when the view was never disposed.</summary>
@@ -99,7 +94,7 @@ public sealed class MappedView<T> : IDisposable
     {
         if (Interlocked.Exchange(ref _released, 1) == 0)
         {
-            _buffer?.DangerousRelease();
+            _segment?.FreeNow();
         }
     }
 

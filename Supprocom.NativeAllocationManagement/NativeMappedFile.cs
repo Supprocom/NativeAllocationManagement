@@ -8,10 +8,10 @@ public sealed class NativeMappedFile : IDisposable
     private readonly MemoryMappedFile? _map;
     private readonly MemoryMappedViewAccessor? _accessor;
     private readonly SafeBuffer? _buffer;
-    private readonly unsafe byte* _baseAddress;
+    private readonly NativeSegment? _segment;
     private int _disposed;
 
-    private unsafe NativeMappedFile(string path, bool writable)
+    private NativeMappedFile(string path, bool writable)
     {
         ArgumentException.ThrowIfNullOrEmpty(path);
         IsReadOnly = !writable;
@@ -40,11 +40,10 @@ public sealed class NativeMappedFile : IDisposable
                 HandleInheritability.None,
                 leaveOpen: false);
             _accessor = _map.CreateViewAccessor(0, 0, access);
-            SafeBuffer buffer = _accessor.SafeMemoryMappedViewHandle;
-            byte* pointer = null;
-            buffer.AcquirePointer(ref pointer);
-            _baseAddress = pointer + _accessor.PointerOffset;
-            _buffer = buffer;
+            _buffer = _accessor.SafeMemoryMappedViewHandle;
+            // One borrow of the whole mapping from offset 0 (page aligned): Borrow does the
+            // reference count, range, overflow and alignment checks; views window inside it.
+            _segment = NativeSegment.Borrow(_buffer, 0, checked((nuint)Length));
         }
         catch
         {
@@ -86,12 +85,14 @@ public sealed class NativeMappedFile : IDisposable
     }
 
     /// <summary>[wording: View range]</summary>
-    public unsafe MappedView<T> View<T>(long byteOffset, long count)
+    public MappedView<T> View<T>(long byteOffset, long count)
         where T : unmanaged
     {
         ThrowIfDisposed();
         MappedRange.CheckView<T>(byteOffset, count, Length);
-        return new MappedView<T>(this, _buffer, _baseAddress + byteOffset, count);
+        // Each view takes its own borrow of the mapping, so it stays mapped until the view ends.
+        NativeSegment? segment = _buffer is null ? null : NativeSegment.Borrow(_buffer, 0, checked((nuint)Length));
+        return new MappedView<T>(this, segment, byteOffset, count);
     }
 
     /// <summary>[wording: Flush]</summary>
@@ -105,7 +106,7 @@ public sealed class NativeMappedFile : IDisposable
     }
 
     /// <summary>[wording: Dispose]</summary>
-    public unsafe void Dispose()
+    public void Dispose()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
         {
@@ -118,7 +119,7 @@ public sealed class NativeMappedFile : IDisposable
         }
 
         // Views keep their own references; the mapping ends when the last one is released.
-        _buffer?.ReleasePointer();
+        _segment?.FreeNow();
         _accessor?.Dispose();
         _map?.Dispose();
     }

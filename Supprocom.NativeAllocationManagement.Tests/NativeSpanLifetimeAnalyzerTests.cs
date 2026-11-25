@@ -16,6 +16,12 @@ public sealed class NativeSpanLifetimeAnalyzerTests
     [InlineData("NativeArena arena = new(); Span<int> s = arena.Scratch<int>(4, 0).AsSpan(); arena.Dispose(); s.Clear();")]
     [InlineData("using NativeArena arena = new(); Span<int> s = arena.ScratchScoped<int>(4, 0).AsSpan(); arena.RecycleScoped(); s[0] = 1;")]
     [InlineData("Span<int> s = default; using (NativeRegion region = new(64, NativeMemoryReturn.Free)) { Local<int> local = region.Lease<int>(4, 0); s = local.AsSpan(); } s[0] = 1;")]
+    [InlineData("var f = NativeMappedFile.OpenRead(p); var v = f.View<int>(); ReadOnlySpan<int> s = v.AsReadOnlySpan(0, 1); v.Dispose(); _ = s[0]; f.Dispose();")]
+    [InlineData("var f = NativeMappedFile.OpenReadWrite(p); var v = f.View<int>(); Span<int> s = v.AsSpan(0, 1); v.Dispose(); s[0] = 1; f.Dispose();")]
+    [InlineData("var f = NativeMappedFile.OpenRead(p); var v = f.View<int>(); ReadOnlySpan<int> s = v.AsReadOnlySpan(0, 1); f.Dispose(); _ = s[0]; v.Dispose();")]
+    [InlineData("var f = NativeMappedFile.OpenRead(p); ReadOnlySpan<int> s = f.View<int>().AsReadOnlySpan(0, 1); f.Dispose(); _ = s[0];")]
+    [InlineData("var f = NativeMappedFile.OpenRead(p); var v = f.View<int>(); ReadOnlySpan<int> s = v.AsReadOnlySpan(0, 4); ReadOnlySpan<int> t = s.Slice(1); v.Dispose(); _ = t[0]; f.Dispose();")]
+    [InlineData("var f = NativeMappedFile.OpenRead(p); var v = f.View<int>(); ReadOnlySpan<int> s = v.AsReadOnlySpan(0, 1); if (condition) { v.Dispose(); } _ = s[0]; f.Dispose();")]
     public async Task SpanUseAfterItsLeaseEndsIsRejected(string body)
     {
         string[] ids = await NativeIdsAsync(body);
@@ -30,6 +36,10 @@ public sealed class NativeSpanLifetimeAnalyzerTests
     [InlineData("using NativeArena arena = new(); Span<int> s = arena.Scratch<int>(4, 0).AsSpan(); arena.RecycleScoped(); s[0] = 1; arena.Reset();")]
     [InlineData("using NativeArena arena = new(); for (int i = 0; i < 3; i++) { Span<int> s = arena.Scratch<int>(4, 0).AsSpan(); s[0] = i; arena.Reset(); }")]
     [InlineData("using (NativeRegion region = new(64, NativeMemoryReturn.Free)) { Local<int> local = region.Lease<int>(4, 0); Span<int> s = local.AsSpan(); s[0] = 1; }")]
+    [InlineData("var f = NativeMappedFile.OpenRead(p); var v = f.View<int>(); ReadOnlySpan<int> s = v.AsReadOnlySpan(0, 1); _ = s[0]; v.Dispose(); f.Dispose();")]
+    [InlineData("using var f = NativeMappedFile.OpenRead(p); using var v = f.View<int>(); ReadOnlySpan<int> s = v.AsReadOnlySpan(0, 1); _ = s[0];")]
+    [InlineData("var f = NativeMappedFile.OpenRead(p); var v = f.View<int>(); ReadOnlySpan<int> s = v.AsReadOnlySpan(0, 1); v.Dispose(); s = default; _ = s.Length; f.Dispose();")]
+    [InlineData("var f = NativeMappedFile.OpenRead(p); var a = f.View<int>(); var b = f.View<int>(); ReadOnlySpan<int> s = b.AsReadOnlySpan(0, 1); a.Dispose(); _ = s[0]; b.Dispose(); f.Dispose();")]
     public async Task SpanUseWhileItsLeaseIsCurrentIsAccepted(string body)
     {
         string[] ids = await NativeIdsAsync(body);
@@ -44,7 +54,7 @@ public sealed class NativeSpanLifetimeAnalyzerTests
             using Supprocom.NativeAllocationManagement;
             public static class Sample
             {
-                public static void Run(bool condition)
+                public static void Run(bool condition, string p)
                 {
                     {{body}}
                 }
